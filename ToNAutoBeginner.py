@@ -292,6 +292,7 @@ RE_VERIFIED_END     = re.compile(r"^Verified Round End$") # intermission突入
 RE_BEGIN_DONE       = re.compile(r"^Verified$") # connecting突入
 RE_ITEM_EQUIP       = re.compile(r"^Equipping (\d+)[.]")   # アイテム装備検出
 
+RE_USER_AUTH        = re.compile(r"User Authenticated: \S+ \((usr_[0-9a-f-]+)\)")
 RE_LOG_PREFIX       = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 
 
@@ -526,6 +527,47 @@ def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
             print(f"送信エラー: {e}")
 
     threading.Thread(target=_send, daemon=True).start()
+    
+    def register_user(uid: str):
+    """usersテーブルにユーザーを登録してhashを取得する"""
+        try:
+            import random
+            # 存在確認
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/users?id=eq.{uid}&select=hash",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                }
+            )
+            with urllib.request.urlopen(req) as res:
+                data = json.loads(res.read())
+            if data:
+                return data[0]["hash"]
+
+            # 新規登録
+            while True:
+                hash_val = random.randint(-32768, 32767)
+                data = json.dumps({"id": uid, "hash": hash_val}).encode()
+                req = urllib.request.Request(
+                    f"{SUPABASE_URL}/rest/v1/users",
+                    data=data,
+                    headers={
+                        "Content-Type": "application/json",
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Prefer": "return=representation",
+                    },
+                    method="POST"
+                )
+                try:
+                    with urllib.request.urlopen(req) as res:
+                        return json.loads(res.read())[0]["hash"]
+                except:
+                    # hash衝突なら再試行
+                    continue
+        except Exception as e:
+            print(f"ユーザー登録エラー: {e}")
 
 
 def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
@@ -569,6 +611,20 @@ def click_at():
     pydirectinput.mouseUp()
     time.sleep(0.1)
 
+# ═══════════════════════════════════════════════
+#  ユーザーIDの設定
+# ═══════════════════════════════════════════════
+_MY_USER_ID: str = ""
+_MY_USER_ID_LOCK = threading.Lock()
+
+def get_my_user_id() -> str:
+    with _MY_USER_ID_LOCK:
+        return _MY_USER_ID
+
+def set_my_user_id(uid: str):
+    global _MY_USER_ID
+    with _MY_USER_ID_LOCK:
+        _MY_USER_ID = uid
 
 # ═══════════════════════════════════════════════
 #  窓ごとの設定
@@ -873,6 +929,15 @@ class LogMonitor:
             # アイテムロスト音声はRoundOverで流す（auto_begin=Falseの場合）
             if self.cfg.auto_begin:
                 threading.Thread(target=self._do_after_round, daemon=True).start()
+            return
+        
+        # ユーザーIDを取得
+        m = RE_USER_AUTH.search(line)
+        if m:
+            uid = m.group(1)
+            set_my_user_id(uid)
+            self._log(f"UserID検出: {uid}")
+            threading.Thread(target=lambda: register_user(uid), daemon=True).start()
             return
 
     # ── テラー確定処理 ────────────────────────
