@@ -159,10 +159,10 @@ REPLACEMENT_ROUND_TNL_KEYS = {
 }
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = "Continue.wav"    # 続行ラウンド用
-VOICE_FOG          = "Fog.wav"   # 霧ラウンド用
-VOICE_ITEM_LOST    = "ItemLost.wav"  # アイテムロスト時
-VOICE_INTERMISSION = "intermission.wav" #intermission突入時
+VOICE_CONTINUE     = "voice/Continue.wav"    # 続行ラウンド用
+VOICE_FOG          = "voice/Fog.wav"   # 霧ラウンド用
+VOICE_ITEM_LOST    = "voice/ItemLost.wav"  # アイテムロスト時
+VOICE_INTERMISSION = "voice/intermission.wav" #intermission突入時
 
 # ── 3クラ続行設定 ──────────────────────────────
 # DTM / Waldo のテラーID（GUIから設定可能、不明な場合は0のまま）
@@ -716,6 +716,9 @@ class LogMonitor:
 
         m = RE_KILLERS_SET.match(line)
         if m:
+            # 特殊ラウンドを経験したら3勝扱い（OpenSpecialRound_completed=True）
+            if st.round_type in SPECIAL_ROUND_TNL_KEYS:
+                st.OpenSpecialRound_wins = OpenSpecialRound_TARGET_WINS
             if not (st.round_type == "Alternate" and m.group(4).strip() == "Classic"): # AF期間中は極まれに偽Classicがある
                 st.round_type = m.group(4).strip()
             self._on_killers(
@@ -918,13 +921,6 @@ class LogMonitor:
         all_ids = st.terror_ids  # すでに累積済み
         is_special_round = st.round_type in SPECIAL_ROUND_TNL_KEYS
 
-        # 特殊ラウンドを経験したら3勝扱い（OpenSpecialRound_completed=True）
-        if is_special_round and st.OpenSpecialRound_wins < OpenSpecialRound_TARGET_WINS:
-            st.special_round_seen = True
-            if st.OpenSpecialRound_wins < OpenSpecialRound_TARGET_WINS:# 3クラの勝利前なら
-                st.OpenSpecialRound_wins = OpenSpecialRound_TARGET_WINS
-                self._log("⚡ 特殊ラウンド経験 → DTM/Waldo続行を3勝扱いに")
-
         is_OpenSpecialRound_target = (
             bool(all_ids and OpenSpecialRound_TERROR_IDS and
                  any(t in OpenSpecialRound_TERROR_IDS for t in all_ids))
@@ -951,7 +947,7 @@ class LogMonitor:
                 self._log("🎙 続行アナウンス再生")
                 _continue_round_start()
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
-            # DTM/Waldoジャンプ開始
+            # 3クラ開け続行開始
             if is_OpenSpecialRound_target and st.OpenSpecialRound_wins < OpenSpecialRound_TARGET_WINS:
                 st.is_OpenSpecialRound_round = True
                 self._log(f"3クラ解放ラウンド開始（勝利数: {st.OpenSpecialRound_wins}/{OpenSpecialRound_TARGET_WINS}）")
