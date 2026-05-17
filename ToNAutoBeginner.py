@@ -10,6 +10,7 @@ git config --global user.name "serim7146-coder"
 git commit -m "変更内容"
 git push origin main
 """
+
 import json
 import os
 import re
@@ -20,11 +21,17 @@ import tkinter as tk
 import keyboard
 import pydirectinput
 import win32gui, win32con
+import urllib.request
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # ═══════════════════════════════════════════════
 #  CONSTANTS
@@ -71,17 +78,19 @@ CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
 # ── グループインスタンスで、自動自爆するラウンド ──
 HOSHIIMO_SKIP_ROUNDS = {
-    "Classic/クラシック",
-    "Classic.exe/Classic.exe",
-    "Bloodbath/ブラッドバス",
-    "Randomizer/Randomizer",
+    "Classic",
+    "Classic.exe",
+    "Bloodbath",
+    "Randomizer",
 }
 CBPS_SKIP_ROUNDS = {
-    "Classic/クラシック",
-    "Bloodbath/ブラッドバス",
-    "Randomizer/Randomizer",
-    "Punish/パニッシュ",
-    "Sabotage/サボタージュ",
+    "Classic",
+    "Bloodbath",
+    "Double Trouble",
+    "Bloodbath EX"
+    "Randomizer",
+    "Punish",
+    "Sabotage",
 }
 
 # ── インスタンスタイプ定数 ──
@@ -165,10 +174,11 @@ REPLACEMENT_ROUND_TNL_KEYS = {
 }
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = "voice/Continue.wav"    # 続行ラウンド用
-VOICE_FOG          = "voice/Fog.wav"   # 霧ラウンド用
-VOICE_ITEM_LOST    = "voice/ItemLost.wav"  # アイテムロスト時
-VOICE_INTERMISSION = "voice/intermission.wav" #intermission突入時
+VOICE_CONTINUE     = "voice/Continue.mp3"    # 続行ラウンド用
+VOICE_FOG          = "voice/Fog.mp3"   # 霧ラウンド用
+VOICE_ITEM_LOST    = "voice/ItemLost.mp3"  # アイテムロスト時
+VOICE_INTERMISSION = "voice/intermission.mp3" #intermission突入時
+VOICE_FOXY         = "voice/foxy.mp3" # Foxyが出現したとき
 
 # ── 3クラ続行設定 ──────────────────────────────
 # DTM / Waldo のテラーID（GUIから設定可能、不明な場合は0のまま）
@@ -207,7 +217,6 @@ def set_destruct_key(key: str):
 _EQUIP_WAIT_EVENT = threading.Event()
 _EQUIP_WAIT_EVENT.set()   # 初期値は通常動作可能
 
-
 _ITEM_GET_BEGIN_MODE = False
 _ITEM_GET_BEGIN_LOCK = threading.Lock()
 
@@ -243,7 +252,7 @@ def _continue_round_start():
     """続行ラウンド開始：カウンターを増やしてフリーズ"""
     global _CONTINUE_ROUND_COUNT
     with _CONTINUE_ROUND_LOCK:
-        _CONTINUE_ROUND_COUNT += 1
+        _CONTINUE_ROUND_COUNT += 1 # 続行が二つ来た時、片方が死んだらフリーズ解除される現象があり、それを回避するため
         _CONTINUE_ROUND_EVENT.clear()
 
 def _continue_round_end():
@@ -471,36 +480,46 @@ CSV_LOCK = threading.Lock()
 _CSV_RECENT: list[tuple] = []
 _CSV_DEDUP_SEC = 2  # 同一インスタンスとみなす誤差秒数
 
-def append_round_csv(round_name: str, terror_ids: list[int], map_id: int):
-    """ラウンド結果をCSVに追記する（重複排除付き）
-    形式: ts(YYMMDDHHmmss), round, terror_ids(;区切り), map_id
-    ±2秒以内の完全一致は重複除外
-    """
-    import csv
+def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
+    """ラウンド結果をSupabaseに送信する（非同期・重複排除付き）"""
     now = datetime.now()
-    ts_str     = now.strftime("%y%m%d%H%M%S")
-    now_ts     = int(ts_str)
-    terror_str = ";".join(str(t) for t in sorted(terror_ids))
-    key        = (round_name, terror_str, map_id)
+    date = int(now.strftime("%Y%m%d"))
+    time = int(now.strftime("%H%M%S"))
+    key = (round_name, tuple(sorted(terror_ids)), map_id)
+    now_ts = date * 1000000 + time
 
-    try:
-        with CSV_LOCK:
-            for rec in _CSV_RECENT:
-                if rec["key"] == key and abs(now_ts - rec["ts"]) <= _CSV_DEDUP_SEC:
-                    return
+    with CSV_LOCK:
+        for rec in _CSV_RECENT:
+            if rec["key"] == key and abs(now_ts - rec["ts"]) <= 2:
+                return
+        if len(_CSV_RECENT) > 20:
+            _CSV_RECENT.clear()
+        _CSV_RECENT.append({"ts": now_ts, "key": key})
 
-            if len(_CSV_RECENT) > 20:
-                _CSV_RECENT.clear()
-            _CSV_RECENT.append({"ts": now_ts, "key": key})
+    def _send():
+        try:
+            data = json.dumps({
+                "date": date,
+                "time": time,
+                "round": round_name,
+                "terror_ids": terror_ids,
+                "map_id": map_id,
+            }).encode()
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/ToNRoundStatistics",
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                method="POST"
+            )
+            urllib.request.urlopen(req)
+        except Exception as e:
+            print(f"Supabase送信エラー: {e}")
 
-            is_new = not CSV_LOG_PATH.exists()
-            with open(CSV_LOG_PATH, "a", encoding="utf-8-sig", newline="") as f:
-                w = csv.writer(f)
-                if is_new:
-                    w.writerow(["ts", "round", "terror_ids", "map_id"])
-                w.writerow([ts_str, round_name, terror_str, map_id])
-    except Exception as e:
-        print(f"CSV書き込みエラー: {e}")
+    threading.Thread(target=_send, daemon=True).start()
 
 
 def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
@@ -841,7 +860,7 @@ class LogMonitor:
                     st.item_id = 0
                 self._log("ラウンド終了")
             # CSVにラウンド結果を記録（重複排除・ユーザーID付き）
-            append_round_csv(st.round_type, st.terror_ids, st.map_id)
+            post_to_supabase(st.round_type, st.terror_ids, st.map_id)
             # Intermissionアナウンス
             if self.cfg.announce_intermission:
                 play_voice(self.cfg.voice_intermission)
