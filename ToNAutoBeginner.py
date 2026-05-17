@@ -703,22 +703,15 @@ class LogMonitor:
                 lines = f.readlines()
             for line in reversed(lines):
                 line = RE_LOG_PREFIX.sub("", line).strip()
-                
-                # ユーザーID検出
                 m = RE_USER_AUTH.search(line)
-                if m and not get_my_user_id():
+                if m:
                     uid = m.group(1)
                     set_my_user_id(uid)
                     self._log(f"UserID検出: {uid}")
                     threading.Thread(target=lambda: register_user(uid), daemon=True).start()
-
-                # インスタンスタイプ検出
-                m = RE_JOINING.search(line)
-                if m:
-                    # 既存の処理...
                     return
         except Exception as e:
-            self._log(f"インスタンス検出エラー: {e}")
+            self._log(f"ユーザーID検出エラー: {e}")
 
     def stop(self):
         self._running = False
