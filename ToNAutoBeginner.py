@@ -9,6 +9,8 @@ git config --global user.email "serim7146@gmail.com"
 git config --global user.name "serim7146-coder"
 git commit -m "変更内容"
 git push origin main
+
+git pull origin main
 """
 
 import json
