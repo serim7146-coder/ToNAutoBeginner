@@ -1,7 +1,6 @@
 """
 Compile
-python -m nuitka ton_macro.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --lto=yes --clang --follow-imports
-pyinstaller --onedir --windowed --name "ToNAutoBeginner" --hidden-import win32gui --hidden-import win32con --hidden-import win32api --hidden-import pydirectinput --hidden-import keyboard ton_macro.py
+python -m nuitka ToNAutoBeginner.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --lto=yes --clang --follow-imports
 """
 
 import json
