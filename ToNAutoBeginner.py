@@ -24,6 +24,7 @@ import keyboard
 import pydirectinput
 import win32gui, win32con
 import urllib.request
+import urllib.error
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -499,15 +500,30 @@ def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
         _CSV_RECENT.append({"ts": now_ts, "key": key})
 
     def _send():
-    try:
-        data = json.dumps({...}).encode()
-        req = urllib.request.Request(...)
-        with urllib.request.urlopen(req) as res:
-            print(f"Supabase応答: {res.status} {res.read()}")
-    except urllib.error.HTTPError as e:
-        print(f"HTTPエラー: {e.code} {e.read()}")
-    except Exception as e:
-        print(f"送信エラー: {e}")
+        try:
+            data = json.dumps({
+                "date": date,
+                "time": time,
+                "round": round_name,
+                "terror_ids": terror_ids,
+                "map_id": map_id,
+            }).encode()
+            req = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/ToNRoundStatistics",
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req) as res:
+                print(f"Supabase応答: {res.status}")
+        except urllib.error.HTTPError as e:
+            print(f"HTTPエラー: {e.code} {e.read()}")
+        except Exception as e:
+            print(f"送信エラー: {e}")
 
     threading.Thread(target=_send, daemon=True).start()
 
