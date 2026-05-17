@@ -33,9 +33,6 @@ from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 # ═══════════════════════════════════════════════
 #  CONSTANTS
 # ═══════════════════════════════════════════════
@@ -536,7 +533,7 @@ def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
     threading.Thread(target=_send, daemon=True).start()
     
     def register_user(uid: str):
-    """usersテーブルにユーザーを登録してhashを取得する"""
+        """usersテーブルにユーザーを登録してhashを取得する"""
         try:
             import random
             # 存在確認
@@ -699,28 +696,26 @@ class LogMonitor:
         self._thread.start()
 
     def _detect_instance_from_log(self):
-        """ログファイルを末尾から遡り、最後のJoining行からインスタンスタイプを取得する"""
         if not self.cfg.log_path or not self.cfg.log_path.exists():
             return
         try:
             with open(self.cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-            # 末尾から遡って最初に見つかったJoining行を使用
             for line in reversed(lines):
                 line = RE_LOG_PREFIX.sub("", line).strip()
+                
+                # ユーザーID検出
+                m = RE_USER_AUTH.search(line)
+                if m and not get_my_user_id():
+                    uid = m.group(1)
+                    set_my_user_id(uid)
+                    self._log(f"UserID検出: {uid}")
+                    threading.Thread(target=lambda: register_user(uid), daemon=True).start()
+
+                # インスタンスタイプ検出
                 m = RE_JOINING.search(line)
                 if m:
-                    suffix = m.group(2)
-                    if f"group({HOSHIIMO_GROUP_ID})" in suffix:
-                        itype = INSTANCE_HOSHIIMO
-                    elif "~group(" in suffix:
-                        itype = INSTANCE_OTHER_GROUP
-                    elif "~friends" in suffix or "~hidden" in suffix or "~private" in suffix or "~private" in suffix:
-                        itype = INSTANCE_PRIVATE
-                    else:
-                        itype = INSTANCE_PUBLIC
-                    set_instance_type(itype)
-                    self._log(f"インスタンスタイプ検出: {itype}")
+                    # 既存の処理...
                     return
         except Exception as e:
             self._log(f"インスタンス検出エラー: {e}")
