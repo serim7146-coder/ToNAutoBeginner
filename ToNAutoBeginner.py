@@ -277,6 +277,13 @@ def _continue_round_reset():
 FOCUS_WAIT_SEC = 0.3
 
 
+# ── SUPABASE ──
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# テスト用
+print(f"URL: {SUPABASE_URL}")
+print(f"KEY: {SUPABASE_KEY}")
+
 # ═══════════════════════════════════════════════
 #  ログ正規表現
 # ═══════════════════════════════════════════════
