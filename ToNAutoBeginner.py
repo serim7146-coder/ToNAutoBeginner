@@ -2,7 +2,14 @@
 Compile
 python -m nuitka ToNAutoBeginner.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --lto=yes --clang --follow-imports
 """
-
+"""
+github実行手順
+git add .
+git config --global user.email "serim7146@gmail.com"
+git config --global user.name "serim7146-coder"
+git commit -m "変更内容"
+git push origin main
+"""
 import json
 import os
 import re
