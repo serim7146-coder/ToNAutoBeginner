@@ -1,0 +1,4 @@
+# requirements.txt
+pywin32
+pydirectinput
+keyboard
