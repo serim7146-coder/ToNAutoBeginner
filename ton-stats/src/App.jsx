@@ -47,13 +47,29 @@ function BarChart({ counts, color }) {
 export default function App() {
   const [input, setInput] = useState('')
   const [playerHash, setPlayerHash] = useState(null)
+  const [excluded, setExcluded] = useState(new Set(['Classic', 'Run']))  // デフォルト除外
   const { rows, loading, error } = useRounds(playerHash)
 
-  // 集計
+  // 全ラウンド名リスト
+  const allRounds = [...new Set(rows.map(r => r.round))].sort()
+
+  // 除外フィルタ適用
+  const filteredRows = rows.filter(r => !excluded.has(r.round))
+
+  const toggleExclude = (round) => {
+    setExcluded(prev => {
+      const next = new Set(prev)
+      if (next.has(round)) next.delete(round)
+      else next.add(round)
+      return next
+    })
+  }
+
+  // 集計はfilteredRowsを使う
   const roundCounts = {}
   const terrorCounts = {}
   const mapCounts = {}
-  rows.forEach(r => {
+  filteredRows.forEach(r => {
     roundCounts[r.round] = (roundCounts[r.round] || 0) + 1
     if (Array.isArray(r.terror_ids)) {
       r.terror_ids.forEach(id => {
@@ -78,6 +94,18 @@ export default function App() {
       </header>
 
       <div className="filter-bar">
+        <div className="round-filter">
+          {allRounds.map(round => (
+            <label key={round} className="filter-chip"
+              style={{ opacity: excluded.has(round) ? 0.4 : 1 }}>
+              <input type="checkbox"
+                checked={!excluded.has(round)}
+                onChange={() => toggleExclude(round)} />
+              <span style={{ color: colorFor(round) }}>■</span>
+              {round}
+            </label>
+          ))}
+        </div>
         <label>Player Hash</label>
         <input
           type="number"

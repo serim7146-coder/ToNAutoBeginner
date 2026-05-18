@@ -15,6 +15,7 @@ git pull origin main
 
 import json
 import os
+import sys
 import re
 import time
 import glob
@@ -31,7 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-load_dotenv()
+base = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+load_dotenv(base / ".env")
 
 # ═══════════════════════════════════════════════
 #  CONSTANTS
