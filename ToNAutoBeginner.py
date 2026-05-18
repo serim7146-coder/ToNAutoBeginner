@@ -15,7 +15,6 @@ git pull origin main
 
 import json
 import os
-import sys
 import re
 import time
 import glob
@@ -31,9 +30,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
-base = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
-load_dotenv(base / ".env")
+
+SUPABASE_URL="https://cpmosqeufhdknzwyfvio.supabase.co"
+SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNwbW9zcWV1Zmhka256d3lmdmlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNDE2MDQsImV4cCI6MjA5NDYxNzYwNH0.k-EGeBWYZ6HexnK1o8jncneEK50Ff00qu5d5HGJCYSw"
 
 # ═══════════════════════════════════════════════
 #  CONSTANTS
@@ -275,11 +274,6 @@ def _continue_round_reset():
 # ウィンドウフォーカス切り替え後の安定待機
 FOCUS_WAIT_SEC = 0.3
 
-
-# ── SUPABASE ──
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 # ═══════════════════════════════════════════════
 #  ログ正規表現
 # ═══════════════════════════════════════════════
@@ -451,33 +445,26 @@ def set_voice_volume(v: float):
 
 
 def play_voice(path: str):
-    """音声ファイルを非同期再生する（.wav/.mp3対応）"""
     if not path:
         return
     p = Path(path)
     if not p.exists():
         return
-    vol = int(get_voice_volume() * 100)
     def _play():
         try:
             import subprocess
-            # PowerShellでSoundPlayerを使って再生（音量はWScriptで制御）
-            script = (
-                f'$vol = {vol};'
-                f'$obj = New-Object -ComObject WScript.Shell;'
-                f'Add-Type -AssemblyName System.Windows.Forms;'
-                f'[System.Windows.Forms.SendKeys]::SendWait([char]0xAD) | Out-Null;'  # mute trick
-                f'$p = New-Object Media.SoundPlayer \"{p}\";'
-                f'$p.PlaySync();'
-            )
-            # シンプルにSoundPlayerで再生（音量はOS側のミキサーに依存）
             subprocess.Popen(
                 ["powershell", "-c",
-                 f'(New-Object Media.SoundPlayer "{p}").PlaySync()'],
+                 f'Add-Type -AssemblyName presentationcore; '
+                 f'$mp = New-Object System.Windows.Media.MediaPlayer; '
+                 f'$mp.Open([Uri]"{p.absolute()}"); '
+                 f'$mp.Play(); '
+                 f'Start-Sleep -s 2; '
+                 f'$mp.Close()'],
                 creationflags=0x08000000
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"音声再生エラー: {e}")
     threading.Thread(target=_play, daemon=True).start()
 
 
@@ -666,6 +653,7 @@ class WindowConfig:
     voice_continue: str = ""   # 続行ラウンド音声ファイルパス
     voice_fog: str = ""        # 霧ラウンド音声ファイルパス
     voice_item_lost: str = ""  # アイテムロスト音声ファイルパス
+    voice_foxy: str = ""  # Foxy出現音声ファイルパス
 
 
 # ═══════════════════════════════════════════════
@@ -862,7 +850,7 @@ class LogMonitor:
         if RE_FOXY.search(line):
             # 「foxy the pirate turned evil!」→ Alternate ID2（+134=136）確定
             self._log("🦊 Foxyが出た！")
-            # ここにフォクシーの出現の音声を追加する
+            play_voice(self.cfg.voice_foxy)
             
             # もし霧なら自爆するか判定する(他はRE_KILLERS_SETから行う)
             if st.round_type == "fog":
@@ -1637,14 +1625,16 @@ class App(tk.Tk):
                     ) or v.get()
                 )).pack(side="left")
 
-        self.v_voice_continue    = tk.StringVar(value=VOICE_CONTINUE)
-        self.v_voice_fog         = tk.StringVar(value=VOICE_FOG)
-        self.v_voice_item_lost   = tk.StringVar(value=VOICE_ITEM_LOST)
+        self.v_voice_continue     = tk.StringVar(value=VOICE_CONTINUE)
+        self.v_voice_fog          = tk.StringVar(value=VOICE_FOG)
+        self.v_voice_item_lost    = tk.StringVar(value=VOICE_ITEM_LOST)
         self.v_voice_intermission = tk.StringVar(value=VOICE_INTERMISSION)
+        self.v_voice_foxy         = tk.StringVar(value=VOICE_FOXY)
         voice_row(fv, "続行ラウンド:", self.v_voice_continue)
         voice_row(fv, "霧ラウンド:", self.v_voice_fog)
         voice_row(fv, "アイテムロスト:", self.v_voice_item_lost)
         voice_row(fv, "Intermission:", self.v_voice_intermission)
+        voice_row(fv, "Foxy:", self.v_voice_foxy)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -1845,6 +1835,7 @@ class App(tk.Tk):
             cfg.voice_fog          = self.v_voice_fog.get().strip()
             cfg.voice_item_lost    = self.v_voice_item_lost.get().strip()
             cfg.voice_intermission = self.v_voice_intermission.get().strip()
+            cfg.voice_foxy          = self.v_voice_foxy.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
             mon = LogMonitor(cfg, self.keepOn_set, self._log, window_idx=tab.idx + 1)
             self.monitors.append(mon)
