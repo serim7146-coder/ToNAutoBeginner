@@ -532,46 +532,46 @@ def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
 
     threading.Thread(target=_send, daemon=True).start()
     
-    def register_user(uid: str):
-        """usersテーブルにユーザーを登録してhashを取得する"""
-        try:
-            import random
-            # 存在確認
+def register_user(uid: str):
+    """Usersテーブルにユーザーを登録してhashを取得する"""
+    try:
+        import random
+        # 存在確認
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/Users?id=eq.{uid}&select=hash",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+            }
+        )
+        with urllib.request.urlopen(req) as res:
+            data = json.loads(res.read())
+        if data:
+            return data[0]["hash"]
+
+        # 新規登録
+        while True:
+            hash_val = random.randint(-32768, 32767)
+            data = json.dumps({"id": uid, "hash": hash_val}).encode()
             req = urllib.request.Request(
-                f"{SUPABASE_URL}/rest/v1/users?id=eq.{uid}&select=hash",
+                f"{SUPABASE_URL}/rest/v1/Users",
+                data=data,
                 headers={
+                    "Content-Type": "application/json",
                     "apikey": SUPABASE_KEY,
                     "Authorization": f"Bearer {SUPABASE_KEY}",
-                }
+                    "Prefer": "return=representation",
+                },
+                method="POST"
             )
-            with urllib.request.urlopen(req) as res:
-                data = json.loads(res.read())
-            if data:
-                return data[0]["hash"]
-
-            # 新規登録
-            while True:
-                hash_val = random.randint(-32768, 32767)
-                data = json.dumps({"id": uid, "hash": hash_val}).encode()
-                req = urllib.request.Request(
-                    f"{SUPABASE_URL}/rest/v1/users",
-                    data=data,
-                    headers={
-                        "Content-Type": "application/json",
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}",
-                        "Prefer": "return=representation",
-                    },
-                    method="POST"
-                )
-                try:
-                    with urllib.request.urlopen(req) as res:
-                        return json.loads(res.read())[0]["hash"]
-                except:
-                    # hash衝突なら再試行
-                    continue
-        except Exception as e:
-            print(f"ユーザー登録エラー: {e}")
+            try:
+                with urllib.request.urlopen(req) as res:
+                    return json.loads(res.read())[0]["hash"]
+            except:
+                # hash衝突なら再試行
+                continue
+    except Exception as e:
+        print(f"ユーザー登録エラー: {e}")
 
 
 def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
