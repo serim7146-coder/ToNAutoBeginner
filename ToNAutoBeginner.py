@@ -277,9 +277,6 @@ FOCUS_WAIT_SEC = 0.3
 # ── SUPABASE ──
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-# テスト用
-print(f"URL: {SUPABASE_URL}")
-print(f"KEY: {SUPABASE_KEY}")
 
 # ═══════════════════════════════════════════════
 #  ログ正規表現
@@ -489,7 +486,6 @@ _CSV_RECENT: list[tuple] = []
 _CSV_DEDUP_SEC = 2  # 同一インスタンスとみなす誤差秒数
 
 def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
-    """ラウンド結果をSupabaseに送信する（非同期・重複排除付き）"""
     now = datetime.now()
     date = int(now.strftime("%Y%m%d"))
     time = int(now.strftime("%H%M%S"))
@@ -512,6 +508,7 @@ def post_to_supabase(round_name: str, terror_ids: list[int], map_id: int):
                 "round": round_name,
                 "terror_ids": terror_ids,
                 "map_id": map_id,
+                "player_id": get_my_user_hash() if get_my_user_hash() != 0 else None,
             }).encode()
             req = urllib.request.Request(
                 f"{SUPABASE_URL}/rest/v1/ToNRoundStatistics",
@@ -542,12 +539,16 @@ def register_user(uid: str):
             headers={
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Accept": "application/json",  # ← 追加
             }
         )
         with urllib.request.urlopen(req) as res:
             data = json.loads(res.read())
+            print(f"存在確認結果: {data}")
         if data:
-            return data[0]["hash"]
+            set_my_user_hash(data[0]["hash"])
+            print(f"既存ユーザー hash: {data[0]['hash']}")
+            return
 
         # 新規登録
         while True:
@@ -566,9 +567,9 @@ def register_user(uid: str):
             )
             try:
                 with urllib.request.urlopen(req) as res:
-                    return json.loads(res.read())[0]["hash"]
+                    set_my_user_hash(hash_val)  # ← 成功後にセット
+                    return
             except:
-                # hash衝突なら再試行
                 continue
     except Exception as e:
         print(f"ユーザー登録エラー: {e}")
@@ -618,6 +619,7 @@ def click_at():
 # ═══════════════════════════════════════════════
 #  ユーザーIDの設定
 # ═══════════════════════════════════════════════
+# ── ユーザーID ──
 _MY_USER_ID: str = ""
 _MY_USER_ID_LOCK = threading.Lock()
 
@@ -629,6 +631,19 @@ def set_my_user_id(uid: str):
     global _MY_USER_ID
     with _MY_USER_ID_LOCK:
         _MY_USER_ID = uid
+
+# ── ユーザーハッシュ ──
+_MY_USER_HASH: int = 0
+_MY_USER_HASH_LOCK = threading.Lock()
+
+def get_my_user_hash() -> int:
+    with _MY_USER_HASH_LOCK:
+        return _MY_USER_HASH
+
+def set_my_user_hash(h: int):
+    global _MY_USER_HASH
+    with _MY_USER_HASH_LOCK:
+        _MY_USER_HASH = h
 
 # ═══════════════════════════════════════════════
 #  窓ごとの設定
