@@ -701,17 +701,40 @@ class LogMonitor:
         try:
             with open(self.cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
+            found_user = False
+            found_instance = False
             for line in reversed(lines):
                 line = RE_LOG_PREFIX.sub("", line).strip()
-                m = RE_USER_AUTH.search(line)
-                if m:
-                    uid = m.group(1)
-                    set_my_user_id(uid)
-                    self._log(f"UserID検出: {uid}")
-                    threading.Thread(target=lambda: register_user(uid), daemon=True).start()
+
+                if not found_user:
+                    m = RE_USER_AUTH.search(line)
+                    if m:
+                        uid = m.group(1)
+                        set_my_user_id(uid)
+                        self._log(f"UserID検出: {uid}")
+                        threading.Thread(target=register_user, args=(uid,), daemon=True).start()
+                        found_user = True
+
+                if not found_instance:
+                    m = RE_JOINING.search(line)
+                    if m:
+                        suffix = m.group(2)
+                        if f"group({HOSHIIMO_GROUP_ID})" in suffix:
+                            itype = INSTANCE_HOSHIIMO
+                        elif "~group(" in suffix:
+                            itype = INSTANCE_OTHER_GROUP
+                        elif "~friends" in suffix or "~hidden" in suffix or "~private" in suffix:
+                            itype = INSTANCE_PRIVATE
+                        else:
+                            itype = INSTANCE_PUBLIC
+                        set_instance_type(itype)
+                        self._log(f"インスタンスタイプ検出: {itype}")
+                        found_instance = True
+
+                if found_user and found_instance:
                     return
         except Exception as e:
-            self._log(f"ユーザーID検出エラー: {e}")
+            self._log(f"検出エラー: {e}")
 
     def stop(self):
         self._running = False
