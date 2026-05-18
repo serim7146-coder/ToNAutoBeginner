@@ -101,9 +101,91 @@ header p { font-size: 12px; color: var(--dim); letter-spacing: .3em; text-transf
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 24px; }
 .panel h2 { font-family: 'Cinzel', serif; font-size: 11px; letter-spacing: .25em; color: var(--dim); text-transform: uppercase; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 
-.bar-list { display: flex; flex-direction: column; gap: 8px; max-height: 400px; overflow-y: auto; }
-.bar-item { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.bar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  padding-right: 8px;  /* 追加 */
+}
+.bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;  /* 追加 */
+  padding-right: 4px;  /* 追加 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
 .bar-label { width: 160px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 3px; transition: width .8s cubic-bezier(.4,0,.2,1); }
-.bar-count { width: 48px; text-align: right; color: var(--dim); font-size: 12px; flex-shrink: 0; }
+.bar-count {
+  width: 48px;
+  text-align: right;
+  color: var(--text);  /* dimからtextに変更 */
+  font-size: 12px;
+  flex-shrink: 0;
+  min-width: 48px;     /* 追加 */
+}
+.filter-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.toggle-common {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'Cinzel', serif;
+  font-size: 11px;
+  letter-spacing: .1em;
+  padding: 6px 14px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.toggle-common:hover {
+  border-color: var(--accent);
+}
+
+.chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.legend {
+  flex: 1;
+  min-width: 150px;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,.03);
+  font-size: 12px;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.legend-name { flex: 1; }
+.legend-count { color: var(--dim); min-width: 36px; text-align: right; font-size: 11px; }
+.legend-pct { color: var(--accent2); min-width: 40px; text-align: right; font-size: 11px; }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRounds } from './hooks/useRounds'
 import { terrorName } from './terrors'
 import './App.css'
@@ -16,12 +16,73 @@ const colorFor = r => {
   return "#555577"
 }
 
+const DEFAULT_EXCLUDED = new Set(['Classic', 'Run'])
+
 function StatCard({ title, value, sub }) {
   return (
     <div className="stat-card">
       <h3>{title}</h3>
       <div className="value">{value}</div>
       {sub && <div className="sub">{sub}</div>}
+    </div>
+  )
+}
+
+function PieChart({ counts }) {
+  const canvasRef = useRef(null)
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1])
+  const total = entries.reduce((s, [, v]) => s + v, 0)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !total) return
+    const ctx = canvas.getContext('2d')
+    const W = canvas.width, H = canvas.height
+    ctx.clearRect(0, 0, W, H)
+    const cx = W / 2, cy = H / 2
+    const r = Math.min(W, H) / 2 - 8
+    const inner = r * 0.55
+    let angle = -Math.PI / 2
+    entries.forEach(([name, count]) => {
+      const slice = (count / total) * Math.PI * 2
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, r, angle, angle + slice)
+      ctx.closePath()
+      ctx.fillStyle = colorFor(name)
+      ctx.fill()
+      ctx.strokeStyle = '#080810'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+      angle += slice
+    })
+    ctx.beginPath()
+    ctx.arc(cx, cy, inner, 0, Math.PI * 2)
+    ctx.fillStyle = '#0e0e1a'
+    ctx.fill()
+    ctx.fillStyle = '#c9a84c'
+    ctx.font = 'bold 24px Cinzel, serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(total.toLocaleString(), cx, cy - 8)
+    ctx.font = '10px Crimson Pro, serif'
+    ctx.fillStyle = '#50506a'
+    ctx.fillText('ROUNDS', cx, cy + 12)
+  }, [counts])
+
+  return (
+    <div className="chart-wrap">
+      <canvas ref={canvasRef} width={240} height={240} />
+      <div className="legend">
+        {entries.map(([name, count]) => (
+          <div key={name} className="legend-item">
+            <span className="legend-dot" style={{ background: colorFor(name) }} />
+            <span className="legend-name">{name}</span>
+            <span className="legend-count">{count.toLocaleString()}</span>
+            <span className="legend-pct">{((count / total) * 100).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -47,13 +108,10 @@ function BarChart({ counts, color }) {
 export default function App() {
   const [input, setInput] = useState('')
   const [playerHash, setPlayerHash] = useState(null)
-  const [excluded, setExcluded] = useState(new Set(['Classic', 'Run']))  // デフォルト除外
+  const [excluded, setExcluded] = useState(new Set(DEFAULT_EXCLUDED))
   const { rows, loading, error } = useRounds(playerHash)
 
-  // 全ラウンド名リスト
   const allRounds = [...new Set(rows.map(r => r.round))].sort()
-
-  // 除外フィルタ適用
   const filteredRows = rows.filter(r => !excluded.has(r.round))
 
   const toggleExclude = (round) => {
@@ -65,7 +123,24 @@ export default function App() {
     })
   }
 
-  // 集計はfilteredRowsを使う
+  // ClassicとRunを一括トグル
+  const COMMON_ROUNDS = ['Classic', 'Run']
+  const isCommonExcluded = COMMON_ROUNDS.every(r =>
+    allRounds.some(ar => ar.includes(r)) ? excluded.has(allRounds.find(ar => ar.includes(r))) : true
+  )
+  const toggleCommon = () => {
+    setExcluded(prev => {
+      const next = new Set(prev)
+      const targets = allRounds.filter(r => COMMON_ROUNDS.includes(r))
+      if (isCommonExcluded) {
+        targets.forEach(r => next.delete(r))
+      } else {
+        targets.forEach(r => next.add(r))
+      }
+      return next
+    })
+  }
+
   const roundCounts = {}
   const terrorCounts = {}
   const mapCounts = {}
@@ -94,6 +169,23 @@ export default function App() {
       </header>
 
       <div className="filter-bar">
+        <div className="filter-controls">
+          <label>Player Hash</label>
+          <input
+            type="number"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="ハッシュ値（空=全員）"
+          />
+          <button onClick={() => setPlayerHash(input ? Number(input) : null)}>読み込む</button>
+          <button onClick={() => { setInput(''); setPlayerHash(null) }}>全員表示</button>
+          <button onClick={toggleCommon} className="toggle-common">
+            {isCommonExcluded ? 'Classic/Run を表示' : 'Classic/Run を除外'}
+          </button>
+          <button onClick={() => setExcluded(new Set())}>全表示</button>
+          <button onClick={() => setExcluded(new Set(allRounds))}>全除外</button>
+          <span className="status">{loading ? '読み込み中…' : `${rows.length.toLocaleString()}件`}</span>
+        </div>
         <div className="round-filter">
           {allRounds.map(round => (
             <label key={round} className="filter-chip"
@@ -106,39 +198,35 @@ export default function App() {
             </label>
           ))}
         </div>
-        <label>Player Hash</label>
-        <input
-          type="number"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="ハッシュ値（空=全員）"
-        />
-        <button onClick={() => setPlayerHash(input ? Number(input) : null)}>読み込む</button>
-        <button onClick={() => { setInput(''); setPlayerHash(null) }}>全員表示</button>
-        <span className="status">{loading ? '読み込み中…' : `${rows.length.toLocaleString()}件`}</span>
       </div>
 
       {error && <p style={{ color: '#c44' }}>エラー: {error}</p>}
 
       <div className="stats-row">
         <StatCard title="総ラウンド数" value={rows.length.toLocaleString()} />
-        <StatCard title="最多ラウンド" value={top?.[0] ?? '—'} sub={top ? `${top[1].toLocaleString()} rounds` : ''} />
-        <StatCard title="ユニークラウンド" value={new Set(rows.map(r => r.round)).size} />
         <StatCard title="記録期間" value={dates.length ? `${fmt(dates[0])} 〜 ${fmt(dates[dates.length-1])}` : '—'} />
       </div>
 
       <div className="grid-2">
         <div className="panel">
-          <h2>テラー遭遇ランキング</h2>
-          <BarChart counts={terrorCounts} color="#a07bd4" />
+          <h2>ラウンド分布
+            <button onClick={toggleCommon} className="toggle-common" style={{ marginLeft: '12px', fontSize: '10px', padding: '4px 10px' }}>
+              {isCommonExcluded ? 'Classic/Run 表示' : 'Classic/Run 除外'}
+            </button>
+          </h2>
+          <PieChart counts={roundCounts} />
         </div>
         <div className="panel">
-          <h2>ラウンド別詳細</h2>
-          <BarChart counts={roundCounts} color="#c9a84c" />
+          <h2>遭遇ランキング</h2>
+          <BarChart counts={terrorCounts} color="#a07bd4" />
         </div>
       </div>
 
       <div className="grid-2">
+        <div className="panel">
+          <h2>ラウンド別詳細</h2>
+          <BarChart counts={roundCounts} color="#c9a84c" />
+        </div>
         <div className="panel">
           <h2>マップ別ラウンド数</h2>
           <BarChart counts={mapCounts} color="#4a9a8a" />
