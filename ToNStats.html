@@ -125,11 +125,22 @@ function terrorName(id){
   return terrors.classic[s]||terrors.alternate[s]||`ID:${id}`;
 }
 
-async function fetchAll(hash){
-  let url=`${SB_URL}/rest/v1/ToNRoundStatistics?select=*&order=date.desc,time.desc&limit=10000`;
-  if(hash)url+=`&player_id=eq.${hash}`;
-  const res=await fetch(url,{headers:{"apikey":SB_KEY,"Authorization":`Bearer ${SB_KEY}`}});
-  return res.json();
+async function fetchAll(hash) {
+  let all = [];
+  let offset = 0;
+  const limit = 1000;
+  while (true) {
+    let url = `${SB_URL}/rest/v1/ToNRoundStatistics?select=*&order=date.desc,time.desc&limit=${limit}&offset=${offset}`;
+    if (hash) url += `&player_id=eq.${hash}`;
+    const res = await fetch(url, {
+      headers: { "apikey": SB_KEY, "Authorization": `Bearer ${SB_KEY}` }
+    });
+    const rows = await res.json();
+    all = all.concat(rows);
+    if (rows.length < limit) break;
+    offset += limit;
+  }
+  return all;
 }
 
 async function loadData(){
