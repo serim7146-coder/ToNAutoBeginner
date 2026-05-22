@@ -15,6 +15,7 @@ git pull origin main
 
 import json
 import os
+import sys
 import re
 import time
 import glob
@@ -24,20 +25,23 @@ import keyboard
 import pydirectinput
 import win32gui
 import urllib.request
-import urllib.error
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
 
 import config
 import PlaySound
 import WindowOperator
 import ConnectDB
 
-SUPABASE_URL="https://cpmosqeufhdknzwyfvio.supabase.co"
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNwbW9zcWV1Zmhka256d3lmdmlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNDE2MDQsImV4cCI6MjA5NDYxNzYwNH0.k-EGeBWYZ6HexnK1o8jncneEK50Ff00qu5d5HGJCYSw"
+base = Path(sys.executable).parent if getattr(sys, '__compiled__', False) else Path(__file__).parent
+load_dotenv(base / ".env")
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # ═══════════════════════════════════════════════
 #  CONSTANTS
