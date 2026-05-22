@@ -17,7 +17,7 @@ ConnectDB.py
 
 ProcessLog.py
 ・process(self, log: str) # ログを解析し適切にアクションする
-    ・RE_ROUND_START： in_roundをTrueに、map_idと、round_typeを取得する。もし霧だったら自動操作をフリーズ
+    ・RE_ROUND_START：in_round = True, map_idとround_typeを取得する。もし霧だったら自動操作をフリーズ
     ・RE_KILLERS_SET：round_typeを確定(Alternateだったのが、Classicになるようだったら、Alternateにする。それ以外は取得情報で管理)
                      霧以外のterror_idsを確定。続行がいなかったら自爆する。また、アイテムロストラウンドだった場合、waiting_for_equip = True
     ・RE_KILLERS_UNKNOWN：完全放置モードの時はこのログで自爆

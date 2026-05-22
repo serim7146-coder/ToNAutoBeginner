@@ -1,8 +1,60 @@
-import re
+import time
 import threading
+from dataclasses import dataclass, field
+from pathlib import Path
 
-import config
+import WindowOperator
+import PlaySound
+import ConnectDB
 
+# ═══════════════════════════════════════════════
+#  窓ごとの設定
+# ═══════════════════════════════════════════════
+@dataclass
+class WindowConfig:
+    hwnd: int = 0
+    log_path: Path = None
+    active: bool = True
+    auto_begin: bool = True
+    do_skip: bool = True
+    cancel_afk: bool = True      # DTM/Waldo続行（3クラまで）
+    hoshiimo_skip: bool = False  # 干し芋自動自爆
+    voice_intermission: str = "" # Intermission音声
+    announce_intermission: bool = False  # Intermissionアナウンス
+    voice_continue: str = ""   # 続行ラウンド音声ファイルパス
+    voice_fog: str = ""        # 霧ラウンド音声ファイルパス
+    voice_item_lost: str = ""  # アイテムロスト音声ファイルパス
+    voice_foxy: str = ""  # Foxy出現音声ファイルパス
+
+
+# ═══════════════════════════════════════════════
+#  1窓の実行状態
+# ═══════════════════════════════════════════════
+@dataclass
+class WindowState:
+    log_pos: int = 0
+    # Round情報
+    in_round: bool = False
+    round_type: str = ""
+    terror_ids: list = field(default_factory=list)
+    map_id: int = 0                    # マップID（括弧内の数字）
+    transformed_uid: str = ""
+    # 自爆関係
+    fog: bool = False
+    is_continue_round: bool = False  # 続行/霧ラウンド中（他窓フリーズ中）
+    _skip_time: float = 0.0        # 自爆実行時刻（RoundOver判定用）
+    begin_done: bool = False   # Beginが正常に押されたか(Connecting)
+    # 3クラ開け
+    is_OpenSpecialRound_round: bool = False     # 現在のラウンドが特殊ラウンドを開けるラウンドかどうか
+    OpenSpecialRound_wins: int = 0              # 窓ごとの勝利数
+    # アイテム関係
+    item_id: int = 1             # 何のアイテムを所持しているか(未所持は0となる)
+    waiting_for_equip: bool = False  # アイテム装備待ち（操作権限を譲渡中）
+
+
+# ═══════════════════════════════════════════════
+#  ログ監視ワーカー
+# ═══════════════════════════════════════════════
 class LogMonitor:
     def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0):
         self.cfg = cfg
@@ -37,7 +89,7 @@ class LogMonitor:
                         uid = m.group(1)
                         set_my_user_id(uid)
                         self._log(f"UserID検出: {uid}")
-                        threading.Thread(target=ConnectDB.send_Users, args=(uid,), daemon=True).start()
+                        threading.Thread(target=ConnectDB.send_Users(uid), args=(uid,), daemon=True).start()
                         found_user = True
 
                 if not found_instance:
@@ -125,7 +177,7 @@ class LogMonitor:
                 _EQUIP_WAIT_EVENT.set()
                 self._log("一時的にアイテムロストフリーズを解除")
 
-            if st.round_type in "Run":
+            if st.round_type in INSTANT_ROUND_TYPES:
                 # Runは死亡してアイテムロスト対応へ
                 st.is_continue_round = False
                 self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
@@ -244,7 +296,7 @@ class LogMonitor:
                 self._log("▶ 続行/霧ラウンド終了 → 他窓フリーズ解除")
             # アイテムロスト判定（放置モード中はフリーズしない）
             if not get_hands_free():
-                if st.round_type in ITEM_LOST_ROUNDS:
+                if st.round_type in ITEM_LOSS_ROUNDS:
                     st.item_id = 0
                     if get_item_get_begin_mode():
                         # アイテム取得→Beginモード: ラウンド終了時点でフォーカス・全窓フリーズ
@@ -261,7 +313,7 @@ class LogMonitor:
                 else:
                     self._log("ラウンド終了")
             else:
-                if st.round_type in ITEM_LOST_ROUNDS:
+                if st.round_type in ITEM_LOSS_ROUNDS:
                     st.item_id = 0
                 self._log("ラウンド終了")
             # CSVにラウンド結果を記録（重複排除・ユーザーID付き）
@@ -430,13 +482,13 @@ class LogMonitor:
                 self._log("自爆キャンセル（ロック取得後にアイテムロスト待ち検出）")
                 return
             self.st._skip_time = time.time()   # 自爆実行時刻を記録
-            self._log(f"自爆実行中 ({SUSIDE_HOLD_SEC}秒)…")
+            self._log(f"自爆実行中 ({DESTRUCT_HOLD_SEC}秒)…")
             self._focus()
-            WindowOperator.hold_key(get_destruct_key(), SUSIDE_HOLD_SEC)
+            WindowOperator.hold_key(get_destruct_key(), DESTRUCT_HOLD_SEC)
 
     def _do_after_round(self):
         """
-        ラウンド終了後: 待機 → [購入+Begin前移動] → Beginクリック&リトライ
+        ラウンド終了後: 待機 → [購入+Begin前移動] → Beginクリック＆リトライ
 
         ロック戦略:
           - 購入・移動・クリック: ロックを取って実行（他窓と干渉しない）

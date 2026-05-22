@@ -13,7 +13,7 @@ sys.modules['win32gui'] = MagicMock()
 sys.modules['keyboard'] = MagicMock()
 sys.modules['pydirectinput'] = MagicMock()
 
-import WindowOperator
+import src.WindowOperator as WindowOperator
 
 class TestFocusWindow(unittest.TestCase):
     def test_hwnd_zero_skips(self):
@@ -55,7 +55,7 @@ class TestClickAt(unittest.TestCase):
 # ═══════════════════════════════════════════════
 #  ConnectDB.py
 # ═══════════════════════════════════════════════
-import ConnectDB
+import src.ConnectDB as ConnectDB
 
 class TestGetTransformedUid(unittest.TestCase):
     def test_send_Users(self):
@@ -158,7 +158,7 @@ class TestGetTransformedUid(unittest.TestCase):
 # ═══════════════════════════════════════════════
 #  PlaySound.py
 # ═══════════════════════════════════════════════
-import PlaySound
+import src.PlaySound as PlaySound
 class TestPlaySound(unittest.TestCase):
     def test_get_sound_volume(self):
         result = PlaySound.get_sound_volume()
