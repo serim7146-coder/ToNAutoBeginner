@@ -1,0 +1,30 @@
+WindowOperator.py
+・focus_window(hwnd: int) # hwndに対応したwindowを前面に持ってくる
+・hold_key(key: str, sec: float) # sec秒間、keyで渡されたキーを押す
+・click() # 左クリックする
+
+PlaySound.py
+volumeの初期値は1.0
+・get_sound_volume() -> volume
+・set_voice_volume(volume: float)
+・play_sound(path: str)
+
+ConnectDB.py
+・send_Users(VRChat_uid: str) #UsersテーブルにVRChat_uidとtransformed_uid(他と被らないint2の任意の値)を送る
+・get_Users(VRChat_uid: str) -> transformed_uid
+・send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int, VRChat_uid: str)
+・get_ToNRoundStatistics()
+
+ProcessLog.py
+・process(self, log: str) # ログを解析し適切にアクションする
+    ・RE_ROUND_START： in_roundをTrueに、map_idと、round_typeを取得する。もし霧だったら自動操作をフリーズ
+    ・RE_KILLERS_SET：round_typeを確定(Alternateだったのが、Classicになるようだったら、Alternateにする。それ以外は取得情報で管理)
+                     霧以外のterror_idsを確定。続行がいなかったら自爆する。また、アイテムロストラウンドだった場合、waiting_for_equip = True
+    ・RE_KILLERS_UNKNOWN：完全放置モードの時はこのログで自爆
+    ・RE_KILLERS_REVEALED：霧のterror_idsを確定、続行ではなかったら自爆する。
+    ・RE_FOXY：Foxyの出現をアナウンス。また、霧であれば、続行を確認(その他はKILLERS_SETで確認される。)
+    ・RE_JOINING：インスタンスタイプを取得
+    ・RE_ROUND_OVER：in_roundをFalseに、
+    ・RE_VERIFIED_END：自動Begin開始。begin_done = False
+    ・RE_BEGIN_DONE：begin_done = True
+    ・RE_ITEM_EQUIP：waiting_for_equip = falseとなる。
