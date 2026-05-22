@@ -3,9 +3,7 @@ Compile
 python -m nuitka ToNAutoBeginner.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --lto=yes --clang --follow-imports
 """
 
-import json
 import os
-import re
 import glob
 import threading
 import tkinter as tk
@@ -28,347 +26,6 @@ VRCHAT_LOG_DIR = (
 ).resolve()
 
 VRCHAT_WINDOW_CLASS  = "UnityWndClass"
-LOG_POLL_INTERVAL    = 0.3
-SELF_DESTRUCT_KEY    = "^"  # デフォルト値（GUIで変更可能）
-
-# ── 自動Begin ──
-
-BEGIN_WAIT_SEC        = 0.0    # ラウンド終了後Beginまでの待機
-BEGIN_FORWARD_SEC     = 2.1    # Begin前の前進時間
-BEGIN_LEFT_SEC        = 0.11   # Begin前の左移動時間
-
-BEGIN_RETRY_LEFT_SEC  = 0.05   # Beginリトライ時の左移動時間
-BEGIN_RETRY_RIGHT_SEC = 0.11   # Beginリトライ時の右移動時間
-BEGIN_RETRY_WAIT_SEC  = 2.0    # リトライの間隔
-BEGIN_RETRY_MAX       = 4      # リトライ回数（初回Beginは含まない）
-
-# ── 自動自爆 ──
-
-DESTRUCT_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
-
-# ── アイテムロストが発生するラウンド ──
-ITEM_LOSS_ROUNDS = {
-    "Randomizer",
-    "Punished",
-    "8 Pages",
-    "Run",
-}
-
-INSTANT_ROUND_TYPES = {"Run"}
-
-# ── インスタンス管理 ──
-HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
-CBPS_GROUP_ID     = "" # 後ほど埋めます。
-
-# ── グループインスタンスで、自動自爆するラウンド ──
-HOSHIIMO_SKIP_ROUNDS = {
-    "Classic",
-    "Classic.exe",
-    "Bloodbath",
-    "Randomizer",
-}
-CBPS_SKIP_ROUNDS = {
-    "Classic",
-    "Bloodbath",
-    "Double Trouble",
-    "Bloodbath EX"
-    "Randomizer",
-    "Punish",
-    "Sabotage",
-}
-
-# ── インスタンスタイプ定数 ──
-INSTANCE_PUBLIC        = "public"
-INSTANCE_PRIVATE       = "private"
-INSTANCE_HOSHIIMO      = "hoshiimo"
-INSTANCE_CBPS          = "cbps"
-INSTANCE_OTHER_GROUP   = "other_group"
-
-# ── インスタンスタイプ(初期はパブリックを仮定) ──
-_CURRENT_INSTANCE_TYPE = INSTANCE_PUBLIC
-_INSTANCE_LOCK = threading.Lock()
-
-def get_instance_type() -> str:
-    with _INSTANCE_LOCK:
-        return _CURRENT_INSTANCE_TYPE
-
-def set_instance_type(t: str):
-    global _CURRENT_INSTANCE_TYPE
-    with _INSTANCE_LOCK:
-        _CURRENT_INSTANCE_TYPE = t
-
-# ラウンド開始時点で即続行確定・他窓フリーズ開始するラウンド
-# （Killers行を待たずにtaking place行で確定）
-INSTANT_CONTINUE_TYPES = {
-    "Fog",             # 霧（テラー不問で続行）
-    "Fog (Alternate)", # 霧Alternate（テラー不問で続行）
-}
-
-# Alternate枠テラーのオフセット設定
-# ログID 0〜35 のテラーは Alternate枠 → +134 してtnlスロットIDに変換する
-# tnlのAlternateスロットは134〜169として登録されているため
-ALTERNATE_OFFSET  = 134
-ALTERNATE_LOG_MAX = 35   # ログIDが0〜35 = Alternate枠テラー
-
-# ラウンドタイプごとの「何番目の枠がAlternate枠か（0始まり）」
-# None = 全枠がAlternate（Alternateラウンド単体）
-# キー = ログの "Round type is XXX" の XXX 部分
-ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
-    "Alternate":           None,  # 全枠Alternate → +134
-    "Midnight":            [2],   # 3枠目のみAlternate → +134
-    "Fog (Alternate)":     None,  # 全枠Alternate → +134、tnl照合はFog
-    "Ghost (Alternate)":   None,  # 全枠Alternate → +134、tnl照合はGhost
-    # 通常の Fog/Ghost/8Pages はClassicテラーのみ → オフセット不要
-}
-
-# ── 特殊ラウンド ──
-SPECIAL_ROUND_TNL_KEYS = {
-    "Classic.exe",
-    "Randomizer",
-    "8 Pages",
-    "Fog",
-    "Ghost",
-    "Punished",
-    "Sabotage",
-    "Bloodbath",
-    "Double Trouble",
-    "Bloodbath EX",
-    "Cracked",
-    "Alternate",
-    "Midnight",
-    "Unbound",
-    "Mystic Moon",
-    "Blood Moon",
-    "Twilight",
-    "Solstice",
-    "Fog (Alternate)",
-    "Ghost (Alternate)",
-    "Sabotage star",
-    "Sabotage murder",
-    "Special",
-}
-
-REPLACEMENT_ROUND_TNL_KEYS = {
-    "Classic.exe/Classic.exe",
-    "Randomizer/Randomizer",
-    "Fog (Alternate)/霧 (Alternate)",
-    "Ghost (Alternate)/ゴースト (Alternate)",
-    "Bloodbath EX/ブラッドバスEX",
-    "Special/Moon",
-}
-
-# ── 3クラ続行設定 ──────────────────────────────
-# DTM / Waldo のテラーID（GUIから設定可能、不明な場合は0のまま）
-# ログに "Killers have been set - X 0 0 // Round type is ..." が出たときのXがID
-DontTouchMe = 50
-Waldo = 131
-OpenSpecialRound_TERROR_IDS: set[int] = {DontTouchMe, Waldo}
-
-OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらジャンプ停止するか（窓ごと）
-OpenSpecialRound_INTERVAL_SEC = 60.0    # AFK回避の移動の間隔（秒）
-
-# 生存/死亡ログ
-RE_LIVED = re.compile(r"^Lived in round[.]$")
-RE_YOU_DIED = re.compile(r"^You died[.]$")  # 自爆成功検出
-
-# ── 多窓排他制御 ──────────────────────────────
-# 全窓で共有するロック。キー入力・マウス操作は必ずこのロックを取ってから実行する。
-# これにより「窓Aが自爆中に窓Bが割り込む」ことを防ぐ。
-_GLOBAL_ACTION_LOCK = threading.Lock()
-
-# 自爆キー（GUIから変更可能）
-_DESTRUCT_KEY = SELF_DESTRUCT_KEY
-_DESTRUCT_KEY_LOCK = threading.Lock()
-
-def get_destruct_key() -> str:
-    with _DESTRUCT_KEY_LOCK:
-        return _DESTRUCT_KEY
-
-def set_destruct_key(key: str):
-    global _DESTRUCT_KEY
-    with _DESTRUCT_KEY_LOCK:
-        _DESTRUCT_KEY = key
-
-# 装備待ちイベント（アイテムロストラウンド後のBegin押下から装備まで全窓フリーズ）
-# set() 状態 = 通常動作可能、clear() 状態 = 装備待ち中（他窓のアクションをブロック）
-_EQUIP_WAIT_EVENT = threading.Event()
-_EQUIP_WAIT_EVENT.set()   # 初期値は通常動作可能
-
-_ITEM_GET_BEGIN_MODE = False
-_ITEM_GET_BEGIN_LOCK = threading.Lock()
-
-def get_item_get_begin_mode() -> bool:
-    with _ITEM_GET_BEGIN_LOCK:
-        return _ITEM_GET_BEGIN_MODE
-
-def set_item_get_begin_mode(val: bool):
-    global _ITEM_GET_BEGIN_MODE
-    with _ITEM_GET_BEGIN_LOCK:
-        _ITEM_GET_BEGIN_MODE = val
-
-_HANDS_FREE = False
-_HANDS_FREE_LOCK = threading.Lock()
-
-def get_hands_free() -> bool:
-    with _HANDS_FREE_LOCK:
-        return _HANDS_FREE
-
-def set_hands_free(val: bool):
-    global _HANDS_FREE
-    with _HANDS_FREE_LOCK:
-        _HANDS_FREE = val
-
-# 続行・霧ラウンド中フリーズイベント
-# set() = 通常動作可能、clear() = 続行/霧ラウンド中（他窓をブロック）
-_CONTINUE_ROUND_EVENT = threading.Event()
-_CONTINUE_ROUND_EVENT.set()   # 初期値は通常動作可能
-_CONTINUE_ROUND_COUNT = 0     # 続行ラウンド中の窓数カウンター
-_CONTINUE_ROUND_LOCK  = threading.Lock()  # カウンター操作用ロック
-
-def _continue_round_start():
-    """続行ラウンド開始：カウンターを増やしてフリーズ"""
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        _CONTINUE_ROUND_COUNT += 1 # 続行が二つ来た時、片方が死んだらフリーズ解除される現象があり、それを回避するため
-        _CONTINUE_ROUND_EVENT.clear()
-
-def _continue_round_end():
-    """続行ラウンド終了：カウンターを減らし、0になったらフリーズ解除"""
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        _CONTINUE_ROUND_COUNT = max(0, _CONTINUE_ROUND_COUNT - 1)
-        if _CONTINUE_ROUND_COUNT == 0:
-            _CONTINUE_ROUND_EVENT.set()
-
-def _continue_round_reset():
-    """停止時など強制リセット"""
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        _CONTINUE_ROUND_COUNT = 0
-        _CONTINUE_ROUND_EVENT.set()
-
-# ウィンドウフォーカス切り替え後の安定待機
-FOCUS_WAIT_SEC = 0.3
-
-# ═══════════════════════════════════════════════
-#  ログ正規表現
-# ═══════════════════════════════════════════════
-RE_ROUND_START      = re.compile(r"This round is taking place at (.+) and the round type is (.+)") # ラウンド突入(180s段階)
-RE_MAP_ID           = re.compile(r"\((\d+)\)$")   # マップ名からID抽出
-RE_KILLERS_SET      = re.compile(r"Killers have been set - (\d+) (\d+) (\d+) // Round type is (.+)") # テラー判明ログ
-RE_KILLERS_UNKNOWN  = re.compile(r"Killers is unknown - \?\?\? // .+ // Round type is (.+)") # 霧ラウンド時に最初のログ
-RE_KILLERS_REVEALED = re.compile(r"Killers have been revealed - (\d+) (\d+) (\d+) // Round type is (.+)") # 霧ラウンド時のテラー判明時のログ
-RE_FOXY             = re.compile(r"foxy the pirate turned evil!", re.IGNORECASE)  # Foxyの出現ログ
-RE_JOINING          = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)") # インスタンスタイプを取得するためのJoinログ
-RE_ROUND_OVER       = re.compile(r"^RoundOver$") # ラウンド終了
-RE_VERIFIED_END     = re.compile(r"^Verified Round End$") # intermission突入
-RE_BEGIN_DONE       = re.compile(r"^Verified$") # connecting突入
-RE_ITEM_EQUIP       = re.compile(r"^Equipping (\d+)[.]")   # アイテム装備検出
-
-RE_USER_AUTH        = re.compile(r"User Authenticated: \S+ \((usr_[0-9a-f-]+)\)")
-RE_LOG_PREFIX       = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
-
-
-# ═══════════════════════════════════════════════
-#  ラウンドタイプ → TNLキー
-# ═══════════════════════════════════════════════
-LOG_TO_TNL = {
-    "Classic":           "Classic/クラシック",
-    "Classic.exe":       "Classic.exe/Classic.exe",
-    "Randomizer":        "Randomizer/Randomizer",
-    "8 Pages":           "8 Pages/8ページ",
-    "Fog":               "Fog/霧",
-    "Ghost":             "Ghost/ゴースト",
-    "Punished":          "Punished/パニッシュ",
-    "Sabotage":          "Sabotage/サボタージュ",
-    "Bloodbath":         "Bloodbath/ブラッドバス",
-    "Double Trouble":    "Double Trouble/ダブルトラブル",
-    "Bloodbath EX":      "Bloodbath EX/ブラッドバスEX",
-    "Cracked":           "Cracked/狂気",
-    "Alternate":         "Alternate/オルタネイト",
-    "Midnight":          "Midnight/ミッドナイト",
-    "Unbound":           "Unbound/アンバウンド",
-    "Run":               "Run/走れ！",
-    "Mystic Moon":       "Mystic Moon/ミスティックムーン",
-    "Blood Moon":        "Blood Moon/ブラッドムーン",
-    "Twilight":          "Twilight/トワイライト",
-    "Solstice":          "Solstice/ソルスティス",
-    "Fog (Alternate)":   "Fog/霧",             # tnl照合は通常Fogスロット
-    "Ghost (Alternate)": "Ghost/ゴースト",     # tnl照合は通常Ghostスロット
-    "Sabotage star":     "Sabotage star/サボタージュスター",
-    "Sabotage murder":   "Sabotage murder/サボタージュマーダー",
-    "Special":           "Special/Moon",
-    "Moon":              "Special/Moon",
-}
-
-
-# ═══════════════════════════════════════════════
-#  TNLデータ
-# ═══════════════════════════════════════════════
-def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    data = raw.get("data", {})
-    keepOn_set: dict[str, set[int]] = {}
-    for round_key, slots in data.items():
-        if not isinstance(slots, dict):
-            continue
-        ids = {int(k) for k, v in slots.items() if isinstance(v, int) and v != 0}
-        if ids:
-            keepOn_set[round_key] = ids
-    meta = {k: raw.get(k, "") for k in ("list_name", "creator", "created_at")}
-    return keepOn_set, meta
-
-
-def should_continue(keepOn_set: dict, tnl_key: str, terror_ids: list[int]) -> bool:
-    if tnl_key not in keepOn_set:
-        return False
-    return any(t in keepOn_set[tnl_key] for t in terror_ids)
-
-
-def parse_terror_ids(a: str, b: str, c: str, round_type: str = "") -> list[int]:
-    ids = [int(x) for x in (a, b, c)]
-    if round_type in ("Midnight", "Bloodbath"):
-        return ids[:3]
-    elif round_type in ("Double Trouble", "8 Pages"):
-        return ids[:2]
-    else:
-        return ids[:1]
-
-
-# April Fool期間中の特例: Alternate ID→tnlID の特別マッピング
-# キー=ログに出るID(オフセット適用後), 値=tnlでの実際のID
-ALTERNATE_ID_OVERRIDE: dict[int, int] = {
-    136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
-}
-
-# Unboundラウンドのオフセット: ログID + 200 = tnlスロットID
-UNBOUND_OFFSET = 200
-
-
-def apply_alternate_offset(ids: list[int], round_type: str) -> list[int]:
-    """
-    Alternate枠テラーのログID（0〜35）を +134 してtnlスロットIDに変換する。
-    round_type = ログの "Round type is XXX" の XXX 部分
-    - Midnight: 3枠目（index=2）のみAlternate
-    - Alternate/Fog(Alternate)/Ghost(Alternate)/8Pages(Alternate): 全枠Alternate
-    - その他（通常8Pages/Fog/Ghost等）: オフセットなし
-    """
-    if round_type not in ALTERNATE_SLOT_POSITIONS:
-        return ids
-    positions = ALTERNATE_SLOT_POSITIONS[round_type]  # None=全枠, list=指定枠のみ
-    result = []
-    for i, tid in enumerate(ids):
-        is_alt_slot = (positions is None) or (i in positions)
-        if is_alt_slot and 0 <= tid <= ALTERNATE_LOG_MAX:
-            converted = tid + ALTERNATE_OFFSET
-            # April Fool等の特例マッピング
-            result.append(ALTERNATE_ID_OVERRIDE.get(converted, converted))
-        else:
-            result.append(tid)
-    return result
-
-
 # ═══════════════════════════════════════════════
 #  ウィンドウ操作
 # ═══════════════════════════════════════════════
@@ -739,11 +396,11 @@ class App(tk.Tk):
         fk = ttk.Frame(self)
         fk.pack(fill="x", padx=12, pady=(0, 4))
         ttk.Label(fk, text="自爆キー:").pack(side="left")
-        self.v_destruct_key = tk.StringVar(value=SELF_DESTRUCT_KEY)
-        ek = ttk.Entry(fk, textvariable=self.v_destruct_key, width=6)
+        self.v_suside_key = tk.StringVar(value=LogMonitor.SELF_SUSIDE_KEY)
+        ek = ttk.Entry(fk, textvariable=self.v_suside_key, width=6)
         ek.pack(side="left", padx=(6, 4))
         ttk.Button(fk, text="適用",
-                   command=lambda: set_destruct_key(self.v_destruct_key.get().strip())
+                   command=lambda: LogMonitor.set_suside_key(self.v_suside_key.get().strip())
                    ).pack(side="left")
 
         # ③ 窓数・ログ
@@ -886,8 +543,8 @@ class App(tk.Tk):
         self._rebuild_tabs(n)
 
     def _toggle_item_get_begin(self):
-        val = not get_item_get_begin_mode()
-        set_item_get_begin_mode(val)
+        val = not LogMonitor.get_item_get_begin_mode()
+        LogMonitor.set_item_get_begin_mode(val)
         if val:
             self.btn_item_get_begin.config(
                 text="🎯 アイテム取得→Begin: ON（全窓共通）",
@@ -900,8 +557,8 @@ class App(tk.Tk):
             self._log("[アイテム取得→Begin] OFF")
 
     def _toggle_hands_free(self):
-        val = not get_hands_free()
-        set_hands_free(val)
+        val = not LogMonitor.get_hands_free()
+        LogMonitor.set_hands_free(val)
         if val:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: ON（全窓共通）",
@@ -928,7 +585,7 @@ class App(tk.Tk):
             messagebox.showerror("エラー", "tnlファイルが見つかりません")
             return
         try:
-            self.keepOn_set, meta = load_tnl(p)
+            self.keepOn_set, meta = LogMonitor.load_tnl(p)
             total = sum(len(v) for v in self.keepOn_set.values())
             msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 スキップ対象"
             self.lbl_tnl.config(text=msg, foreground=GRN)
@@ -1017,8 +674,8 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
 
     def _stop(self):
-        _EQUIP_WAIT_EVENT.set()          # フリーズ中でも確実に解除
-        _continue_round_reset()        # 続行ラウンドフリーズも解除
+        LogMonitor._EQUIP_WAIT_EVENT.set()          # フリーズ中でも確実に解除
+        LogMonitor._continue_round_reset()        # 続行ラウンドフリーズも解除
         for m in self.monitors:
             m.stop()
         self.monitors.clear()
