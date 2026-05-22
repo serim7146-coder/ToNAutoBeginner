@@ -10,9 +10,8 @@ def focus_window(hwnd: int):
     if hwnd == 0:
         return
     try:
-        with SharedState._GLOBAL_ACTION_LOCK:
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(config.OPERATOR_WAIT_SEC)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(config.OPERATOR_WAIT_SEC)
     except Exception:
         pass
 

@@ -39,17 +39,17 @@ RE_JOINING          = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?
 #  排他制御
 # ═══════════════════════════════════════════════
 # 自爆キー（GUIから変更可能）
-_SUSIDE_KEY = config.SELF_SUSIDE_KEY
-_SUSIDE_KEY_LOCK = threading.Lock()
+_SUICIDE_KEY = config.SELF_SUICIDE_KEY
+_SUICIDE_KEY_LOCK = threading.Lock()
 
-def get_suside_key() -> str:
-    with _SUSIDE_KEY_LOCK:
-        return _SUSIDE_KEY
+def get_suicide_key() -> str:
+    with _SUICIDE_KEY_LOCK:
+        return _SUICIDE_KEY
 
-def set_suside_key(key: str):
-    global _SUSIDE_KEY
-    with _SUSIDE_KEY_LOCK:
-        _SUSIDE_KEY = key
+def set_suicide_key(key: str):
+    global _SUICIDE_KEY
+    with _SUICIDE_KEY_LOCK:
+        _SUICIDE_KEY = key
 
 # 装備待ちイベント（アイテムロストラウンド後のBegin押下から装備まで全窓フリーズ）
 # set() 状態 = 通常動作可能、clear() 状態 = 装備待ち中（他窓のアクションをブロック）
@@ -583,9 +583,9 @@ class LogMonitor:
                 self._log("自爆キャンセル（ロック取得後にアイテムロスト待ち検出）")
                 return
             self.st._skip_time = time.time()   # 自爆実行時刻を記録
-            self._log(f"自爆実行中 ({config.SUSIDE_HOLD_SEC}秒)…")
+            self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒)…")
             self._focus()
-            WindowOperator.hold_key(get_suside_key(), config.SUSIDE_HOLD_SEC)
+            WindowOperator.hold_key(get_suicide_key(), config.SUICIDE_HOLD_SEC)
 
     def _do_after_round(self):
         """

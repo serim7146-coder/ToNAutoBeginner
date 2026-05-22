@@ -52,11 +52,14 @@ BEGIN_RETRY_WAIT_SEC  = 2.0    # リトライの間隔
 BEGIN_RETRY_MAX       = 4      # リトライ回数（初回Beginは含まない）
 
 # ── 自動自爆 ──
-SELF_SUSIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
-SUSIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
+SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
 
 # ── 3クラ続行設定 ──────────────────────────────
-OpenSpecialRound_TERROR_IDS: set[int] = {ReadJson.terror_id("Don't Touch Me"), ReadJson.terror_id("Waldo")}
+OpenSpecialRound_TERROR_IDS: set[int] = {
+    ReadJson.terror_id("Don't Touch Me", TERRORS),
+    ReadJson.terror_id("Waldo", TERRORS)
+}
 OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらジャンプ停止するか（窓ごと）
 OpenSpecialRound_INTERVAL_SEC = 60.0    # AFK回避の移動の間隔（秒）
 
@@ -82,7 +85,7 @@ CBPS_SKIP_ROUNDS = {
     "Classic",
     "Bloodbath",
     "Double Trouble",
-    "Bloodbath EX"
+    "Bloodbath EX",
     "Randomizer",
     "Punish",
     "Sabotage",
@@ -100,3 +103,6 @@ VOICE_FOG          = "../voice/Fog.mp3"
 VOICE_ITEM_LOST    = "../voice/ItemLost.mp3"
 VOICE_INTERMISSION = "../voice/intermission.mp3"
 VOICE_FOXY         = "../voice/foxy.mp3"
+
+# 自動操作後の待ち時間
+OPERATOR_WAIT_SEC = 0.05

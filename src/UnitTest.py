@@ -5,16 +5,18 @@ import sys
 import json
 from datetime import datetime
 
-# ═══════════════════════════════════════════════
-#  WindowOperator.py
-# ═══════════════════════════════════════════════
+import WindowOperator
+import ConnectDB
+import PlaySound
+
 # Windowsライブラリをモック化
 sys.modules['win32gui'] = MagicMock()
 sys.modules['keyboard'] = MagicMock()
 sys.modules['pydirectinput'] = MagicMock()
 
-import src.WindowOperator as WindowOperator
-
+# ═══════════════════════════════════════════════
+#  WindowOperator.py
+# ═══════════════════════════════════════════════
 class TestFocusWindow(unittest.TestCase):
     def test_hwnd_zero_skips(self):
         """hwnd=0の時は何もしない"""
@@ -55,8 +57,6 @@ class TestClickAt(unittest.TestCase):
 # ═══════════════════════════════════════════════
 #  ConnectDB.py
 # ═══════════════════════════════════════════════
-import src.ConnectDB as ConnectDB
-
 class TestGetTransformedUid(unittest.TestCase):
     def test_send_Users(self):
         """新規ユーザー登録"""
@@ -158,7 +158,6 @@ class TestGetTransformedUid(unittest.TestCase):
 # ═══════════════════════════════════════════════
 #  PlaySound.py
 # ═══════════════════════════════════════════════
-import src.PlaySound as PlaySound
 class TestPlaySound(unittest.TestCase):
     def test_get_sound_volume(self):
         result = PlaySound.get_sound_volume()

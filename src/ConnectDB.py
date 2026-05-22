@@ -4,6 +4,7 @@ import json
 import random
 import threading
 import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -70,7 +71,7 @@ def send_Users(VRChat_uid: str) -> int:
 def get_transformed_uid(VRChat_uid: str) -> int:
     try:
         req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/Users?vrchat_id=eq.{VRChat_uid}&select=transformed_uid",
+            f"{SUPABASE_URL}/rest/v1/Users?VRChat_uid=eq.{VRChat_uid}&select=transformed_uid",
             headers={
                 "apikey": SUPABASE_KEY,
                 "Authorization": f"Bearer {SUPABASE_KEY}",
