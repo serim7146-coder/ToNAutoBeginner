@@ -1,8 +1,5 @@
 import time
-import re
 import threading
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
 import config
@@ -10,30 +7,10 @@ import SharedState
 import WindowOperator
 import PlaySound
 import ConnectDB
-import MatchTNL
 import ReadJson
-
-
-# ═══════════════════════════════════════════════
-#  ログ正規表現
-# ═══════════════════════════════════════════════
-RE_ROUND_START      = re.compile(r"This round is taking place at (.+) and the round type is (.+)") # ラウンド突入(180s段階)
-RE_MAP_ID           = re.compile(r"\((\d+)\)$")   # マップ名からID抽出
-RE_KILLERS_SET      = re.compile(r"Killers have been set - (\d+) (\d+) (\d+) // Round type is (.+)") # テラー判明ログ
-RE_KILLERS_UNKNOWN  = re.compile(r"Killers is unknown - \?\?\? // .+ // Round type is (.+)") # 霧ラウンド時に最初のログ
-RE_KILLERS_REVEALED = re.compile(r"Killers have been revealed - (\d+) (\d+) (\d+) // Round type is (.+)") # 霧ラウンド時のテラー判明時のログ
-RE_FOXY             = re.compile(r"foxy the pirate turned evil!", re.IGNORECASE)  # Foxyの出現ログ
-RE_LIVED            = re.compile(r"^Lived in round[.]$") # 生存
-RE_YOU_DIED         = re.compile(r"^You died[.]$")  # 死亡
-RE_ROUND_OVER       = re.compile(r"^RoundOver$") # ラウンド終了
-RE_VERIFIED_END     = re.compile(r"^Verified Round End$") # intermission突入
-RE_BEGIN_DONE       = re.compile(r"^Verified$") # connecting突入
-RE_ITEM_EQUIP       = re.compile(r"^Equipping (\d+)[.]")   # アイテム装備検出
-
-
-RE_USER_AUTH        = re.compile(r"User Authenticated: \S+ \((usr_[0-9a-f-]+)\)")
-RE_LOG_PREFIX       = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
-RE_JOINING          = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)") # インスタンスタイプを取得するためのJoinログ
+import LogParser
+import RoundDecision
+from State import WindowConfig, WindowState
 
 
 # ═══════════════════════════════════════════════
@@ -119,51 +96,6 @@ def format_terror_ids(ids: list[int]) -> str:
 
 
 # ═══════════════════════════════════════════════
-#  窓ごとの設定
-# ═══════════════════════════════════════════════
-@dataclass
-class WindowConfig:
-    hwnd: int = 0
-    log_path: Optional[Path] = None
-    active: bool = True
-    auto_begin: bool = True
-    do_skip: bool = True
-    cancel_afk: bool = True      # DTM/Waldo続行（3クラまで）
-    hoshiimo_skip: bool = False  # 干し芋自動自爆
-    voice_intermission: str = "" # Intermission音声
-    announce_intermission: bool = False  # Intermissionアナウンス
-    voice_continue: str = ""   # 続行ラウンド音声ファイルパス
-    voice_fog: str = ""        # 霧ラウンド音声ファイルパス
-    voice_item_lost: str = ""  # アイテムロスト音声ファイルパス
-    voice_foxy: str = ""  # Foxy出現音声ファイルパス
-    
-
-# ═══════════════════════════════════════════════
-#  1窓の実行状態
-# ═══════════════════════════════════════════════
-@dataclass
-class WindowState:
-    log_pos: int = 0
-    # Round情報
-    in_round: bool = False
-    round_type: str = ""
-    terror_ids: list = field(default_factory=list)
-    map_id: int = 0                    # マップID（括弧内の数字）
-    transformed_uid: str = ""
-    # 自爆関係
-    fog: bool = False
-    is_continue_round: bool = False  # 続行/霧ラウンド中（他窓フリーズ中）
-    _skip_time: float = 0.0        # 自爆実行時刻（RoundOver判定用）
-    begin_done: bool = False   # Beginが正常に押されたか(Connecting)
-    # 3クラ開け
-    is_OpenSpecialRound_round: bool = False     # 現在のラウンドが特殊ラウンドを開けるラウンドかどうか
-    OpenSpecialRound_wins: int = 0              # 窓ごとの勝利数
-    # アイテム関係
-    item_id: int = 1             # 何のアイテムを所持しているか(未所持は0となる)
-    waiting_for_equip: bool = False  # アイテム装備待ち（操作権限を譲渡中）
-
-
-# ═══════════════════════════════════════════════
 #  ログ監視ワーカー
 # ═══════════════════════════════════════════════
 class LogMonitor:
@@ -192,32 +124,27 @@ class LogMonitor:
             found_user = False
             found_instance = False
             for line in reversed(lines):
-                line = RE_LOG_PREFIX.sub("", line).strip()
+                event = LogParser.parse(line)
 
-                if not found_user:
-                    m = RE_USER_AUTH.search(line)
-                    if m:
-                        VRChat_uid = m.group(1)
-                        self._log(f"UserID検出: {VRChat_uid}")
-                        self.st.transformed_uid = ConnectDB.send_Users(VRChat_uid)  
-                        self._log(f"transformed_uid: {self.st.transformed_uid}")
-                        found_user = True
+                if not found_user and event and event.kind == LogParser.EVENT_USER_AUTH:
+                    self._log(f"UserID検出: {event.user_id}")
+                    self.st.transformed_uid = ConnectDB.send_Users(event.user_id)
+                    self._log(f"transformed_uid: {self.st.transformed_uid}")
+                    found_user = True
 
-                if not found_instance:
-                    m = RE_JOINING.search(line)
-                    if m:
-                        suffix = m.group(2)
-                        if f"group({config.HOSHIIMO_GROUP_ID})" in suffix:
-                            itype = config.INSTANCE_HOSHIIMO
-                        elif "~group(" in suffix:
-                            itype = config.INSTANCE_OTHER_GROUP
-                        elif "~friends" in suffix or "~hidden" in suffix or "~private" in suffix:
-                            itype = config.INSTANCE_PRIVATE
-                        else:
-                            itype = config.INSTANCE_PUBLIC
-                        SharedState.set_instance_type(itype)
-                        self._log(f"インスタンスタイプ検出: {itype}")
-                        found_instance = True
+                if not found_instance and event and event.kind == LogParser.EVENT_JOINING:
+                    suffix = event.suffix
+                    if f"group({config.HOSHIIMO_GROUP_ID})" in suffix:
+                        itype = config.INSTANCE_HOSHIIMO
+                    elif "~group(" in suffix:
+                        itype = config.INSTANCE_OTHER_GROUP
+                    elif "~friends" in suffix or "~hidden" in suffix or "~private" in suffix:
+                        itype = config.INSTANCE_PRIVATE
+                    else:
+                        itype = config.INSTANCE_PUBLIC
+                    SharedState.set_instance_type(itype)
+                    self._log(f"インスタンスタイプ検出: {itype}")
+                    found_instance = True
 
                 if found_user and found_instance:
                     return
@@ -246,7 +173,6 @@ class LogMonitor:
                     self.st.log_pos = f.tell()
                 if chunk:
                     for line in chunk.splitlines():
-                        line = RE_LOG_PREFIX.sub("", line).strip()
                         self._process(line)
             except Exception as e:
                 self._log(f"読み取りエラー: {e}")
@@ -255,8 +181,11 @@ class LogMonitor:
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
         st = self.st
-        
-        if RE_BEGIN_DONE.match(line):
+        event = LogParser.parse(line)
+        if not event:
+            return
+
+        if event.kind == LogParser.EVENT_BEGIN_DONE:
             st.begin_done = True
             self._log("✅ Connecting")
             # アイテムロスト中のBegin確認
@@ -270,18 +199,16 @@ class LogMonitor:
                     threading.Thread(target=_delayed_release, daemon=True).start()
             return
 
-        m = RE_ROUND_START.match(line)
-        if m:
-            map_match = RE_MAP_ID.search(m.group(1).strip())
+        if event.kind == LogParser.EVENT_ROUND_START:
             st.in_round        = True
-            st.round_type      = m.group(2).strip()
+            st.round_type      = event.round_type
             st.terror_ids      = []
-            st.map_id          = int(map_match.group(1)) if map_match else 0
+            st.map_id          = event.map_id
             st.fog             = False
             st.begin_done      = False
             st.is_OpenSpecialRound_round   = False
-            if not map_match:
-                self._log(f"Map IDを抽出できませんでした: {m.group(1).strip()}")
+            if not event.map_id_found:
+                self._log(f"Map IDを抽出できませんでした: {event.raw_map}")
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -308,34 +235,30 @@ class LogMonitor:
                 self._log(f"開始: {st.round_type}")
             return
 
-        m = RE_KILLERS_SET.match(line)
-        if m:
+        if event.kind == LogParser.EVENT_KILLERS_SET:
             # 特殊ラウンドを経験したら3勝扱い（OpenSpecialRound_completed=True）
             if st.round_type in config.SPECIAL_ROUND:
                 st.OpenSpecialRound_wins = config.OpenSpecialRound_TARGET_WINS
-            if not (st.round_type == "Alternate" and m.group(4).strip() == "Classic"): # AF期間中は極まれに偽Classicがある
-                st.round_type = m.group(4).strip()
-            self._on_killers(
-                MatchTNL.parse_terror_ids(m.group(1), m.group(2), m.group(3), st.round_type)
-                , st.round_type, revealed=False
-            )
+            if not (st.round_type == "Alternate" and event.round_type == "Classic"): # AF期間中は極まれに偽Classicがある
+                st.round_type = event.round_type
+            self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
             return
 
-        if RE_YOU_DIED.match(line):
+        if event.kind == LogParser.EVENT_YOU_DIED:
             if st._skip_time > 0 and (time.time() - st._skip_time) <= 3.0:
                 self._log("✅ 自爆成功")
                 st._skip_time = 0.0
             st.is_OpenSpecialRound_round = False
             return
 
-        if RE_ROUND_OVER.match(line):
+        if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
             # アイテムロスト音声: auto_beginなしの場合はRoundOverで流す
             if st.waiting_for_equip and not self.cfg.auto_begin:
                 PlaySound.play_sound(self.cfg.voice_item_lost)
             return
 
-        if RE_VERIFIED_END.match(line):
+        if event.kind == LogParser.EVENT_VERIFIED_END:
             # 続行/霧ラウンドのフリーズ解除
             if st.is_continue_round:
                 st.is_continue_round = False
@@ -374,16 +297,16 @@ class LogMonitor:
             return
 
         # Fogラウンド突入
-        if RE_KILLERS_UNKNOWN.match(line):
+        if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
             st.fog  = True
-            st.round_type = "Fog"
+            st.round_type = event.round_type or "Fog"
             self._log(f"テラー不明 → revealed待ち")
             if get_hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
                 threading.Thread(target=self._do_skip, daemon=True).start()
             return
 
-        if RE_FOXY.search(line):
+        if event.kind == LogParser.EVENT_FOXY:
             # 「foxy the pirate turned evil!」→ Alternate ID2（+134=136）確定
             self._log("🦊 Foxyが出た！")
             PlaySound.play_sound(self.cfg.voice_foxy)
@@ -393,16 +316,12 @@ class LogMonitor:
                 self._on_killers([2], st.round_type, revealed=True)
             return
 
-        m = RE_KILLERS_REVEALED.match(line)
-        if m:
-            self._on_killers(
-                MatchTNL.parse_terror_ids(m.group(1), m.group(2), m.group(3), m.group(4).strip()),
-                m.group(4).strip(), revealed=True)
+        if event.kind == LogParser.EVENT_KILLERS_REVEALED:
+            self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
             return
 
-        m = RE_JOINING.search(line)
-        if m:
-            suffix = m.group(2)
+        if event.kind == LogParser.EVENT_JOINING:
+            suffix = event.suffix
             if f"group({config.HOSHIIMO_GROUP_ID})" in suffix:
                 itype = config.INSTANCE_HOSHIIMO
             elif "~group(" in suffix:
@@ -416,9 +335,8 @@ class LogMonitor:
             return
         
         # アイテム装備検出（操作権限譲渡中の再開トリガー）
-        m = RE_ITEM_EQUIP.match(line)
-        if m:
-            st.item_id = int(m.group(1))
+        if event.kind == LogParser.EVENT_ITEM_EQUIP:
+            st.item_id = event.item_id
             self._log(f"✅ アイテム装備 (id={st.item_id})")
             if st.waiting_for_equip:
                 # 両条件（装備＋Begin）が揃ったら2秒後に解除
@@ -431,7 +349,7 @@ class LogMonitor:
                     threading.Thread(target=_delayed_release, daemon=True).start()
             return
         
-        if RE_LIVED.match(line):
+        if event.kind == LogParser.EVENT_LIVED:
             if st.is_OpenSpecialRound_round:
                 st.OpenSpecialRound_wins += 1
                 self._log(f"生存数: {st.OpenSpecialRound_wins}/{config.OpenSpecialRound_TARGET_WINS}")
@@ -446,12 +364,7 @@ class LogMonitor:
         st = self.st
         st.fog = False
 
-        # Alternate枠のオフセット補正（round_type で判定）
-        ids = MatchTNL.apply_alternate_offset(ids, round_type)
-
-        # Unboundラウンドのオフセット補正: ログID + 200 = tnlID
-        if st.round_type == "Unbound":
-            ids = [tid + MatchTNL.UNBOUND_OFFSET for tid in ids]
+        ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
         for tid in ids:
@@ -511,21 +424,16 @@ class LogMonitor:
                 return
             # DTM/Waldobなので通常判定へ（is_OpenSpecialRound_target で続行）
 
-        # 累積テラーIDで判定（複数体ラウンド対応）
         all_ids = st.terror_ids  # すでに累積済み
-        is_special_round = st.round_type in config.SPECIAL_ROUND
-
-        is_OpenSpecialRound_target = (
-            bool(all_ids and config.OpenSpecialRound_TERROR_IDS and
-                 any(t in config.OpenSpecialRound_TERROR_IDS for t in all_ids))
-            and not is_special_round
-            and st.OpenSpecialRound_wins < config.OpenSpecialRound_TARGET_WINS
-            and self.cfg.cancel_afk   # 窓ごとの設定
+        decision = RoundDecision.decide_killers(
+            self.keepOn_set,
+            all_ids,
+            st.round_type,
+            st.OpenSpecialRound_wins,
+            self.cfg.cancel_afk,
         )
-
-        # 続行判定: 1体でも続行希望があれば続行
-        # 特殊ラウンド中・3勝後のDTM/WaldoはtnlのみでkeepOn判定
-        st.is_continue_round = MatchTNL.should_continue(self.keepOn_set, MatchTNL.LOG_TO_TNL.get(round_type, round_type), all_ids) or is_OpenSpecialRound_target
+        is_OpenSpecialRound_target = decision.is_open_special_round_target
+        st.is_continue_round = decision.is_continue_round
 
         verb = "revealed" if revealed else "set"
         if is_OpenSpecialRound_target:

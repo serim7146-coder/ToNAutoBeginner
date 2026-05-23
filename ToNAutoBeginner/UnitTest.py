@@ -12,6 +12,9 @@ sys.modules['pydirectinput'] = MagicMock()
 import WindowOperator
 import ConnectDB
 import PlaySound
+import LogParser
+import RoundDecision
+import config
 
 ConnectDB.SUPABASE_URL = "https://example.supabase.co"
 ConnectDB.SUPABASE_KEY = "test-key"
@@ -55,6 +58,56 @@ class TestClickAt(unittest.TestCase):
             WindowOperator.click()
             mock_down.assert_called_once()
             mock_up.assert_called_once()
+
+# ═══════════════════════════════════════════════
+#  LogParser.py
+# ═══════════════════════════════════════════════
+class TestLogParser(unittest.TestCase):
+    def test_round_start_extracts_round_and_map_id(self):
+        event = LogParser.parse("This round is taking place at Facility (12) and the round type is Fog")
+        self.assertEqual(event.kind, LogParser.EVENT_ROUND_START)
+        self.assertEqual(event.round_type, "Fog")
+        self.assertEqual(event.map_id, 12)
+        self.assertEqual(event.raw_map, "Facility (12)")
+
+    def test_round_start_without_map_id_uses_zero(self):
+        event = LogParser.parse("This round is taking place at Unknown Map and the round type is Run")
+        self.assertEqual(event.kind, LogParser.EVENT_ROUND_START)
+        self.assertEqual(event.map_id, 0)
+
+    def test_killers_set_parses_terror_ids(self):
+        event = LogParser.parse("Killers have been set - 1 2 3 // Round type is Double Trouble")
+        self.assertEqual(event.kind, LogParser.EVENT_KILLERS_SET)
+        self.assertEqual(event.round_type, "Double Trouble")
+        self.assertEqual(event.terror_ids, [1, 2])
+
+    def test_user_auth_and_joining_parse_after_prefix(self):
+        prefix = "2026.05.24 10:00:00 Log - "
+        user = LogParser.parse(prefix + "User Authenticated: tester (usr_12345678-1234-1234-1234-123456789abc)")
+        joining = LogParser.parse(prefix + "[Behaviour] Joining wrld_abc:12345~friends~region(us)")
+        self.assertEqual(user.kind, LogParser.EVENT_USER_AUTH)
+        self.assertEqual(user.user_id, "usr_12345678-1234-1234-1234-123456789abc")
+        self.assertEqual(joining.kind, LogParser.EVENT_JOINING)
+        self.assertIn("~friends", joining.suffix)
+
+# ═══════════════════════════════════════════════
+#  RoundDecision.py
+# ═══════════════════════════════════════════════
+class TestRoundDecision(unittest.TestCase):
+    def test_normalize_killer_ids_applies_alternate_and_unbound_offsets(self):
+        self.assertEqual(RoundDecision.normalize_killer_ids([1], "Alternate"), [135])
+        self.assertEqual(RoundDecision.normalize_killer_ids([1], "Classic", "Unbound"), [201])
+
+    def test_decide_killers_uses_tnl_and_open_special_target(self):
+        keep_on = {"Classic/クラシック": {42}}
+        decision = RoundDecision.decide_killers(keep_on, [42], "Classic", 0, False)
+        self.assertTrue(decision.is_continue_round)
+        self.assertFalse(decision.is_open_special_round_target)
+
+        target_id = next(iter(config.OpenSpecialRound_TERROR_IDS))
+        special = RoundDecision.decide_killers({}, [target_id], "Classic", 0, True)
+        self.assertTrue(special.is_continue_round)
+        self.assertTrue(special.is_open_special_round_target)
 
 # ═══════════════════════════════════════════════
 #  ConnectDB.py
