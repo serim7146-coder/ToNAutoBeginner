@@ -3,10 +3,7 @@ from pathlib import Path
 import ReadJson
 
 # ── テラーIDとテラー名の対応表.json ──
-_BASE = Path(__file__).parent
-_TERRORS_PATH = _BASE / "terrors.json"
-# ↓これが固定量
-TERRORS = ReadJson.load_terrors(_TERRORS_PATH)
+TERRORS = ReadJson.load_terrors("terrors.json")
 
 SPECIAL_ROUND = {
     "Classic.exe",
@@ -98,11 +95,11 @@ LOG_POLL_INTERVAL    = 0.3
 DEFAULT_SOUND_VOLUME = 1.0
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = "../voice/Continue.mp3"
-VOICE_FOG          = "../voice/Fog.mp3"
-VOICE_ITEM_LOST    = "../voice/ItemLost.mp3"
-VOICE_INTERMISSION = "../voice/intermission.mp3"
-VOICE_FOXY         = "../voice/foxy.mp3"
+VOICE_CONTINUE     = "voice/Continue.mp3"
+VOICE_FOG          = "voice/Fog.mp3"
+VOICE_ITEM_LOST    = "voice/ItemLost.mp3"
+VOICE_INTERMISSION = "voice/intermission.mp3"
+VOICE_FOXY         = "voice/foxy.mp3"
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05

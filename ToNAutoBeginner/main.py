@@ -1,6 +1,8 @@
 """
-Compile
-python -m nuitka src/main.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --lto=yes --clang --follow-imports
+コンパイル
+python -m nuitka ToNAutoBeginner/main.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --lto=yes --clang --follow-imports --windows-icon-from-ico=ToNAutoBeginnerIcon.ico
+テストビルド
+python -m nuitka ToNAutoBeginner/main.py --onefile --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --enable-plugin=tk-inter --follow-imports --windows-icon-from-ico=ToNAutoBeginnerIcon.ico
 """
 
 import keyboard
