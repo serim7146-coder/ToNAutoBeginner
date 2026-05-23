@@ -11,6 +11,7 @@ import WindowOperator
 import PlaySound
 import ConnectDB
 import MatchTNL
+import ReadJson
 
 
 # ═══════════════════════════════════════════════
@@ -108,6 +109,15 @@ def _continue_round_reset():
     with _CONTINUE_ROUND_LOCK:
         _CONTINUE_ROUND_COUNT = 0
         _CONTINUE_ROUND_EVENT.set()
+        
+def format_terror_ids(ids: list[int], round_type: str) -> str:
+    terror_ids = MatchTNL.parse_terror_ids(ids, round_type)
+    
+    names = []
+    for tid in terror_ids:
+        name = ReadJson.terror_name(tid, config.TERRORS)
+        names.append(name if name else f"ID:{tid}")
+    return ", ".join(names)
 
 
 # ═══════════════════════════════════════════════
@@ -485,7 +495,7 @@ class LogMonitor:
             # アイテムなし → DTMのみ続行、Waldo含むそれ以外は自爆
             if not st.item_id:
                 # DTM(50)はアイテム不要なので続行可、Waldo(131)はアイテム必要なので自爆
-                DTM_ONLY_IDS = {50}
+                DTM_ONLY_IDS = ReadJson.terror_id("Don't Touch Me", config.TERRORS)
                 has_dtm = bool(
                     self.cfg.cancel_afk and
                     any(t in DTM_ONLY_IDS for t in st.terror_ids)
@@ -530,7 +540,7 @@ class LogMonitor:
             tag = "【プレイ(DTM/Waldo)】"
         else:
             tag = "【プレイ】" if st.is_continue_round else "【スキップ】"
-        self._log(f"テラー{verb}: {all_ids} / {round_type} {tag}")
+        self._log(f"テラー{verb}: {format_terror_ids(all_ids, round_type)} / {round_type} {tag}")
 
         if st.is_continue_round:
             # 続行ラウンドの音声アナウンス＋他窓フリーズ（DTM/Waldo以外）
