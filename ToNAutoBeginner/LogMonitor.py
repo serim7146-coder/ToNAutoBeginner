@@ -124,7 +124,7 @@ def format_terror_ids(ids: list[int]) -> str:
 @dataclass
 class WindowConfig:
     hwnd: int = 0
-    log_path: Path = None
+    log_path: Optional[Path] = None
     active: bool = True
     auto_begin: bool = True
     do_skip: bool = True
@@ -272,13 +272,16 @@ class LogMonitor:
 
         m = RE_ROUND_START.match(line)
         if m:
+            map_match = RE_MAP_ID.search(m.group(1).strip())
             st.in_round        = True
             st.round_type      = m.group(2).strip()
             st.terror_ids      = []
-            st.map_id          = int(RE_MAP_ID.search(m.group(1).strip()).group(1))
+            st.map_id          = int(map_match.group(1)) if map_match else 0
             st.fog             = False
             st.begin_done      = False
             st.is_OpenSpecialRound_round   = False
+            if not map_match:
+                self._log(f"Map IDを抽出できませんでした: {m.group(1).strip()}")
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -286,13 +289,13 @@ class LogMonitor:
                 _EQUIP_WAIT_EVENT.set()
                 self._log("一時的にアイテムロストフリーズを解除")
 
-            if st.round_type in "Run":
+            if st.round_type == "Run":
                 # Runは死亡してアイテムロスト対応へ
                 st.is_continue_round = False
                 self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
                 return
 
-            if st.round_type in "Fog":
+            if st.round_type == "Fog":
                 if not get_hands_free():
                     # Fog：taking place時点で即続行確定・他窓フリーズ開始
                     st.is_continue_round = True
@@ -373,7 +376,7 @@ class LogMonitor:
         # Fogラウンド突入
         if RE_KILLERS_UNKNOWN.match(line):
             st.fog  = True
-            st.round_type = "fog"
+            st.round_type = "Fog"
             self._log(f"テラー不明 → revealed待ち")
             if get_hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
@@ -386,7 +389,7 @@ class LogMonitor:
             PlaySound.play_sound(self.cfg.voice_foxy)
             
             # もし霧なら自爆するか判定する(他はRE_KILLERS_SETから行う)
-            if st.round_type == "fog":
+            if st.round_type == "Fog":
                 self._on_killers([2], st.round_type, revealed=True)
             return
 
@@ -597,7 +600,7 @@ class LogMonitor:
         """
         time.sleep(config.BEGIN_WAIT_SEC)
         # Beginはフレ/フレ+/招待/招待+のみ
-        if SharedState.get_instance_type() not in config.INSTANCE_PRIVATE:
+        if SharedState.get_instance_type() != config.INSTANCE_PRIVATE:
             return
         if not self._running or self.st.in_round:
             self._log("Begin キャンセル（停止 or 次のラウンドが開始）")

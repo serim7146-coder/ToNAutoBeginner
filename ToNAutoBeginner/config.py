@@ -84,7 +84,7 @@ CBPS_SKIP_ROUNDS = {
     "Double Trouble",
     "Bloodbath EX",
     "Randomizer",
-    "Punish",
+    "Punished",
     "Sabotage",
 }
 
@@ -99,7 +99,7 @@ VOICE_CONTINUE     = "voice/Continue.mp3"
 VOICE_FOG          = "voice/Fog.mp3"
 VOICE_ITEM_LOST    = "voice/ItemLost.mp3"
 VOICE_INTERMISSION = "voice/intermission.mp3"
-VOICE_FOXY         = "voice/foxy.mp3"
+VOICE_FOXY         = "voice/SpawnFoxy.mp3"
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05

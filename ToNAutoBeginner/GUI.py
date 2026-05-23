@@ -118,7 +118,7 @@ class WindowTab(ttk.Frame):
         self.cb_hwnd = ttk.Combobox(hf, textvariable=self.v_hwnd_sel,
                                      state="readonly", width=36)
         self.cb_hwnd.pack(side="left", padx=(0, 4))
-        ttk.Button(hf, text="🔄 更新", command=self._refresh_hwnds(1)).pack(side="left") # refresh_hwndsに1を入力することで、最新でアクティブになった窓を選択する
+        ttk.Button(hf, text="🔄 更新", command=lambda: self._refresh_hwnds(1)).pack(side="left") # refresh_hwndsに1を入力することで、最新でアクティブになった窓を選択する
 
         # ── ログファイル ──
         section("■ ログファイル")
@@ -154,11 +154,6 @@ class WindowTab(ttk.Frame):
         self._hwnd_map = {}
         choices = []
         for i, h in enumerate(hwnds):
-            try:
-                import win32gui as _wg
-                rect = _wg.GetWindowRect(h)
-            except Exception:
-                rect = (0, 0, 0, 0)
             label = f"[{i+1}] HWND={h:#010x}"
             self._hwnd_map[label] = h
             choices.append(label)

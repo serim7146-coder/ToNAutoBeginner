@@ -5,41 +5,60 @@ import random
 import threading
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_, **__):
+        return False
 
 base = Path(sys.executable).parent if getattr(sys, '__compiled__', False) else Path(__file__).parent
 load_dotenv(base / ".env")
+load_dotenv(base.parent / ".env")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+REQUEST_TIMEOUT = 10
+
+def _configured() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+def _headers(accept: bool = False) -> dict[str, str]:
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    if accept:
+        headers["Accept"] = "application/json"
+    return headers
+
+def _url(path: str) -> str:
+    return f"{SUPABASE_URL}/rest/v1/{path}"
 
 # 追加できない時はNoneを返す
 def send_Users(VRChat_uid: str) -> int | None:
+    if not _configured():
+        print("Supabase設定がないためユーザー登録をスキップします。")
+        return None
+    uid = urllib.parse.quote(VRChat_uid, safe="")
     # VRChat_uidが既に存在するか確認
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/Users?VRChat_uid=eq.{VRChat_uid}&select=transformed_uid",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Accept": "application/json",
-        }
+        _url(f"Users?VRChat_uid=eq.{uid}&select=transformed_uid"),
+        headers=_headers(accept=True)
     )
-    with urllib.request.urlopen(req) as res:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         existing_user = json.loads(res.read())
     if existing_user:
         print("既に登録されています。")
         return existing_user[0]["transformed_uid"]
     
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/Users?select=transformed_uid",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Accept": "application/json",
-        }
+        _url("Users?select=transformed_uid"),
+        headers=_headers(accept=True)
     )
-    with urllib.request.urlopen(req) as res:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         existing = {row["transformed_uid"] for row in json.loads(res.read())} # 既存のtransformed_uidを取得
     if len(existing) >= 65534:
         print("これ以上transformed_uidを追加できません。")
@@ -54,30 +73,29 @@ def send_Users(VRChat_uid: str) -> int | None:
         "transformed_uid": transformed_uid, 
     }).encode()
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/Users",
+        _url("Users"),
         data=Users_data,
         headers={
             "Content-Type": "application/json",
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
+            **_headers(),
         },
         method="POST"
     )
-    with urllib.request.urlopen(req) as res:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         print(f"ユーザー登録: {res.status}")
         return transformed_uid
 
-def get_transformed_uid(VRChat_uid: str) -> int:
+def get_transformed_uid(VRChat_uid: str) -> int | None:
+    if not _configured():
+        print("Supabase設定がないためtransformed_uid取得をスキップします。")
+        return None
     try:
+        uid = urllib.parse.quote(VRChat_uid, safe="")
         req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/Users?VRChat_uid=eq.{VRChat_uid}&select=transformed_uid",
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Accept": "application/json",
-            }
+            _url(f"Users?VRChat_uid=eq.{uid}&select=transformed_uid"),
+            headers=_headers(accept=True)
         )
-        with urllib.request.urlopen(req) as res:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
             data = json.loads(res.read())
         if data:
             return data[0]["transformed_uid"]
@@ -87,7 +105,10 @@ def get_transformed_uid(VRChat_uid: str) -> int:
         print(f"transformed_uid取得エラー: {e}")
         return None
 
-def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int, transformed_uid: int):
+def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int, transformed_uid: int | None):
+    if not _configured():
+        print("Supabase設定がないためラウンド統計送信をスキップします。")
+        return
     def _send_ToNRoundStatistics():
         try:
             data = json.dumps({
@@ -97,16 +118,15 @@ def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
                 "transformed_uid": transformed_uid
             }).encode()
             req = urllib.request.Request(
-                f"{SUPABASE_URL}/rest/v1/ToNRoundStatistics",
+                _url("ToNRoundStatistics"),
                 data=data,
                 headers={
                     "Content-Type": "application/json",
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    **_headers(),
                 },
                 method="POST"
             )
-            with urllib.request.urlopen(req) as res:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
                 print(f"Supabase登録: {res.status}")
         except urllib.error.HTTPError as e:
             print(f"HTTPエラー: {e.code} {e.read()}")
@@ -117,14 +137,13 @@ def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
 
 # どうせ全部取り出すことになるので、全部取り出す仕様
 def get_ToNRoundStatistics():
+    if not _configured():
+        print("Supabase設定がないため集計データ取得をスキップします。")
+        return []
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/ToNRoundStatistics?select=*",
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Accept": "application/json",
-        }
+        _url("ToNRoundStatistics?select=*"),
+        headers=_headers(accept=True)
     )
-    with urllib.request.urlopen(req) as res:
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         data = json.loads(res.read().decode("utf-8"))
     return data
