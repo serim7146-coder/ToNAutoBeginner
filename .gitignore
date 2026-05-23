@@ -1,0 +1,21 @@
+.env
+__pycache__/
+*.pyc
+
+# Python
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# JavaScript
+node_modules/
+ton-stats/dist/
+
+# Packaged artifacts
+main.dist/
+*.exe
+*.7z

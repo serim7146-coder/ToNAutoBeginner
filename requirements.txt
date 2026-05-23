@@ -1,0 +1,5 @@
+# requirements.txt
+pywin32
+pydirectinput
+keyboard
+python-dotenv
