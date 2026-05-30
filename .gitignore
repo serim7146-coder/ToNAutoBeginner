@@ -2,20 +2,27 @@
 __pycache__/
 *.pyc
 
-# Python
-*.pyo
-*.pyd
+# Python caches and test artifacts
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.pyo
+
+# Nuitka / local build outputs
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.7z
 build/
 dist/
 
-# JavaScript
+# Frontend dependencies and build outputs
 node_modules/
+ton-stats/node_modules/
 ton-stats/dist/
 
-# Packaged artifacts
-main.dist/
-*.exe
-*.7z
+# Local logs and temporary files
+*.log
+*.tmp
+*.bak

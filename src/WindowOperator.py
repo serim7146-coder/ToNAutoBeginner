@@ -4,7 +4,6 @@ import keyboard
 import pydirectinput
 
 import config
-import SharedState
 
 def focus_window(hwnd: int):
     if hwnd == 0:

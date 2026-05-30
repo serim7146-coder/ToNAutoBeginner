@@ -157,6 +157,12 @@ class LogMonitor:
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
 
+    def _announce_item_lost_once(self):
+        if self.st.item_lost_announced:
+            return
+        self.st.item_lost_announced = True
+        PlaySound.play_sound(self.cfg.voice_item_lost)
+
     # ── メインループ ──────────────────────────
     def _run(self):
         cfg = self.cfg
@@ -200,6 +206,9 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_ROUND_START:
+            if st.is_continue_round:
+                st.is_continue_round = False
+                _continue_round_end()
             st.in_round        = True
             st.round_type      = event.round_type
             st.terror_ids      = []
@@ -207,8 +216,7 @@ class LogMonitor:
             st.fog             = False
             st.begin_done      = False
             st.is_OpenSpecialRound_round   = False
-            if not event.map_id_found:
-                self._log(f"Map IDを抽出できませんでした: {event.raw_map}")
+            st.item_lost_announced = False
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -255,7 +263,7 @@ class LogMonitor:
             st.in_round = False
             # アイテムロスト音声: auto_beginなしの場合はRoundOverで流す
             if st.waiting_for_equip and not self.cfg.auto_begin:
-                PlaySound.play_sound(self.cfg.voice_item_lost)
+                self._announce_item_lost_once()
             return
 
         if event.kind == LogParser.EVENT_VERIFIED_END:
@@ -268,6 +276,7 @@ class LogMonitor:
             if not get_hands_free():
                 if st.round_type in config.ITEM_LOSS_ROUNDS:
                     st.item_id = 0
+                    self._announce_item_lost_once()
                     if get_item_get_begin_mode():
                         # アイテム取得→Beginモード: ラウンド終了時点でフォーカス・全窓フリーズ
                         st.waiting_for_equip = True
@@ -279,12 +288,14 @@ class LogMonitor:
                         self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
                 elif not st.item_id:
                     st.waiting_for_equip = True
+                    self._announce_item_lost_once()
                     self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
                 else:
                     self._log("ラウンド終了")
             else:
                 if st.round_type in config.ITEM_LOSS_ROUNDS:
                     st.item_id = 0
+                    self._announce_item_lost_once()
                 self._log("ラウンド終了")
             # CSVにラウンド結果を記録（重複排除・ユーザーID付き）
             ConnectDB.send_ToNRoundStatistics(st.round_type, st.terror_ids, st.map_id, st.transformed_uid)
@@ -310,10 +321,13 @@ class LogMonitor:
             # 「foxy the pirate turned evil!」→ Alternate ID2（+134=136）確定
             self._log("🦊 Foxyが出た！")
             PlaySound.play_sound(self.cfg.voice_foxy)
-            
+
             # もし霧なら自爆するか判定する(他はRE_KILLERS_SETから行う)
             if st.round_type == "Fog":
-                self._on_killers([2], st.round_type, revealed=True)
+                # FoxyはAlternate枠テラーなのでFog(Alternate)に更新
+                # → apply_alternate_offset が ID2+134=136→316 に正しく変換される
+                st.round_type = "Fog (Alternate)"
+                self._on_killers([2], "Fog (Alternate)", revealed=True)
             return
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
@@ -370,30 +384,33 @@ class LogMonitor:
         for tid in ids:
             if tid not in st.terror_ids:
                 st.terror_ids.append(tid)
+
         # インスタンス制限チェック
         itype = SharedState.get_instance_type()
-        is_allowed = itype == config.INSTANCE_PRIVATE
+        is_private = itype == config.INSTANCE_PRIVATE
         is_hoshiimo = itype == config.INSTANCE_HOSHIIMO
+        can_decide = is_private or is_hoshiimo
 
         # 干し芋グループ専用自動自爆
         if is_hoshiimo and self.cfg.hoshiimo_skip:
             if st.round_type in config.HOSHIIMO_SKIP_ROUNDS:
                 self._log(f"干し芋自動自爆: {st.round_type}")
-                if not st.is_continue_round:
-                    threading.Thread(target=self._do_skip, daemon=True).start()
-                return
-            else:
-                # 干し芋グループだがスキップ対象外→何もしない
+                if st.is_continue_round:
+                    st.is_continue_round = False
+                    _continue_round_end()
+                threading.Thread(target=self._do_skip, daemon=True).start()
                 return
 
-        # 通常機能はフレ/フレ+/招待/招待+のみ
-        # ただし完全放置モードはインスタンス問わず動作
-        if not is_allowed:
+        # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
+        if not can_decide:
+            if st.is_continue_round:
+                st.is_continue_round = False
+                _continue_round_end()
             self._log(f"インスタンス制限: 操作スキップ ({itype})")
             return
 
-        # 放置モードの処理
-        if get_hands_free():
+        # 放置モードの自動操作はprivateのみ。干し芋では判定と音声だけ通す。
+        if get_hands_free() and is_private:
             # 特殊ラウンド経験済み → 全ラウンド即自爆
             if st.OpenSpecialRound_wins >= config.OpenSpecialRound_TARGET_WINS:
                 self._log(f"放置モード(3クラ済み): 即自爆 {st.terror_ids} / {st.round_type}")
@@ -425,6 +442,7 @@ class LogMonitor:
             # DTM/Waldobなので通常判定へ（is_OpenSpecialRound_target で続行）
 
         all_ids = st.terror_ids  # すでに累積済み
+        was_continue_round = st.is_continue_round
         decision = RoundDecision.decide_killers(
             self.keepOn_set,
             all_ids,
@@ -435,6 +453,9 @@ class LogMonitor:
         is_OpenSpecialRound_target = decision.is_open_special_round_target
         st.is_continue_round = decision.is_continue_round
 
+        if was_continue_round and not st.is_continue_round:
+            _continue_round_end()
+
         verb = "revealed" if revealed else "set"
         if is_OpenSpecialRound_target:
             tag = "【プレイ(DTM/Waldo)】"
@@ -444,22 +465,24 @@ class LogMonitor:
 
         if st.is_continue_round:
             # 続行ラウンドの音声アナウンス＋他窓フリーズ（DTM/Waldo以外）
-            if not is_OpenSpecialRound_target:
+            if not is_OpenSpecialRound_target and not was_continue_round:
                 PlaySound.play_sound(self.cfg.voice_continue)
                 self._log("🎙 続行アナウンス再生")
                 _continue_round_start()
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             # 3クラ開け続行開始
-            if is_OpenSpecialRound_target and st.OpenSpecialRound_wins < config.OpenSpecialRound_TARGET_WINS:
+            if is_OpenSpecialRound_target and is_private and st.OpenSpecialRound_wins < config.OpenSpecialRound_TARGET_WINS:
                 st.is_OpenSpecialRound_round = True
                 self._log(f"3クラ解放ラウンド開始（勝利数: {st.OpenSpecialRound_wins}/{config.OpenSpecialRound_TARGET_WINS}）")
                 t = threading.Thread(target=self._do_OpenSpecialRound_loop, daemon=True)
                 t.start()
+            elif is_OpenSpecialRound_target and not is_private:
+                self._log("DTM/WaldoラウンドだがAFK解除はprivateのみ")
             elif is_OpenSpecialRound_target:
                 self._log("DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")
         else:
-            # 全テラーがスキップ対象 → 自爆（まだ自爆していなければ）
-            if self.cfg.do_skip and not st.is_continue_round:
+            # 全テラーがスキップ対象 → 自爆（通常操作が許可されたインスタンスのみ）
+            if self.cfg.do_skip and is_private and not st.is_continue_round:
                 threading.Thread(target=self._do_skip, daemon=True).start()
 
     # ═════════════════════════════════════════
@@ -567,7 +590,7 @@ class LogMonitor:
                 self._focus()
                 # アイテムロスト時はBeginへ向かう直前に音声（フォーカス後）
                 if st.waiting_for_equip:
-                    PlaySound.play_sound(cfg.voice_item_lost)
+                    self._announce_item_lost_once()
                 WindowOperator.hold_key("w", config.BEGIN_FORWARD_SEC)
                 WindowOperator.hold_key("a", config.BEGIN_LEFT_SEC)
                 time.sleep(0.1)

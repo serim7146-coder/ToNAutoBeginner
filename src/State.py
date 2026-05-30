@@ -36,3 +36,4 @@ class WindowState:
     OpenSpecialRound_wins: int = 0
     item_id: int = 1
     waiting_for_equip: bool = False
+    item_lost_announced: bool = False

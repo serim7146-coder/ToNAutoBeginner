@@ -14,13 +14,44 @@ except ModuleNotFoundError:
     def load_dotenv(*_, **__):
         return False
 
-base = Path(sys.executable).parent if getattr(sys, '__compiled__', False) else Path(__file__).parent
-load_dotenv(base / ".env")
-load_dotenv(base.parent / ".env")
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        try:
+            normalized = path.resolve()
+        except OSError:
+            normalized = path
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(path)
+    return deduped
+
+
+def env_file_candidates() -> list[Path]:
+    here = Path(__file__).resolve().parent
+    candidates = []
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        candidates.append(Path(compiled.containing_dir) / ".env")
+
+    candidates.extend((
+        Path(sys.executable).resolve().parent / ".env",
+        here / ".env",
+        here.parent / ".env",
+        here.parent / "ToNAutoBeginner" / ".env",
+    ))
+    return _dedupe_paths(candidates)
+
+
+for env_path in env_file_candidates():
+    load_dotenv(env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 REQUEST_TIMEOUT = 10
+DEFAULT_EXCLUDED_STAT_ROUNDS = ("Classic", "Run")
 
 def _configured() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
@@ -36,6 +67,18 @@ def _headers(accept: bool = False) -> dict[str, str]:
 
 def _url(path: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{path}"
+
+def _not_in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
+    if not values:
+        return ""
+    encoded_values = ",".join(urllib.parse.quote(str(value), safe="") for value in values)
+    return f"&{column}=not.in.({encoded_values})"
+
+def _in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
+    if not values:
+        return ""
+    encoded_values = ",".join(urllib.parse.quote(str(value), safe="") for value in values)
+    return f"&{column}=in.({encoded_values})"
 
 # 追加できない時はNoneを返す
 def send_Users(VRChat_uid: str) -> int | None:
@@ -135,15 +178,26 @@ def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
             
     threading.Thread(target=_send_ToNRoundStatistics, daemon=True).start()
 
-# どうせ全部取り出すことになるので、全部取り出す仕様
-def get_ToNRoundStatistics():
+def get_ToNRoundStatistics(
+    exclude_rounds: tuple[str, ...] | list[str] | None = DEFAULT_EXCLUDED_STAT_ROUNDS,
+    include_rounds: tuple[str, ...] | list[str] | None = None,
+):
     if not _configured():
         print("Supabase設定がないため集計データ取得をスキップします。")
         return []
-    req = urllib.request.Request(
-        _url("ToNRoundStatistics?select=*"),
-        headers=_headers(accept=True)
-    )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        data = json.loads(res.read().decode("utf-8"))
-    return data
+    all_rows = []
+    offset = 0
+    page_size = 1000
+    round_filter = _in_filter("round", include_rounds) if include_rounds else _not_in_filter("round", exclude_rounds)
+    while True:
+        req = urllib.request.Request(
+            _url(f"ToNRoundStatistics?select=*&order=created_at.desc{round_filter}&limit={page_size}&offset={offset}"),
+            headers=_headers(accept=True)
+        )
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
+            data = json.loads(res.read().decode("utf-8"))
+        all_rows.extend(data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+    return all_rows

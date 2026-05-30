@@ -2,8 +2,24 @@ from pathlib import Path
 
 import ReadJson
 
+def resource_path(filename: str) -> Path:
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / filename,
+        here.parent / filename,
+        here.parent / "ToNAutoBeginner" / filename,
+    ]
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        candidates.append(Path(compiled.containing_dir) / filename)
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
 # ── テラーIDとテラー名の対応表.json ──
-TERRORS = ReadJson.load_terrors("terrors.json")
+TERRORS = ReadJson.load_terrors(resource_path("terrors.json"))
 
 SPECIAL_ROUND = {
     "Classic.exe",
@@ -57,7 +73,7 @@ OpenSpecialRound_TERROR_IDS: set[int] = {
     ReadJson.terror_id("Don't Touch Me", TERRORS),
     ReadJson.terror_id("Waldo", TERRORS)
 }
-OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらジャンプ停止するか（窓ごと）
+OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらAFK回避を終わるか（窓ごと）
 OpenSpecialRound_INTERVAL_SEC = 60.0    # AFK回避の移動の間隔（秒）
 
 # ── インスタンスタイプ ──
@@ -95,11 +111,11 @@ LOG_POLL_INTERVAL    = 0.3
 DEFAULT_SOUND_VOLUME = 1.0
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = "voice/Continue.mp3"
-VOICE_FOG          = "voice/Fog.mp3"
-VOICE_ITEM_LOST    = "voice/ItemLost.mp3"
-VOICE_INTERMISSION = "voice/intermission.mp3"
-VOICE_FOXY         = "voice/SpawnFoxy.mp3"
+VOICE_CONTINUE     = str(resource_path("voice/Continue.mp3"))
+VOICE_FOG          = str(resource_path("voice/Fog.mp3"))
+VOICE_ITEM_LOST    = str(resource_path("voice/ItemLost.mp3"))
+VOICE_INTERMISSION = str(resource_path("voice/intermission.mp3"))
+VOICE_FOXY         = str(resource_path("voice/SpawnFoxy.mp3"))
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05
