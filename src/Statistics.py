@@ -46,6 +46,29 @@ def binomial_pmf(n: int, k: int, p: float) -> float:
     return math.exp(log_prob)
 
 
+def binomial_pmf_lower(n: int, k: int, p: float) -> float:
+    if k < 0:
+        return 0.0
+    if k >= n:
+        return 1.0
+    if p == 0:
+        return 1.0
+    if p == 1:
+        return 0.0
+
+    q = 1 - p
+    term = binomial_pmf(n, 0, p)
+    total = term
+
+    for i in range(0, k):
+        term *= ((n - i) / (i + 1)) * (p / q)
+        total += term
+        if term == 0.0:
+            break
+
+    return min(total, 1.0)
+
+
 # k回以上出る確率
 # 隣り合う確率の比を使う漸化式により、毎回nCkを計算し直さない。
 def binomial_pmf_upper(n: int, k: int, p: float) -> float:
@@ -57,6 +80,9 @@ def binomial_pmf_upper(n: int, k: int, p: float) -> float:
         return 0.0
     if p == 1:
         return 1.0
+
+    if k <= n * p:
+        return max(0.0, min(1.0, 1.0 - binomial_pmf_lower(n, k - 1, p)))
 
     q = 1 - p
     term = binomial_pmf(n, k, p)
@@ -152,6 +178,18 @@ def map_entries() -> list[dict[str, Any]]:
     return []
 
 
+@lru_cache(maxsize=1)
+def map_entries_by_id() -> dict[int, list[dict[str, Any]]]:
+    entries_by_id: dict[int, list[dict[str, Any]]] = {}
+    for entry in map_entries():
+        try:
+            map_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            continue
+        entries_by_id.setdefault(map_id, []).append(entry)
+    return entries_by_id
+
+
 def map_name_for_id(map_id: Any, round_name: str = "") -> str:
     if map_id is None:
         return "Unknown"
@@ -160,7 +198,7 @@ def map_name_for_id(map_id: Any, round_name: str = "") -> str:
     except (TypeError, ValueError):
         return "Unknown"
 
-    entries = [entry for entry in map_entries() if entry.get("id") == normalized_id]
+    entries = map_entries_by_id().get(normalized_id, [])
     if not entries:
         return f"Map {normalized_id}"
 

@@ -1,3 +1,28 @@
 .env
 __pycache__/
 *.pyc
+
+# Python caches and test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyo
+
+# Nuitka / local build outputs
+*.build/
+*.dist/
+*.onefile-build/
+*.exe
+*.7z
+build/
+dist/
+
+# Frontend dependencies and build outputs
+node_modules/
+ton-stats/node_modules/
+ton-stats/dist/
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.bak

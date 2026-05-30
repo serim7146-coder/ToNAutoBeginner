@@ -38,12 +38,11 @@ RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\
 
 @dataclass(frozen=True)
 class LogEvent:
-    kind: str
+    kind: str = ""
     round_type: str = ""
     terror_ids: list[int] | None = None
     raw_map: str = ""
     map_id: int = 0
-    map_id_found: bool = False
     user_id: str = ""
     suffix: str = ""
     item_id: int = 0
@@ -68,7 +67,6 @@ def parse(line: str) -> LogEvent | None:
             round_type=m.group(2).strip(),
             raw_map=raw_map,
             map_id=int(map_match.group(1)) if map_match else 0,
-            map_id_found=bool(map_match),
         )
 
     m = RE_KILLERS_SET.match(line)

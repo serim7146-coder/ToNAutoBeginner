@@ -14,9 +14,39 @@ except ModuleNotFoundError:
     def load_dotenv(*_, **__):
         return False
 
-base = Path(sys.executable).parent if getattr(sys, '__compiled__', False) else Path(__file__).parent
-load_dotenv(base / ".env")
-load_dotenv(base.parent / ".env")
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        try:
+            normalized = path.resolve()
+        except OSError:
+            normalized = path
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(path)
+    return deduped
+
+
+def env_file_candidates() -> list[Path]:
+    here = Path(__file__).resolve().parent
+    candidates = []
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        candidates.append(Path(compiled.containing_dir) / ".env")
+
+    candidates.extend((
+        Path(sys.executable).resolve().parent / ".env",
+        here / ".env",
+        here.parent / ".env",
+        here.parent / "ToNAutoBeginner" / ".env",
+    ))
+    return _dedupe_paths(candidates)
+
+
+for env_path in env_file_candidates():
+    load_dotenv(env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -148,7 +178,6 @@ def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
             
     threading.Thread(target=_send_ToNRoundStatistics, daemon=True).start()
 
-# どうせ全部取り出すことになるので、全部取り出す仕様
 def get_ToNRoundStatistics(
     exclude_rounds: tuple[str, ...] | list[str] | None = DEFAULT_EXCLUDED_STAT_ROUNDS,
     include_rounds: tuple[str, ...] | list[str] | None = None,
