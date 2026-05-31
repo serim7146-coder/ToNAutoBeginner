@@ -1,4 +1,4 @@
-最新リリース
+# 最新リリース
 https://github.com/user-attachments/files/28430810/ToNAutoBeginner-v0.1.0.zip
 
 # ToNAutoBeginner
