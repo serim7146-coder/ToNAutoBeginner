@@ -24,7 +24,7 @@ ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
 # April Fool期間中の特例: Alternate ID→tnlID の特別マッピング
 # キー=ログに出るID(オフセット適用後), 値=tnlでの実際のID
 ALTERNATE_ID_OVERRIDE: dict[int, int] = {
-    136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
+    # 136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
 }
 
 
