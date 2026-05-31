@@ -2,8 +2,24 @@ from pathlib import Path
 
 import ReadJson
 
+def resource_path(filename: str) -> Path:
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here / filename,
+        here.parent / filename,
+        here.parent / "ToNAutoBeginner" / filename,
+    ]
+    compiled = globals().get("__compiled__")
+    if compiled is not None:
+        candidates.append(Path(compiled.containing_dir) / filename)
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
 # ── テラーIDとテラー名の対応表.json ──
-TERRORS = ReadJson.load_terrors("terrors.json")
+TERRORS = ReadJson.load_terrors(resource_path("terrors.json"))
 
 SPECIAL_ROUND = {
     "Classic.exe",
@@ -51,14 +67,18 @@ BEGIN_RETRY_MAX       = 4      # リトライ回数（初回Beginは含まない
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+SUICIDE_FOCUS_SETTLE_SEC = 0.25  # 自爆前にVRChatへフォーカスが移るのを待つ時間
 
 # ── 3クラ続行設定 ──────────────────────────────
-OpenSpecialRound_TERROR_IDS: set[int] = {
+OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
     ReadJson.terror_id("Don't Touch Me", TERRORS),
     ReadJson.terror_id("Waldo", TERRORS)
 }
-OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらジャンプ停止するか（窓ごと）
-OpenSpecialRound_INTERVAL_SEC = 60.0    # AFK回避の移動の間隔（秒）
+OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）
+OPEN_SPECIAL_ROUND_INTERVAL_SEC = 60.0   # AFK回避の移動の間隔（秒）
+
+# ── フリーズ解除待機 ──
+EQUIP_RELEASE_DELAY_SEC = 2.0            # アイテム装備確認後のフリーズ解除までの待機時間
 
 # ── インスタンスタイプ ──
 INSTANCE_PUBLIC        = "public"
@@ -84,7 +104,7 @@ CBPS_SKIP_ROUNDS = {
     "Double Trouble",
     "Bloodbath EX",
     "Randomizer",
-    "Punish",
+    "Punished",
     "Sabotage",
 }
 
@@ -95,11 +115,11 @@ LOG_POLL_INTERVAL    = 0.3
 DEFAULT_SOUND_VOLUME = 1.0
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = "voice/Continue.mp3"
-VOICE_FOG          = "voice/Fog.mp3"
-VOICE_ITEM_LOST    = "voice/ItemLost.mp3"
-VOICE_INTERMISSION = "voice/intermission.mp3"
-VOICE_FOXY         = "voice/foxy.mp3"
+VOICE_CONTINUE     = str(resource_path("voice/Continue.mp3"))
+VOICE_FOG          = str(resource_path("voice/Fog.mp3"))
+VOICE_ITEM_LOST    = str(resource_path("voice/ItemLost.mp3"))
+VOICE_INTERMISSION = str(resource_path("voice/intermission.mp3"))
+VOICE_FOXY         = str(resource_path("voice/SpawnFoxy.mp3"))
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05

@@ -1,5 +1,6 @@
 import threading
 import subprocess
+import base64
 from pathlib import Path
 
 import config
@@ -27,15 +28,19 @@ def play_sound(path: str):
     def _play_sound():
         try:
             vol = get_sound_volume()
+            sound_uri = p.absolute().as_uri()
+            script = (
+                "Add-Type -AssemblyName PresentationCore; "
+                "$mp = New-Object System.Windows.Media.MediaPlayer; "
+                f"$mp.Open([Uri]'{sound_uri}'); "
+                f"$mp.Volume = {vol}; "
+                "$mp.Play(); "
+                "Start-Sleep -Seconds 2; "
+                "$mp.Close()"
+            )
+            encoded_script = base64.b64encode(script.encode("utf-16le")).decode("ascii")
             subprocess.Popen(
-                ["powershell", "-c",
-                f'Add-Type -AssemblyName presentationcore; '
-                f'$mp = New-Object System.Windows.Media.MediaPlayer; '
-                f'$mp.Open([Uri]"{p.absolute()}"); '
-                f'$mp.Volume = {vol}; '
-                f'$mp.Play(); '
-                f'Start-Sleep -s 2; '
-                f'$mp.Close()'],
+                ["powershell", "-NoProfile", "-EncodedCommand", encoded_script],
                 creationflags=0x08000000
             )
         except Exception as e:

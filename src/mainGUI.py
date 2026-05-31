@@ -1,8 +1,6 @@
 import os
-import sys
 import tkinter as tk
 import win32gui
-import threading
 import glob
 from pathlib import Path
 from tkinter import ttk, scrolledtext, filedialog, messagebox
@@ -10,9 +8,12 @@ from datetime import datetime
 from typing import Optional
 
 import config
+from config import resource_path
 import LogMonitor
+import SharedState
 import PlaySound
 import MatchTNL
+from StatisticsGUI import StatisticsWindow
 
 # ═══════════════════════════════════════════════
 #  CONSTANTS
@@ -25,7 +26,7 @@ VRCHAT_WINDOW_CLASS  = "UnityWndClass"
 
 
 # ═══════════════════════════════════════════════
-#  最新ログを読み取るの処理
+#  最新ログを読み取る処理
 # ═══════════════════════════════════════════════
 def get_vrchat_windows(hwnd_count: int) -> list[int]:
     hwnds = []
@@ -67,22 +68,6 @@ def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
     latest = sorted_desc[:count]
     return [Path(f) for f in sorted(latest, key=log_datetime, reverse=False)]
 
-def resource_path(filename: str) -> Path:
-    candidates = [
-        Path(__file__).resolve().parent / filename,
-        Path(__file__).resolve().parent.parent / filename,
-    ]
-
-    compiled = globals().get("__compiled__")
-    if compiled is not None:
-        candidates.append(Path(compiled.containing_dir) / filename)
-
-    for path in candidates:
-        if path.exists():
-            return path
-
-    return candidates[0]
-
 # ═══════════════════════════════════════════════
 #  GUI
 # ═══════════════════════════════════════════════
@@ -118,7 +103,7 @@ class WindowTab(ttk.Frame):
         self.cb_hwnd = ttk.Combobox(hf, textvariable=self.v_hwnd_sel,
                                      state="readonly", width=36)
         self.cb_hwnd.pack(side="left", padx=(0, 4))
-        ttk.Button(hf, text="🔄 更新", command=self._refresh_hwnds(1)).pack(side="left") # refresh_hwndsに1を入力することで、最新でアクティブになった窓を選択する
+        ttk.Button(hf, text="🔄 更新", command=lambda: self._refresh_hwnds(1)).pack(side="left") # refresh_hwndsに1を入力することで、最新でアクティブになった窓を選択する
 
         # ── ログファイル ──
         section("■ ログファイル")
@@ -154,11 +139,6 @@ class WindowTab(ttk.Frame):
         self._hwnd_map = {}
         choices = []
         for i, h in enumerate(hwnds):
-            try:
-                import win32gui as _wg
-                rect = _wg.GetWindowRect(h)
-            except Exception:
-                rect = (0, 0, 0, 0)
             label = f"[{i+1}] HWND={h:#010x}"
             self._hwnd_map[label] = h
             choices.append(label)
@@ -326,17 +306,17 @@ class CollapsibleFrame(tk.Frame):
             self._toggle_btn.config(text="▼")
 
 
-# ── メインウィンドウ ──────────────────────────
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        
+
         icon_path = resource_path("ToNAutoBeginnerIcon.ico")
         if icon_path.exists():
             self.iconbitmap(default=str(icon_path))
-            
+
         self.title("ToNAutoBeginner")
-        self.geometry("780x700")
+        self.geometry("900x860")
+        self.minsize(820, 760)
         self.configure(bg=BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
@@ -383,7 +363,7 @@ class App(tk.Tk):
         ek = ttk.Entry(fk, textvariable=self.v_suicide_key, width=6)
         ek.pack(side="left", padx=(6, 4))
         ttk.Button(fk, text="適用",
-                   command=lambda: LogMonitor.LogMonitor.set_suicide_key(self.v_suicide_key.get().strip())
+                   command=lambda: SharedState.set_suicide_key(self.v_suicide_key.get().strip())
                    ).pack(side="left")
 
         # ③ 窓数・ログ
@@ -465,6 +445,8 @@ class App(tk.Tk):
         self.btn_stop.pack(side="left", padx=6)
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
+        ttk.Button(fc, text="統計",
+                   command=self._open_statistics, width=10).pack(side="left", padx=6)
         ttk.Label(fc, text="緊急停止: Pキー長押し",
                   foreground=ORG).pack(side="left", padx=(10, 0))
 
@@ -526,8 +508,8 @@ class App(tk.Tk):
         self._rebuild_tabs(n)
 
     def _toggle_item_get_begin(self):
-        val = not LogMonitor.get_item_get_begin_mode()
-        LogMonitor.set_item_get_begin_mode(val)
+        val = not SharedState.get_item_begin_mode()
+        SharedState.set_item_begin_mode(val)
         if val:
             self.btn_item_get_begin.config(
                 text="🎯 アイテム取得→Begin: ON（全窓共通）",
@@ -540,8 +522,8 @@ class App(tk.Tk):
             self._log("[アイテム取得→Begin] OFF")
 
     def _toggle_hands_free(self):
-        val = not LogMonitor.get_hands_free()
-        LogMonitor.set_hands_free(val)
+        val = not SharedState.get_hands_free()
+        SharedState.set_hands_free(val)
         if val:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: ON（全窓共通）",
@@ -573,7 +555,7 @@ class App(tk.Tk):
             msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 スキップ対象"
             self.lbl_tnl.config(text=msg, foreground=GRN)
             self._log(f"[TNL] {msg}")
-        except Exception as e:                                  
+        except Exception as e:
             messagebox.showerror("TNL読み込みエラー", str(e))
 
     def _assign_logs(self):
@@ -634,6 +616,7 @@ class App(tk.Tk):
                 continue
             if cfg.hwnd == 0:
                 self._log(f"[窓{tab.idx+1}] ⚠ HWNDが未選択です。窓タブで「🔄 更新」してVRChatウィンドウを選択してください")
+                continue
             # 音声ファイルパスをAppのGUI設定から注入
             cfg.voice_continue     = self.v_voice_continue.get().strip()
             cfg.voice_fog          = self.v_voice_fog.get().strip()
@@ -657,8 +640,8 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
 
     def _stop(self):
-        LogMonitor._EQUIP_WAIT_EVENT.set()          # フリーズ中でも確実に解除
-        LogMonitor._continue_round_reset()        # 続行ラウンドフリーズも解除
+        SharedState.EQUIP_WAIT_EVENT.set()       # フリーズ中でも確実に解除
+        SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
         for m in self.monitors:
             m.stop()
         self.monitors.clear()
@@ -680,6 +663,9 @@ class App(tk.Tk):
             if self._overlay and not self._overlay._closed:
                 self._overlay.append(f"[{ts}] {msg}")
         self.after(0, _a)
+
+    def _open_statistics(self):
+        StatisticsWindow(self)
 
     def _toggle_overlay(self):
         if self._overlay and not self._overlay._closed:
