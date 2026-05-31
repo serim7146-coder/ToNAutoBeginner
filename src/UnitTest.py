@@ -17,11 +17,12 @@ import PlaySound
 import LogParser
 import RoundDecision
 import Statistics
-import GUI
+import StatisticsGUI
 import LogMonitor
+import ActionExecutor
 import SharedState
 import config
-from State import WindowConfig
+from State import WindowConfig, WindowState
 
 ConnectDB.SUPABASE_URL = "https://example.supabase.co"
 ConnectDB.SUPABASE_KEY = "test-key"
@@ -100,6 +101,69 @@ class TestClickAt(unittest.TestCase):
             mock_down.assert_called_once()
             mock_up.assert_called_once()
 
+
+class TestActionExecutorSkip(unittest.TestCase):
+    def setUp(self):
+        SharedState.EQUIP_WAIT_EVENT.set()
+        SharedState.CONTINUE_ROUND_EVENT.set()
+        SharedState.set_suicide_key(config.SELF_SUICIDE_KEY)
+
+    def tearDown(self):
+        SharedState.EQUIP_WAIT_EVENT.set()
+        SharedState.CONTINUE_ROUND_EVENT.set()
+        SharedState.set_suicide_key(config.SELF_SUICIDE_KEY)
+
+    def test_do_skip_cancels_when_hwnd_missing(self):
+        cfg = WindowConfig(hwnd=0)
+        st = WindowState(in_round=True)
+        logs: list[str] = []
+        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+
+        with patch.object(WindowOperator, "focus_window") as mock_focus, \
+             patch.object(WindowOperator, "hold_key") as mock_hold:
+            executor.do_skip()
+
+        mock_focus.assert_not_called()
+        mock_hold.assert_not_called()
+        self.assertTrue(any("HWND" in msg for msg in logs))
+
+    def test_do_skip_waits_after_focus_before_holding_key(self):
+        cfg = WindowConfig(hwnd=123)
+        st = WindowState(in_round=True)
+        calls = []
+        SharedState.set_suicide_key("x")
+        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _msg: None)
+
+        with patch.object(WindowOperator, "focus_window", side_effect=lambda hwnd: calls.append(("focus", hwnd))), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=lambda sec: calls.append(("sleep", sec))), \
+             patch.object(WindowOperator, "hold_key", side_effect=lambda key, sec: calls.append(("hold", key, sec))):
+            executor.do_skip()
+
+        self.assertEqual(
+            calls,
+            [
+                ("focus", 123),
+                ("sleep", config.SUICIDE_FOCUS_SETTLE_SEC),
+                ("hold", "x", config.SUICIDE_HOLD_SEC),
+            ],
+        )
+
+    def test_do_after_round_uses_window_instance_not_global_instance(self):
+        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
+        cfg = WindowConfig(hwnd=123)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _msg: None)
+
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(config, "BEGIN_RETRY_MAX", 0), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(WindowOperator, "focus_window") as mock_focus, \
+             patch.object(WindowOperator, "hold_key"), \
+             patch.object(WindowOperator, "click"):
+            executor.do_after_round()
+
+        mock_focus.assert_called()
+
 # ═══════════════════════════════════════════════
 #  LogParser.py
 # ═══════════════════════════════════════════════
@@ -145,22 +209,50 @@ class TestRoundDecision(unittest.TestCase):
         self.assertTrue(decision.is_continue_round)
         self.assertFalse(decision.is_open_special_round_target)
 
-        target_id = next(iter(config.OpenSpecialRound_TERROR_IDS))
+        target_id = next(iter(config.OPEN_SPECIAL_ROUND_TERROR_IDS))
         special = RoundDecision.decide_killers({}, [target_id], "Classic", 0, True)
         self.assertTrue(special.is_continue_round)
         self.assertTrue(special.is_open_special_round_target)
 
 
+class TestLogMonitorInstanceParsing(unittest.TestCase):
+    def test_private_instance_suffixes(self):
+        cases = [
+            "~private",
+            "~private(usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3)",
+            "~private(usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3)~canRequestInvite",
+            "~friends",
+            "~friends(usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3)",
+            "~hidden",
+            "~hidden(usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3)",
+            "~canRequestInvite",
+        ]
+
+        for suffix in cases:
+            with self.subTest(suffix=suffix):
+                self.assertEqual(LogMonitor.LogMonitor._parse_instance_type(suffix), config.INSTANCE_PRIVATE)
+
+    def test_group_instance_suffixes(self):
+        self.assertEqual(
+            LogMonitor.LogMonitor._parse_instance_type(f"~group({config.HOSHIIMO_GROUP_ID})~groupAccessType(members)"),
+            config.INSTANCE_HOSHIIMO,
+        )
+        self.assertEqual(
+            LogMonitor.LogMonitor._parse_instance_type("~group(grp_other)~groupAccessType(public)"),
+            config.INSTANCE_OTHER_GROUP,
+        )
+
+
 class TestLogMonitorHoshiimo(unittest.TestCase):
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def tearDown(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def _monitor(self, *, hoshiimo_skip: bool = True, keep_on: dict | None = None):
         cfg = WindowConfig(
@@ -168,10 +260,11 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
             do_skip=True,
             voice_continue="continue.mp3",
         )
-        return LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        return monitor
 
     def test_hoshiimo_allows_continue_voice_outside_skip_rounds(self):
-        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
         monitor = self._monitor(
             hoshiimo_skip=True,
             keep_on={"Double Trouble/ダブルトラブル": {42}},
@@ -186,7 +279,6 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
 
     def test_hoshiimo_does_not_run_normal_skip_for_non_skip_rounds(self):
-        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
         monitor = self._monitor(hoshiimo_skip=True)
         monitor.st.in_round = True
         monitor.st.round_type = "Double Trouble"
@@ -197,8 +289,7 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         mock_thread.assert_not_called()
 
     def test_hoshiimo_hands_free_still_only_allows_voice(self):
-        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
-        LogMonitor.set_hands_free(True)
+        SharedState.set_hands_free(True)
         monitor = self._monitor(
             hoshiimo_skip=True,
             keep_on={"Double Trouble/ダブルトラブル": {42}},
@@ -214,7 +305,6 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         mock_thread.assert_not_called()
 
     def test_hoshiimo_skip_round_still_uses_dedicated_skip(self):
-        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
         monitor = self._monitor(hoshiimo_skip=True)
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
@@ -225,7 +315,6 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         mock_thread.assert_called_once()
 
     def test_hoshiimo_skip_clears_stale_continue_state(self):
-        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
         monitor = self._monitor(hoshiimo_skip=True)
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
@@ -250,20 +339,22 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
 class TestLogMonitorItemLostVoice(unittest.TestCase):
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def tearDown(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def _monitor(self, *, auto_begin: bool = False):
         cfg = WindowConfig(
             auto_begin=auto_begin,
             voice_item_lost="lost.mp3",
         )
-        return LogMonitor.LogMonitor(cfg, {}, lambda _msg: None, window_idx=1)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _msg: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
 
     def test_item_lost_voice_plays_when_verified_end_detects_loss(self):
         monitor = self._monitor(auto_begin=False)
@@ -300,13 +391,13 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
 class TestLogMonitorFogRound(unittest.TestCase):
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def tearDown(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        LogMonitor._continue_round_reset()
-        LogMonitor.set_hands_free(False)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
 
     def _monitor(self, *, keep_on: dict | None = None):
         cfg = WindowConfig(
@@ -314,7 +405,9 @@ class TestLogMonitorFogRound(unittest.TestCase):
             voice_fog="fog.mp3",
             voice_continue="continue.mp3",
         )
-        return LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
 
     def test_fog_reveal_skip_releases_fog_freeze_before_skip(self):
         monitor = self._monitor()
@@ -322,13 +415,13 @@ class TestLogMonitorFogRound(unittest.TestCase):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
         self.assertTrue(monitor.st.is_continue_round)
-        self.assertFalse(LogMonitor._CONTINUE_ROUND_EVENT.is_set())
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set())
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
             monitor._process("Killers have been revealed - 44 0 0 // Round type is Fog")
 
         self.assertFalse(monitor.st.is_continue_round)
-        self.assertTrue(LogMonitor._CONTINUE_ROUND_EVENT.is_set())
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
         mock_thread.assert_called_once()
 
     def test_fog_reveal_continue_does_not_double_count_freeze(self):
@@ -336,14 +429,39 @@ class TestLogMonitorFogRound(unittest.TestCase):
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
-        self.assertEqual(LogMonitor._CONTINUE_ROUND_COUNT, 1)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
 
         with patch.object(PlaySound, "play_sound") as mock_play:
             monitor._process("Killers have been revealed - 44 0 0 // Round type is Fog")
 
         self.assertTrue(monitor.st.is_continue_round)
-        self.assertEqual(LogMonitor._CONTINUE_ROUND_COUNT, 1)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
         mock_play.assert_not_called()
+
+
+class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+
+    def tearDown(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+
+    def test_private_skip_is_not_blocked_by_hoshiimo_global_state(self):
+        SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
+        cfg = WindowConfig(do_skip=True)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _msg: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._on_killers([99], "Classic", revealed=False)
+
+        mock_thread.assert_called_once()
 
 # ═══════════════════════════════════════════════
 #  Statistics.py
@@ -398,7 +516,7 @@ class TestStatistics(unittest.TestCase):
 
 class TestGuiRoundHelpers(unittest.TestCase):
     def test_ordered_round_entries_include_deferred_rounds_and_aliases(self):
-        entries = GUI._ordered_round_entries(["Unbound", "Fog", "Fog (Alternate)", "Ghost Alternate", "Mystic Moon"])
+        entries = StatisticsGUI._ordered_round_entries(["Unbound", "Fog", "Fog (Alternate)", "Ghost Alternate", "Mystic Moon"])
 
         self.assertIn(("Classic", "Classic"), entries)
         self.assertIn(("Run", "Run"), entries)
@@ -406,7 +524,7 @@ class TestGuiRoundHelpers(unittest.TestCase):
         self.assertIn(("Ghost(Alternate)", "Ghost Alternate"), entries)
 
     def test_round_chart_colors_are_not_collapsed_to_one_color(self):
-        self.assertGreater(len(set(GUI.ROUND_CHART_COLORS)), 3)
+        self.assertGreater(len(set(StatisticsGUI.ROUND_CHART_COLORS)), 3)
 
 
 # ═══════════════════════════════════════════════

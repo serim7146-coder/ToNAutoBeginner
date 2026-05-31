@@ -12,11 +12,11 @@ if sys.platform == "win32":
 
 import keyboard
 
-import GUI
+import mainGUI
 
 # ═══════════════════════════════════════════════
 if __name__ == "__main__":
-    app = GUI.App()
+    app = mainGUI.App()
 
     # 緊急停止キー: P（ポーリング方式で長時間動作を保証）
     # リストで囲むことでネスト関数内から書き換え可能にする

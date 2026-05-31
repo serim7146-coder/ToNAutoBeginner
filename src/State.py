@@ -22,6 +22,7 @@ class WindowConfig:
 
 @dataclass
 class WindowState:
+    instance_type: str = "public"
     log_pos: int = 0
     in_round: bool = False
     round_type: str = ""
@@ -32,8 +33,8 @@ class WindowState:
     is_continue_round: bool = False
     _skip_time: float = 0.0
     begin_done: bool = False
-    is_OpenSpecialRound_round: bool = False
-    OpenSpecialRound_wins: int = 0
+    is_open_special_round_round: bool = False
+    open_special_round_wins: int = 0
     item_id: int = 1
     waiting_for_equip: bool = False
     item_lost_announced: bool = False

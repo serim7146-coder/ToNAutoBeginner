@@ -24,10 +24,10 @@ def is_open_special_round_target(
     cancel_afk: bool,
 ) -> bool:
     return (
-        bool(terror_ids and config.OpenSpecialRound_TERROR_IDS)
-        and any(tid in config.OpenSpecialRound_TERROR_IDS for tid in terror_ids)
+        bool(terror_ids and config.OPEN_SPECIAL_ROUND_TERROR_IDS)
+        and any(tid in config.OPEN_SPECIAL_ROUND_TERROR_IDS for tid in terror_ids)
         and round_type not in config.SPECIAL_ROUND
-        and wins < config.OpenSpecialRound_TARGET_WINS
+        and wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
         and cancel_afk
     )
 

@@ -67,14 +67,18 @@ BEGIN_RETRY_MAX       = 4      # リトライ回数（初回Beginは含まない
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+SUICIDE_FOCUS_SETTLE_SEC = 0.25  # 自爆前にVRChatへフォーカスが移るのを待つ時間
 
 # ── 3クラ続行設定 ──────────────────────────────
-OpenSpecialRound_TERROR_IDS: set[int] = {
+OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
     ReadJson.terror_id("Don't Touch Me", TERRORS),
     ReadJson.terror_id("Waldo", TERRORS)
 }
-OpenSpecialRound_TARGET_WINS  = 3       # 何勝したらAFK回避を終わるか（窓ごと）
-OpenSpecialRound_INTERVAL_SEC = 60.0    # AFK回避の移動の間隔（秒）
+OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）
+OPEN_SPECIAL_ROUND_INTERVAL_SEC = 60.0   # AFK回避の移動の間隔（秒）
+
+# ── フリーズ解除待機 ──
+EQUIP_RELEASE_DELAY_SEC = 2.0            # アイテム装備確認後のフリーズ解除までの待機時間
 
 # ── インスタンスタイプ ──
 INSTANCE_PUBLIC        = "public"
