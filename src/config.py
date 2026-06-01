@@ -54,10 +54,17 @@ ITEM_LOSS_ROUNDS = {
     "Run",
 }
 
+LATE_ROUND = {
+    "Punished",
+}
+
 # ── 自動Begin ──
 BEGIN_WAIT_SEC        = 0.0    # ラウンド終了後Beginまでの待機
 BEGIN_FORWARD_SEC     = 2.1    # Begin前の前進時間
 BEGIN_LEFT_SEC        = 0.11   # Begin前の左移動時間
+BEGIN_FORWARD_SEC_LATER = 3.2  # パニッシュや8 Pages後
+BEGIN_LEFT_SEC_LATER  = 0.16  # パニッシュや8 Pages後
+
 
 BEGIN_RETRY_LEFT_SEC  = 0.05   # Beginリトライ時の左移動時間
 BEGIN_RETRY_RIGHT_SEC = 0.11   # Beginリトライ時の右移動時間

@@ -139,8 +139,12 @@ class ActionExecutor:
                 self.focus()
                 if st.waiting_for_equip:
                     self.announce_item_lost_once()
-                WindowOperator.hold_key("w", config.BEGIN_FORWARD_SEC)
-                WindowOperator.hold_key("a", config.BEGIN_LEFT_SEC)
+                if not (st.round_type in config.LATE_ROUND):
+                    WindowOperator.hold_key("w", config.BEGIN_FORWARD_SEC)
+                    WindowOperator.hold_key("a", config.BEGIN_LEFT_SEC)
+                else:
+                    WindowOperator.hold_key("w", config.BEGIN_FORWARD_SEC_LATER)
+                    WindowOperator.hold_key("a", config.BEGIN_LEFT_SEC_LATER)
                 time.sleep(0.1)
                 if not st.in_round:
                     self._log("Beginクリック")

@@ -23,9 +23,9 @@ ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
 
 # April Fool期間中の特例: Alternate ID→tnlID の特別マッピング
 # キー=ログに出るID(オフセット適用後), 値=tnlでの実際のID
-ALTERNATE_ID_OVERRIDE: dict[int, int] = {
-    # 136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
-}
+# ALTERNATE_ID_OVERRIDE: dict[int, int] = {
+#     136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
+# }
 
 
 # ═══════════════════════════════════════════════
@@ -109,7 +109,8 @@ def apply_alternate_offset(ids: list[int], round_type: str) -> list[int]:
         if is_alt_slot and 0 <= tid <= ALTERNATE_LOG_MAX:
             converted = tid + ALTERNATE_OFFSET
             # April Fool等の特例マッピング
-            result.append(ALTERNATE_ID_OVERRIDE.get(converted, converted))
+            # result.append(ALTERNATE_ID_OVERRIDE.get(converted, converted))
+            result.append(converted)
         else:
             result.append(tid)
     return result

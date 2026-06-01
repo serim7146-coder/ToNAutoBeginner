@@ -368,6 +368,20 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertTrue(monitor.st.item_lost_announced)
 
+    def test_auto_begin_item_lost_voice_waits_until_begin_action(self):
+        monitor = self._monitor(auto_begin=True)
+        monitor.st.round_type = "Run"
+
+        with patch.object(PlaySound, "play_sound") as mock_play, \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process("Verified Round End")
+
+        mock_play.assert_not_called()
+        mock_thread.assert_called_once()
+        self.assertTrue(monitor.st.waiting_for_equip)
+        self.assertFalse(monitor.st.item_lost_announced)
+
     def test_item_lost_voice_is_not_duplicated_by_round_over(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.round_type = "Run"
