@@ -202,7 +202,8 @@ class LogMonitor:
             if not SharedState.get_hands_free():
                 if st.round_type in config.ITEM_LOSS_ROUNDS:
                     st.item_id = 0
-                    self._action.announce_item_lost_once()
+                    if not self.cfg.auto_begin:
+                        self._action.announce_item_lost_once()
                     if SharedState.get_item_begin_mode():
                         st.waiting_for_equip = True
                         SharedState.EQUIP_WAIT_EVENT.clear()
@@ -213,7 +214,8 @@ class LogMonitor:
                         self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
                 elif not st.item_id:
                     st.waiting_for_equip = True
-                    self._action.announce_item_lost_once()
+                    if not self.cfg.auto_begin:
+                        self._action.announce_item_lost_once()
                     self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
                 else:
                     self._log("ラウンド終了")
