@@ -61,11 +61,17 @@ class LogMonitor:
         suffix = suffix or ""
         if f"group({config.HOSHIIMO_GROUP_ID})" in suffix:
             return config.INSTANCE_HOSHIIMO
+        if f"group({config.YAKIIMO_GROUP_ID})" in suffix:
+            return config.INSTANCE_YAKIIMO
         if "~group(" in suffix:
             return config.INSTANCE_OTHER_GROUP
         if any(marker in suffix for marker in ("~private", "~friends", "~hidden", "~canRequestInvite")):
             return config.INSTANCE_PRIVATE
         return config.INSTANCE_PUBLIC
+
+    @staticmethod
+    def _same_player_name(a: str, b: str) -> bool:
+        return bool(a and b and a.strip() == b.strip())
 
     def _detect_instance_from_log(self):
         if not self.cfg.log_path or not self.cfg.log_path.exists():
@@ -82,6 +88,7 @@ class LogMonitor:
 
                 if not found_user and event.kind == LogParser.EVENT_USER_AUTH:
                     self._log(f"UserID検出: {event.user_id}")
+                    self.st.local_player_name = event.player_name
                     self.st.transformed_uid = ConnectDB.send_Users(event.user_id)
                     self._log(f"transformed_uid: {self.st.transformed_uid}")
                     found_user = True
@@ -117,11 +124,41 @@ class LogMonitor:
                 self._log(f"読み取りエラー: {e}")
             time.sleep(config.LOG_POLL_INTERVAL)
 
+    def _mark_sabotage_murder(self):
+        st = self.st
+        if st.sabotage_murder_this_round:
+            return
+        st.sabotage_murder_this_round = True
+        st.item_id = 0
+        self._log("Sabotageマーダー判定: アイテムロスト")
+
+    def _round_lost_item(self) -> bool:
+        st = self.st
+        item_loss_round = (
+            st.round_type in config.ITEM_LOSS_ROUNDS
+            and not st.item_equipped_after_death
+        )
+        sabotage_murder_loss = st.sabotage_murder_this_round and not st.item_id
+        return item_loss_round or sabotage_murder_loss
+
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
         st = self.st
         event = LogParser.parse(line)
         if not event:
+            return
+
+        if event.kind == LogParser.EVENT_USER_AUTH:
+            st.local_player_name = event.player_name
+            return
+
+        if event.kind == LogParser.EVENT_SUS_PLAYER:
+            if self._same_player_name(event.player_name, st.local_player_name):
+                if st.in_round and st.round_type == "Sabotage":
+                    self._mark_sabotage_murder()
+                else:
+                    st.pending_sabotage_murder = True
+                self._log(f"Sus player一致: {event.player_name}")
             return
 
         if event.kind == LogParser.EVENT_BEGIN_DONE:
@@ -145,16 +182,27 @@ class LogMonitor:
             st.round_type                  = event.round_type
             st.terror_ids                  = []
             st.map_id                      = event.map_id
+            st.statistics_sent             = False
             st.fog                         = False
             st.begin_done                  = False
             st.is_open_special_round_round = False
             st.item_lost_announced         = False
+            st.died_this_round             = False
+            st.item_equipped_after_death   = False
+            st.sabotage_murder_this_round  = (
+                st.round_type == "Sabotage" and st.pending_sabotage_murder
+            )
+            st.pending_sabotage_murder     = False
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
                 st.waiting_for_equip = False
                 SharedState.EQUIP_WAIT_EVENT.set()
                 self._log("一時的にアイテムロストフリーズを解除")
+
+            if st.sabotage_murder_this_round:
+                st.item_id = 0
+                self._log("Sabotageマーダー開始: アイテムロスト")
 
             if st.round_type == "Run":
                 st.is_continue_round = False
@@ -185,11 +233,20 @@ class LogMonitor:
             if st._skip_time > 0 and (time.time() - st._skip_time) <= 3.0:
                 self._log("✅ 自爆成功")
                 st._skip_time = 0.0
+            st.died_this_round = True
+            st.item_equipped_after_death = False
             st.is_open_special_round_round = False
             return
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            if not self.cfg.auto_begin and not SharedState.get_hands_free():
+                round_lost_item = self._round_lost_item()
+                if round_lost_item:
+                    st.item_id = 0
+                    st.waiting_for_equip = True
+                elif not st.item_id:
+                    st.waiting_for_equip = True
             if st.waiting_for_equip and not self.cfg.auto_begin:
                 self._action.announce_item_lost_once()
             return
@@ -199,12 +256,13 @@ class LogMonitor:
                 st.is_continue_round = False
                 SharedState.continue_round_end()
                 self._log("▶ 続行/霧ラウンド終了 → 他窓フリーズ解除")
+            round_lost_item = self._round_lost_item()
             if not SharedState.get_hands_free():
-                if st.round_type in config.ITEM_LOSS_ROUNDS:
+                if round_lost_item:
                     st.item_id = 0
-                    if not self.cfg.auto_begin:
-                        self._action.announce_item_lost_once()
-                    if SharedState.get_item_begin_mode():
+                    if not self.cfg.auto_begin and not st.waiting_for_equip:
+                        self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
+                    elif SharedState.get_item_begin_mode():
                         st.waiting_for_equip = True
                         SharedState.EQUIP_WAIT_EVENT.clear()
                         self._log("ラウンド終了 【⚠ アイテムロスト → フォーカス・全窓フリーズ開始】")
@@ -213,18 +271,21 @@ class LogMonitor:
                         st.waiting_for_equip = True
                         self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
                 elif not st.item_id:
-                    st.waiting_for_equip = True
-                    if not self.cfg.auto_begin:
-                        self._action.announce_item_lost_once()
-                    self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
+                    if not self.cfg.auto_begin and not st.waiting_for_equip:
+                        self._log("ラウンド終了 【⚠ アイテム未回収 → RoundOver時に通知予定】")
+                    else:
+                        st.waiting_for_equip = True
+                        self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
                 else:
                     self._log("ラウンド終了")
             else:
-                if st.round_type in config.ITEM_LOSS_ROUNDS:
+                if round_lost_item:
                     st.item_id = 0
-                    self._action.announce_item_lost_once()
+                    if self.cfg.auto_begin:
+                        self._action.announce_item_lost_once()
+                    else:
+                        st.waiting_for_equip = True
                 self._log("ラウンド終了")
-            ConnectDB.send_ToNRoundStatistics(st.round_type, st.terror_ids, st.map_id, st.transformed_uid)
             if self.cfg.announce_intermission:
                 PlaySound.play_sound(self.cfg.voice_intermission)
             if self.cfg.auto_begin:
@@ -261,6 +322,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
             st.item_id = event.item_id
+            if st.died_this_round and st.item_id:
+                st.item_equipped_after_death = True
             self._log(f"✅ アイテム装備 (id={st.item_id})")
             # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
             if st.waiting_for_equip and st.begin_done:
@@ -293,14 +356,16 @@ class LogMonitor:
             if tid not in st.terror_ids:
                 st.terror_ids.append(tid)
 
+        self._send_round_statistics_once()
+
         # インスタンス制限チェック
         itype        = st.instance_type
         is_private   = itype == config.INSTANCE_PRIVATE
-        is_hoshiimo  = itype == config.INSTANCE_HOSHIIMO
-        can_decide   = is_private or is_hoshiimo
+        is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
+        can_decide   = is_private or is_group_skip
 
         # 干し芋グループ専用自動自爆
-        if is_hoshiimo and self.cfg.hoshiimo_skip:
+        if is_group_skip and self.cfg.hoshiimo_skip:
             if st.round_type in config.HOSHIIMO_SKIP_ROUNDS:
                 self._log(f"干し芋自動自爆: {st.round_type}")
                 if st.is_continue_round:
@@ -380,3 +445,15 @@ class LogMonitor:
         else:
             if self.cfg.do_skip and is_private:
                 threading.Thread(target=self._action.do_skip, daemon=True).start()
+
+    def _send_round_statistics_once(self):
+        st = self.st
+        if st.statistics_sent or not st.terror_ids:
+            return
+        st.statistics_sent = True
+        ConnectDB.send_ToNRoundStatistics(
+            st.round_type,
+            list(st.terror_ids),
+            st.map_id,
+            st.transformed_uid,
+        )

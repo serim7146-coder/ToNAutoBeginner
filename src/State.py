@@ -28,7 +28,9 @@ class WindowState:
     round_type: str = ""
     terror_ids: list[int] = field(default_factory=list)
     map_id: int = 0
+    statistics_sent: bool = False
     transformed_uid: int | None = None
+    local_player_name: str = ""
     fog: bool = False
     is_continue_round: bool = False
     _skip_time: float = 0.0
@@ -38,3 +40,7 @@ class WindowState:
     item_id: int = 1
     waiting_for_equip: bool = False
     item_lost_announced: bool = False
+    died_this_round: bool = False
+    item_equipped_after_death: bool = False
+    pending_sabotage_murder: bool = False
+    sabotage_murder_this_round: bool = False

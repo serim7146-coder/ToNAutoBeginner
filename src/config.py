@@ -91,11 +91,13 @@ EQUIP_RELEASE_DELAY_SEC = 2.0            # アイテム装備確認後のフリ�
 INSTANCE_PUBLIC        = "public"
 INSTANCE_PRIVATE       = "private"
 INSTANCE_HOSHIIMO      = "hoshiimo"
+INSTANCE_YAKIIMO       = "yakiimo"
 INSTANCE_CBPS          = "cbps"
 INSTANCE_OTHER_GROUP   = "other_group"
 
 # ── インスタンスid ──
 HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
+YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
 # ── グループインスタンスで、自動自爆するラウンド ──

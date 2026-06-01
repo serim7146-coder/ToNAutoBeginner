@@ -17,6 +17,7 @@ EVENT_JOINING = "joining"
 EVENT_ITEM_EQUIP = "item_equip"
 EVENT_LIVED = "lived"
 EVENT_USER_AUTH = "user_auth"
+EVENT_SUS_PLAYER = "sus_player"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -31,7 +32,8 @@ RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
 RE_BEGIN_DONE = re.compile(r"^Verified$")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.]")
-RE_USER_AUTH = re.compile(r"User Authenticated: \S+ \((usr_[0-9a-f-]+)\)")
+RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
+RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
 
@@ -46,6 +48,7 @@ class LogEvent:
     user_id: str = ""
     suffix: str = ""
     item_id: int = 0
+    player_name: str = ""
 
 
 def strip_prefix(line: str) -> str:
@@ -109,11 +112,18 @@ def parse(line: str) -> LogEvent | None:
     if m:
         return LogEvent(EVENT_ITEM_EQUIP, item_id=int(m.group(1)))
 
+    m = RE_SUS_PLAYER.match(line)
+    if m:
+        return LogEvent(
+            EVENT_SUS_PLAYER,
+            player_name=m.group(3).strip(),
+        )
+
     if RE_LIVED.match(line):
         return LogEvent(EVENT_LIVED)
 
     m = RE_USER_AUTH.search(line)
     if m:
-        return LogEvent(EVENT_USER_AUTH, user_id=m.group(1))
+        return LogEvent(EVENT_USER_AUTH, user_id=m.group(2), player_name=m.group(1).strip())
 
     return None

@@ -192,8 +192,19 @@ class TestLogParser(unittest.TestCase):
         joining = LogParser.parse(prefix + "[Behaviour] Joining wrld_abc:12345~friends~region(us)")
         self.assertEqual(user.kind, LogParser.EVENT_USER_AUTH)
         self.assertEqual(user.user_id, "usr_12345678-1234-1234-1234-123456789abc")
+        self.assertEqual(user.player_name, "tester")
         self.assertEqual(joining.kind, LogParser.EVENT_JOINING)
         self.assertIn("~friends", joining.suffix)
+
+    def test_sus_player_parses_name_and_second_slot(self):
+        first = LogParser.parse("Sus player = 5 serim01")
+        second = LogParser.parse("Sus player 2 = 13 urichata")
+
+        self.assertEqual(first.kind, LogParser.EVENT_SUS_PLAYER)
+        self.assertEqual(first.player_name, "serim01")
+
+        self.assertEqual(second.kind, LogParser.EVENT_SUS_PLAYER)
+        self.assertEqual(second.player_name, "urichata")
 
 # ═══════════════════════════════════════════════
 #  RoundDecision.py
@@ -238,6 +249,10 @@ class TestLogMonitorInstanceParsing(unittest.TestCase):
             config.INSTANCE_HOSHIIMO,
         )
         self.assertEqual(
+            LogMonitor.LogMonitor._parse_instance_type(f"~group({config.YAKIIMO_GROUP_ID})~groupAccessType(members)"),
+            config.INSTANCE_YAKIIMO,
+        )
+        self.assertEqual(
             LogMonitor.LogMonitor._parse_instance_type("~group(grp_other)~groupAccessType(public)"),
             config.INSTANCE_OTHER_GROUP,
         )
@@ -248,20 +263,29 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher.start()
 
     def tearDown(self):
+        self._stats_patcher.stop()
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
 
-    def _monitor(self, *, hoshiimo_skip: bool = True, keep_on: dict | None = None):
+    def _monitor(
+        self,
+        *,
+        hoshiimo_skip: bool = True,
+        keep_on: dict | None = None,
+        instance_type: str = config.INSTANCE_HOSHIIMO,
+    ):
         cfg = WindowConfig(
             hoshiimo_skip=hoshiimo_skip,
             do_skip=True,
             voice_continue="continue.mp3",
         )
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
-        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        monitor.st.instance_type = instance_type
         return monitor
 
     def test_hoshiimo_allows_continue_voice_outside_skip_rounds(self):
@@ -314,6 +338,16 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
 
         mock_thread.assert_called_once()
 
+    def test_yakiimo_skip_round_uses_hoshiimo_dedicated_skip(self):
+        monitor = self._monitor(hoshiimo_skip=True, instance_type=config.INSTANCE_YAKIIMO)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._on_killers([99], "Classic", revealed=False)
+
+        mock_thread.assert_called_once()
+
     def test_hoshiimo_skip_clears_stale_continue_state(self):
         monitor = self._monitor(hoshiimo_skip=True)
         monitor.st.in_round = True
@@ -341,8 +375,11 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher.start()
 
     def tearDown(self):
+        self._stats_patcher.stop()
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -356,7 +393,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         return monitor
 
-    def test_item_lost_voice_plays_when_verified_end_detects_loss(self):
+    def test_item_lost_voice_does_not_play_on_verified_end_when_auto_begin_disabled(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.round_type = "Run"
 
@@ -364,9 +401,118 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
              patch.object(ConnectDB, "send_ToNRoundStatistics"):
             monitor._process("Verified Round End")
 
+        mock_play.assert_not_called()
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertFalse(monitor.st.item_lost_announced)
+
+    def test_item_lost_voice_plays_on_round_over_when_auto_begin_disabled(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+
+        with patch.object(PlaySound, "play_sound") as mock_play, \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("Verified Round End")
+            monitor._process("RoundOver")
+
+        mock_play.assert_called_once_with("lost.mp3")
+        self.assertTrue(monitor.st.item_lost_announced)
+
+    def test_item_lost_voice_plays_on_round_over_without_verified_end(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("RoundOver")
+
         mock_play.assert_called_once_with("lost.mp3")
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertTrue(monitor.st.item_lost_announced)
+
+    def test_death_does_not_mark_item_lost_by_itself(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Classic"
+        monitor.st.item_id = 7
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("You died.")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 7)
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertTrue(monitor.st.died_this_round)
+        self.assertFalse(monitor.st.item_equipped_after_death)
+
+    def test_item_equip_after_death_prevents_round_over_lost_voice(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+        monitor.st.item_id = 7
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("You died.")
+            monitor._process("Equipping 42.")
+            monitor._process("Verified Round End")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 42)
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertTrue(monitor.st.item_equipped_after_death)
+
+    def test_sabotage_sus_player_self_marks_item_lost_on_round_start(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 10
+        monitor._process("User Authenticated: serim01 (usr_12345678-1234-1234-1234-123456789abc)")
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("Sus player = 5 serim01")
+            monitor._process("This round is taking place at Cheese Maze (59) and the round type is Sabotage")
+            self.assertEqual(monitor.st.item_id, 0)
+            self.assertTrue(monitor.st.sabotage_murder_this_round)
+            monitor._process("RoundOver")
+
+        mock_play.assert_called_once_with("lost.mp3")
+        self.assertTrue(monitor.st.waiting_for_equip)
+
+    def test_sabotage_sus_player_second_slot_can_mark_self(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor._process("User Authenticated: serim01 (usr_12345678-1234-1234-1234-123456789abc)")
+
+        monitor._process("Sus player = 5 other")
+        monitor._process("Sus player 2 = 13 serim01")
+        monitor._process("This round is taking place at Ancient (18) and the round type is Sabotage")
+
+        self.assertTrue(monitor.st.sabotage_murder_this_round)
+        self.assertEqual(monitor.st.item_id, 0)
+
+    def test_sabotage_sus_player_other_does_not_mark_item_lost(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 10
+        monitor._process("User Authenticated: serim01 (usr_12345678-1234-1234-1234-123456789abc)")
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("Sus player = 5 other")
+            monitor._process("This round is taking place at Cheese Maze (59) and the round type is Sabotage")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 10)
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertFalse(monitor.st.sabotage_murder_this_round)
+
+    def test_sabotage_murder_re_equip_prevents_round_over_lost_voice(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor._process("User Authenticated: serim01 (usr_12345678-1234-1234-1234-123456789abc)")
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("Sus player = 5 serim01")
+            monitor._process("This round is taking place at Cheese Maze (59) and the round type is Sabotage")
+            monitor._process("Equipping 42.")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 42)
+        self.assertFalse(monitor.st.waiting_for_equip)
 
     def test_auto_begin_item_lost_voice_waits_until_begin_action(self):
         monitor = self._monitor(auto_begin=True)
@@ -396,10 +542,18 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
     def test_round_start_resets_item_lost_voice_announcement(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.item_lost_announced = True
+        monitor.st.died_this_round = True
+        monitor.st.item_equipped_after_death = True
+        monitor.st.pending_sabotage_murder = True
+        monitor.st.sabotage_murder_this_round = True
 
         monitor._process("This round is taking place at Facility (12) and the round type is Classic")
 
         self.assertFalse(monitor.st.item_lost_announced)
+        self.assertFalse(monitor.st.died_this_round)
+        self.assertFalse(monitor.st.item_equipped_after_death)
+        self.assertFalse(monitor.st.pending_sabotage_murder)
+        self.assertFalse(monitor.st.sabotage_murder_this_round)
 
 
 class TestLogMonitorFogRound(unittest.TestCase):
@@ -407,8 +561,11 @@ class TestLogMonitorFogRound(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher.start()
 
     def tearDown(self):
+        self._stats_patcher.stop()
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -458,8 +615,11 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher.start()
 
     def tearDown(self):
+        self._stats_patcher.stop()
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -476,6 +636,52 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
             monitor._on_killers([99], "Classic", revealed=False)
 
         mock_thread.assert_called_once()
+
+
+class TestLogMonitorStatisticsRegistration(unittest.TestCase):
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.st.map_id = 12
+        monitor.st.transformed_uid = 99
+        return monitor
+
+    def test_statistics_are_sent_when_killers_are_known(self):
+        monitor = self._monitor()
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([1], "Classic", revealed=False)
+
+        mock_send.assert_called_once_with("Classic", [1], 12, 99)
+        self.assertTrue(monitor.st.statistics_sent)
+
+    def test_statistics_are_sent_only_once_per_round(self):
+        monitor = self._monitor()
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([1], "Classic", revealed=False)
+            monitor._on_killers([2], "Classic", revealed=True)
+
+        mock_send.assert_called_once_with("Classic", [1], 12, 99)
+        self.assertEqual(monitor.st.terror_ids, [1, 2])
+
+    def test_round_start_resets_statistics_sent_flag(self):
+        monitor = self._monitor()
+        monitor.st.statistics_sent = True
+
+        monitor._process("This round is taking place at Facility (12) and the round type is Classic")
+
+        self.assertFalse(monitor.st.statistics_sent)
+
+    def test_verified_end_does_not_send_statistics(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [1]
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._process("Verified Round End")
+
+        mock_send.assert_not_called()
 
 # ═══════════════════════════════════════════════
 #  Statistics.py
