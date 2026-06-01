@@ -30,7 +30,7 @@ https://github.com/user-attachments/files/28430810/ToNAutoBeginner-v0.1.0.zip
 # 詳細な仕様
 ## 自動自爆について
 * Runは自爆を行いません。Runラウンドの窓が選択されることもありません。
-* April Foolイベント中に配布された当ツールはSanicをFoxyに置換しています。ex.) Foxy生存済みで、Sanic未生存の際は、Foxyで判定され、生存済みと判定されます。
+~~* April Foolイベント中に配布された当ツールはSanicをFoxyに置換しています。ex.) Foxy生存済みで、Sanic未生存の際は、Foxyで判定され、生存済みと判定されます。~~
 * 8 Pagesはテラーを正確に判定できません。
 * 「干し芋自動自爆」は、"Classic, Bloodbath, Randomizer, Classic.exe"を自爆します。(後にVariantのセーフを設ける予定)
 * 「完全放置モード」は、Runを除くすべてのラウンドで、自爆できるようになった時に自爆します。
@@ -47,6 +47,5 @@ https://github.com/user-attachments/files/28430810/ToNAutoBeginner-v0.1.0.zip
   * a = 0.05 ⇒ 出やすい
   * a = 0.025 ⇒ かなり出やすい
   * a = 0.01 ⇒ テーブル！
-## 
 ## その他機能
 * 機能停止ボタン：Pを押せばマクロを停止します。
