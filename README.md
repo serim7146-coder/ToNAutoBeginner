@@ -30,7 +30,7 @@ https://github.com/serim7146-coder/ToNAutoBeginner/releases/download/0.2.0/ToNAu
 # 詳細な仕様
 ## 自動自爆について
 * Runは自爆を行いません。Runラウンドの窓が選択されることもありません。
-~~* April Foolイベント中に配布された当ツールはSanicをFoxyに置換しています。ex.) Foxy生存済みで、Sanic未生存の際は、Foxyで判定され、生存済みと判定されます。~~
+* ~~April Foolイベント中に配布された当ツールはSanicをFoxyに置換しています。ex.) Foxy生存済みで、Sanic未生存の際は、Foxyで判定され、生存済みと判定されます。~~
 * 8 Pagesはテラーを正確に判定できません。
 * 「干し芋自動自爆」は、"Classic, Bloodbath, Randomizer, Classic.exe"を自爆します。(後にVariantのセーフを設ける予定)
 * 「完全放置モード」は、Runを除くすべてのラウンドで、自爆できるようになった時に自爆します。
