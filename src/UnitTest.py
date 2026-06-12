@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 import time
 import sys
 import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,8 @@ import StatisticsGUI
 import LogMonitor
 import ActionExecutor
 import SharedState
+import VRChatDiscovery
+import mainGUI
 import config
 from State import WindowConfig, WindowState
 
@@ -76,6 +79,169 @@ class TestFocusWindow(unittest.TestCase):
         with patch('win32gui.SetForegroundWindow') as mock:
             WindowOperator.focus_window(123)
             mock.assert_called_once_with(123)
+
+class TestVRChatDiscovery(unittest.TestCase):
+    def test_find_latest_logs_returns_latest_in_oldest_to_newest_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for name in [
+                "output_log_2026-05-21_10-00-00.txt",
+                "output_log_2026-05-22_10-00-00.txt",
+                "output_log_2026-05-23_10-00-00.txt",
+            ]:
+                (base / name).write_text("", encoding="utf-8")
+
+            logs = VRChatDiscovery.find_latest_logs(base, 2)
+
+        self.assertEqual(
+            [path.name for path in logs],
+            [
+                "output_log_2026-05-22_10-00-00.txt",
+                "output_log_2026-05-23_10-00-00.txt",
+            ],
+        )
+
+    def test_get_vrchat_windows_filters_by_title_and_class(self):
+        def enum_windows(callback, arg):
+            for hwnd in (1, 2, 3):
+                callback(hwnd, arg)
+
+        with patch.object(VRChatDiscovery.win32gui, "EnumWindows", side_effect=enum_windows), \
+             patch.object(VRChatDiscovery.win32gui, "IsWindowVisible", side_effect=lambda hwnd: hwnd != 1), \
+             patch.object(VRChatDiscovery.win32gui, "GetWindowText", side_effect=lambda hwnd: "VRChat" if hwnd != 2 else "Other"), \
+             patch.object(VRChatDiscovery.win32gui, "GetClassName", side_effect=lambda hwnd: config.VRCHAT_WINDOW_CLASS):
+            hwnds = VRChatDiscovery.get_vrchat_windows(4)
+
+        self.assertEqual(hwnds, [3])
+
+
+class TestWindowTabHwndChoices(unittest.TestCase):
+    def test_set_hwnd_choices_selects_requested_hwnd_without_discovery(self):
+        class FakeVar:
+            def __init__(self):
+                self.value = "未選択"
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        class FakeCombo(dict):
+            pass
+
+        tab = type("FakeTab", (), {})()
+        tab._hwnd_map = {}
+        tab.cb_hwnd = FakeCombo()
+        tab.v_hwnd_sel = FakeVar()
+
+        with patch.object(VRChatDiscovery, "get_vrchat_windows") as mock_discover:
+            mainGUI.WindowTab.set_hwnd_choices(tab, [0x1111, 0x2222], selected_hwnd=0x2222)
+
+        mock_discover.assert_not_called()
+        self.assertEqual(tab.cb_hwnd["values"], ["[1] HWND=0x00001111", "[2] HWND=0x00002222"])
+        self.assertEqual(tab.v_hwnd_sel.get(), "[2] HWND=0x00002222")
+
+
+class TestAppLogLimit(unittest.TestCase):
+    def test_append_log_text_keeps_recent_lines_only(self):
+        class FakeLogText:
+            def __init__(self):
+                self.lines = []
+                self.state = None
+                self.seen = None
+
+            def config(self, **kwargs):
+                self.state = kwargs.get("state", self.state)
+
+            def insert(self, index, line):
+                self.lines.append(line)
+
+            def delete(self, start, end):
+                end_line = int(end.split(".", 1)[0])
+                del self.lines[:end_line - 1]
+
+            def see(self, index):
+                self.seen = index
+
+        app = type("FakeApp", (), {})()
+        app.log_text = FakeLogText()
+        app._log_line_count = 0
+
+        with patch.object(config, "GUI_LOG_MAX_LINES", 3):
+            for i in range(5):
+                mainGUI.App._append_log_text(app, f"line {i}\n")
+
+        self.assertEqual(app.log_text.lines, ["line 2\n", "line 3\n", "line 4\n"])
+        self.assertEqual(app._log_line_count, 3)
+        self.assertEqual(app.log_text.seen, "end")
+        self.assertEqual(app.log_text.state, "disabled")
+
+
+class TestAppTabLifecycle(unittest.TestCase):
+    def test_rebuild_tabs_destroys_old_tabs(self):
+        class FakeNotebook:
+            def __init__(self):
+                self.forgot = []
+                self.added = []
+
+            def forget(self, tab):
+                self.forgot.append(tab)
+
+            def add(self, tab, text):
+                self.added.append((tab, text))
+
+        class OldTab:
+            def __init__(self):
+                self.destroyed = False
+
+            def destroy(self):
+                self.destroyed = True
+
+        class NewTab:
+            def __init__(self, parent, idx):
+                self.parent = parent
+                self.idx = idx
+                self.destroyed = False
+
+            def destroy(self):
+                self.destroyed = True
+
+        app = type("FakeApp", (), {})()
+        app.nb = FakeNotebook()
+        app.tabs = [OldTab(), OldTab()]
+        old_tabs = list(app.tabs)
+
+        with patch.object(mainGUI, "WindowTab", NewTab):
+            mainGUI.App._rebuild_tabs(app, 3)
+
+        self.assertEqual(app.nb.forgot, old_tabs)
+        self.assertTrue(all(tab.destroyed for tab in old_tabs))
+        self.assertEqual(len(app.tabs), 3)
+        self.assertEqual([tab.idx for tab in app.tabs], [0, 1, 2])
+        self.assertEqual(len(app.nb.added), 3)
+
+    def test_win_count_change_skips_rebuild_when_count_is_unchanged(self):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        app = type("FakeApp", (), {})()
+        app._running = False
+        app.v_win_count = FakeVar(2)
+        app.tabs = [object(), object()]
+        app._rebuild_tabs = MagicMock()
+
+        mainGUI.App._on_win_count_change(app)
+
+        app._rebuild_tabs.assert_not_called()
+
 
 class TestHoldKey(unittest.TestCase):
     def test_zero_sec_skips(self):
@@ -206,6 +372,30 @@ class TestLogParser(unittest.TestCase):
         self.assertEqual(second.kind, LogParser.EVENT_SUS_PLAYER)
         self.assertEqual(second.player_name, "urichata")
 
+    def test_bloodthirsty_creature_log_parses(self):
+        event = LogParser.parse(config.BLOODTHIRSTY_CREATURE_LOG)
+
+        self.assertEqual(event.kind, LogParser.EVENT_CREATURE_BLOODTHIRSTY)
+
+    def test_hungry_home_invader_log_parses(self):
+        event = LogParser.parse(config.HUNGRY_HOME_INVADER_LOG)
+
+        self.assertEqual(event.kind, LogParser.EVENT_HUNGRY_HOME_INVADER)
+
+    def test_item_equip_parses_previous_item_id(self):
+        event = LogParser.parse("Equipping 94. Was using 41")
+
+        self.assertEqual(event.kind, LogParser.EVENT_ITEM_EQUIP)
+        self.assertEqual(event.item_id, 94)
+        self.assertEqual(event.previous_item_id, 41)
+
+    def test_respawn_logs_parse(self):
+        generic = LogParser.parse("Player respawned, opted out!")
+
+        self.assertEqual(generic.kind, LogParser.EVENT_RESPAWN)
+        self.assertEqual(generic.player_name, "")
+        self.assertIsNone(LogParser.parse("[DEATH][serim01] serim01 was forcefully respawned."))
+
 # ═══════════════════════════════════════════════
 #  RoundDecision.py
 # ═══════════════════════════════════════════════
@@ -256,6 +446,37 @@ class TestLogMonitorInstanceParsing(unittest.TestCase):
             LogMonitor.LogMonitor._parse_instance_type("~group(grp_other)~groupAccessType(public)"),
             config.INSTANCE_OTHER_GROUP,
         )
+
+
+class TestLogMonitorRuntimeHelpers(unittest.TestCase):
+    def test_iter_log_lines_reversed_handles_chunk_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "output_log.txt"
+            path.write_text("first\nsecond\nthird\n", encoding="utf-8")
+
+            lines = list(LogMonitor.LogMonitor._iter_log_lines_reversed(path, 5))
+
+        self.assertEqual(lines, ["third", "second", "first"])
+
+    def test_stop_sets_running_false_and_wakes_poll_wait(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
+        monitor._running = True
+        monitor._stop_event.clear()
+
+        monitor.stop()
+
+        self.assertFalse(monitor._running)
+        self.assertTrue(monitor._stop_event.is_set())
+
+    def test_format_terror_ids_caches_name_lookup(self):
+        LogMonitor._terror_name_cached.cache_clear()
+        with patch.object(LogMonitor.ReadJson, "terror_name", return_value="Cached Terror") as mock_name:
+            first = LogMonitor.format_terror_ids([9999])
+            second = LogMonitor.format_terror_ids([9999])
+
+        self.assertEqual(first, "Cached Terror")
+        self.assertEqual(second, "Cached Terror")
+        mock_name.assert_called_once_with(9999, config.TERRORS)
 
 
 class TestLogMonitorHoshiimo(unittest.TestCase):
@@ -338,6 +559,29 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
 
         mock_thread.assert_called_once()
 
+    def test_hoshiimo_classic_bloodthirsty_does_not_skip(self):
+        monitor = self._monitor(hoshiimo_skip=True)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+        mock_thread.assert_not_called()
+
+    def test_hoshiimo_classic_curious_creature_waits_before_skip(self):
+        monitor = self._monitor(hoshiimo_skip=True)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
+        mock_thread.assert_not_called()
+
     def test_yakiimo_skip_round_uses_hoshiimo_dedicated_skip(self):
         monitor = self._monitor(hoshiimo_skip=True, instance_type=config.INSTANCE_YAKIIMO)
         monitor.st.in_round = True
@@ -411,17 +655,60 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("You died.")
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
 
         mock_play.assert_called_once_with("lost.mp3")
         self.assertTrue(monitor.st.item_lost_announced)
 
+    def test_run_survival_does_not_play_item_lost_voice(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+        monitor.st.item_id = 7
+
+        with patch.object(PlaySound, "play_sound") as mock_play, \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("Lived in round.")
+            monitor._process("Verified Round End")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 7)
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertFalse(monitor.st.item_lost_announced)
+        self.assertTrue(monitor.st.lived_this_round)
+
+    def test_run_death_marks_item_lost(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+        monitor.st.item_id = 7
+
+        monitor._process("You died.")
+
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
+        self.assertTrue(monitor.st.died_this_round)
+
+    def test_run_without_death_does_not_play_item_lost_voice(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.round_type = "Run"
+        monitor.st.item_id = 7
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 7)
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertFalse(monitor.st.item_lost_announced)
+
     def test_item_lost_voice_plays_on_round_over_without_verified_end(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("You died.")
             monitor._process("RoundOver")
 
         mock_play.assert_called_once_with("lost.mp3")
@@ -514,6 +801,66 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         self.assertEqual(monitor.st.item_id, 42)
         self.assertFalse(monitor.st.waiting_for_equip)
 
+    def test_punished_marks_item_lost_on_round_start(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 10
+
+        monitor._process("This round is taking place at Astral (13) and the round type is Punished")
+
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
+
+    def test_eight_pages_kept_item_does_not_mark_item_lost(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 10
+
+        with patch.object(config, "EIGHT_PAGES_KEEP_ITEM_IDS", {10}):
+            monitor._process("This round is taking place at Warehouse (0) and the round type is 8 Pages")
+
+        self.assertEqual(monitor.st.item_id, 10)
+        self.assertFalse(monitor.st.item_lost_this_round)
+
+    def test_respawn_marks_item_lost(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.in_round = True
+        monitor.st.item_id = 10
+
+        monitor._process("Player respawned, opted out!")
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
+
+    def test_randomizer_item_change_warns_without_marking_item_lost(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 41
+        monitor._process("This round is taking place at Secret (5) and the round type is Randomizer")
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("Equipping 94. Was using 41")
+            monitor._process("Verified Round End")
+            self.assertEqual(monitor.st.item_id, 94)
+            monitor._process("RoundOver")
+
+        mock_play.assert_called_once_with("lost.mp3")
+        self.assertEqual(monitor.st.item_id, 94)
+        self.assertTrue(monitor.st.randomizer_item_changed)
+        self.assertFalse(monitor.st.item_lost_this_round)
+        self.assertTrue(monitor.st.waiting_for_equip)
+
+    def test_randomizer_restoring_original_item_clears_warning(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.item_id = 41
+        monitor._process("This round is taking place at Secret (5) and the round type is Randomizer")
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("Equipping 94. Was using 41")
+            monitor._process("Equipping 41. Was using 94")
+            monitor._process("RoundOver")
+
+        mock_play.assert_not_called()
+        self.assertEqual(monitor.st.item_id, 41)
+        self.assertFalse(monitor.st.randomizer_item_changed)
+        self.assertFalse(monitor.st.waiting_for_equip)
+
     def test_auto_begin_item_lost_voice_waits_until_begin_action(self):
         monitor = self._monitor(auto_begin=True)
         monitor.st.round_type = "Run"
@@ -521,6 +868,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         with patch.object(PlaySound, "play_sound") as mock_play, \
              patch.object(ConnectDB, "send_ToNRoundStatistics"), \
              patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process("You died.")
             monitor._process("Verified Round End")
 
         mock_play.assert_not_called()
@@ -528,12 +876,29 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertFalse(monitor.st.item_lost_announced)
 
+    def test_yakiimo_plays_item_lost_voice_on_round_over_with_auto_begin_enabled(self):
+        monitor = self._monitor(auto_begin=True)
+        monitor.st.instance_type = config.INSTANCE_YAKIIMO
+        monitor.st.in_round = True
+        monitor.st.round_type = "Run"
+        monitor.st.item_id = 7
+
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("You died.")
+            monitor._process("RoundOver")
+
+        mock_play.assert_called_once_with("lost.mp3")
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.waiting_for_equip)
+        self.assertTrue(monitor.st.item_lost_announced)
+
     def test_item_lost_voice_is_not_duplicated_by_round_over(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("You died.")
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
 
@@ -542,7 +907,10 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
     def test_round_start_resets_item_lost_voice_announcement(self):
         monitor = self._monitor(auto_begin=False)
         monitor.st.item_lost_announced = True
+        monitor.st.item_lost_this_round = True
+        monitor.st.randomizer_item_changed = True
         monitor.st.died_this_round = True
+        monitor.st.lived_this_round = True
         monitor.st.item_equipped_after_death = True
         monitor.st.pending_sabotage_murder = True
         monitor.st.sabotage_murder_this_round = True
@@ -550,7 +918,10 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor._process("This round is taking place at Facility (12) and the round type is Classic")
 
         self.assertFalse(monitor.st.item_lost_announced)
+        self.assertFalse(monitor.st.item_lost_this_round)
+        self.assertFalse(monitor.st.randomizer_item_changed)
         self.assertFalse(monitor.st.died_this_round)
+        self.assertFalse(monitor.st.lived_this_round)
         self.assertFalse(monitor.st.item_equipped_after_death)
         self.assertFalse(monitor.st.pending_sabotage_murder)
         self.assertFalse(monitor.st.sabotage_murder_this_round)
@@ -669,10 +1040,94 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
     def test_round_start_resets_statistics_sent_flag(self):
         monitor = self._monitor()
         monitor.st.statistics_sent = True
+        monitor.st.bloodthirsty_creature_variant = True
+        monitor.st.hungry_home_invader_variant = True
 
         monitor._process("This round is taking place at Facility (12) and the round type is Classic")
 
         self.assertFalse(monitor.st.statistics_sent)
+        self.assertFalse(monitor.st.bloodthirsty_creature_variant)
+        self.assertFalse(monitor.st.hungry_home_invader_variant)
+
+    def test_bloodthirsty_log_before_killers_converts_curious_creature(self):
+        monitor = self._monitor()
+        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+
+    def test_bloodthirsty_log_after_killers_updates_delayed_statistics(self):
+        monitor = self._monitor()
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+            mock_send.assert_not_called()
+
+            monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+
+    def test_bloodthirsty_variant_is_not_limited_to_classic(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Bloodbath", revealed=False)
+            mock_send.assert_not_called()
+            monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+
+    def test_hungry_home_invader_log_after_classic_slender_converts_id(self):
+        monitor = self._monitor()
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
+            mock_send.assert_not_called()
+            monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+
+        self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99)
+
+    def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
+        monitor = self._monitor()
+        monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99)
+
+    def test_hungry_home_invader_is_ignored_outside_classic(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.SLENDER_ID], "Bloodbath", revealed=False)
+            monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+
+        self.assertEqual(monitor.st.terror_ids, [config.SLENDER_ID])
+        self.assertFalse(monitor.st.hungry_home_invader_variant)
+        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99)
+
+    def test_curious_creature_statistics_send_on_round_end_if_not_bloodthirsty(self):
+        monitor = self._monitor()
+        monitor.cfg.auto_begin = False
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+            mock_send.assert_not_called()
+
+            monitor._process("Verified Round End")
+
+        self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
+        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99)
 
     def test_verified_end_does_not_send_statistics(self):
         monitor = self._monitor()
@@ -745,6 +1200,134 @@ class TestGuiRoundHelpers(unittest.TestCase):
 
     def test_round_chart_colors_are_not_collapsed_to_one_color(self):
         self.assertGreater(len(set(StatisticsGUI.ROUND_CHART_COLORS)), 3)
+
+    def test_round_count_sort_key_orders_by_count_desc_then_round_order(self):
+        rows = [
+            ("Unbound", 2, 2),
+            ("Fog", 5, 5),
+            ("Classic", 5, 5),
+            ("Bloodbath", 1, 1),
+        ]
+
+        self.assertEqual(
+            sorted(rows, key=StatisticsGUI._round_count_sort_key),
+            [
+                ("Classic", 5, 5),
+                ("Fog", 5, 5),
+                ("Unbound", 2, 2),
+                ("Bloodbath", 1, 1),
+            ],
+        )
+
+    def test_round_chart_draws_positive_extents_with_distinct_colors(self):
+        class FakeCanvas:
+            def __init__(self):
+                self.polygons = []
+
+            def delete(self, _target):
+                pass
+
+            def winfo_width(self):
+                return 300
+
+            def winfo_height(self):
+                return 300
+
+            def create_polygon(self, *args, **kwargs):
+                self.polygons.append((args, kwargs))
+
+            def create_oval(self, *args, **kwargs):
+                pass
+
+            def create_text(self, *args, **kwargs):
+                pass
+
+        window = type("FakeStatisticsWindow", (), {})()
+        window.round_chart = FakeCanvas()
+        window._round_chart_job = "job"
+        window._round_chart_rows = [
+            ("Bloodbath", 6, 6),
+            ("Alternate", 4, 4),
+            ("Randomizer", 2, 2),
+        ]
+        window._draw_round_slice = StatisticsGUI.StatisticsWindow._draw_round_slice.__get__(window)
+
+        StatisticsGUI.StatisticsWindow._draw_round_chart(window)
+
+        colors = [kwargs["fill"] for _args, kwargs in window.round_chart.polygons]
+        self.assertEqual(colors, list(StatisticsGUI.ROUND_CHART_COLORS[:3]))
+        self.assertTrue(all(len(args) >= 4 for args, _kwargs in window.round_chart.polygons))
+
+    def test_filtered_rows_and_round_summary_reuses_cache_for_same_key(self):
+        window = type("FakeStatisticsWindow", (), {})()
+        window.rows = [{"round": "Unbound"}]
+        window._filter_cache_key = None
+        window._filter_cache_rows = []
+        window._filter_cache_round_rows = []
+        window._terror_stats_cache = {"unbound": (1, 1, [])}
+        window._map_counts_cache = {1: [("Sewers", 1)]}
+        start = datetime(2026, 5, 1, 0)
+        end = datetime(2026, 5, 2, 0)
+        key = (1, start, end, ("Unbound",))
+
+        with patch.object(StatisticsGUI.Statistics, "filter_rows", return_value=window.rows) as mock_filter, \
+             patch.object(StatisticsGUI.Statistics, "round_summary", return_value=[("Unbound", 1, 1)]) as mock_summary:
+            first = StatisticsGUI.StatisticsWindow._filtered_rows_and_round_summary(
+                window, key, start, end, {"Unbound"}
+            )
+            second = StatisticsGUI.StatisticsWindow._filtered_rows_and_round_summary(
+                window, key, start, end, {"Unbound"}
+            )
+
+        self.assertEqual(first, second)
+        mock_filter.assert_called_once()
+        mock_summary.assert_called_once()
+        self.assertEqual(window._terror_stats_cache, {})
+        self.assertEqual(window._map_counts_cache, {})
+
+    def test_terror_map_counts_are_cached_per_filtered_rows(self):
+        class FakeTree:
+            def __init__(self):
+                self.inserted = []
+
+            def selection(self):
+                return ("1",)
+
+            def insert(self, *args, **kwargs):
+                self.inserted.append((args, kwargs))
+
+        window = type("FakeStatisticsWindow", (), {})()
+        window.terror_tree = FakeTree()
+        window.map_tree = FakeTree()
+        window.filtered_rows = [{"round": "Classic", "terror_ids": [1], "map_id": 1}]
+        window._map_counts_cache = {}
+        window._clear_tree = MagicMock()
+
+        with patch.object(StatisticsGUI.Statistics, "map_counts_for_terror", return_value=[("Sewers", 1)]) as mock_counts:
+            StatisticsGUI.StatisticsWindow._on_terror_selected(window)
+            StatisticsGUI.StatisticsWindow._on_terror_selected(window)
+
+        mock_counts.assert_called_once_with(window.filtered_rows, 1)
+        self.assertEqual(window._clear_tree.call_count, 2)
+        self.assertEqual(len(window.map_tree.inserted), 2)
+
+    def test_load_rows_async_ignores_duplicate_request_while_loading(self):
+        class FakeStatus:
+            def __init__(self):
+                self.value = None
+
+            def set(self, value):
+                self.value = value
+
+        window = type("FakeStatisticsWindow", (), {})()
+        window._rows_loading = True
+        window.v_status = FakeStatus()
+
+        with patch.object(StatisticsGUI.threading, "Thread") as mock_thread:
+            StatisticsGUI.StatisticsWindow._load_rows_async(window)
+
+        mock_thread.assert_not_called()
+        self.assertIsNone(window.v_status.value)
 
 
 # ═══════════════════════════════════════════════

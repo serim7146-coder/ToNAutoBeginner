@@ -38,9 +38,15 @@ class WindowState:
     is_open_special_round_round: bool = False
     open_special_round_wins: int = 0
     item_id: int = 1
+    item_id_at_round_start: int = 1
     waiting_for_equip: bool = False
     item_lost_announced: bool = False
+    item_lost_this_round: bool = False
+    randomizer_item_changed: bool = False
     died_this_round: bool = False
+    lived_this_round: bool = False
     item_equipped_after_death: bool = False
     pending_sabotage_murder: bool = False
     sabotage_murder_this_round: bool = False
+    bloodthirsty_creature_variant: bool = False
+    hungry_home_invader_variant: bool = False

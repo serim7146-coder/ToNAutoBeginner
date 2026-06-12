@@ -1,5 +1,6 @@
 import time
 import threading
+from functools import lru_cache
 from typing import Optional
 
 import config
@@ -14,12 +15,16 @@ from ActionExecutor import ActionExecutor
 from State import WindowConfig, WindowState
 
 
+DTM_TERROR_ID = ReadJson.terror_id("Don't Touch Me", config.TERRORS)
+
+
+@lru_cache(maxsize=512)
+def _terror_name_cached(tid: int) -> str:
+    return ReadJson.terror_name(tid, config.TERRORS) or f"ID:{tid}"
+
+
 def format_terror_ids(ids: list[int]) -> str:
-    names = []
-    for tid in ids:
-        name = ReadJson.terror_name(tid, config.TERRORS)
-        names.append(name if name else f"ID:{tid}")
-    return ", ".join(names)
+    return ", ".join(_terror_name_cached(tid) for tid in ids)
 
 
 # ═══════════════════════════════════════════════
@@ -35,6 +40,7 @@ class LogMonitor:
         self.window_idx = window_idx
         self.st = WindowState()
         self._running = False
+        self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._action = ActionExecutor(
             cfg=cfg,
@@ -45,13 +51,14 @@ class LogMonitor:
 
     def start(self):
         self._running = True
+        self._stop_event.clear()
         # 過去ログからインスタンスタイプを検出（ワールド入室後の起動に対応）
         self._detect_instance_from_log()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        self._thread = self._start_daemon(self._run)
 
     def stop(self):
         self._running = False
+        self._stop_event.set()
 
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
@@ -73,15 +80,58 @@ class LogMonitor:
     def _same_player_name(a: str, b: str) -> bool:
         return bool(a and b and a.strip() == b.strip())
 
+    def _start_daemon(self, target, *args) -> threading.Thread:
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+        return thread
+
+    def _release_equip_wait_after_delay(self):
+        time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
+        SharedState.EQUIP_WAIT_EVENT.set()
+        self._log("✅ 全窓フリーズ解除")
+
+    @staticmethod
+    def _iter_log_lines_reversed(path, chunk_size: int):
+        if chunk_size <= 0:
+            chunk_size = 256 * 1024
+
+        with open(path, "rb") as f:
+            pos = f.seek(0, 2)
+            pending = b""
+            while pos > 0:
+                read_size = min(chunk_size, pos)
+                pos -= read_size
+                f.seek(pos)
+                data = f.read(read_size) + pending
+                lines = data.splitlines()
+
+                if pos > 0:
+                    if lines:
+                        pending = lines[0]
+                        lines = lines[1:]
+                    else:
+                        pending = data
+                        lines = []
+                else:
+                    pending = b""
+
+                for raw_line in reversed(lines):
+                    yield raw_line.decode("utf-8", errors="replace")
+
+            if pending:
+                yield pending.decode("utf-8", errors="replace")
+
     def _detect_instance_from_log(self):
         if not self.cfg.log_path or not self.cfg.log_path.exists():
             return
         try:
-            with open(self.cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
             found_user     = False
             found_instance = False
-            for line in reversed(lines):
+            lines = self._iter_log_lines_reversed(
+                self.cfg.log_path,
+                config.LOG_START_SCAN_CHUNK_BYTES,
+            )
+            for line in lines:
                 event = LogParser.parse(line)
                 if not event:
                     continue
@@ -111,41 +161,166 @@ class LogMonitor:
             return
         self.st.log_pos = cfg.log_path.stat().st_size
         self._log("監視開始")
-        while self._running:
-            try:
-                with open(cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
-                    f.seek(self.st.log_pos)
-                    chunk = f.read()
-                    self.st.log_pos = f.tell()
-                if chunk:
-                    for line in chunk.splitlines():
-                        self._process(line)
-            except Exception as e:
-                self._log(f"読み取りエラー: {e}")
-            time.sleep(config.LOG_POLL_INTERVAL)
+        try:
+            with open(cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(self.st.log_pos)
+                while self._running:
+                    try:
+                        current_size = cfg.log_path.stat().st_size
+                        if current_size < self.st.log_pos:
+                            f.seek(0)
+                            self.st.log_pos = 0
+
+                        f.seek(self.st.log_pos)
+                        chunk = f.read()
+                        self.st.log_pos = f.tell()
+                        if chunk:
+                            for line in chunk.splitlines():
+                                self._process(line)
+                    except Exception as e:
+                        self._log(f"読み取りエラー: {e}")
+                    if self._stop_event.wait(config.LOG_POLL_INTERVAL):
+                        break
+        except Exception as e:
+            self._log(f"読み取りエラー: {e}")
 
     def _mark_sabotage_murder(self):
         st = self.st
         if st.sabotage_murder_this_round:
             return
         st.sabotage_murder_this_round = True
+        self._mark_item_lost("Sabotageマーダー判定: アイテムロスト")
+
+    def _mark_item_lost(self, message: str = ""):
+        st = self.st
+        already_lost = st.item_lost_this_round and st.item_id == 0
+        st.item_lost_this_round = True
+        st.randomizer_item_changed = False
         st.item_id = 0
-        self._log("Sabotageマーダー判定: アイテムロスト")
+        if message and not already_lost:
+            self._log(message)
+
+    def _round_start_loses_item(self) -> bool:
+        st = self.st
+        if st.round_type not in config.ROUND_START_ITEM_LOSS_ROUNDS:
+            return False
+        if st.round_type == "8 Pages" and st.item_id in config.EIGHT_PAGES_KEEP_ITEM_IDS:
+            return False
+        return True
 
     def _round_lost_item(self) -> bool:
         st = self.st
-        item_loss_round = (
-            st.round_type in config.ITEM_LOSS_ROUNDS
-            and not st.item_equipped_after_death
+        return st.item_lost_this_round and not st.item_id
+
+    def _round_item_warning(self) -> bool:
+        return self._round_lost_item() or self.st.randomizer_item_changed
+
+    def _track_randomizer_item_change(self, event: LogParser.LogEvent):
+        st = self.st
+        if st.round_type != "Randomizer" or not st.in_round or not event.item_id:
+            return
+
+        was_changed = st.randomizer_item_changed
+        original_item_id = st.item_id_at_round_start or event.previous_item_id
+        if original_item_id and event.item_id == original_item_id:
+            st.randomizer_item_changed = False
+        elif original_item_id and event.item_id != original_item_id:
+            st.randomizer_item_changed = True
+        elif event.previous_item_id is not None and event.previous_item_id != event.item_id:
+            st.randomizer_item_changed = True
+
+        if st.randomizer_item_changed and not was_changed:
+            self._log("Randomizer: アイテム差し替え警告")
+
+    def _apply_bloodthirsty_creature_variant(self, ids: list[int]) -> list[int]:
+        if not self.st.bloodthirsty_creature_variant:
+            return ids
+        return [
+            config.BLOODTHIRSTY_CREATURE_ID if tid == config.CURIOUS_CREATURE_ID else tid
+            for tid in ids
+        ]
+
+    def _apply_hungry_home_invader_variant(self, ids: list[int], round_type: str) -> list[int]:
+        if not self.st.hungry_home_invader_variant or round_type != "Classic":
+            return ids
+        return [
+            config.HUNGRY_HOME_INVADER_ID if tid == config.SLENDER_ID else tid
+            for tid in ids
+        ]
+
+    def _waiting_for_bloodthirsty_creature_variant(self) -> bool:
+        return (
+            config.CURIOUS_CREATURE_ID in self.st.terror_ids
+            and not self.st.bloodthirsty_creature_variant
         )
-        sabotage_murder_loss = st.sabotage_murder_this_round and not st.item_id
-        return item_loss_round or sabotage_murder_loss
+
+    def _waiting_for_hungry_home_invader_variant(self) -> bool:
+        return (
+            self.st.round_type == "Classic"
+            and config.SLENDER_ID in self.st.terror_ids
+            and not self.st.hungry_home_invader_variant
+        )
+
+    def _waiting_for_terror_variant(self) -> bool:
+        return (
+            self._waiting_for_bloodthirsty_creature_variant()
+            or self._waiting_for_hungry_home_invader_variant()
+        )
+
+    def _mark_bloodthirsty_creature_variant(self):
+        st = self.st
+        st.bloodthirsty_creature_variant = True
+        changed = False
+        for i, tid in enumerate(st.terror_ids):
+            if tid == config.CURIOUS_CREATURE_ID:
+                st.terror_ids[i] = config.BLOODTHIRSTY_CREATURE_ID
+                changed = True
+        if changed:
+            self._log("Wild Yet Curious Creature -> Wild Yet Bloodthirsty Creature")
+            self._send_round_statistics_once()
+        else:
+            self._log("Wild Yet Bloodthirsty Creature variant detected")
+
+    def _mark_hungry_home_invader_variant(self):
+        st = self.st
+        if st.round_type != "Classic":
+            return
+        st.hungry_home_invader_variant = True
+        changed = False
+        for i, tid in enumerate(st.terror_ids):
+            if tid == config.SLENDER_ID:
+                st.terror_ids[i] = config.HUNGRY_HOME_INVADER_ID
+                changed = True
+        if changed:
+            self._log("Slender -> Hungry Home Invader")
+            self._send_round_statistics_once()
+        else:
+            self._log("Hungry Home Invader variant detected")
+
+    def _should_skip_hoshiimo_classic(self, is_hoshiimo: bool) -> bool:
+        if not (is_hoshiimo and self.st.round_type == "Classic"):
+            return True
+        if config.BLOODTHIRSTY_CREATURE_ID in self.st.terror_ids:
+            self._log("干し芋Classic Bloodthirsty: 自動自爆しません")
+            return False
+        if self._waiting_for_bloodthirsty_creature_variant():
+            self._log("干し芋Classic Curious Creature: Bloodthirsty判定待ちのため自動自爆を保留")
+            return False
+        return True
 
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
         st = self.st
         event = LogParser.parse(line)
         if not event:
+            return
+
+        if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
+            self._mark_bloodthirsty_creature_variant()
+            return
+
+        if event.kind == LogParser.EVENT_HUNGRY_HOME_INVADER:
+            self._mark_hungry_home_invader_variant()
             return
 
         if event.kind == LogParser.EVENT_USER_AUTH:
@@ -167,11 +342,7 @@ class LogMonitor:
             # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
             if st.waiting_for_equip and st.item_id:
                 st.waiting_for_equip = False
-                def _delayed_release(self=self):
-                    time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
-                    SharedState.EQUIP_WAIT_EVENT.set()
-                    self._log("✅ 全窓フリーズ解除")
-                threading.Thread(target=_delayed_release, daemon=True).start()
+                self._start_daemon(self._release_equip_wait_after_delay)
             return
 
         if event.kind == LogParser.EVENT_ROUND_START:
@@ -186,13 +357,19 @@ class LogMonitor:
             st.fog                         = False
             st.begin_done                  = False
             st.is_open_special_round_round = False
+            st.item_id_at_round_start      = st.item_id
             st.item_lost_announced         = False
+            st.item_lost_this_round        = False
+            st.randomizer_item_changed     = False
             st.died_this_round             = False
+            st.lived_this_round            = False
             st.item_equipped_after_death   = False
             st.sabotage_murder_this_round  = (
                 st.round_type == "Sabotage" and st.pending_sabotage_murder
             )
             st.pending_sabotage_murder     = False
+            st.bloodthirsty_creature_variant = False
+            st.hungry_home_invader_variant = False
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -201,8 +378,9 @@ class LogMonitor:
                 self._log("一時的にアイテムロストフリーズを解除")
 
             if st.sabotage_murder_this_round:
-                st.item_id = 0
-                self._log("Sabotageマーダー開始: アイテムロスト")
+                self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
+            elif self._round_start_loses_item():
+                self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
 
             if st.round_type == "Run":
                 st.is_continue_round = False
@@ -236,37 +414,55 @@ class LogMonitor:
             st.died_this_round = True
             st.item_equipped_after_death = False
             st.is_open_special_round_round = False
+            if st.round_type == "Run":
+                self._mark_item_lost("Run死亡: アイテムロスト")
+            return
+
+        if event.kind == LogParser.EVENT_RESPAWN:
+            if st.in_round:
+                self._mark_item_lost("リスポーン: アイテムロスト")
             return
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
-            if not self.cfg.auto_begin and not SharedState.get_hands_free():
+            if self._waiting_for_terror_variant():
+                self._send_round_statistics_once()
+            announce_on_round_over = (
+                not self.cfg.auto_begin
+                or st.instance_type != config.INSTANCE_PRIVATE
+            )
+            if announce_on_round_over and not SharedState.get_hands_free():
                 round_lost_item = self._round_lost_item()
-                if round_lost_item:
-                    st.item_id = 0
+                if self._round_item_warning():
+                    if round_lost_item:
+                        st.item_id = 0
                     st.waiting_for_equip = True
                 elif not st.item_id:
                     st.waiting_for_equip = True
-            if st.waiting_for_equip and not self.cfg.auto_begin:
+            if st.waiting_for_equip and announce_on_round_over:
                 self._action.announce_item_lost_once()
             return
 
         if event.kind == LogParser.EVENT_VERIFIED_END:
+            if self._waiting_for_terror_variant():
+                self._send_round_statistics_once()
             if st.is_continue_round:
                 st.is_continue_round = False
                 SharedState.continue_round_end()
                 self._log("▶ 続行/霧ラウンド終了 → 他窓フリーズ解除")
             round_lost_item = self._round_lost_item()
+            round_item_warning = self._round_item_warning()
             if not SharedState.get_hands_free():
-                if round_lost_item:
-                    st.item_id = 0
+                if round_item_warning:
+                    if round_lost_item:
+                        st.item_id = 0
                     if not self.cfg.auto_begin and not st.waiting_for_equip:
                         self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
                     elif SharedState.get_item_begin_mode():
                         st.waiting_for_equip = True
                         SharedState.EQUIP_WAIT_EVENT.clear()
                         self._log("ラウンド終了 【⚠ アイテムロスト → フォーカス・全窓フリーズ開始】")
-                        threading.Thread(target=lambda: WindowOperator.focus_window(self.cfg.hwnd), daemon=True).start()
+                        self._start_daemon(WindowOperator.focus_window, self.cfg.hwnd)
                     else:
                         st.waiting_for_equip = True
                         self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
@@ -279,8 +475,9 @@ class LogMonitor:
                 else:
                     self._log("ラウンド終了")
             else:
-                if round_lost_item:
-                    st.item_id = 0
+                if round_item_warning:
+                    if round_lost_item:
+                        st.item_id = 0
                     if self.cfg.auto_begin:
                         self._action.announce_item_lost_once()
                     else:
@@ -289,7 +486,7 @@ class LogMonitor:
             if self.cfg.announce_intermission:
                 PlaySound.play_sound(self.cfg.voice_intermission)
             if self.cfg.auto_begin:
-                threading.Thread(target=self._action.do_after_round, daemon=True).start()
+                self._start_daemon(self._action.do_after_round)
             return
 
         if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
@@ -298,7 +495,7 @@ class LogMonitor:
             self._log("テラー不明 → revealed待ち")
             if SharedState.get_hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
-                threading.Thread(target=self._action.do_skip, daemon=True).start()
+                self._start_daemon(self._action.do_skip)
             return
 
         if event.kind == LogParser.EVENT_FOXY:
@@ -321,6 +518,7 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
+            self._track_randomizer_item_change(event)
             st.item_id = event.item_id
             if st.died_this_round and st.item_id:
                 st.item_equipped_after_death = True
@@ -328,14 +526,11 @@ class LogMonitor:
             # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
             if st.waiting_for_equip and st.begin_done:
                 st.waiting_for_equip = False
-                def _delayed_release(self=self):
-                    time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
-                    SharedState.EQUIP_WAIT_EVENT.set()
-                    self._log("✅ 全窓フリーズ解除")
-                threading.Thread(target=_delayed_release, daemon=True).start()
+                self._start_daemon(self._release_equip_wait_after_delay)
             return
 
         if event.kind == LogParser.EVENT_LIVED:
+            st.lived_this_round = True
             if st.is_open_special_round_round:
                 st.open_special_round_wins += 1
                 self._log(f"生存数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
@@ -350,28 +545,32 @@ class LogMonitor:
         st.fog = False
 
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
+        ids = self._apply_bloodthirsty_creature_variant(ids)
+        ids = self._apply_hungry_home_invader_variant(ids, round_type)
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
         for tid in ids:
             if tid not in st.terror_ids:
                 st.terror_ids.append(tid)
 
-        self._send_round_statistics_once()
+        if not self._waiting_for_terror_variant():
+            self._send_round_statistics_once()
 
         # インスタンス制限チェック
         itype        = st.instance_type
         is_private   = itype == config.INSTANCE_PRIVATE
+        is_hoshiimo  = itype == config.INSTANCE_HOSHIIMO
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
         # 干し芋グループ専用自動自爆
         if is_group_skip and self.cfg.hoshiimo_skip:
-            if st.round_type in config.HOSHIIMO_SKIP_ROUNDS:
+            if st.round_type in config.HOSHIIMO_SKIP_ROUNDS and self._should_skip_hoshiimo_classic(is_hoshiimo):
                 self._log(f"干し芋自動自爆: {st.round_type}")
                 if st.is_continue_round:
                     st.is_continue_round = False
                     SharedState.continue_round_end()
-                threading.Thread(target=self._action.do_skip, daemon=True).start()
+                self._start_daemon(self._action.do_skip)
                 return
 
         # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
@@ -387,15 +586,14 @@ class LogMonitor:
             if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 self._log(f"放置モード(3クラ済み): 即自爆 {st.terror_ids} / {st.round_type}")
                 if not st.is_continue_round and self.cfg.do_skip:
-                    threading.Thread(target=self._action.do_skip, daemon=True).start()
+                    self._start_daemon(self._action.do_skip)
                 return
             if not st.item_id:
-                DTM_ID = ReadJson.terror_id("Don't Touch Me", config.TERRORS)
-                has_dtm = self.cfg.cancel_afk and DTM_ID in st.terror_ids
+                has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in st.terror_ids
                 if not has_dtm:
                     self._log(f"放置モード(アイテムなし・DTMなし): 即自爆 {st.terror_ids} / {st.round_type}")
                     if not st.is_continue_round and self.cfg.do_skip:
-                        threading.Thread(target=self._action.do_skip, daemon=True).start()
+                        self._start_daemon(self._action.do_skip)
                     return
             has_cancel_afk = bool(
                 config.OPEN_SPECIAL_ROUND_TERROR_IDS and
@@ -405,7 +603,7 @@ class LogMonitor:
             if not has_cancel_afk:
                 self._log(f"放置モード(DTM/Waldo以外): 即自爆 {st.terror_ids} / {st.round_type}")
                 if not st.is_continue_round and self.cfg.do_skip:
-                    threading.Thread(target=self._action.do_skip, daemon=True).start()
+                    self._start_daemon(self._action.do_skip)
                 return
 
         all_ids = st.terror_ids
@@ -437,14 +635,14 @@ class LogMonitor:
             if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 st.is_open_special_round_round = True
                 self._log(f"3クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}）")
-                threading.Thread(target=self._action.do_open_special_round_loop, daemon=True).start()
+                self._start_daemon(self._action.do_open_special_round_loop)
             elif is_open_special_round_target and not is_private:
                 self._log("DTM/WaldoラウンドだがAFK解除はprivateのみ")
             elif is_open_special_round_target:
                 self._log("DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")
         else:
             if self.cfg.do_skip and is_private:
-                threading.Thread(target=self._action.do_skip, daemon=True).start()
+                self._start_daemon(self._action.do_skip)
 
     def _send_round_statistics_once(self):
         st = self.st

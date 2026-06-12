@@ -1,7 +1,4 @@
-import os
 import tkinter as tk
-import win32gui
-import glob
 from pathlib import Path
 from tkinter import ttk, scrolledtext, filedialog, messagebox
 from datetime import datetime
@@ -13,73 +10,13 @@ import LogMonitor
 import SharedState
 import PlaySound
 import MatchTNL
+import VRChatDiscovery
 from StatisticsGUI import StatisticsWindow
 
-# ═══════════════════════════════════════════════
-#  CONSTANTS
-# ═══════════════════════════════════════════════
-VRCHAT_LOG_DIR = (
-    Path(os.environ.get("APPDATA", "~")) / ".." / "LocalLow" / "VRChat" / "VRChat"
-).resolve()
-
-VRCHAT_WINDOW_CLASS  = "UnityWndClass"
-
-
-# ═══════════════════════════════════════════════
-#  最新ログを読み取る処理
-# ═══════════════════════════════════════════════
-def get_vrchat_windows(hwnd_count: int) -> list[int]:
-    hwnds = []
-    found_hwnd = 0
-    def cb(h, _):
-        nonlocal found_hwnd
-        if found_hwnd >= hwnd_count:
-            return
-        if not win32gui.IsWindowVisible(h):
-            return
-        if "VRChat" not in win32gui.GetWindowText(h):
-            return
-        if win32gui.GetClassName(h) == VRCHAT_WINDOW_CLASS:
-            hwnds.insert(0, h)
-            found_hwnd += 1
-    if found_hwnd >= hwnd_count:
-        return hwnds
-    win32gui.EnumWindows(cb, None)
-    return hwnds
-
-def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
-    """ファイル名から時刻を読み取り、最新count件を古い順で返す。
-    ファイル名形式: output_log_YYYY-MM-DD_HH-MM-SS.txt
-    窓1=最も古いログ、窓N=最も新しいログ の順に割り当てる。"""
-    pattern = str(base_dir / "output_log_*.txt")
-    files = glob.glob(pattern)
-
-    def log_datetime(path: str) -> str:
-        # ファイル名から日時部分を抽出してソートキーにする
-        name = os.path.basename(path)
-        # output_log_2026-05-09_00-35-09.txt → "2026-05-09_00-35-09"
-        try:
-            return name.replace("output_log_", "").replace(".txt", "")
-        except Exception:
-            return ""
-
-    # ファイル名の日時で降順ソート（新しい順）→ 最新count件取得 → 昇順（古い順）に戻す
-    sorted_desc = sorted(files, key=log_datetime, reverse=True)
-    latest = sorted_desc[:count]
-    return [Path(f) for f in sorted(latest, key=log_datetime, reverse=False)]
-
-# ═══════════════════════════════════════════════
-#  GUI
-# ═══════════════════════════════════════════════
-BG  = "#1e1e2e"
-FG  = "#cdd6f4"
-ACC = "#89b4fa"
-RED = "#f38ba8"
-GRN = "#a6e3a1"
-SUB = "#313244"
-YLW = "#f9e2af"
-ORG = "#fab387"
-
+try:
+    import keyboard
+except ImportError:
+    keyboard = None
 
 class WindowTab(ttk.Frame):
     def __init__(self, parent, idx: int):
@@ -92,7 +29,7 @@ class WindowTab(ttk.Frame):
         p = self
 
         def section(text):
-            ttk.Label(p, text=text, background=BG, foreground=ACC,
+            ttk.Label(p, text=text, background=config.GUI_BG, foreground=config.GUI_ACC,
                       font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
 
         # ── VRChatウィンドウ ──
@@ -135,7 +72,10 @@ class WindowTab(ttk.Frame):
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
     def _refresh_hwnds(self, hwnd_count: int):
-        hwnds = get_vrchat_windows(hwnd_count)
+        hwnds = VRChatDiscovery.get_vrchat_windows(hwnd_count)
+        self.set_hwnd_choices(hwnds)
+
+    def set_hwnd_choices(self, hwnds: list[int], selected_hwnd: int | None = None):
         self._hwnd_map = {}
         choices = []
         for i, h in enumerate(hwnds):
@@ -143,7 +83,11 @@ class WindowTab(ttk.Frame):
             self._hwnd_map[label] = h
             choices.append(label)
         self.cb_hwnd["values"] = choices
-        if choices and self.v_hwnd_sel.get() == "未選択":
+        if selected_hwnd is not None:
+            label = next((k for k, v in self._hwnd_map.items() if v == selected_hwnd), None)
+            if label:
+                self.v_hwnd_sel.set(label)
+        elif choices and self.v_hwnd_sel.get() == "未選択":
             self.v_hwnd_sel.set(choices[0])
 
     def _get_selected_hwnd(self) -> int:
@@ -152,7 +96,7 @@ class WindowTab(ttk.Frame):
     def _browse_log(self):
         p = filedialog.askopenfilename(
             title="VRChatログを選択",
-            initialdir=str(VRCHAT_LOG_DIR),
+            initialdir=str(config.VRCHAT_LOG_DIR),
             filetypes=[("Log", "*.txt"), ("All", "*.*")]
         )
         if p:
@@ -182,7 +126,7 @@ class WindowTab(ttk.Frame):
 # ── ログオーバーレイ ──────────────────────────────
 class LogOverlay(tk.Toplevel):
     """半透明の最前面ログオーバーレイウィンドウ"""
-    MAX_LINES = 20
+    MAX_LINES = config.GUI_OVERLAY_LOG_MAX_LINES
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -276,23 +220,23 @@ class LogOverlay(tk.Toplevel):
 class CollapsibleFrame(tk.Frame):
     """クリックで折りたたみ可能なLabelFrame風ウィジェット"""
     def __init__(self, parent, text: str, collapsed: bool = False, **kwargs):
-        super().__init__(parent, bg=BG, **kwargs)
+        super().__init__(parent, bg=config.GUI_BG, **kwargs)
         self._collapsed = collapsed
         # ヘッダ行
-        hf = tk.Frame(self, bg=BG)
+        hf = tk.Frame(self, bg=config.GUI_BG)
         hf.pack(fill="x")
         self._toggle_btn = tk.Button(
             hf, text="▶" if collapsed else "▼",
-            bg=BG, fg=ACC, font=("Segoe UI", 9),
+            bg=config.GUI_BG, fg=config.GUI_ACC, font=("Segoe UI", 9),
             relief="flat", bd=0, cursor="hand2",
             command=self._toggle)
         self._toggle_btn.pack(side="left")
-        tk.Label(hf, text=text, bg=BG, fg=ACC,
+        tk.Label(hf, text=text, bg=config.GUI_BG, fg=config.GUI_ACC,
                  font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
         # 区切り線
-        tk.Frame(hf, bg=SUB, height=1).pack(side="left", fill="x", expand=True, pady=6)
+        tk.Frame(hf, bg=config.GUI_SUB, height=1).pack(side="left", fill="x", expand=True, pady=6)
         # コンテンツ領域
-        self.content = tk.Frame(self, bg=BG)
+        self.content = tk.Frame(self, bg=config.GUI_BG)
         if not collapsed:
             self.content.pack(fill="x", padx=8, pady=(0, 4))
 
@@ -317,34 +261,57 @@ class App(tk.Tk):
         self.title("ToNAutoBeginner")
         self.geometry("900x860")
         self.minsize(820, 760)
-        self.configure(bg=BG)
+        self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
         self.keepOn_set: dict = {}
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._running = False
         self._overlay: LogOverlay | None = None
+        self._log_line_count = 0
+        self._emergency_stop_key_pressed = False
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._start_emergency_stop_polling()
+
+    def _start_emergency_stop_polling(self):
+        if keyboard is None:
+            return
+        self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
+
+    def _poll_emergency_stop_key(self):
+        try:
+            now = keyboard.is_pressed(config.EMERGENCY_STOP_KEY)
+            if now and not self._emergency_stop_key_pressed:
+                self._log("[緊急停止] Pキーが押されました")
+                self.after(0, self._stop)
+            self._emergency_stop_key_pressed = now
+        except Exception:
+            pass
+
+        try:
+            self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
+        except tk.TclError:
+            pass
 
     def _build_ui(self):
         s = ttk.Style(self)
         s.theme_use("clam")
-        s.configure("TFrame",            background=BG)
-        s.configure("TLabel",            background=BG, foreground=FG, font=("Segoe UI", 10))
+        s.configure("TFrame",            background=config.GUI_BG)
+        s.configure("TLabel",            background=config.GUI_BG, foreground=config.GUI_FG, font=("Segoe UI", 10))
         s.configure("TButton",           font=("Segoe UI", 10, "bold"), padding=4)
-        s.configure("TCheckbutton",      background=BG, foreground=FG, font=("Segoe UI", 10))
-        s.map("TCheckbutton", background=[("active", BG)])
-        s.configure("TLabelframe",       background=BG, foreground=ACC)
-        s.configure("TLabelframe.Label", background=BG, foreground=ACC,
+        s.configure("TCheckbutton",      background=config.GUI_BG, foreground=config.GUI_FG, font=("Segoe UI", 10))
+        s.map("TCheckbutton", background=[("active", config.GUI_BG)])
+        s.configure("TLabelframe",       background=config.GUI_BG, foreground=config.GUI_ACC)
+        s.configure("TLabelframe.Label", background=config.GUI_BG, foreground=config.GUI_ACC,
                     font=("Segoe UI", 10, "bold"))
-        s.configure("TEntry",            fieldbackground=SUB, foreground=FG)
-        s.configure("TSpinbox",          fieldbackground=SUB, foreground=FG)
-        s.configure("TNotebook",         background=BG, tabmargins=[2, 2, 2, 0])
-        s.configure("TNotebook.Tab",     background=SUB, foreground=FG, padding=[10, 4])
+        s.configure("TEntry",            fieldbackground=config.GUI_SUB, foreground=config.GUI_FG)
+        s.configure("TSpinbox",          fieldbackground=config.GUI_SUB, foreground=config.GUI_FG)
+        s.configure("TNotebook",         background=config.GUI_BG, tabmargins=[2, 2, 2, 0])
+        s.configure("TNotebook.Tab",     background=config.GUI_SUB, foreground=config.GUI_FG, padding=[10, 4])
         s.map("TNotebook.Tab",
-              background=[("selected", ACC)], foreground=[("selected", BG)])
-        s.configure("TSeparator",        background=SUB)
+              background=[("selected", config.GUI_ACC)], foreground=[("selected", config.GUI_BG)])
+        s.configure("TSeparator",        background=config.GUI_SUB)
 
         # ① TNL
         f1 = ttk.LabelFrame(self, text="① 続行リスト(.tnl)", padding=8)
@@ -352,7 +319,7 @@ class App(tk.Tk):
         ttk.Entry(f1, textvariable=self.v_tnl, width=58).pack(side="left", padx=(0, 6))
         ttk.Button(f1, text="参照…",    command=self._browse_tnl).pack(side="left")
         ttk.Button(f1, text="再読み込み", command=self._load_tnl).pack(side="left", padx=(4, 0))
-        self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=RED)
+        self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
 
         # ② 自爆キー設定
@@ -382,7 +349,7 @@ class App(tk.Tk):
 
 
         self.lbl_win_warn = ttk.Label(
-            f2, text="※ 窓数はマクロ起動前に設定してください", foreground=YLW)
+            f2, text="※ 窓数はマクロ起動前に設定してください", foreground=config.GUI_YLW)
         self.lbl_win_warn.pack(anchor="w")
 
         # ③ 窓タブ
@@ -448,37 +415,37 @@ class App(tk.Tk):
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
         ttk.Label(fc, text="緊急停止: Pキー長押し",
-                  foreground=ORG).pack(side="left", padx=(10, 0))
+                  foreground=config.GUI_ORG).pack(side="left", padx=(10, 0))
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
         fhf.pack(pady=(0, 4))
         self.btn_hands_free = tk.Button(
             fhf, text="🤖 完全放置モード: OFF（全窓共通）",
-            bg=SUB, fg=FG, font=("Segoe UI", 11, "bold"),
+            bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_hands_free)
         self.btn_hands_free.pack(side="left")
         ttk.Label(fhf, text="← ONにするとアイテムロストを無視・全ラウンド即自爆",
-                  foreground=YLW).pack(side="left", padx=(10, 0))
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # アイテム取得→Begin
         fif = ttk.Frame(self)
         fif.pack(pady=(0, 4))
         self.btn_item_get_begin = tk.Button(
             fif, text="🎯 アイテム取得→Begin: OFF（全窓共通）",
-            bg=SUB, fg=FG, font=("Segoe UI", 11, "bold"),
+            bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_item_get_begin)
         self.btn_item_get_begin.pack(side="left")
         ttk.Label(fif, text="← ONにするとアイテムロストラウンド開始時にフォーカス＆フリーズ",
-                  foreground=YLW).pack(side="left", padx=(10, 0))
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
         fl.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.log_text = scrolledtext.ScrolledText(
-            fl, height=16, bg="#181825", fg=FG, width=80,
+            fl, height=16, bg="#181825", fg=config.GUI_FG, width=80,
             font=("Consolas", 9), state="disabled"
         )
         self.log_text.pack(fill="both", expand=True)
@@ -486,11 +453,15 @@ class App(tk.Tk):
 
         # クレジット表示
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
-                 bg=BG, fg=SUB, font=("Segoe UI", 8)).pack(anchor="e", padx=12)
+                 bg=config.GUI_BG, fg=config.GUI_SUB, font=("Segoe UI", 8)).pack(anchor="e", padx=12)
 
     def _rebuild_tabs(self, count: int):
         for tab in self.tabs:
-            self.nb.forget(tab)
+            try:
+                self.nb.forget(tab)
+            except tk.TclError:
+                pass
+            tab.destroy()
         self.tabs.clear()
         for i in range(count):
             tab = WindowTab(self.nb, i)
@@ -505,6 +476,8 @@ class App(tk.Tk):
         except (ValueError, tk.TclError):
             n = 1
         self.v_win_count.set(n)
+        if len(self.tabs) == n:
+            return
         self._rebuild_tabs(n)
 
     def _toggle_item_get_begin(self):
@@ -518,7 +491,7 @@ class App(tk.Tk):
         else:
             self.btn_item_get_begin.config(
                 text="🎯 アイテム取得→Begin: OFF（全窓共通）",
-                bg=SUB, fg=FG, relief="raised")
+                bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
 
     def _toggle_hands_free(self):
@@ -527,12 +500,12 @@ class App(tk.Tk):
         if val:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: ON（全窓共通）",
-                bg="#3a1a1a", fg=RED, relief="sunken")
+                bg="#3a1a1a", fg=config.GUI_RED, relief="sunken")
             self._log("[放置モード] ON: アイテムロスト無視・全ラウンド即自爆")
         else:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: OFF（全窓共通）",
-                bg=SUB, fg=FG, relief="raised")
+                bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[放置モード] OFF")
 
     def _browse_tnl(self):
@@ -553,7 +526,7 @@ class App(tk.Tk):
             self.keepOn_set, meta = MatchTNL.load_tnl(p)
             total = sum(len(v) for v in self.keepOn_set.values())
             msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 スキップ対象"
-            self.lbl_tnl.config(text=msg, foreground=GRN)
+            self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(f"[TNL] {msg}")
         except Exception as e:
             messagebox.showerror("TNL読み込みエラー", str(e))
@@ -563,10 +536,10 @@ class App(tk.Tk):
         VRChatウィンドウとログファイルを起動順（古い順）に自動割り当てる。
         有効な窓タブのi番目 → HWND[i] + ログ[i] を一括設定。
         """
-        hwnds = get_vrchat_windows(self.v_win_count.get()) # 選ばれたのが古い順で配列に格納される。
+        hwnds = VRChatDiscovery.get_vrchat_windows(self.v_win_count.get()) # 選ばれたのが古い順で配列に格納される。
         active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
         count = max(len(hwnds), len(active_tabs))
-        logs = find_latest_logs(VRCHAT_LOG_DIR, count)
+        logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, count)
 
         if not hwnds and not logs:
             self._log("[自動割り当て] VRChatウィンドウもログも見つかりません")
@@ -576,12 +549,7 @@ class App(tk.Tk):
             # HWND割り当て
             if i < len(hwnds):
                 hwnd = hwnds[i]
-                # ComboboxにHWNDを追加して選択
-                tab._refresh_hwnds(self.v_win_count.get())
-                label = next(
-                    (k for k, v in tab._hwnd_map.items() if v == hwnd), None)
-                if label:
-                    tab.v_hwnd_sel.set(label)
+                tab.set_hwnd_choices(hwnds, selected_hwnd=hwnd)
 
             # ログ割り当て
             if i < len(logs):
@@ -599,7 +567,7 @@ class App(tk.Tk):
 
         # 有効な窓のログが空なら自動割り当て
         active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
-        logs = find_latest_logs(VRCHAT_LOG_DIR, len(active_tabs))
+        logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, len(active_tabs))
         log_idx = 0
         for tab in active_tabs:
             if not tab.v_log.get().strip() and log_idx < len(logs):
@@ -636,7 +604,7 @@ class App(tk.Tk):
         self.btn_start.config(state="disabled")
         self.btn_stop.config(state="normal")
         self.lbl_win_warn.config(
-            text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=RED)
+            text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
 
     def _stop(self):
@@ -649,20 +617,36 @@ class App(tk.Tk):
         self.btn_start.config(state="normal")
         self.btn_stop.config(state="disabled")
         self.lbl_win_warn.config(
-            text="※ 窓数はマクロ起動前に設定してください", foreground=YLW)
+            text="※ 窓数はマクロ起動前に設定してください", foreground=config.GUI_YLW)
         self._log("[停止] マクロを停止しました")
 
     def _log(self, msg: str):
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{ts}] {msg}\n"
         def _a():
-            self.log_text.config(state="normal")
+            try:
+                self._append_log_text(line)
+                if self._overlay and not self._overlay._closed:
+                    self._overlay.append(f"[{ts}] {msg}")
+            except tk.TclError:
+                pass
+        try:
+            self.after(0, _a)
+        except tk.TclError:
+            pass
+
+    def _append_log_text(self, line: str):
+        self.log_text.config(state="normal")
+        try:
             self.log_text.insert("end", line)
+            self._log_line_count += max(1, line.count("\n"))
+            excess = self._log_line_count - max(1, config.GUI_LOG_MAX_LINES)
+            if excess > 0:
+                self.log_text.delete("1.0", f"{excess + 1}.0")
+                self._log_line_count -= excess
             self.log_text.see("end")
+        finally:
             self.log_text.config(state="disabled")
-            if self._overlay and not self._overlay._closed:
-                self._overlay.append(f"[{ts}] {msg}")
-        self.after(0, _a)
 
     def _open_statistics(self):
         StatisticsWindow(self)
@@ -676,8 +660,11 @@ class App(tk.Tk):
 
     def _clear_log(self):
         self.log_text.config(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.config(state="disabled")
+        try:
+            self.log_text.delete("1.0", "end")
+            self._log_line_count = 0
+        finally:
+            self.log_text.config(state="disabled")
 
     def _on_close(self):
         self._stop()

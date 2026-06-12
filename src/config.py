@@ -1,6 +1,28 @@
+import os
 from pathlib import Path
 
 import ReadJson
+
+
+VRCHAT_LOG_DIR = (
+    Path(os.environ.get("APPDATA", "~")) / ".." / "LocalLow" / "VRChat" / "VRChat"
+).resolve()
+VRCHAT_WINDOW_CLASS = "UnityWndClass"
+
+EMERGENCY_STOP_KEY = "p"
+EMERGENCY_STOP_POLL_MS = 200
+
+GUI_BG  = "#1e1e2e"
+GUI_FG  = "#cdd6f4"
+GUI_ACC = "#89b4fa"
+GUI_RED = "#f38ba8"
+GUI_GRN = "#a6e3a1"
+GUI_SUB = "#313244"
+GUI_YLW = "#f9e2af"
+GUI_ORG = "#fab387"
+GUI_LOG_MAX_LINES = 1000
+GUI_OVERLAY_LOG_MAX_LINES = 20
+
 
 def resource_path(filename: str) -> Path:
     here = Path(__file__).resolve().parent
@@ -47,12 +69,14 @@ SPECIAL_ROUND = {
     "Special",
 }
 
-ITEM_LOSS_ROUNDS = {
-    "Randomizer",
+ROUND_START_ITEM_LOSS_ROUNDS = {
     "Punished",
     "8 Pages",
-    "Run",
 }
+
+# Wiki note: 8 Pages keeps items below 100 Eph. Fill this with item IDs once
+# the app has an item-id to price table.
+EIGHT_PAGES_KEEP_ITEM_IDS = set()
 
 LATE_ROUND = {
     "Punished",
@@ -119,6 +143,14 @@ CBPS_SKIP_ROUNDS = {
 
 # ── ログの更新頻度 ──
 LOG_POLL_INTERVAL    = 0.3
+LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
+
+CURIOUS_CREATURE_ID = 106
+BLOODTHIRSTY_CREATURE_ID = 192
+BLOODTHIRSTY_CREATURE_LOG = "The creature is bloodthirsty today..."
+SLENDER_ID = 47
+HUNGRY_HOME_INVADER_ID = 190
+HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 
 # ── 音量 ──
 DEFAULT_SOUND_VOLUME = 1.0

@@ -1,4 +1,5 @@
 import calendar
+import math
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -8,18 +9,19 @@ import config
 import ConnectDB
 import Statistics
 
-BG  = "#1e1e2e"
-FG  = "#cdd6f4"
-ACC = "#89b4fa"
-RED = "#f38ba8"
-GRN = "#a6e3a1"
-SUB = "#313244"
-YLW = "#f9e2af"
-ORG = "#fab387"
+BG  = config.GUI_BG
+FG  = config.GUI_FG
+ACC = config.GUI_ACC
+RED = config.GUI_RED
+GRN = config.GUI_GRN
+SUB = config.GUI_SUB
+YLW = config.GUI_YLW
+ORG = config.GUI_ORG
 ROUND_CHIP_COLUMNS = 6
 ROUND_CHIP_WIDTH = 21
 ROUND_CHIP_MIN_WIDTH = 158
 DEFAULT_EXCLUDED_ROUNDS = {"Classic", "Run"}
+FilterCacheKey = tuple[int, datetime, datetime, tuple[str, ...]]
 ROUND_CHART_COLORS = (
     "#accdff",
     "#a6e3a1",
@@ -39,10 +41,10 @@ ROUND_ORDER_GROUPS = (
         ("Classic", ("Classic",)),
         ("8 Pages", ("8 Pages",)),
         ("Fog", ("Fog",)),
-        ("Fog (Alternate)", ("Fog (Alternate)",)),
+        ("Fog(Alternate)", ("Fog (Alternate)", "Fog(Alternate)", "Fog Alternate")),
         ("Ghost", ("Ghost",)),
-        ("Ghost (Alternate)", ("Ghost (Alternate)",)),
-        ("Punish", ("Punished",)),
+        ("Ghost(Alternate)", ("Ghost (Alternate)", "Ghost(Alternate)", "Ghost Alternate")),
+        ("Punish", ("Punished", "Punish")),
         ("Sabotage", ("Sabotage",)),
         ("Bloodbath", ("Bloodbath",)),
         ("Double Trouble", ("Double Trouble",)),
@@ -105,6 +107,11 @@ def _round_order_key(round_name: str) -> tuple[int, int, str]:
     return (len(ROUND_ORDER_GROUPS), 0, normalized)
 
 
+def _round_count_sort_key(row: tuple[str, int, int]) -> tuple[int, tuple[int, int, str]]:
+    round_name, count, _slots = row
+    return (-count, _round_order_key(round_name))
+
+
 class StatisticsWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -114,6 +121,12 @@ class StatisticsWindow(tk.Toplevel):
         self.configure(bg=BG)
         self.rows: list[dict] = []
         self.filtered_rows: list[dict] = []
+        self._rows_revision = 0
+        self._filter_cache_key: FilterCacheKey | None = None
+        self._filter_cache_rows: list[dict] = []
+        self._filter_cache_round_rows: list[tuple[str, int, int]] = []
+        self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
+        self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
         self._dt_vars: dict[str, dict[str, tk.IntVar]] = {}
         self.round_vars: dict[str, tk.BooleanVar] = {}
         self.v_terror_category = tk.StringVar(value="unbound")
@@ -121,6 +134,7 @@ class StatisticsWindow(tk.Toplevel):
         self._round_stats_visible = False
         self._round_chart_rows: list[tuple[str, int, int]] = []
         self._round_chart_job: str | None = None
+        self._rows_loading = False
         self._loaded_deferred_rounds: set[str] = set()
         self._loading_deferred_rounds: set[str] = set()
         self.v_status = tk.StringVar(value="統計データ未読み込み")
@@ -299,6 +313,9 @@ class StatisticsWindow(tk.Toplevel):
         return datetime(year, month, day, hour, 0, 0)
 
     def _load_rows_async(self):
+        if self._rows_loading:
+            return
+        self._rows_loading = True
         self.v_status.set("統計データ取得中...")
         self._loaded_deferred_rounds.clear()
         self._loading_deferred_rounds.clear()
@@ -315,10 +332,13 @@ class StatisticsWindow(tk.Toplevel):
             self.after(0, lambda error=e: self._on_rows_loaded([], error))
 
     def _on_rows_loaded(self, rows: list[dict], error: Exception | None):
+        self._rows_loading = False
         if error:
             self.v_status.set(f"取得エラー: {error}")
             return
         self.rows = rows
+        self._rows_revision += 1
+        self._invalidate_analysis_cache()
         self._populate_rounds()
         dates = sorted(dt for dt in (Statistics.row_datetime(row) for row in rows) if dt is not None)
         if dates:
@@ -440,6 +460,7 @@ class StatisticsWindow(tk.Toplevel):
             )
             for row in self.rows
         }
+        added = 0
         for row in rows:
             key = (
                 row.get("created_at"),
@@ -451,6 +472,10 @@ class StatisticsWindow(tk.Toplevel):
             if key not in existing_keys:
                 self.rows.append(row)
                 existing_keys.add(key)
+                added += 1
+        if added:
+            self._rows_revision += 1
+            self._invalidate_analysis_cache()
         self.v_status.set(f"{', '.join(rounds)} を{len(rows)}件追加ロード")
         self._analyze()
 
@@ -468,6 +493,8 @@ class StatisticsWindow(tk.Toplevel):
             )
 
     def _set_terror_category(self, category: str):
+        if self.v_terror_category.get() == category:
+            return
         self.v_terror_category.set(category)
         self._refresh_category_buttons()
         self._analyze()
@@ -506,22 +533,57 @@ class StatisticsWindow(tk.Toplevel):
         if not self._ensure_deferred_rounds_loaded(rounds):
             return
 
-        self.filtered_rows = Statistics.filter_rows(self.rows, start_at, end_at, rounds)
-        round_rows = Statistics.round_summary(self.filtered_rows)
+        filter_key = self._make_filter_cache_key(start_at, end_at, rounds)
+        self.filtered_rows, round_rows = self._filtered_rows_and_round_summary(filter_key, start_at, end_at, rounds)
         if len(rounds) > 1 and len(round_rows) > 1:
             self._show_round_stats(round_rows)
         else:
             self._hide_round_stats()
 
-        candidate_ids = Statistics.candidate_ids_for_category(self.v_terror_category.get(), config.TERRORS)
-        total_slots, candidate_count, terror_rows = Statistics.analyze_terrors(
-            self.filtered_rows, config.TERRORS, candidate_ids
-        )
+        category = self.v_terror_category.get()
+        cached_terror_stats = self._terror_stats_cache.get(category)
+        if cached_terror_stats is None:
+            candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
+            cached_terror_stats = Statistics.analyze_terrors(
+                self.filtered_rows, config.TERRORS, candidate_ids
+            )
+            self._terror_stats_cache[category] = cached_terror_stats
+        total_slots, candidate_count, terror_rows = cached_terror_stats
         self._render_terror_stats(terror_rows)
         self._clear_tree(self.map_tree)
         self.v_status.set(
             f"{len(self.filtered_rows)}ラウンド / {total_slots}枠 / 候補{candidate_count}体"
         )
+
+    def _make_filter_cache_key(
+        self,
+        start_at: datetime,
+        end_at: datetime,
+        rounds: set[str],
+    ) -> FilterCacheKey:
+        return (self._rows_revision, start_at, end_at, tuple(sorted(rounds)))
+
+    def _filtered_rows_and_round_summary(
+        self,
+        filter_key: FilterCacheKey,
+        start_at: datetime,
+        end_at: datetime,
+        rounds: set[str],
+    ) -> tuple[list[dict], list[tuple[str, int, int]]]:
+        if filter_key != self._filter_cache_key:
+            self._filter_cache_key = filter_key
+            self._filter_cache_rows = Statistics.filter_rows(self.rows, start_at, end_at, rounds)
+            self._filter_cache_round_rows = Statistics.round_summary(self._filter_cache_rows)
+            self._terror_stats_cache.clear()
+            self._map_counts_cache.clear()
+        return self._filter_cache_rows, self._filter_cache_round_rows
+
+    def _invalidate_analysis_cache(self):
+        self._filter_cache_key = None
+        self._filter_cache_rows = []
+        self._filter_cache_round_rows = []
+        self._terror_stats_cache.clear()
+        self._map_counts_cache.clear()
 
     def _clear_round_stats(self):
         self._round_chart_rows = []
@@ -571,14 +633,13 @@ class StatisticsWindow(tk.Toplevel):
         extent: float,
         color: str,
     ):
-        canvas.create_arc(
-            cx - radius,
-            cy - radius,
-            cx + radius,
-            cy + radius,
-            start=start,
-            extent=-extent,
-            style=tk.PIESLICE,
+        steps = max(2, int(abs(extent) / 4) + 1)
+        points = [(cx, cy)]
+        for step in range(steps + 1):
+            angle = math.radians(start + extent * step / steps)
+            points.append((cx + radius * math.cos(angle), cy - radius * math.sin(angle)))
+        canvas.create_polygon(
+            *points,
             fill=color,
             outline=BG,
             width=1,
@@ -606,8 +667,9 @@ class StatisticsWindow(tk.Toplevel):
         for index, (_round_name, count, _slots) in enumerate(rows):
             extent = count / total * 360
             color = ROUND_CHART_COLORS[index % len(ROUND_CHART_COLORS)]
-            self._draw_round_slice(canvas, cx, cy, radius, start, extent, color)
-            start -= extent
+            slice_start = start - extent
+            self._draw_round_slice(canvas, cx, cy, radius, slice_start, extent, color)
+            start = slice_start
 
         inner = size * 0.38
         canvas.create_oval(
@@ -622,7 +684,7 @@ class StatisticsWindow(tk.Toplevel):
         canvas.create_text(cx, cy + 14, text="rounds", fill=YLW, font=("Segoe UI", 9))
 
     def _show_round_stats(self, rows: list[tuple[str, int, int]]):
-        ordered_rows = sorted(rows, key=lambda row: _round_order_key(row[0]))
+        ordered_rows = sorted(rows, key=_round_count_sort_key)
         self._round_chart_rows = ordered_rows
         self._render_round_legend(ordered_rows)
         if not self._round_stats_visible:
@@ -662,7 +724,11 @@ class StatisticsWindow(tk.Toplevel):
         except ValueError:
             return
         self._clear_tree(self.map_tree)
-        for map_name, count in Statistics.map_counts_for_terror(self.filtered_rows, terror_id):
+        rows = self._map_counts_cache.get(terror_id)
+        if rows is None:
+            rows = Statistics.map_counts_for_terror(self.filtered_rows, terror_id)
+            self._map_counts_cache[terror_id] = rows
+        for map_name, count in rows:
             self.map_tree.insert("", "end", values=(map_name, count))
 
     def _clear_tree(self, tree: ttk.Treeview):
@@ -676,5 +742,3 @@ class StatisticsWindow(tk.Toplevel):
         if value < 0.0001:
             return f"{value:.2e}"
         return f"{value:.6f}"
-
-
