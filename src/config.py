@@ -82,6 +82,10 @@ LATE_ROUND = {
     "Punished",
 }
 
+LATE_ROUND = {
+    "Punished",
+}
+
 # ── 自動Begin ──
 BEGIN_WAIT_SEC        = 0.0    # ラウンド終了後Beginまでの待機
 BEGIN_FORWARD_SEC     = 2.1    # Begin前の前進時間
