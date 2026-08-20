@@ -12,6 +12,7 @@ class WindowConfig:
     do_skip: bool = True
     cancel_afk: bool = True
     hoshiimo_skip: bool = False
+    osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     voice_intermission: str = ""
     announce_intermission: bool = False
     voice_continue: str = ""
@@ -28,6 +29,9 @@ class WindowState:
     round_type: str = ""
     terror_ids: list[int] = field(default_factory=list)
     map_id: int = 0
+    round_seq: int = 0
+    round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
+    round_end_seen: bool = False   # Verified Round End を受けたか（クリック可の合図）
     statistics_sent: bool = False
     transformed_uid: int | None = None
     local_player_name: str = ""
@@ -40,6 +44,7 @@ class WindowState:
     item_id: int = 1
     item_id_at_round_start: int = 1
     waiting_for_equip: bool = False
+    equip_freeze_held: bool = False
     item_lost_announced: bool = False
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False

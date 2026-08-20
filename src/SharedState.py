@@ -71,9 +71,47 @@ def set_item_begin_mode(val: bool):
 # ═══════════════════════════════════════════════
 #  装備待ちイベント
 #  set() = 通常動作可能、clear() = 装備待ち中（他窓のアクションをブロック）
+#  複数窓が同時にアイテムロストしても全窓の解除が揃うまでフリーズを維持するため、
+#  続行ラウンドと同じカウンタ方式で管理する。
+#  clear/setは直接呼ばず equip_freeze_start / equip_freeze_end を使うこと。
+#  窓ごとの多重登録・多重解除は WindowState.equip_freeze_held で防ぐ。
 # ═══════════════════════════════════════════════
 EQUIP_WAIT_EVENT = threading.Event()
 EQUIP_WAIT_EVENT.set()  # 初期値は通常動作可能
+_EQUIP_FREEZE_COUNT = 0
+_EQUIP_FREEZE_LOCK = threading.Lock()
+
+def equip_freeze_start(st):
+    """窓stを装備待ちフリーズ保持者として登録（登録済みなら何もしない）"""
+    global _EQUIP_FREEZE_COUNT
+    with _EQUIP_FREEZE_LOCK:
+        if st.equip_freeze_held:
+            return
+        st.equip_freeze_held = True
+        _EQUIP_FREEZE_COUNT += 1
+        EQUIP_WAIT_EVENT.clear()
+
+def equip_freeze_end(st):
+    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
+    global _EQUIP_FREEZE_COUNT
+    with _EQUIP_FREEZE_LOCK:
+        if not st.equip_freeze_held:
+            return
+        st.equip_freeze_held = False
+        _EQUIP_FREEZE_COUNT = max(0, _EQUIP_FREEZE_COUNT - 1)
+        if _EQUIP_FREEZE_COUNT == 0:
+            EQUIP_WAIT_EVENT.set()
+
+def equip_freeze_reset():
+    """停止時など強制リセット（LogMonitor/WindowStateは起動ごとに作り直される前提）"""
+    global _EQUIP_FREEZE_COUNT
+    with _EQUIP_FREEZE_LOCK:
+        _EQUIP_FREEZE_COUNT = 0
+        EQUIP_WAIT_EVENT.set()
+
+def get_equip_freeze_count() -> int:
+    with _EQUIP_FREEZE_LOCK:
+        return _EQUIP_FREEZE_COUNT
 
 # ═══════════════════════════════════════════════
 #  続行・霧ラウンド中フリーズイベント

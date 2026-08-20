@@ -1,3 +1,6 @@
+import json
+import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, scrolledtext, filedialog, messagebox
@@ -6,11 +9,15 @@ from typing import Optional
 
 import config
 from config import resource_path
+import AutoUpdate
 import LogMonitor
 import SharedState
 import PlaySound
 import MatchTNL
 import VRChatDiscovery
+import VRChatLauncher
+import ToNEntry
+import OSCClient
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -18,11 +25,67 @@ try:
 except ImportError:
     keyboard = None
 
+
+# ── 設定ファイル（前回のtnlパス等の永続化） ──────
+def load_settings() -> dict:
+    """設定ファイルを読み込む。無い・壊れている場合は空dict。"""
+    try:
+        return json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(data: dict):
+    """設定ファイルへ保存する（失敗しても動作継続）"""
+    try:
+        config.SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        config.SETTINGS_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def launch_window_count(win_count: int, already_open: int) -> int:
+    """新しく起動する窓数の既定値。
+
+    マクロを適用する窓数から、すでに開いているVRChatの窓数を引いた数。
+    足りている（または多い）場合は0。
+    """
+    try:
+        win_count = int(win_count)
+        already_open = int(already_open)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, win_count - max(0, already_open))
+
+
+def tabs_to_launch(tabs: list, count: int) -> list:
+    """起動対象の窓タブを後ろから count 個選ぶ。
+
+    既存の窓は起動時刻順に先頭の窓タブへ割り当てられる（_assign_windows_and_logs）。
+    そのため新しく開く窓は後ろのタブに対応し、プロファイルとOSCポートも
+    そのタブのものを使う必要がある。
+    """
+    if count <= 0:
+        return []
+    return tabs[max(0, len(tabs) - count):]
+
+
+def build_launch_plan(tabs: list) -> list:
+    """起動計画 (表示用の窓番号, プロファイルID, OSC/インスタンス割当index)。
+
+    OSC割当はタブ番号そのものを使う。監視開始時のポート決定
+    （App._start の ports_for_window(tab.idx)）と一致させるため。
+    """
+    return [(tab.idx + 1, tab.v_profile.get(), tab.idx) for tab in tabs]
+
+
 class WindowTab(ttk.Frame):
-    def __init__(self, parent, idx: int):
+    def __init__(self, parent, idx: int, on_log_selected=None):
         super().__init__(parent)
         self.idx = idx
         self._hwnd_map: dict[str, int] = {}
+        self._on_log_selected = on_log_selected
         self._build()
 
     def _build(self):
@@ -49,6 +112,16 @@ class WindowTab(ttk.Frame):
         lf.pack(fill="x", padx=10, pady=2)
         ttk.Entry(lf, textvariable=self.v_log, width=80).pack(side="left", padx=(0, 4))
         ttk.Button(lf, text="…", width=3, command=self._browse_log).pack(side="left")
+
+        # ── 起動プロファイル ──
+        section("■ 起動プロファイル（VRChat起動時に使用）")
+        pf = ttk.Frame(p)
+        pf.pack(fill="x", padx=10, pady=2)
+        ttk.Label(pf, text="--profile=").pack(side="left")
+        self.v_profile = tk.IntVar(value=0)
+        ttk.Spinbox(pf, from_=0, to=15, textvariable=self.v_profile, width=4).pack(side="left", padx=(2, 8))
+        ttk.Label(pf, text="※ 同じ番号の窓は同じアカウント設定を共有します",
+                  foreground=config.GUI_YLW).pack(side="left")
 
         # ── ON/OFF ──
         ttk.Separator(p, orient="horizontal").pack(fill="x", padx=10, pady=8)
@@ -101,6 +174,8 @@ class WindowTab(ttk.Frame):
         )
         if p:
             self.v_log.set(p)
+            if self._on_log_selected:
+                self._on_log_selected(self)
 
     def get_config(self) -> "tuple[Optional[LogMonitor.WindowConfig], Optional[str]]":
         if not self.v_active.get():
@@ -259,8 +334,8 @@ class App(tk.Tk):
             self.iconbitmap(default=str(icon_path))
 
         self.title("ToNAutoBeginner")
-        self.geometry("900x860")
-        self.minsize(820, 760)
+        self.geometry("980x1080")
+        self.minsize(880, 900)
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
@@ -270,7 +345,14 @@ class App(tk.Tk):
         self._overlay: LogOverlay | None = None
         self._log_line_count = 0
         self._emergency_stop_key_pressed = False
+        self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
+        self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._build_ui()
+        self._load_saved_settings()
+        self._auto_detect_windows()
+        self._sync_launch_count()
+        AutoUpdate.cleanup_old_exe()
+        self._start_update_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._start_emergency_stop_polling()
 
@@ -346,6 +428,59 @@ class App(tk.Tk):
         sb.bind("<FocusOut>", lambda e: self._on_win_count_change())
         ttk.Button(wf, text="📄 最新ログを自動割り当て",
                    command=self._assign_logs).pack(side="left")
+
+        # ── VRChat起動 ──
+        ttk.Separator(f2, orient="horizontal").pack(fill="x", pady=6)
+        lf1 = ttk.Frame(f2)
+        lf1.pack(fill="x")
+        self.btn_launch = ttk.Button(lf1, text="🚀 VRChatを起動", command=self._launch_vrchat)
+        self.btn_launch.pack(side="left")
+        ttk.Label(lf1, text="起動する窓数:").pack(side="left", padx=(12, 0))
+        self.v_launch_count = tk.IntVar(value=0)
+        ttk.Spinbox(lf1, from_=0, to=8, textvariable=self.v_launch_count,
+                    width=4).pack(side="left", padx=(4, 0))
+        ttk.Label(lf1, text="※ 既定は「窓数 − 起動済みの窓数」",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(4, 0))
+        # デスクトップモードとOSCポート割り当ては常時有効（設定不要のため非表示）
+        self.v_desktop_mode = tk.BooleanVar(value=True)
+        self.v_use_osc = tk.BooleanVar(value=True)
+        self.btn_stop_entry = ttk.Button(
+            lf1, text="■ 入室操作を中止", command=self._cancel_ton_entry, state="disabled")
+        self.btn_stop_entry.pack(side="left", padx=(10, 0))
+        self.lbl_launch = ttk.Label(lf1, text="", foreground=config.GUI_GRN)
+        self.lbl_launch.pack(side="left", padx=(10, 0))
+
+        lf2 = ttk.Frame(f2)
+        lf2.pack(fill="x", pady=(4, 0))
+        self.v_join_world = tk.BooleanVar(value=False)
+        ttk.Checkbutton(lf2, text="ToNへ自動的にJoin",
+                        variable=self.v_join_world).pack(side="left")
+        self.v_instance_link = tk.StringVar()
+        ttk.Entry(lf2, textvariable=self.v_instance_link, width=50).pack(side="left", padx=(6, 4))
+        ttk.Button(lf2, text="最新ログから取得",
+                   command=self._fill_instance_link_from_log).pack(side="left")
+        ttk.Label(lf2, text="※ 空欄ならToNの新規インスタンスを自動生成（窓ごとに別インスタンス）",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(8, 0))
+
+        lf25 = ttk.Frame(f2)
+        lf25.pack(fill="x", pady=(4, 0))
+        self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
+        ttk.Checkbutton(lf25, text="入室後の選択画面を自動突破",
+                        variable=self.v_ton_entry).pack(side="left")
+        self.v_ton_begin = tk.BooleanVar(value=config.TON_ENTRY_BEGIN)
+        ttk.Checkbutton(lf25, text="続けてBeginまで押す",
+                        variable=self.v_ton_begin).pack(side="left", padx=(12, 0))
+        ttk.Label(lf25, text="※ 警告同意→Casual→BGMあり→LET ME PLAY の順に押します",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+
+        lf3 = ttk.Frame(f2)
+        lf3.pack(fill="x", pady=(2, 0))
+        ttk.Label(lf3, text="起動exe:").pack(side="left")
+        self.v_vrchat_exe = tk.StringVar()
+        ttk.Entry(lf3, textvariable=self.v_vrchat_exe, width=56).pack(side="left", padx=(4, 4))
+        ttk.Button(lf3, text="…", width=3, command=self._browse_vrchat_exe).pack(side="left")
+        ttk.Label(lf3, text="※ 空欄ならSteamから自動検出",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(6, 0))
 
 
         self.lbl_win_warn = ttk.Label(
@@ -464,9 +599,10 @@ class App(tk.Tk):
             tab.destroy()
         self.tabs.clear()
         for i in range(count):
-            tab = WindowTab(self.nb, i)
+            tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected)
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
+        self._apply_saved_profiles()
 
     def _on_win_count_change(self):
         if self._running:
@@ -476,9 +612,34 @@ class App(tk.Tk):
         except (ValueError, tk.TclError):
             n = 1
         self.v_win_count.set(n)
+        self._sync_launch_count()
         if len(self.tabs) == n:
             return
         self._rebuild_tabs(n)
+
+    def _sync_launch_count(self):
+        """起動する窓数を「窓数 − 既に開いているVRChat窓数」に合わせる。
+
+        手で入れ直した値は次に窓数を変えるかVRChatを起動するまで保たれる。
+        """
+        if self._running:
+            return
+        try:
+            win_count = int(self.v_win_count.get())
+        except (ValueError, tk.TclError):
+            return
+        opened = len(VRChatDiscovery.get_vrchat_windows_by_start_time(8))
+        self.v_launch_count.set(launch_window_count(win_count, opened))
+
+    def _launch_count_value(self, max_count: int) -> int:
+        """入力された起動窓数を 0〜max_count に収めて返す"""
+        try:
+            n = int(self.v_launch_count.get())
+        except (ValueError, tk.TclError):
+            n = 0
+        n = max(0, min(max_count, n))
+        self.v_launch_count.set(n)
+        return n
 
     def _toggle_item_get_begin(self):
         val = not SharedState.get_item_begin_mode()
@@ -517,10 +678,13 @@ class App(tk.Tk):
             self.v_tnl.set(p)
             self._load_tnl()
 
-    def _load_tnl(self):
+    def _load_tnl(self, show_error: bool = True):
         p = self.v_tnl.get().strip()
         if not p or not Path(p).exists():
-            messagebox.showerror("エラー", "tnlファイルが見つかりません")
+            if show_error:
+                messagebox.showerror("エラー", "tnlファイルが見つかりません")
+            else:
+                self._log(f"[TNL] 前回のtnlが見つかりません: {p}")
             return
         try:
             self.keepOn_set, meta = MatchTNL.load_tnl(p)
@@ -528,37 +692,98 @@ class App(tk.Tk):
             msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 スキップ対象"
             self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(f"[TNL] {msg}")
+            save_settings({**load_settings(), "tnl_path": p})
         except Exception as e:
-            messagebox.showerror("TNL読み込みエラー", str(e))
+            if show_error:
+                messagebox.showerror("TNL読み込みエラー", str(e))
+            else:
+                self._log(f"[TNL] 読み込みエラー: {e}")
+
+    def _load_saved_settings(self):
+        """起動時: 前回選んだtnlを復元して即読み込む"""
+        data = load_settings()
+        self.v_vrchat_exe.set(data.get("vrchat_exe", ""))
+        self.v_desktop_mode.set(bool(data.get("desktop_mode", config.LAUNCH_DESKTOP_MODE)))
+        self.v_use_osc.set(bool(data.get("use_osc", config.OSC_ENABLED)))
+        self.v_ton_entry.set(bool(data.get("ton_entry", config.TON_ENTRY_ENABLED)))
+        self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
+        self.v_join_world.set(bool(data.get("join_world", False)))
+        self.v_instance_link.set(data.get("instance_link", ""))
+        self._saved_profiles = data.get("profiles", [])
+        self._apply_saved_profiles()
+        tnl_path = data.get("tnl_path", "")
+        if not tnl_path:
+            return
+        self.v_tnl.set(tnl_path)
+        self._load_tnl(show_error=False)
+
+    def _apply_saved_profiles(self):
+        """保存済みの窓ごとprofile IDを反映する"""
+        for tab, pid in zip(self.tabs, getattr(self, "_saved_profiles", [])):
+            try:
+                tab.v_profile.set(int(pid))
+            except (ValueError, tk.TclError):
+                pass
+
+    def _auto_detect_windows(self):
+        """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
+        起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(8)
+        if not windows:
+            self._log("[起動時検出] VRChatウィンドウ未検出（窓数は手動で設定してください）")
+            return
+        n = len(windows)
+        self.v_win_count.set(n)
+        if len(self.tabs) != n:
+            self._rebuild_tabs(n)
+        self._log(f"[起動時検出] VRChatウィンドウを{n}窓検出 → 窓数を{n}に設定")
+        self._assign_windows_and_logs(windows)
+
+    def _assign_windows_and_logs(self, windows: list):
+        """VRChatの起動時刻とログファイル名の時刻を突き合わせて
+        HWNDとログを窓タブへ1対1で割り当てる（Zオーダーに依存しない）"""
+        hwnds = [h for h, _t in windows]
+        candidates = VRChatDiscovery.find_latest_logs(
+            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
+        matched = VRChatDiscovery.match_windows_to_logs(
+            windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
+
+        active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
+        for i, tab in enumerate(active_tabs):
+            if i >= len(windows):
+                break
+            tab.set_hwnd_choices(hwnds, selected_hwnd=hwnds[i])
+            log_path = matched[i]
+            if log_path is None:
+                self._log(f"[窓{tab.idx+1}] HWND={hwnds[i]:#010x} → 対応するログが見つかりません")
+                continue
+            tab.v_log.set(str(log_path))
+            source = "起動時刻一致" if windows[i][1] is not None else "起動時刻不明のため順番で割当"
+            self._log(f"[窓{tab.idx+1}] HWND={hwnds[i]:#010x} → {log_path.name}（{source}）")
+            self._on_tab_log_selected(tab)
+
+    def _on_tab_log_selected(self, tab: WindowTab):
+        """ログ選択時: ログ末尾からインスタンスタイプを検出し、
+        干し芋/焼き芋なら干し芋自動自爆を自動ONにする"""
+        p = tab.v_log.get().strip()
+        if not p:
+            return
+        itype = LogMonitor.LogMonitor.detect_instance_type_from_log(Path(p))
+        if itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO) and not tab.v_hoshiimo.get():
+            tab.v_hoshiimo.set(True)
+            self._log(f"[窓{tab.idx+1}] 干し芋/焼き芋インスタンス検出 → 干し芋自動自爆をON")
 
     def _assign_logs(self):
         """
-        VRChatウィンドウとログファイルを起動順（古い順）に自動割り当てる。
-        有効な窓タブのi番目 → HWND[i] + ログ[i] を一括設定。
+        VRChatの起動時刻とログの時刻を突き合わせてHWND・ログを一括割り当てる。
+        窓の並び順（Zオーダー）に依存しないため、窓を切り替えた後でも正しく対応する。
         """
-        hwnds = VRChatDiscovery.get_vrchat_windows(self.v_win_count.get()) # 選ばれたのが古い順で配列に格納される。
-        active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
-        count = max(len(hwnds), len(active_tabs))
-        logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, count)
-
-        if not hwnds and not logs:
-            self._log("[自動割り当て] VRChatウィンドウもログも見つかりません")
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(self.v_win_count.get())
+        if not windows:
+            self._log("[自動割り当て] VRChatウィンドウが見つかりません")
             return
-
-        for i, tab in enumerate(active_tabs):
-            # HWND割り当て
-            if i < len(hwnds):
-                hwnd = hwnds[i]
-                tab.set_hwnd_choices(hwnds, selected_hwnd=hwnd)
-
-            # ログ割り当て
-            if i < len(logs):
-                tab.v_log.set(str(logs[i]))
-
-            hwnd_str = f"{hwnds[i]:#010x}" if i < len(hwnds) else "未検出"
-            log_str  = logs[i].name if i < len(logs) else "未検出"
-            self._log(f"[窓{tab.idx+1}] HWND={hwnd_str} → {log_str}")
-        self._log(f"[自動割り当て] {len(active_tabs)}窓に割り当てました")
+        self._assign_windows_and_logs(windows)
+        self._log(f"[自動割り当て] {min(len(windows), len(self.tabs))}窓に割り当てました")
 
     def _start(self):
         if not self.keepOn_set:
@@ -573,11 +798,23 @@ class App(tk.Tk):
             if not tab.v_log.get().strip() and log_idx < len(logs):
                 tab.v_log.set(str(logs[log_idx]))
                 self._log(f"[窓{tab.idx+1}] ログを自動割り当て: {logs[log_idx].name}")
+                self._on_tab_log_selected(tab)
             log_idx += 1
 
         self.monitors.clear()
         for tab in self.tabs:
             cfg, err = tab.get_config()
+            if cfg is not None and cfg.hwnd:
+                # OSC可否は起動時に1回だけ確定させる。このツールが --osc= を
+                # 付けて起動した窓だけが該当ポートを掴んでいる。手動起動の
+                # 2窓目以降はポート競合でOSCが無効なので従来方式になる。
+                port, _out = OSCClient.ports_for_window(tab.idx)
+                if OSCClient.osc_available_for(cfg.hwnd, tab.idx):
+                    cfg.osc_port = port
+                    self._log(f"[窓{tab.idx+1}] OSC利用可（ポート{port}）→ 移動はOSC、排他はクリックと自爆のみ")
+                else:
+                    cfg.osc_port = 0
+                    self._log(f"[窓{tab.idx+1}] OSC利用不可 → 従来どおりキー操作（全体を排他）")
             if cfg is None:
                 if err:
                     self._log(f"[窓{tab.idx+1}] スキップ: {err}")
@@ -608,7 +845,8 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
 
     def _stop(self):
-        SharedState.EQUIP_WAIT_EVENT.set()       # フリーズ中でも確実に解除
+        self._entry_stop.set()                   # 入室時自動操作も中断する
+        SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
         SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
         for m in self.monitors:
             m.stop()
@@ -647,6 +885,284 @@ class App(tk.Tk):
             self.log_text.see("end")
         finally:
             self.log_text.config(state="disabled")
+
+    # ── 自動アップデート ──────────────────────
+    def _start_update_check(self):
+        """起動時にGitHub Releasesの最新版をバックグラウンドで確認する"""
+        if AutoUpdate.current_exe_path() is None:
+            return  # 開発実行(python直起動)時は無効
+
+        def worker():
+            release = AutoUpdate.fetch_latest_release()
+            if not release:
+                return
+            tag = release.get("tag_name", "")
+            if not AutoUpdate.is_newer(tag, config.APP_VERSION):
+                return
+            asset = AutoUpdate.find_exe_asset(release)
+            try:
+                if asset is None:
+                    self._log(f"[更新] 新バージョン {tag} を検出しましたが、"
+                              f"リリースに {config.UPDATE_ASSET_NAME} が添付されていません")
+                    return
+                self.after(0, lambda: self._prompt_update(tag, asset))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _prompt_update(self, tag: str, asset: tuple):
+        if self._running:
+            self._log(f"[更新] 新バージョン {tag} があります（マクロ動作中のため更新は保留）")
+            return
+        ok = messagebox.askyesno(
+            "アップデート",
+            f"新しいバージョン {tag} があります。\n"
+            f"（現在: {config.APP_VERSION}）\n\n"
+            "ダウンロードして再起動しますか？")
+        if not ok:
+            self._log(f"[更新] {tag} への更新をスキップしました")
+            return
+        url, size = asset
+        self._log(f"[更新] {tag} をダウンロード中…")
+
+        def worker():
+            tmp = AutoUpdate.download_to_temp(url, size)
+            try:
+                self.after(0, lambda: self._finish_update(tag, tmp))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_update(self, tag: str, tmp):
+        if tmp is None:
+            self._log("[更新] ダウンロード失敗")
+            messagebox.showerror(
+                "アップデート失敗",
+                "ダウンロードに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+            return
+        exe = AutoUpdate.current_exe_path()
+        if exe is None or not AutoUpdate.apply_update(tmp, exe):
+            self._log("[更新] EXE置き換え失敗")
+            messagebox.showerror(
+                "アップデート失敗",
+                "ファイルの置き換えに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+            return
+        messagebox.showinfo("アップデート完了", f"{tag} へ更新しました。再起動します。")
+        AutoUpdate.restart_to_new_exe(exe)
+        self._on_close()
+
+    # ── VRChat起動 ─────────────────────────────
+    def _browse_vrchat_exe(self):
+        p = filedialog.askopenfilename(
+            title="VRChatの起動exeを選択（launch.exe）",
+            filetypes=[("VRChatランチャー", "launch.exe"), ("実行ファイル", "*.exe"), ("All", "*.*")])
+        if p:
+            self.v_vrchat_exe.set(p)
+
+    def _fill_instance_link_from_log(self):
+        """最新ログの直近のJoining行から参加リンクを取り出す"""
+        logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, 1)
+        if not logs:
+            self._log("[起動] ログが見つかりません")
+            return
+        link = VRChatLauncher.instance_link_from_log(logs[0])
+        if not link:
+            self._log("[起動] %s に参加履歴が見つかりません" % logs[0].name)
+            return
+        self.v_instance_link.set(link)
+        self._log("[起動] 参加リンクを取得: %s" % link)
+
+    def _launch_vrchat(self):
+        if self._running:
+            messagebox.showwarning("警告", "マクロ動作中は起動できません。先に停止してください")
+            return
+        exe = VRChatLauncher.resolve_vrchat_exe(self.v_vrchat_exe.get())
+        if exe is None:
+            messagebox.showerror(
+                "エラー",
+                "VRChatのlaunch.exeが見つかりません。\n「起動exe」欄でパスを指定してください")
+            return
+
+        base_link = None
+        if self.v_join_world.get():
+            raw = self.v_instance_link.get().strip()
+            if raw:
+                base_link = VRChatLauncher.normalize_instance_link(raw)
+                if base_link is None:
+                    messagebox.showerror(
+                        "エラー",
+                        "参加リンクを解釈できません。\n"
+                        "vrchat://launch?... 形式か wrld_xxx:12345~... 形式で指定してください")
+                    return
+            else:
+                user_id = VRChatLauncher.latest_user_id(config.VRCHAT_LOG_DIR)
+                if not user_id:
+                    messagebox.showerror(
+                        "エラー",
+                        "自分のユーザーIDを検出できませんでした。\n"
+                        "一度VRChatにログインするか、参加リンクを直接入力してください")
+                    return
+                base_link = VRChatLauncher.build_ton_link(user_id)
+                self._log("[起動] ToNの新規インスタンスを生成します（%s）" % user_id)
+
+        tabs = [tab for tab in self.tabs if tab.v_active.get()]
+        if not tabs:
+            messagebox.showerror("エラー", "有効な窓がありません")
+            return
+
+        desktop = self.v_desktop_mode.get()
+        baseline = {h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(8)}
+        count = self._launch_count_value(len(tabs))
+        if count <= 0:
+            messagebox.showinfo(
+                "情報",
+                "起動する窓数が0です。\n"
+                "すでに必要な数のVRChatが開いているか、起動する窓数を0にしています。")
+            return
+        # 既存の窓は先頭のタブに割り当てられるので、新しく開くのは後ろのタブ
+        plan_tabs = tabs_to_launch(tabs, count)
+        # Tkinter変数はメインスレッドでのみ読めるため、起動計画をここで確定させる
+        # (表示用の窓番号, プロファイルID, OSCポート割り当て用のタブ番号)
+        launch_plan = build_launch_plan(plan_tabs)
+        # 入室時の自動操作は今回起動した窓だけに行う（既に入室済みの窓は対象外）
+        self._launched_tab_indices = [tab.idx for tab in plan_tabs]
+        existing = len(baseline)
+        use_osc = self.v_use_osc.get()
+        self.btn_launch.config(state="disabled")
+        self.lbl_launch.config(text="起動中…", foreground=config.GUI_YLW)
+        self._save_launch_settings()
+
+        def worker():
+            try:
+                for i, (window_no, profile_id, osc_index) in enumerate(launch_plan):
+                    # 同じprivateインスタンスにはオーナー以外入れないため窓ごとに分ける
+                    link = (VRChatLauncher.with_unique_instance(base_link, osc_index)
+                            if base_link else None)
+                    args = VRChatLauncher.launch_one(
+                        exe, profile_id, desktop, link,
+                        osc_index=osc_index if use_osc else None)
+                    self._log("[起動] 窓%d: %s" % (window_no, " ".join(args[1:])))
+                    if i < len(launch_plan) - 1:
+                        time.sleep(config.LAUNCH_STAGGER_SEC)
+                self._log("[起動] %d窓を起動。ウィンドウ出現を待っています…" % len(launch_plan))
+                found = VRChatLauncher.wait_for_windows(
+                    baseline, len(launch_plan), config.LAUNCH_WINDOW_TIMEOUT)
+                n = len(found)
+                self.after(0, lambda: self._on_launch_finished(n, len(launch_plan), existing))
+            except Exception as e:
+                msg = str(e)
+                self.after(0, lambda: self._on_launch_error(msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_launch_finished(self, found: int, expected: int, existing: int = 0):
+        self.btn_launch.config(state="normal")
+        if found < expected:
+            self.lbl_launch.config(
+                text="%d/%d窓のみ検出" % (found, expected), foreground=config.GUI_ORG)
+            self._log("[起動] %d/%d窓しか検出できませんでした" % (found, expected))
+        else:
+            self.lbl_launch.config(text="%d窓 起動完了" % found, foreground=config.GUI_GRN)
+        self._sync_launch_count()   # 起動済みが増えたぶん既定値を引き直す
+        self._log("[起動] ログ生成を待っています…")
+        # ログが揃ったかは既存の窓も含めた合計で判定する
+        self._wait_logs_then_assign(existing + found, 0.0)
+
+    def _wait_logs_then_assign(self, expected: int, waited: float):
+        """ログファイルが起動時刻で紐づけられるようになり次第、割り当てる。
+        固定待ちだとウィンドウ出現から無駄に待つため、準備でき次第すぐ進める。"""
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(8)
+        candidates = VRChatDiscovery.find_latest_logs(
+            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
+        ready = VRChatDiscovery.count_time_matched_logs(
+            windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
+        if ready >= expected:
+            self._log("[起動] ログ生成を確認（%.1f秒）" % waited)
+            self._assign_logs()
+            self._run_ton_entry()
+            return
+        if waited >= config.LAUNCH_LOG_TIMEOUT:
+            self._log("[起動] ログ生成待ちがタイムアウト（%d/%d）" % (ready, expected))
+            self._assign_logs()
+            self._run_ton_entry()
+            return
+        self.after(int(config.LAUNCH_LOG_POLL_SEC * 1000),
+                   lambda: self._wait_logs_then_assign(expected, waited + config.LAUNCH_LOG_POLL_SEC))
+
+    def _cancel_ton_entry(self):
+        """入室時自動操作を中断する"""
+        if not self._entry_stop.is_set():
+            self._entry_stop.set()
+            self._log("[入室操作] 中止を要求しました")
+        self.btn_stop_entry.config(state="disabled")
+
+    def _run_ton_entry(self):
+        """入室後の選択画面を自動突破する（窓ごとに順番に実行）"""
+        if not self.v_ton_entry.get():
+            self._log("[入室操作] 設定がOFFのためスキップします")
+            return
+        launched = getattr(self, "_launched_tab_indices", None)
+        targets = [(tab.idx + 1, tab._get_selected_hwnd())
+                   for tab in self.tabs
+                   if tab.v_active.get() and (launched is None or tab.idx in launched)]
+        targets = [(no, h) for no, h in targets if h]
+        if not targets:
+            self._log("[入室操作] 対象の窓がありません")
+            return
+        press_begin = self.v_ton_begin.get()
+        self._entry_stop.clear()
+        self.btn_stop_entry.config(state="normal")
+        self._log("[入室操作] 開始します（中止は「入室操作を中止」ボタンか %sキー）"
+                  % config.EMERGENCY_STOP_KEY.upper())
+
+        def worker():
+            try:
+                for window_no, hwnd in targets:
+                    if self._entry_stop.is_set():
+                        self._log("[入室操作] 中止しました")
+                        return
+                    entry = ToNEntry.ToNEntry(
+                        hwnd,
+                        window_index=window_no - 1,   # OSCポートの割り当てに使う
+                        log=lambda m, n=window_no: self._log("[窓%d] %s" % (n, m)),
+                        is_running=lambda: not self._entry_stop.is_set(),
+                    )
+                    try:
+                        if entry.run() and press_begin and not self._entry_stop.is_set():
+                            entry.press_begin()
+                    except Exception as e:
+                        self._log("[窓%d] 入室操作でエラー: %s" % (window_no, e))
+                    finally:
+                        entry.close()
+                self._log("[入室操作] 完了")
+            finally:
+                try:
+                    self.after(0, lambda: self.btn_stop_entry.config(state="disabled"))
+                except tk.TclError:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_launch_error(self, msg: str):
+        self.btn_launch.config(state="normal")
+        self.lbl_launch.config(text="起動失敗", foreground=config.GUI_RED)
+        self._log("[起動] 失敗: %s" % msg)
+        messagebox.showerror("起動失敗", msg)
+
+    def _save_launch_settings(self):
+        save_settings({
+            **load_settings(),
+            "vrchat_exe":    self.v_vrchat_exe.get().strip(),
+            "desktop_mode":  self.v_desktop_mode.get(),
+            "use_osc":       self.v_use_osc.get(),
+            "ton_entry":     self.v_ton_entry.get(),
+            "ton_begin":     self.v_ton_begin.get(),
+            "join_world":    self.v_join_world.get(),
+            "instance_link": self.v_instance_link.get().strip(),
+            "profiles":      [tab.v_profile.get() for tab in self.tabs],
+        })
 
     def _open_statistics(self):
         StatisticsWindow(self)

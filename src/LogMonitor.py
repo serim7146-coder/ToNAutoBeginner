@@ -1,6 +1,7 @@
 import time
 import threading
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 import config
@@ -85,10 +86,33 @@ class LogMonitor:
         thread.start()
         return thread
 
+    def _release_continue_freeze_after_delay(self, round_seq: int):
+        """死亡から一定時間後に続行/霧ラウンドのフリーズを解除する。
+
+        猶予を置くのは、解除前に手動操作を挟む余地を残すため。
+        テラーが分からないまま終わった霧ラウンドは猶予を短くする
+        （続行ラウンドほど手動で挟む用事がないため）。
+        待機中に次のラウンドが始まったら（round_seqが変わったら）何もしない。
+        """
+        st = self.st
+        # 眠っている間にテラーが判明する可能性があるので、待つ長さは先に決める
+        delay = (config.FOG_FREEZE_RELEASE_DELAY_SEC if st.fog
+                 else config.CONTINUE_FREEZE_RELEASE_DELAY_SEC)
+        time.sleep(delay)
+        if not self._running or st.round_seq != round_seq:
+            return
+        if st.is_continue_round:
+            st.is_continue_round = False
+            SharedState.continue_round_end()
+            self._log(f"続行/霧ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
+
     def _release_equip_wait_after_delay(self):
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
-        SharedState.EQUIP_WAIT_EVENT.set()
-        self._log("✅ 全窓フリーズ解除")
+        SharedState.equip_freeze_end(self.st)
+        if SharedState.get_equip_freeze_count() == 0:
+            self._log("✅ 全窓フリーズ解除")
+        else:
+            self._log("✅ この窓の装備待ち解除（他窓の装備待ちが残っています）")
 
     @staticmethod
     def _iter_log_lines_reversed(path, chunk_size: int):
@@ -120,6 +144,24 @@ class LogMonitor:
 
             if pending:
                 yield pending.decode("utf-8", errors="replace")
+
+    @classmethod
+    def detect_instance_type_from_log(cls, log_path) -> Optional[str]:
+        """ログ末尾からインスタンスタイプを検出する（GUIのログ選択時用）。
+        最初に見つかったJoining行（＝最新の入室）で打ち切るため軽量。
+        見つからなければNone。"""
+        try:
+            path = Path(log_path)
+            if not path.exists():
+                return None
+            lines = cls._iter_log_lines_reversed(path, config.LOG_START_SCAN_CHUNK_BYTES)
+            for line in lines:
+                event = LogParser.parse(line)
+                if event and event.kind == LogParser.EVENT_JOINING:
+                    return cls._parse_instance_type(event.suffix)
+        except Exception:
+            return None
+        return None
 
     def _detect_instance_from_log(self):
         if not self.cfg.log_path or not self.cfg.log_path.exists():
@@ -297,16 +339,49 @@ class LogMonitor:
         else:
             self._log("Hungry Home Invader variant detected")
 
-    def _should_skip_hoshiimo_classic(self, is_hoshiimo: bool) -> bool:
-        if not (is_hoshiimo and self.st.round_type == "Classic"):
-            return True
-        if config.BLOODTHIRSTY_CREATURE_ID in self.st.terror_ids:
-            self._log("干し芋Classic Bloodthirsty: 自動自爆しません")
+    def _should_skip_group_round(self) -> bool:
+        """干し芋/焼き芋の自動自爆をしてよいか。
+        バリアントテラー(Bloodthirsty / Hungry Home Invader)なら自爆しない。
+        干し芋・焼き芋の両方、かつ自爆対象ラウンド全種に適用する。"""
+        st = self.st
+        if config.BLOODTHIRSTY_CREATURE_ID in st.terror_ids:
+            self._log("グループ自動自爆キャンセル: Wild Yet Bloodthirsty Creature")
             return False
-        if self._waiting_for_bloodthirsty_creature_variant():
-            self._log("干し芋Classic Curious Creature: Bloodthirsty判定待ちのため自動自爆を保留")
+        if config.HUNGRY_HOME_INVADER_ID in st.terror_ids:
+            self._log("グループ自動自爆キャンセル: Hungry Home Invader")
             return False
         return True
+
+    def _variant_wait_sec(self) -> float:
+        return config.TERROR_VARIANT_WAIT_SEC.get(
+            self.st.round_type, config.TERROR_VARIANT_WAIT_DEFAULT_SEC)
+
+    def _round_still_active(self, round_seq: int) -> bool:
+        return self._running and self.st.in_round and self.st.round_seq == round_seq
+
+    def _start_group_skip(self):
+        st = self.st
+        self._log(f"干し芋自動自爆: {st.round_type}")
+        if st.is_continue_round:
+            st.is_continue_round = False
+            SharedState.continue_round_end()
+        self._start_daemon(self._action.do_skip)
+
+    def _delayed_group_skip(self, wait_sec: float, round_seq: int):
+        """テラー出現ログ(バリアント判定)を待ってから自動自爆の可否を決める。
+        Bloodbath等は枠ごとに出現時刻がずれるためラウンド種別ごとに待ち時間を変える。"""
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            if not self._round_still_active(round_seq):
+                return
+            if not self._waiting_for_terror_variant():
+                break  # バリアント確定 → 残り時間を待たずに判断へ
+            time.sleep(config.TERROR_VARIANT_POLL_SEC)
+        if not self._round_still_active(round_seq):
+            return
+        if not self._should_skip_group_round():
+            return
+        self._start_group_skip()
 
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
@@ -350,6 +425,8 @@ class LogMonitor:
                 st.is_continue_round = False
                 SharedState.continue_round_end()
             st.in_round                    = True
+            st.round_seq                  += 1
+            st.round_end_seen              = False
             st.round_type                  = event.round_type
             st.terror_ids                  = []
             st.map_id                      = event.map_id
@@ -374,7 +451,7 @@ class LogMonitor:
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
                 st.waiting_for_equip = False
-                SharedState.EQUIP_WAIT_EVENT.set()
+                SharedState.equip_freeze_end(st)
                 self._log("一時的にアイテムロストフリーズを解除")
 
             if st.sabotage_murder_this_round:
@@ -414,6 +491,11 @@ class LogMonitor:
             st.died_this_round = True
             st.item_equipped_after_death = False
             st.is_open_special_round_round = False
+            # 続行/霧ラウンドのフリーズは死亡から少し置いて解除する。
+            # 猶予中に手動で視点調整などを挟めるようにするため。
+            if st.is_continue_round:
+                self._start_daemon(self._release_continue_freeze_after_delay,
+                                   st.round_seq)
             if st.round_type == "Run":
                 self._mark_item_lost("Run死亡: アイテムロスト")
             return
@@ -425,6 +507,9 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            # Begin待ちの起点。実処理は Verified Round End 側で走るが、
+            # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
+            st.round_over_time = time.time()
             if self._waiting_for_terror_variant():
                 self._send_round_statistics_once()
             announce_on_round_over = (
@@ -441,15 +526,21 @@ class LogMonitor:
                     st.waiting_for_equip = True
             if st.waiting_for_equip and announce_on_round_over:
                 self._action.announce_item_lost_once()
+            # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
+            # Verified Round End を待ってから行う（RoundOver時点だと
+            # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
+            if self.cfg.auto_begin:
+                self._start_daemon(self._action.do_after_round)
             return
 
         if event.kind == LogParser.EVENT_VERIFIED_END:
             if self._waiting_for_terror_variant():
                 self._send_round_statistics_once()
             if st.is_continue_round:
+                # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
                 st.is_continue_round = False
                 SharedState.continue_round_end()
-                self._log("▶ 続行/霧ラウンド終了 → 他窓フリーズ解除")
+                self._log("続行/霧ラウンド終了 → 他窓フリーズ解除（保険）")
             round_lost_item = self._round_lost_item()
             round_item_warning = self._round_item_warning()
             if not SharedState.get_hands_free():
@@ -460,7 +551,7 @@ class LogMonitor:
                         self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
                     elif SharedState.get_item_begin_mode():
                         st.waiting_for_equip = True
-                        SharedState.EQUIP_WAIT_EVENT.clear()
+                        SharedState.equip_freeze_start(st)
                         self._log("ラウンド終了 【⚠ アイテムロスト → フォーカス・全窓フリーズ開始】")
                         self._start_daemon(WindowOperator.focus_window, self.cfg.hwnd)
                     else:
@@ -478,15 +569,13 @@ class LogMonitor:
                 if round_item_warning:
                     if round_lost_item:
                         st.item_id = 0
-                    if self.cfg.auto_begin:
-                        self._action.announce_item_lost_once()
-                    else:
+                    if not self.cfg.auto_begin:
                         st.waiting_for_equip = True
+                    # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
                 self._log("ラウンド終了")
             if self.cfg.announce_intermission:
                 PlaySound.play_sound(self.cfg.voice_intermission)
-            if self.cfg.auto_begin:
-                self._start_daemon(self._action.do_after_round)
+            st.round_end_seen = True   # Beginのクリック待ちを解除する合図
             return
 
         if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
@@ -559,19 +648,21 @@ class LogMonitor:
         # インスタンス制限チェック
         itype        = st.instance_type
         is_private   = itype == config.INSTANCE_PRIVATE
-        is_hoshiimo  = itype == config.INSTANCE_HOSHIIMO
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
         # 干し芋グループ専用自動自爆
         if is_group_skip and self.cfg.hoshiimo_skip:
-            if st.round_type in config.HOSHIIMO_SKIP_ROUNDS and self._should_skip_hoshiimo_classic(is_hoshiimo):
-                self._log(f"干し芋自動自爆: {st.round_type}")
-                if st.is_continue_round:
-                    st.is_continue_round = False
-                    SharedState.continue_round_end()
-                self._start_daemon(self._action.do_skip)
-                return
+            if st.round_type in config.HOSHIIMO_SKIP_ROUNDS:
+                # バリアント化しうるテラーがいる場合は出現ログを待ってから判断する
+                if self._waiting_for_terror_variant():
+                    wait = self._variant_wait_sec()
+                    self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
+                    self._start_daemon(self._delayed_group_skip, wait, st.round_seq)
+                    return
+                if self._should_skip_group_round():
+                    self._start_group_skip()
+                    return
 
         # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
         if not can_decide:
