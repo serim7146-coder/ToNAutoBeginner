@@ -66,6 +66,33 @@ class OSCClient:
         time.sleep(max(0.0, hold_sec))
         return self.send(address, 0) and ok
 
+    def press_multi(self, holds) -> bool:
+        """複数の入力を同時に押し、それぞれの秒数で個別に離す。
+
+        holds は [(アドレス, 押す秒数), ...]。全部を同時に押し始め、
+        秒数の短いものから離していく。
+
+        逐次に press() を並べると移動ごとに加速と減速が入り、
+        前の移動の残留速度が次の移動に混ざる。同時押しなら加速・減速が
+        各1回で済み、その混入が起きない。
+        """
+        holds = [(a, s) for a, s in holds if s > 0]
+        if not holds:
+            return True
+        # 0→1の変化で反応する入力があるため、押す前に0を送る
+        ok = True
+        for address, _ in holds:
+            ok = self.send(address, 0) and ok
+        for address, _ in holds:
+            ok = self.send(address, 1) and ok
+        start = time.time()
+        for address, sec in sorted(holds, key=lambda h: h[1]):
+            remain = sec - (time.time() - start)
+            if remain > 0:
+                time.sleep(remain)
+            ok = self.send(address, 0) and ok
+        return ok
+
     def move_forward(self, sec: float) -> bool:
         return self.press("/input/MoveForward", sec)
 

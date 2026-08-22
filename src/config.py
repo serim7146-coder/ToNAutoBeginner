@@ -11,7 +11,7 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 
 # ── アプリ情報・自動アップデート ──
 # APP_VERSION はリリースごとに上げ、GitHubのリリースタグと一致させること
-APP_VERSION       = "0.3.0"
+APP_VERSION       = "0.3.1"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 
@@ -102,17 +102,60 @@ BEGIN_WAIT_SEC        = 11.0   # RoundOver から Begin移動を始めるまで�
 # 霧ラウンド（テラー不明のまま終わった場合）は短め、続行ラウンドは長めにする。
 CONTINUE_FREEZE_RELEASE_DELAY_SEC = 5.0
 FOG_FREEZE_RELEASE_DELAY_SEC      = 2.0
-BEGIN_FORWARD_SEC     = 2.1    # Begin前の前進時間
-BEGIN_LEFT_SEC        = 0.09   # Begin前の左移動時間（OSC移動での実測値）
+# Begin前の移動。前進を通しで1回押し、その【頭から】左を重ねる。
+# つまり 前半 = 斜め移動、後半 = 直進 になる（逐次に「前進→左」ではない）。
+# 加速・減速が各1回で済むので、逐次より到達点が安定する。
+# 同時押しの区間はVRChatが斜め速度を正規化するため、各軸の速度が約0.707倍に
+# なる。逐次だった頃の値をそのまま使うと距離が変わるので要調整。
+BEGIN_FORWARD_SEC     = 2.08   # 前進を押している総時間
+BEGIN_LEFT_SEC        = 0.15   # 冒頭で左を重ねる時間（斜めになる区間）
 BEGIN_FORWARD_SEC_LATER = 3.2  # パニッシュ後
-BEGIN_LEFT_SEC_LATER  = 0.16  # パニッシュ後
+BEGIN_LEFT_SEC_LATER  = 0.16   # パニッシュ後
 
 
-BEGIN_RETRY_LEFT_SEC  = 0.05   # Beginリトライ時の左移動時間
-BEGIN_RETRY_FIRST_LEFT_SEC = 0.10  # 1回目のリトライだけ左に大きく寄せる
-BEGIN_RETRY_RIGHT_SEC = 0.11   # Beginリトライ時の右移動時間
+# Beginリトライの位置合わせ: 1回目は左へ、以降は左右交互に振れ幅を広げていく。
+# 左0.10 → 右0.08 → 左0.10 → 右0.12 → 左0.14 …（0.02秒ずつ増加）
+BEGIN_RETRY_FIRST_LEFT_SEC = 0.10  # 1回目（左）の移動時間
+BEGIN_RETRY_STEP_START_SEC = 0.08  # 2回目（右）の移動時間
+BEGIN_RETRY_STEP_INC_SEC   = 0.02  # 1回ごとに増やす量
 BEGIN_RETRY_WAIT_SEC  = 2.0    # リトライの間隔
-BEGIN_RETRY_MAX       = 4      # リトライ回数（初回Beginは含まない）
+BEGIN_RETRY_MAX       = 20     # リトライ回数（初回Beginは含まない）
+
+# `Verified` はBegin受理以外に、ラウンド結果の検証完了と約300秒周期の定期シグナルでも出る。
+# 判定に使うのは「前回の“定期シグナル”からの間隔」であって「前回のVerifiedからの
+# 間隔」ではない（定期の直前には24〜83秒間隔でラウンド由来のVerifiedが入るため）。
+# 周期は窓ごとに位相が違い、ドリフトもするので指数平滑で追従させる。
+VERIFIED_PERIODIC_INIT_SEC = 300.0   # 周期の初期推定
+VERIFIED_PERIODIC_TOL_SEC  = 8.0     # 予測からの許容ズレ
+VERIFIED_PERIODIC_MIN_SEC  = 250.0   # 学習に採用する間隔の下限
+VERIFIED_PERIODIC_MAX_SEC  = 360.0   # 同上限
+VERIFIED_PERIODIC_SMOOTH   = 0.3     # 指数平滑の係数
+VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
+
+# ── Begin画像認識 ──
+# 画面から [ BEGIN ] を見つけてクリックする。閾値はnumpy版プロトタイプの実測値。
+BEGIN_DETECT_ENABLED        = True
+BEGIN_DETECT_SUBSAMPLE      = 4      # 何画素ごとに拾うか
+BEGIN_DETECT_RED_MIN        = 150    # 赤とみなす R の下限
+BEGIN_DETECT_RED_RATIO      = 0.55   # G,B が R のこの比率未満なら赤
+BEGIN_DETECT_AROUND_WIN     = 11     # 「周囲」を見る窓の一辺（セル数）
+BEGIN_DETECT_AROUND_MAX_LUM = 25     # 周囲がこれより暗ければ「黒地の赤」
+BEGIN_DETECT_DILATE_CELLS   = 4      # 連結前の膨張（セル）
+BEGIN_DETECT_MIN_CELLS      = 15     # 塊の最小セル数
+BEGIN_DETECT_MAX_BBOX_LUM   = 60     # bbox平均輝度の上限
+# 撃っても効かなかった候補を「同じもの」とみなす画面上の距離
+BEGIN_REJECT_RADIUS_PX      = 60
+
+# 除外するHUD領域（画面比率, (y0, y1, x0, x1)）
+BEGIN_DETECT_EXCLUDE_AVATAR = (0.80, 1.00, 0.82, 1.00)
+BEGIN_DETECT_EXCLUDE_MUTE   = (0.68, 0.82, 0.26, 0.38)
+
+# 横移動の自己校正（px→秒の係数は実測で求める。固定値を置かない）
+BEGIN_PROBE_SEC       = 0.05
+BEGIN_STRAFE_MIN_SEC  = 0.02
+BEGIN_STRAFE_MAX_SEC  = 0.50
+BEGIN_GAIN_MIN        = 200.0    # px/秒 の妥当範囲
+BEGIN_GAIN_MAX        = 20000.0
 
 # ── フォーカス取得 ──
 FOCUS_RETRY_MAX      = 3     # 前面化を試みる回数

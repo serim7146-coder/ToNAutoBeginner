@@ -106,6 +106,35 @@ class LogMonitor:
             SharedState.continue_round_end()
             self._log(f"続行/霧ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
 
+    def _learn_periodic(self, t: float):
+        """定期シグナルと判定した時刻から周期を学習する。
+
+        周期は窓ごとに位相が違い、ドリフトもするので指数平滑で追従させる。
+        極端な間隔（ラウンド由来の取り違えなど）は学習に混ぜない。
+        """
+        st = self.st
+        if st.periodic_last:
+            iv = t - st.periodic_last
+            if config.VERIFIED_PERIODIC_MIN_SEC <= iv <= config.VERIFIED_PERIODIC_MAX_SEC:
+                base = st.periodic_period or config.VERIFIED_PERIODIC_INIT_SEC
+                st.periodic_period = ((1 - config.VERIFIED_PERIODIC_SMOOTH) * base
+                                      + config.VERIFIED_PERIODIC_SMOOTH * iv)
+        st.periodic_last = t
+
+    def _check_pending_verified(self):
+        """採用したVerifiedに Everything recieved が続かなければ定期シグナルだった。
+
+        位相を掴む唯一の手段。棄却したものだけで学習すると最初の1件を拾えず、
+        位相が永久に初期化されない。
+        """
+        st = self.st
+        if not st.pending_verified_time:
+            return
+        if (time.time() - st.pending_verified_time) <= config.VERIFIED_RECV_TIMEOUT_SEC:
+            return
+        self._learn_periodic(st.pending_verified_time)
+        st.pending_verified_time = 0.0
+
     def _release_equip_wait_after_delay(self):
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
         SharedState.equip_freeze_end(self.st)
@@ -221,6 +250,7 @@ class LogMonitor:
                                 self._process(line)
                     except Exception as e:
                         self._log(f"読み取りエラー: {e}")
+                    self._check_pending_verified()
                     if self._stop_event.wait(config.LOG_POLL_INTERVAL):
                         break
         except Exception as e:
@@ -232,6 +262,15 @@ class LogMonitor:
             return
         st.sabotage_murder_this_round = True
         self._mark_item_lost("Sabotageマーダー判定: アイテムロスト")
+
+    def _hands_free(self) -> bool:
+        """この窓で放置モードが効いているか。
+
+        放置モードは全窓共通のトグルだが、効くのはprivate系インスタンスに居る窓だけ。
+        干し芋の窓とプラベの窓を同時に監視することがあるため、窓ごとに判定する。
+        """
+        return (SharedState.get_hands_free()
+                and self.st.instance_type == config.INSTANCE_PRIVATE)
 
     def _mark_item_lost(self, message: str = ""):
         st = self.st
@@ -412,12 +451,30 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_BEGIN_DONE:
+            # `Verified` はBegin受理専用のログではない。ラウンド結果の検証完了と
+            # 約300秒周期の定期シグナルでも同じ行が出る。
+            # 予測に使うのは「前回の“定期”からの間隔」であって、直前のVerifiedからの
+            # 間隔ではない（定期の直前には数十秒間隔でラウンド由来のVerifiedが入る）。
+            now = time.time()
+            period = st.periodic_period or config.VERIFIED_PERIODIC_INIT_SEC
+            if st.periodic_last and abs(now - (st.periodic_last + period)) <= config.VERIFIED_PERIODIC_TOL_SEC:
+                self._learn_periodic(now)
+                self._log("Verified を無視（定期シグナル）")
+                return
+
+            # 本物として採用。Everything recieved が続くかで事後確認する
+            st.pending_verified_time = now
             st.begin_done = True
             self._log("✅ Connecting")
             # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
             if st.waiting_for_equip and st.item_id:
                 st.waiting_for_equip = False
                 self._start_daemon(self._release_equip_wait_after_delay)
+            return
+
+        if event.kind == LogParser.EVENT_EVERYTHING_RECEIVED:
+            # 直前に採用したVerifiedは本物だった
+            st.pending_verified_time = 0.0
             return
 
         if event.kind == LogParser.EVENT_ROUND_START:
@@ -433,6 +490,9 @@ class LogMonitor:
             st.statistics_sent             = False
             st.fog                         = False
             st.begin_done                  = False
+            st.begin_strafe_gain           = 0.0
+            st.begin_reject                = []
+            st.begin_last_target           = None
             st.is_open_special_round_round = False
             st.item_id_at_round_start      = st.item_id
             st.item_lost_announced         = False
@@ -465,7 +525,7 @@ class LogMonitor:
                 return
 
             if st.round_type == "Fog":
-                if not SharedState.get_hands_free():
+                if not self._hands_free():
                     st.is_continue_round = True
                     SharedState.continue_round_start()
                     PlaySound.play_sound(self.cfg.voice_fog)
@@ -516,7 +576,7 @@ class LogMonitor:
                 not self.cfg.auto_begin
                 or st.instance_type != config.INSTANCE_PRIVATE
             )
-            if announce_on_round_over and not SharedState.get_hands_free():
+            if announce_on_round_over and not self._hands_free():
                 round_lost_item = self._round_lost_item()
                 if self._round_item_warning():
                     if round_lost_item:
@@ -543,7 +603,7 @@ class LogMonitor:
                 self._log("続行/霧ラウンド終了 → 他窓フリーズ解除（保険）")
             round_lost_item = self._round_lost_item()
             round_item_warning = self._round_item_warning()
-            if not SharedState.get_hands_free():
+            if not self._hands_free():
                 if round_item_warning:
                     if round_lost_item:
                         st.item_id = 0
@@ -573,7 +633,7 @@ class LogMonitor:
                         st.waiting_for_equip = True
                     # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
                 self._log("ラウンド終了")
-            if self.cfg.announce_intermission:
+            if self.cfg.announce_intermission and not self._hands_free():
                 PlaySound.play_sound(self.cfg.voice_intermission)
             st.round_end_seen = True   # Beginのクリック待ちを解除する合図
             return
@@ -582,14 +642,15 @@ class LogMonitor:
             st.fog = True
             st.round_type = event.round_type or "Fog"
             self._log("テラー不明 → revealed待ち")
-            if SharedState.get_hands_free():
+            if self._hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
                 self._start_daemon(self._action.do_skip)
             return
 
         if event.kind == LogParser.EVENT_FOXY:
             self._log("🦊 Foxyが出た！")
-            PlaySound.play_sound(self.cfg.voice_foxy)
+            if not self._hands_free():
+                PlaySound.play_sound(self.cfg.voice_foxy)
             if st.round_type == "Fog":
                 # FoxyはAlternate枠テラーなのでFog(Alternate)に更新
                 # → apply_alternate_offset が ID2+134=136→316 に正しく変換される
@@ -672,8 +733,8 @@ class LogMonitor:
             self._log(f"インスタンス制限: 操作スキップ ({itype})")
             return
 
-        # 放置モードの自動操作はprivateのみ。
-        if SharedState.get_hands_free() and is_private:
+        # 放置モードの自動操作はprivateのみ（_hands_free が種別を見ている）。
+        if self._hands_free():
             if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 self._log(f"放置モード(3クラ済み): 即自爆 {st.terror_ids} / {st.round_type}")
                 if not st.is_continue_round and self.cfg.do_skip:
@@ -719,8 +780,9 @@ class LogMonitor:
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
-                PlaySound.play_sound(self.cfg.voice_continue)
-                self._log("🎙 続行アナウンス再生")
+                if not self._hands_free():
+                    PlaySound.play_sound(self.cfg.voice_continue)
+                    self._log("🎙 続行アナウンス再生")
                 SharedState.continue_round_start()
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:

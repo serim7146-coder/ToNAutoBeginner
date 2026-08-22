@@ -561,7 +561,8 @@ class App(tk.Tk):
             relief="raised", padx=12, pady=5,
             command=self._toggle_hands_free)
         self.btn_hands_free.pack(side="left")
-        ttk.Label(fhf, text="← ONにするとアイテムロストを無視・全ラウンド即自爆",
+        ttk.Label(fhf, text="← ONにするとアイテムロストを無視・全ラウンド即自爆"
+                            "（プライベート系の窓でのみ機能します）",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # アイテム取得→Begin
@@ -656,13 +657,16 @@ class App(tk.Tk):
             self._log("[アイテム取得→Begin] OFF")
 
     def _toggle_hands_free(self):
+        # ONにはいつでもできるが、効くのはprivate系インスタンスに居る窓だけ。
+        # 干し芋の窓とプラベの窓を同時に監視することがあるため、窓ごとに判定する。
         val = not SharedState.get_hands_free()
         SharedState.set_hands_free(val)
         if val:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: ON（全窓共通）",
                 bg="#3a1a1a", fg=config.GUI_RED, relief="sunken")
-            self._log("[放置モード] ON: アイテムロスト無視・全ラウンド即自爆")
+            self._log("[放置モード] ON: アイテムロスト無視・全ラウンド即自爆・アナウンス停止"
+                      "（プライベート系の窓のみ）")
         else:
             self.btn_hands_free.config(
                 text="🤖 完全放置モード: OFF（全窓共通）",

@@ -21,6 +21,7 @@ EVENT_SUS_PLAYER = "sus_player"
 EVENT_CREATURE_BLOODTHIRSTY = "creature_bloodthirsty"
 EVENT_HUNGRY_HOME_INVADER = "hungry_home_invader"
 EVENT_RESPAWN = "respawn"
+EVENT_EVERYTHING_RECEIVED = "everything_received"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -34,6 +35,8 @@ RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
 RE_BEGIN_DONE = re.compile(r"^Verified$")
+# ToN側の綴りどおり（recieved）。本物のVerifiedにだけ続く行
+RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!$")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
@@ -67,6 +70,9 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_BEGIN_DONE.match(line):
         return LogEvent(EVENT_BEGIN_DONE)
+
+    if RE_EVERYTHING_RECEIVED.match(line):
+        return LogEvent(EVENT_EVERYTHING_RECEIVED)
 
     m = RE_ROUND_START.match(line)
     if m:

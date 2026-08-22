@@ -16,11 +16,10 @@ ToN入室直後の選択画面を自動で突破する
 import time
 
 import win32gui
-import win32ui
-from ctypes import windll
 
 import config
 import OSCClient
+import ScreenCapture
 import SharedState
 import WindowOperator
 
@@ -40,21 +39,7 @@ class ToNEntry:
 
     def capture(self):
         """PrintWindowでウィンドウの画素を取得する。(bits, 幅, 高さ)"""
-        left, top, right, bottom = win32gui.GetWindowRect(self._hwnd)
-        w, h = right - left, bottom - top
-        dc = win32gui.GetWindowDC(self._hwnd)
-        mfc = win32ui.CreateDCFromHandle(dc)
-        save = mfc.CreateCompatibleDC()
-        bmp = win32ui.CreateBitmap()
-        bmp.CreateCompatibleBitmap(mfc, w, h)
-        save.SelectObject(bmp)
-        windll.user32.PrintWindow(self._hwnd, save.GetSafeHdc(), 2)
-        bits = bmp.GetBitmapBits(True)
-        win32gui.DeleteObject(bmp.GetHandle())
-        save.DeleteDC()
-        mfc.DeleteDC()
-        win32gui.ReleaseDC(self._hwnd, dc)
-        return bits, w, h
+        return ScreenCapture.capture_window(self._hwnd)
 
     @staticmethod
     def _is_neon_red(b, g, r) -> bool:
