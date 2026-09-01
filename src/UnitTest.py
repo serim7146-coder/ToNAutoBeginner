@@ -26,7 +26,7 @@ import SharedState
 import VRChatDiscovery
 import VRChatLauncher
 import OSCClient
-import BeginDetect
+import OSCReceiver
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -137,7 +137,6 @@ class TestActionExecutorFocusFailure(unittest.TestCase):
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 0), \
              patch.object(WindowOperator, "focus_window", return_value=False), \
              patch.object(WindowOperator, "hold_key") as mock_hold, \
              patch.object(WindowOperator, "click") as mock_click, \
@@ -1129,7 +1128,6 @@ class TestActionExecutorSkip(unittest.TestCase):
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _msg: None)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(WindowOperator, "focus_window") as mock_focus, \
              patch.object(WindowOperator, "hold_key"), \
@@ -1160,7 +1158,6 @@ class TestActionExecutorSkip(unittest.TestCase):
         executor = ActionExecutor.ActionExecutor(cfg, st, is_running, lambda _m: None)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window"), \
@@ -1193,7 +1190,6 @@ class TestActionExecutorSkip(unittest.TestCase):
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 0), \
              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep), \
              patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window"), \
@@ -1232,7 +1228,7 @@ class TestActionExecutorSkip(unittest.TestCase):
         _real_freeze_start = SharedState.equip_freeze_start
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(config, "BEGIN_RETRY_MAX", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
                           side_effect=fake_freeze_start),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_sound,              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "hold_key"),              patch.object(WindowOperator, "click",
                           side_effect=lambda: order.append("click")):
             executor.do_after_round()
@@ -1338,281 +1334,6 @@ class TestLaunchWindowCount(unittest.TestCase):
         self.assertEqual(mainGUI.App._launch_count_value(app, 4), 0)
 
 
-class TestBeginDetect(unittest.TestCase):
-    """画面からBEGINを見つける（合成画像で判定条件を固定する）"""
-
-    W, H = 640, 360
-
-    def _canvas(self, bg=(0, 0, 0)):
-        """背景色で塗ったBGRAバッファ（bytearray）を作る"""
-        b, g, r = bg
-        return bytearray([b, g, r, 255] * (self.W * self.H))
-
-    def _fill(self, buf, x, y, w, h, color):
-        """矩形を塗る。colorは (B, G, R)"""
-        b, g, r = color
-        for yy in range(y, y + h):
-            base = (yy * self.W + x) * 4
-            buf[base:base + w * 4] = bytes([b, g, r, 255]) * w
-
-    def _detect(self, buf):
-        return BeginDetect.detect(bytes(buf), self.W, self.H)
-
-    def test_red_bar_on_black_is_detected(self):
-        """真っ黒地の赤い帯は検出され、dxが中心からのズレになる"""
-        buf = self._canvas()
-        # 中心より右に80pxずらした帯（中心 x=320+80=400）
-        self._fill(buf, 340, 170, 120, 24, (0, 0, 255))
-
-        res = self._detect(buf)
-
-        self.assertIsNotNone(res)
-        dx, dy, info = res
-        self.assertAlmostEqual(dx, 80, delta=BeginDetect.config.BEGIN_DETECT_SUBSAMPLE * 2)
-        self.assertAlmostEqual(dy, 2, delta=BeginDetect.config.BEGIN_DETECT_SUBSAMPLE * 2)
-        self.assertGreaterEqual(info["area"], config.BEGIN_DETECT_MIN_CELLS)
-
-    def test_red_bar_on_bright_background_is_rejected(self):
-        """明るい地の赤は落とす（木箱マップのような赤茶色い画面の対策）"""
-        buf = self._canvas(bg=(150, 150, 150))
-        self._fill(buf, 300, 170, 120, 24, (0, 0, 255))
-
-        self.assertIsNone(self._detect(buf))
-
-    def test_no_red_returns_none(self):
-        self.assertIsNone(self._detect(self._canvas()))
-
-    def test_red_in_excluded_hud_regions_is_ignored(self):
-        """アバターとミュートアイコンの位置の赤は無視する"""
-        avatar = self._canvas()
-        self._fill(avatar, int(self.W * 0.86), int(self.H * 0.85), 60, 30, (0, 0, 255))
-        self.assertIsNone(self._detect(avatar))
-
-        mute = self._canvas()
-        self._fill(mute, int(self.W * 0.28), int(self.H * 0.72), 50, 30, (0, 0, 255))
-        self.assertIsNone(self._detect(mute))
-
-    def test_the_blob_nearest_to_center_wins(self):
-        """壁のINTERMISSION回避: 大きくて遠い塊より、小さくて中心に近い塊を選ぶ
-
-        実測では INTERMISSION 5343px（中心から-489px）に対し
-        本物のBEGIN台は 413px（中心から-14px）だった。
-        """
-        buf = self._canvas()
-        self._fill(buf, 20, 120, 200, 60, (0, 0, 255))    # 大きい・遠い
-        self._fill(buf, 300, 170, 60, 20, (0, 0, 255))    # 小さい・中心付近
-
-        res = self._detect(buf)
-
-        self.assertIsNotNone(res)
-        dx, _dy, info = res
-        self.assertLess(abs(dx), 40, "中心に近い方を選ぶこと")
-        self.assertLess(info["bbox"][2], 200, "大きい塊を掴んでいないこと")
-
-
-class TestBeginDetectAll(unittest.TestCase):
-    """候補は1件に絞らず、中心に近い順で全部返す"""
-
-    W, H = 640, 360
-
-    def _canvas(self):
-        return bytearray([0, 0, 0, 255] * (self.W * self.H))
-
-    def _fill(self, buf, x, y, w, h):
-        for yy in range(y, y + h):
-            base = (yy * self.W + x) * 4
-            buf[base:base + w * 4] = bytes([0, 0, 255, 255]) * w
-
-    def test_all_candidates_are_returned_sorted_by_distance(self):
-        buf = self._canvas()
-        self._fill(buf, 20, 120, 200, 60)     # 遠い（左端）
-        self._fill(buf, 300, 170, 60, 20)     # 中心付近
-        self._fill(buf, 470, 250, 120, 30)    # やや右
-
-        cands = BeginDetect.detect_all(bytes(buf), self.W, self.H)
-
-        self.assertEqual(len(cands), 3)
-        self.assertEqual([abs(c["dx"]) for c in cands],
-                         sorted(abs(c["dx"]) for c in cands), "|dx|の昇順で返すこと")
-        self.assertLess(abs(cands[0]["dx"]), 40, "先頭は中心に最も近い候補")
-        for c in cands:
-            self.assertAlmostEqual(c["cx"] - self.W / 2, c["dx"], delta=0.01)
-            self.assertAlmostEqual(c["cy"] - self.H / 2, c["dy"], delta=0.01)
-
-    def test_detect_returns_the_first_candidate(self):
-        buf = self._canvas()
-        self._fill(buf, 20, 120, 200, 60)
-        self._fill(buf, 300, 170, 60, 20)
-
-        cands = BeginDetect.detect_all(bytes(buf), self.W, self.H)
-        res = BeginDetect.detect(bytes(buf), self.W, self.H)
-
-        self.assertEqual(res[0], cands[0]["dx"])
-        self.assertEqual(res[2]["area"], cands[0]["area"])
-
-    def test_no_candidates_is_an_empty_list(self):
-        self.assertEqual(BeginDetect.detect_all(bytes(self._canvas()), self.W, self.H), [])
-
-
-class TestGuidedRetry(unittest.TestCase):
-    """リトライは「必ず動いて撃つ」。効かなかった候補は除外して次を試す"""
-
-    def setUp(self):
-        SharedState.equip_freeze_reset()
-        SharedState.continue_round_reset()
-
-    tearDown = setUp
-
-    def _cand(self, dx, cx=None, cy=100.0, area=100):
-        return {"dx": dx, "dy": 0.0, "cx": 640 + dx if cx is None else cx,
-                "cy": cy, "area": area, "bbox": (0, 0, 10, 10)}
-
-    def _executor(self):
-        cfg = WindowConfig(hwnd=123, osc_port=9000)
-        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_end_seen=True)
-        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
-
-    def test_no_detection_means_no_click(self):
-        """BEGINが見えなければ撃たない（ラウンド中の誤クリック防止）"""
-        ex, _st = self._executor()
-        with patch.object(ex, "_detect_begin_all", return_value=[]), \
-             patch.object(WindowOperator, "click") as mock_click:
-            self.assertTrue(ex._guided_retry_click())
-        mock_click.assert_not_called()
-
-    def test_it_always_moves_even_when_centered(self):
-        """dxが0でも必ず動く。動かないと同じ対象を撃ち続けて固まる"""
-        ex, _st = self._executor()
-        with patch.object(ex, "_detect_begin_all", return_value=[self._cand(0.0)]), \
-             patch.object(ex, "move") as mock_move, \
-             patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(WindowOperator, "click"):
-            ex._guided_retry_click()
-
-        mock_move.assert_called_once()
-        self.assertGreaterEqual(mock_move.call_args.args[1], config.BEGIN_STRAFE_MIN_SEC)
-
-    def test_far_target_is_clicked_anyway(self):
-        """中心到達は待たない。BEGIN台は大きいので寄せたら撃つ"""
-        ex, _st = self._executor()
-        with patch.object(ex, "_detect_begin_all", return_value=[self._cand(300.0)]), \
-             patch.object(ex, "move"), \
-             patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(WindowOperator, "click") as mock_click:
-            self.assertTrue(ex._guided_retry_click())
-        mock_click.assert_called_once()
-
-    def test_previous_target_is_rejected_and_the_next_one_is_tried(self):
-        """撃って効かなかった対象は除外され、次の候補が選ばれる"""
-        ex, st = self._executor()
-        first = self._cand(0.0, cx=640.0)       # 壁のINTERMISSION想定（中央）
-        second = self._cand(-82.0, cx=558.0)    # BEGIN想定
-        picked = []
-
-        def strafe(target):
-            picked.append(target["cx"])
-            return target
-
-        with patch.object(ex, "_detect_begin_all", return_value=[first, second]), \
-             patch.object(ex, "_strafe_toward", side_effect=strafe), \
-             patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(WindowOperator, "click"):
-            ex._guided_retry_click()          # 1回目: 中心の候補を撃つ
-            self.assertEqual(st.begin_last_target, (640.0, 100.0))
-            ex._guided_retry_click()          # 2回目: 効かなかったので次へ
-
-        self.assertEqual(picked, [640.0, 558.0], "2回目は別の候補を狙うこと")
-        self.assertIn((640.0, 100.0), st.begin_reject)
-
-    def test_rejecting_every_candidate_resets_the_list(self):
-        """全部試し終えたら除外をリセットして最初からやり直す"""
-        ex, st = self._executor()
-        only = self._cand(0.0, cx=640.0)
-        st.begin_reject = [(640.0, 100.0)]
-
-        with patch.object(ex, "_detect_begin_all", return_value=[only]), \
-             patch.object(ex, "_strafe_toward", side_effect=lambda t: t), \
-             patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(WindowOperator, "click") as mock_click:
-            ex._guided_retry_click()
-
-        self.assertEqual(st.begin_reject, [], "除外をリセットすること")
-        mock_click.assert_called_once()
-
-    def test_strafe_gain_is_measured_against_the_same_target(self):
-        """係数は「移動前の重心に最も近い候補」と比べて測る"""
-        ex, st = self._executor()
-        target = self._cand(300.0, cx=940.0, cy=100.0)
-        after = [self._cand(-200.0, cx=440.0, cy=300.0),   # 中心には近いが別物
-                 self._cand(100.0, cx=740.0, cy=100.0)]    # 移動前に近い＝同じ対象
-
-        with patch.object(ex, "move"), \
-             patch.object(ex, "_detect_begin_all", return_value=after):
-            same = ex._strafe_toward(target)
-
-        self.assertEqual(same["cx"], 740.0)
-        # 300px -> 100px の 200px ぶんを BEGIN_PROBE_SEC で動いた
-        self.assertAlmostEqual(st.begin_strafe_gain, 200 / config.BEGIN_PROBE_SEC)
-
-    def test_focus_failure_does_not_abort_the_remaining_retries(self):
-        """フォーカス取得に失敗しても、そのラウンドのBeginを諦めない"""
-        ex, st = self._executor()
-        focus_calls = {"n": 0}
-
-        def focus(_hwnd):
-            focus_calls["n"] += 1
-            return focus_calls["n"] == 1     # 初回クリックだけ成功、以降は失敗
-
-        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 4), \
-             patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0), \
-             patch.object(ActionExecutor.time, "sleep"), \
-             patch.object(ex, "move"), \
-             patch.object(ex, "_detect_begin_all", return_value=[self._cand(0.0)]), \
-             patch.object(WindowOperator, "focus_window", side_effect=focus), \
-             patch.object(WindowOperator, "click"):
-            ex.do_after_round()
-
-        self.assertGreater(focus_calls["n"], 2,
-                           "1回失敗しただけで do_after_round を抜けている")
-
-
-class TestBeginRetryMove(unittest.TestCase):
-    """Beginリトライの位置合わせ量"""
-
-    def _moves(self, attempts):
-        cfg = WindowConfig(hwnd=123, osc_port=9000)
-        executor = ActionExecutor.ActionExecutor(cfg, WindowState(),
-                                                 lambda: True, lambda _m: None)
-        moves: list[tuple[str, float]] = []
-        with patch.object(executor, "move",
-                          side_effect=lambda d, sec: moves.append((d, sec))):
-            for attempt in attempts:
-                executor._retry_move(attempt)
-        return moves
-
-    def test_moves_alternate_and_widen(self):
-        """左0.10 → 右0.08 → 左0.10 → 右0.12 → 左0.14 … と外へ広げる"""
-        self.assertEqual(
-            self._moves([1, 2, 3, 4, 5, 6]),
-            [("left", 0.10),
-             ("right", 0.08),
-             ("left", 0.10),
-             ("right", 0.12),
-             ("left", 0.14),
-             ("right", 0.16)],
-        )
-
-    def test_step_follows_the_configured_increment(self):
-        """振れ幅は設定値から計算する（丸め誤差を残さない）"""
-        moves = self._moves([2, 3, 4])
-        step = config.BEGIN_RETRY_STEP_START_SEC
-        inc = config.BEGIN_RETRY_STEP_INC_SEC
-
-        self.assertEqual([sec for _d, sec in moves], [step, step + inc, step + inc * 2])
-        self.assertEqual([d for d, _sec in moves], ["right", "left", "right"])
-
-
 class TestItemLostAnnounceTiming(unittest.TestCase):
     """アイテムロストの通知はBeginクリックの直前に鳴らす"""
 
@@ -1644,7 +1365,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
 
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(config, "BEGIN_RETRY_MAX", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
                           side_effect=lambda state: order.append("freeze")),              patch.object(ActionExecutor.PlaySound, "play_sound",
                           side_effect=lambda _p: order.append("sound")),              patch.object(executor, "move",
                           side_effect=lambda d, sec: order.append("move")),              patch.object(executor, "move_forward_left",
@@ -1673,7 +1394,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
                          round_end_seen=True, item_id=5)
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(config, "BEGIN_RETRY_MAX", 0),              patch.object(ActionExecutor.time, "sleep"),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_play,              patch.object(executor, "move"),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click") as mock_click:
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep"),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_play,              patch.object(executor, "move"),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
         mock_click.assert_called_once()
@@ -1698,7 +1419,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
             if sleeps["n"] >= 3:
                 st.item_id = 5      # プレイヤーが装備した
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(config, "BEGIN_RETRY_MAX", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.PlaySound, "play_sound",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.PlaySound, "play_sound",
                           side_effect=lambda _p: order.append("sound")),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click",
                           side_effect=lambda: order.append("click")):
             executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
@@ -1753,7 +1474,7 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
             moves.append("forward+left")
             moved.set()
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(config, "BEGIN_RETRY_MAX", 0),              patch.object(ex, "move", side_effect=on_move), patch.object(ex, "move_forward_left", side_effect=on_move_fl),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click", side_effect=clicked.set):
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ex, "move", side_effect=on_move), patch.object(ex, "move_forward_left", side_effect=on_move_fl),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click", side_effect=clicked.set):
             t = threading.Thread(target=ex.do_after_round, daemon=True)
             t.start()
             observed_move = moved.wait(3.0)
@@ -1797,49 +1518,655 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
         self.assertTrue(clicked_after_release, "解除後は移動してクリックすること")
         self.assertEqual(moves, ["forward+left"])
 
-    def test_retry_move_runs_during_freeze_and_click_waits(self):
-        """Beginリトライ中にフリーズが張られても、位置合わせの移動は進む"""
-        st = self._state()
-        ex = self._executor(st)
-        clicks: list[int] = []
-        retry_moved = threading.Event()
-        second_click = threading.Event()
-        target = {"dx": 0.0, "dy": 0.0, "cx": 640.0, "cy": 100.0,
-                  "area": 50, "bbox": (0, 0, 10, 10)}
 
-        def fake_detect():
-            return [target]
+class TestMultiWindowLaunch(unittest.TestCase):
+    """1〜8窓の起動と自動Join"""
 
-        def on_move(direction, seconds):
-            if clicks:                      # 初回クリック後の移動＝リトライの位置合わせ
-                retry_moved.set()
+    class FakeVar:
+        def __init__(self, value):
+            self.value = value
 
-        def on_click():
-            clicks.append(1)
-            if len(clicks) == 1:
-                # 初回Beginの直後に他窓が続行ラウンドを開始した状況
-                SharedState.continue_round_start()
-            else:
-                second_click.set()
+        def get(self):
+            return self.value
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(config, "BEGIN_RETRY_MAX", 2), \
-             patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0.2), \
-             patch.object(ex, "_detect_begin_all", side_effect=fake_detect), \
-             patch.object(ex, "move", side_effect=on_move), \
-             patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(WindowOperator, "click", side_effect=on_click):
-            t = threading.Thread(target=ex.do_after_round, daemon=True)
-            t.start()
-            observed_retry_move = retry_moved.wait(3.0)
-            clicked_while_frozen = second_click.wait(0.6)
-            SharedState.continue_round_end()
-            clicked_after_release = second_click.wait(3.0)
-            t.join(timeout=3.0)
+        def set(self, value):
+            self.value = value
 
-        self.assertTrue(observed_retry_move, "フリーズ中でもリトライの移動は行うこと")
-        self.assertFalse(clicked_while_frozen, "フリーズ中にリトライのクリックをしてはいけない")
-        self.assertTrue(clicked_after_release, "解除後はリトライのクリックをすること")
+    def test_eight_windows_get_distinct_osc_ports(self):
+        pairs = [OSCClient.ports_for_window(i) for i in range(config.MAX_WINDOWS)]
+        flat = [p for pair in pairs for p in pair]
+
+        self.assertEqual(len(set(flat)), len(flat), "受信・送信ポートが衝突している")
+
+    def test_eight_windows_get_distinct_instances(self):
+        """同じprivateインスタンスには入れないので、窓ごとに別インスタンスが要る"""
+        link = "vrchat://launch?ref=vrchat.com&id=wrld_abc-123:12345~private(usr_x)~region(jp)"
+        nums = [VRChatLauncher.with_unique_instance(link, i).split(":")[-1].split("~")[0]
+                for i in range(config.MAX_WINDOWS)]
+
+        self.assertEqual(len(set(nums)), config.MAX_WINDOWS)
+
+    def test_launch_plan_covers_eight_windows(self):
+        tabs = []
+        for i in range(config.MAX_WINDOWS):
+            tab = type("FakeTab", (), {})()
+            tab.idx = i
+            tab.v_profile = self.FakeVar(i)
+            tabs.append(tab)
+
+        plan = mainGUI.build_launch_plan(mainGUI.tabs_to_launch(tabs, config.MAX_WINDOWS))
+
+        self.assertEqual(len(plan), config.MAX_WINDOWS)
+        self.assertEqual([p[0] for p in plan], list(range(1, config.MAX_WINDOWS + 1)))
+        self.assertEqual([p[2] for p in plan], list(range(config.MAX_WINDOWS)))
+
+    def test_wait_for_windows_counts_new_ones_only(self):
+        """逐次起動では「既存＋i個目」が出たかで次へ進む"""
+        baseline = {1, 2}
+        states = [[1, 2], [1, 2, 3], [1, 2, 3, 4]]
+
+        def discover():
+            return states.pop(0) if len(states) > 1 else states[0]
+
+        found = VRChatLauncher.wait_for_windows(baseline, 2, 5.0, poll_sec=0.01,
+                                                discover=discover)
+
+        self.assertEqual(found, [3, 4])
+
+
+class TestJoinStatus(unittest.TestCase):
+    """ToNに入れたかをログで確認する"""
+
+    def _log_with(self, tmpdir, line):
+        path = Path(tmpdir) / "output_log_2026-01-01_00-00-00.txt"
+        path.write_text(line + chr(10), encoding="utf-8")
+        return path
+
+    def test_ton_join_is_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._log_with(
+                d, "2026.01.01 00:00:00 Debug      -  [Behaviour] Joining "
+                   + config.TON_WORLD_ID + ":12345~private(usr_x)~region(jp)")
+
+            self.assertEqual(VRChatLauncher.joined_world_id(path), config.TON_WORLD_ID)
+            self.assertTrue(VRChatLauncher.joined_ton(path))
+
+    def test_other_world_is_not_ton(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._log_with(
+                d, "2026.01.01 00:00:00 Debug      -  [Behaviour] Joining "
+                   "wrld_other-0000:1~region(jp)")
+
+            self.assertFalse(VRChatLauncher.joined_ton(path))
+
+    def test_missing_log_is_not_ton(self):
+        self.assertFalse(VRChatLauncher.joined_ton("does_not_exist.txt"))
+
+    def test_report_names_the_windows_that_are_not_in_ton(self):
+        app = type("FakeApp", (), {})()
+        app.logs = []
+        app._log = app.logs.append
+        tabs = []
+        for i, in_ton in enumerate((True, False, True)):
+            tab = type("FakeTab", (), {})()
+            tab.idx = i
+            tab.v_active = TestMultiWindowLaunch.FakeVar(True)
+            tab.v_log = TestMultiWindowLaunch.FakeVar(f"log{i}.txt")
+            tab._in_ton = in_ton
+            tabs.append(tab)
+        app.tabs = tabs
+        joined = {f"log{i}.txt": t._in_ton for i, t in enumerate(tabs)}
+
+        with patch.object(VRChatLauncher, "joined_ton", side_effect=lambda p: joined[p]):
+            missing = mainGUI.App._report_join_status(app)
+
+        self.assertEqual(missing, [2])
+        self.assertTrue(any("ToNに入れていない窓" in m for m in app.logs))
+
+
+class TestStartWithoutTnl(unittest.TestCase):
+    """tnl未読み込みでも開始できる（続行リストは0件として扱う）"""
+
+    class FakeVar:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def _app(self, keep_on):
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = keep_on
+        app.tabs = []
+        app.monitors = []
+        app.logs = []
+        app._log = app.logs.append
+        app._running = False
+        app.btn_start = MagicMock()
+        app.btn_stop = MagicMock()
+        app.lbl_win_warn = MagicMock()
+        for name in ("v_voice_continue", "v_voice_fog", "v_voice_item_lost",
+                     "v_voice_intermission", "v_voice_foxy"):
+            setattr(app, name, self.FakeVar(""))
+        return app
+
+    def test_start_is_not_blocked_without_tnl(self):
+        """警告で止めず、そのまま窓の準備へ進む"""
+        app = self._app({})
+
+        with patch.object(mainGUI.messagebox, "showwarning") as mock_warn, \
+             patch.object(mainGUI.messagebox, "showerror") as mock_error, \
+             patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]):
+            mainGUI.App._start(app)
+
+        mock_warn.assert_not_called()
+        # 窓が無いので最後は「有効な窓/ログが見つかりません」で止まる＝tnlでは止まっていない
+        mock_error.assert_called_once()
+        self.assertTrue(any("tnl未読み込み" in m for m in app.logs))
+
+    def test_empty_keep_on_set_never_continues(self):
+        """tnlが空なら、どのテラーでも続行にならない"""
+        for round_type in ("Classic", "Alternate", "Midnight", "Double Trouble"):
+            decision = RoundDecision.decide_killers(
+                {}, [42, 7, 3], round_type, wins=0, cancel_afk=False)
+            self.assertFalse(decision.is_continue_round, round_type)
+
+    def test_tnl_entries_still_continue(self):
+        """読み込んだ場合は従来どおり続行する（止めすぎていないことの確認）"""
+        decision = RoundDecision.decide_killers(
+            {"Classic/クラシック": {42}}, [42], "Classic", wins=0, cancel_afk=False)
+
+        self.assertTrue(decision.is_continue_round)
+
+
+class _ImmediateThread:
+    """テスト用: start() でその場で実行し、以後 is_alive() は一度だけTrue"""
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+        self._calls = 0
+
+    def start(self):
+        if self._target:
+            self._target(*self._args, **self._kwargs)
+
+    def is_alive(self):
+        self._calls += 1
+        return self._calls <= 1
+
+    def join(self, timeout=None):
+        pass
+
+
+class TestSpeedClassify(unittest.TestCase):
+    """速度からラウンド種別を引く（値の照合だけ。張り付き判定は受信側）"""
+
+    def test_normal_speed(self):
+        self.assertEqual(ActionExecutor.classify_speed(6.6), "normal")
+
+    def test_eight_pages_speed(self):
+        self.assertEqual(ActionExecutor.classify_speed(6.5), "8pages")
+
+    def test_punish_speed(self):
+        self.assertEqual(ActionExecutor.classify_speed(4.0), "punish")
+
+    def test_in_between_value_is_unknown(self):
+        """帯で判定していないことの回帰: 6.52 はどれでもない"""
+        self.assertEqual(ActionExecutor.classify_speed(6.52), "")
+
+    def test_far_value_is_unknown(self):
+        self.assertEqual(ActionExecutor.classify_speed(0.0), "")
+
+    def test_small_jitter_still_matches(self):
+        """一致の許容内なら拾う"""
+        self.assertEqual(
+            ActionExecutor.classify_speed(6.6 + config.SPEED_MATCH_TOL / 2), "normal")
+
+
+class TestVelocityStability(unittest.TestCase):
+    """張り付き（値が変化していない時間）は受信側が持つ"""
+
+    def _receiver(self):
+        return OSCReceiver.VelocityReceiver(19999)
+
+    def _feed(self, r, value, at):
+        """指定時刻にVelocityMagnitudeを受信したことにする"""
+        with patch.object(OSCReceiver.time, "time", return_value=at):
+            r._handle(OSCReceiver.VELOCITY_MAGNITUDE, value)
+
+    def test_unreceived_is_none_and_zero(self):
+        r = self._receiver()
+
+        self.assertIsNone(r.stable_value)
+        self.assertEqual(r.stable_for, 0.0)
+
+    def test_stable_for_grows_while_the_value_holds(self):
+        r = self._receiver()
+        self._feed(r, 6.6, 1000.0)
+
+        with patch.object(OSCReceiver.time, "time", return_value=1000.5):
+            self.assertAlmostEqual(r.stable_for, 0.5)
+            self.assertEqual(r.stable_value, 6.6)
+
+    def test_jitter_within_tolerance_does_not_reset(self):
+        """許容内の揺らぎで _stable_since を戻さない（戻すと永久に張り付かない）"""
+        r = self._receiver()
+        self._feed(r, 6.6, 1000.0)
+        self._feed(r, 6.6 + config.SPEED_STICK_TOL / 2, 1000.2)
+
+        with patch.object(OSCReceiver.time, "time", return_value=1000.4):
+            self.assertAlmostEqual(r.stable_for, 0.4, places=6)
+            self.assertEqual(r.stable_value, 6.6, "基準値は変えない")
+
+    def test_change_beyond_tolerance_resets(self):
+        r = self._receiver()
+        self._feed(r, 6.6, 1000.0)
+        self._feed(r, 4.0, 1000.3)
+
+        with patch.object(OSCReceiver.time, "time", return_value=1000.31):
+            self.assertEqual(r.stable_value, 4.0)
+            self.assertAlmostEqual(r.stable_for, 0.01, places=6)
+
+    def test_speed_and_ever_received_still_track_every_packet(self):
+        r = self._receiver()
+        self.assertFalse(r.ever_received)
+
+        self._feed(r, 6.6, 1000.0)
+
+        self.assertTrue(r.ever_received)
+        self.assertEqual(r.speed, 6.6)
+
+
+class TestSpeedDetect(unittest.TestCase):
+    """判定モジュール: 受信するだけ。どのインスタンスでも動く"""
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+        SharedState.set_hands_free(False)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+        SharedState.set_hands_free(False)
+
+    class FakeReceiver:
+        def __init__(self, value=None, stable_for=1.0, grounded=True,
+                     ever_received=True):
+            self.stable_value = value
+            self.stable_for = stable_for
+            self.grounded = grounded
+            self.ever_received = ever_received
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    def _executor(self, instance_type=None):
+        cfg = WindowConfig(hwnd=123, osc_port=9000,
+                           voice_8pages="8p.mp3", voice_punish="pn.mp3")
+        st = WindowState(instance_type=instance_type or config.INSTANCE_PRIVATE)
+        logs = []
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append), st, logs
+
+    def _run(self, receiver, instance_type=None):
+        ex, st, logs = self._executor(instance_type)
+        ex._receiver = receiver
+        calls = {"n": 0}
+
+        def stop_after_one(_sec):
+            calls["n"] += 1
+            st.in_round = True      # 1周で打ち切る
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=stop_after_one), \
+             patch.object(ActionExecutor.PlaySound, "play_sound") as mock_play:
+            ex.do_speed_detect()
+        return st, logs, [c.args[0] for c in mock_play.call_args_list]
+
+    def test_stable_eight_pages_is_announced(self):
+        st, _logs, played = self._run(self.FakeReceiver(6.5))
+
+        self.assertEqual(st.speed_round_kind, "8pages")
+        self.assertEqual(played, ["8p.mp3"])
+
+    def test_stable_punish_is_announced(self):
+        st, _logs, played = self._run(self.FakeReceiver(4.0))
+
+        self.assertEqual(st.speed_round_kind, "punish")
+        self.assertEqual(played, ["pn.mp3"])
+
+    def test_normal_is_not_announced(self):
+        st, _logs, played = self._run(self.FakeReceiver(6.6))
+
+        self.assertEqual(st.speed_round_kind, "normal")
+        self.assertEqual(played, [])
+
+    def test_not_stable_long_enough_is_ignored(self):
+        """SPEED_STABLE_SEC に満たないうちは判定しない"""
+        st, _logs, played = self._run(
+            self.FakeReceiver(6.5, stable_for=config.SPEED_STABLE_SEC / 2))
+
+        self.assertEqual(st.speed_round_kind, "")
+        self.assertEqual(played, [])
+
+    def test_airborne_samples_are_ignored(self):
+        st, _logs, played = self._run(self.FakeReceiver(6.5, grounded=False))
+
+        self.assertEqual(st.speed_round_kind, "")
+        self.assertEqual(played, [])
+
+    def test_unreceived_is_ignored(self):
+        st, _logs, played = self._run(self.FakeReceiver(None, ever_received=False))
+
+        self.assertEqual(st.speed_round_kind, "")
+        self.assertTrue(any("速度を受信できない" in m for m in _logs))
+
+    def test_detect_runs_in_any_instance(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_PUBLIC):
+            st, _logs, played = self._run(self.FakeReceiver(6.5), instance_type=itype)
+            self.assertEqual(st.speed_round_kind, "8pages", itype)
+
+    def test_hands_free_is_silent(self):
+        SharedState.set_hands_free(True)
+        st, _logs, played = self._run(self.FakeReceiver(6.5))
+
+        self.assertEqual(st.speed_round_kind, "8pages", "判定自体はする")
+        self.assertEqual(played, [])
+
+    def test_toggle_off_does_nothing(self):
+        SharedState.set_speed_detect(False)
+        ex, st, _logs = self._executor()
+        ex._receiver = self.FakeReceiver(6.5)
+
+        with patch.object(ActionExecutor.time, "sleep"):
+            ex.do_speed_detect()
+
+        self.assertEqual(st.speed_round_kind, "")
+
+    def test_without_a_receiver_it_does_nothing(self):
+        ex, st, _logs = self._executor()
+        ex._receiver = None
+
+        with patch.object(ActionExecutor.time, "sleep"):
+            ex.do_speed_detect()
+
+        self.assertEqual(st.speed_round_kind, "")
+
+    def test_detect_does_not_stop_the_shared_receiver(self):
+        """常時監視なのでプローブ終了で止めない"""
+        receiver = self.FakeReceiver(6.6)
+        self._run(receiver)
+
+        self.assertFalse(receiver.stopped)
+
+
+class TestVelocityReceiverLifecycle(unittest.TestCase):
+    """受信器は監視の開始から停止まで生かす"""
+
+    def _executor(self, osc_port=9000):
+        cfg = WindowConfig(hwnd=123, osc_port=osc_port)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, WindowState(), lambda: True, logs.append)
+        return ex, logs
+
+    class FakeReceiver:
+        def __init__(self, port, log=None):
+            self.port = port
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+            return True
+
+        def stop(self):
+            self.stopped = True
+
+    def test_monitor_start_and_stop_control_the_receiver(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9010), {},
+                                        lambda _m: None, window_idx=1)
+
+        with patch.object(OSCReceiver, "VelocityReceiver", self.FakeReceiver), \
+             patch.object(LogMonitor.threading, "Thread"):
+            monitor.start()
+            receiver = monitor._action._receiver
+            self.assertIsNotNone(receiver, "監視開始で受信を始めること")
+            self.assertTrue(receiver.started)
+            self.assertEqual(receiver.port, 9011, "VRChatが送ってくる側のポート")
+
+            monitor.stop()
+
+        self.assertTrue(receiver.stopped, "監視停止で止めること")
+        self.assertIsNone(monitor._action._receiver)
+
+    def test_start_is_idempotent(self):
+        ex, _logs = self._executor()
+
+        with patch.object(OSCReceiver, "VelocityReceiver", self.FakeReceiver):
+            self.assertTrue(ex.start_velocity_receiver())
+            first = ex._receiver
+            self.assertTrue(ex.start_velocity_receiver())
+
+        self.assertIs(ex._receiver, first, "二重にbindしない")
+
+    def test_no_osc_port_is_harmless(self):
+        ex, logs = self._executor(osc_port=0)
+
+        with patch.object(OSCReceiver, "VelocityReceiver") as mock_recv:
+            self.assertFalse(ex.start_velocity_receiver())
+
+        mock_recv.assert_not_called()
+        self.assertIsNone(ex._receiver)
+        self.assertTrue(ex._speed_ready.is_set(), "横移動を待たせないこと")
+
+    def test_bind_failure_is_reported_once_and_harmless(self):
+        ex, logs = self._executor()
+
+        class DeadReceiver:
+            def __init__(self, port, log=None):
+                pass
+
+            def start(self):
+                return False
+
+        with patch.object(OSCReceiver, "VelocityReceiver", DeadReceiver):
+            self.assertFalse(ex.start_velocity_receiver())
+
+        self.assertIsNone(ex._receiver)
+        self.assertTrue(ex._speed_ready.is_set())
+        self.assertEqual(len([m for m in logs if "速度受信を開始できない" in m]), 1)
+
+    def test_stop_without_start_is_safe(self):
+        ex, _logs = self._executor()
+
+        ex.stop_velocity_receiver()
+
+        self.assertIsNone(ex._receiver)
+
+
+class TestSpeedStrafe(unittest.TestCase):
+    """横移動モジュール: マクロなのでprivateのみ（起動側で判定）"""
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def _executor(self, osc_port=9000, **st_kw):
+        cfg = WindowConfig(hwnd=123, osc_port=osc_port)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, **st_kw)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        ex._speed_ready.set()   # 受信の準備は済んでいる前提
+        return ex, st, logs
+
+    def test_moves_right_once_then_left_once(self):
+        """右 → 左 の1往復だけ。繰り返さない"""
+        ex, _st, _logs = self._executor()
+        moves = []
+
+        with patch.object(ex, "move", side_effect=lambda d, sec: moves.append((d, sec))):
+            ex.do_speed_strafe()
+
+        self.assertEqual(moves, [("right", config.SPEED_PROBE_RIGHT_SEC),
+                                 ("left", config.SPEED_PROBE_LEFT_SEC)])
+
+    def test_item_lost_round_does_not_move(self):
+        ex, _st, logs = self._executor(waiting_for_equip=True)
+
+        with patch.object(ex, "move") as mock_move:
+            ex.do_speed_strafe()
+
+        mock_move.assert_not_called()
+        self.assertTrue(any("横移動はしません" in m for m in logs))
+
+    def test_toggle_off_stops_the_strafe(self):
+        SharedState.set_speed_detect(False)
+        ex, _st, _logs = self._executor()
+
+        with patch.object(ex, "move") as mock_move:
+            ex.do_speed_strafe()
+
+        mock_move.assert_not_called()
+
+    def test_no_osc_port_stops_the_strafe(self):
+        ex, _st, _logs = self._executor(osc_port=0)
+
+        with patch.object(ex, "move") as mock_move:
+            ex.do_speed_strafe()
+
+        mock_move.assert_not_called()
+
+
+class TestSpeedProbeOrder(unittest.TestCase):
+    """横移動は受信のbindが終わってから始める
+
+    VRChatは値が変わったときしか送らないので、bind前に動き出すと立ち上がりの
+    サンプルを永久に取りこぼす。
+    """
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def _executor(self, osc_port=9000):
+        cfg = WindowConfig(hwnd=123, osc_port=osc_port)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        return ex, st, logs
+
+    def test_strafe_waits_until_the_receiver_is_ready(self):
+        """準備できるまで move を呼ばない"""
+        ex, _st, _logs = self._executor()
+        moves = []
+        done = threading.Event()
+
+        def worker():
+            with patch.object(ex, "move", side_effect=lambda d, sec: moves.append(d)):
+                ex.do_speed_strafe()
+            done.set()
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        time.sleep(0.2)
+        self.assertEqual(moves, [], "準備前に動いてはいけない")
+
+        ex._speed_ready.set()
+
+        self.assertTrue(done.wait(2.0))
+        self.assertEqual(moves, ["right", "left"])
+
+    def test_starting_the_receiver_makes_it_ready(self):
+        """準備完了を伝えるのは受信の開始（監視開始時に1回）"""
+        ex, _st, _logs = self._executor()
+
+        class FakeReceiver:
+            def __init__(self, port, log=None):
+                pass
+
+            def start(self):
+                return True
+
+            def stop(self):
+                pass
+
+        self.assertFalse(ex._speed_ready.is_set())
+        with patch.object(OSCReceiver, "VelocityReceiver", FakeReceiver):
+            ex.start_velocity_receiver()
+
+        self.assertTrue(ex._speed_ready.is_set())
+
+        ex.stop_velocity_receiver()
+        self.assertFalse(ex._speed_ready.is_set(), "停止したら待ちに戻す")
+
+    def test_strafe_moves_anyway_after_the_timeout(self):
+        """待ち切れなくても移動する（受信が使えなくても横移動は他を壊さない）"""
+        ex, _st, logs = self._executor()
+        moves = []
+
+        with patch.object(config, "SPEED_READY_TIMEOUT_SEC", 0.05), \
+             patch.object(ex, "move", side_effect=lambda d, sec: moves.append(d)):
+            ex.do_speed_strafe()
+
+        self.assertEqual(moves, ["right", "left"], "止まってはいけない")
+        self.assertTrue(any("準備を待てませんでした" in m for m in logs))
+
+
+class TestOSCReceiverParse(unittest.TestCase):
+    """VRChatからのOSCメッセージの読み取り"""
+
+    def test_float_message(self):
+        msg = OSCClient.OSCClient.build_message("/avatar/parameters/VelocityX", 1.5)
+        self.assertEqual(OSCReceiver.parse_message(msg),
+                         ("/avatar/parameters/VelocityX", 1.5))
+
+    def test_broken_message_is_ignored(self):
+        self.assertIsNone(OSCReceiver.parse_message(b"garbage"))
+
+    def test_magnitude_message(self):
+        msg = OSCClient.OSCClient.build_message(OSCReceiver.VELOCITY_MAGNITUDE, 6.6)
+        address, value = OSCReceiver.parse_message(msg)
+
+        self.assertEqual(address, OSCReceiver.VELOCITY_MAGNITUDE)
+        self.assertAlmostEqual(value, 6.6, places=4)
+
+    def test_grounded_defaults_to_true_when_never_received(self):
+        """Groundedを持たないアバターでも機能を止めない"""
+        self.assertTrue(OSCReceiver.VelocityReceiver(19999).grounded)
+
+    def test_alive_is_true_right_after_start(self):
+        """起動直後は受信0が正常。猶予内はTrueを返す"""
+        r = OSCReceiver.VelocityReceiver(19999)
+        r._started = time.time()
+
+        self.assertTrue(r.alive)
+        self.assertFalse(r.ever_received)
+
+    def test_alive_is_false_after_the_grace_period(self):
+        r = OSCReceiver.VelocityReceiver(19999)
+        r._started = time.time() - config.SPEED_RECV_TIMEOUT_SEC - 1
+
+        self.assertFalse(r.alive)
+
+    def test_alive_follows_the_last_packet_once_received(self):
+        r = OSCReceiver.VelocityReceiver(19999)
+        r._started = time.time() - 999
+        r._last_recv = time.time()
+
+        self.assertTrue(r.alive, "受信が続いていれば生きている")
+
+        r._last_recv = time.time() - config.SPEED_RECV_TIMEOUT_SEC - 1
+        self.assertFalse(r.alive, "途絶したら死んでいる")
+
+    def test_speed_is_none_before_receiving(self):
+        self.assertIsNone(OSCReceiver.VelocityReceiver(19999).speed)
 
 
 class TestHandsFreePerWindow(unittest.TestCase):
@@ -2191,8 +2518,12 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
 
         mock_thread.assert_not_called()
 
-    def test_hoshiimo_hands_free_does_not_act_or_announce(self):
-        """放置モード: 干し芋では自動操作をせず、アナウンスも鳴らさない"""
+    def test_hoshiimo_hands_free_still_only_allows_voice(self):
+        """放置モード: 干し芋の窓では自動操作をしない。
+
+        放置モードはprivate系の窓でしか効かないので、干し芋の窓では
+        アナウンスは従来どおり鳴る（TestHandsFreePerWindow を参照）。
+        """
         SharedState.set_hands_free(True)
         monitor = self._monitor(
             hoshiimo_skip=True,
@@ -2201,11 +2532,11 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         monitor.st.in_round = True
         monitor.st.round_type = "Double Trouble"
 
-        with patch.object(PlaySound, "_mci") as mock_mci, \
+        with patch.object(PlaySound, "play_sound") as mock_play, \
              patch.object(LogMonitor.threading, "Thread") as mock_thread:
             monitor._on_killers([42], "Double Trouble", revealed=False)
 
-        mock_mci.assert_not_called()
+        mock_play.assert_called_once_with("continue.mp3")
         mock_thread.assert_not_called()
 
     def test_hoshiimo_skip_round_still_uses_dedicated_skip(self):

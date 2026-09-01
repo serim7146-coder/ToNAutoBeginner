@@ -22,6 +22,7 @@ EVENT_CREATURE_BLOODTHIRSTY = "creature_bloodthirsty"
 EVENT_HUNGRY_HOME_INVADER = "hungry_home_invader"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
+EVENT_STRING_DOWNLOAD = "string_download"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -37,6 +38,11 @@ RE_VERIFIED_END = re.compile(r"^Verified Round End$")
 RE_BEGIN_DONE = re.compile(r"^Verified$")
 # ToN側の綴りどおり（recieved）。本物のVerifiedにだけ続く行
 RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!$")
+# Beginが押されるとラウンドデータの取得が始まる。誰が押しても出る。
+# 同じ [String Download] で始まる "Clearing string download queue" と区別するため、
+# "Attempting to load String from URL" まで含めてマッチさせる。
+RE_STRING_DOWNLOAD = re.compile(
+    r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
@@ -51,6 +57,7 @@ RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\
 class LogEvent:
     kind: str = ""
     round_type: str = ""
+    url: str = ""
     terror_ids: list[int] | None = None
     raw_map: str = ""
     map_id: int = 0
@@ -73,6 +80,11 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_EVERYTHING_RECEIVED.match(line):
         return LogEvent(EVENT_EVERYTHING_RECEIVED)
+
+    m = RE_STRING_DOWNLOAD.match(line)
+    if m:
+        # URLはログ用。判定には使わない（ラウンドデータのURLは複数あるため）
+        return LogEvent(EVENT_STRING_DOWNLOAD, url=m.group(1))
 
     m = RE_ROUND_START.match(line)
     if m:

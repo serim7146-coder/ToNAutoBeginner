@@ -1,14 +1,29 @@
+import threading
 import time
 from typing import Callable
 
 import config
-import BeginDetect
-import ScreenCapture
 import SharedState
 import WindowOperator
 import OSCClient
+import OSCReceiver
 import PlaySound
 from State import WindowConfig, WindowState
+
+
+def classify_speed(value: float) -> str:
+    """速度からラウンド種別を返す。どれとも一致しなければ空文字。
+
+    帯（6.45〜6.55なら8 Pages 等）では判定しない。平常時でも壁擦りや加速途中で
+    6.5付近の値が出るため誤検知する。ここは定数との一致だけを見て、
+    「一定値のまま変化していないか」の判断は受信側（stable_for）が持つ。
+    """
+    for kind, target in (("punish", config.SPEED_PUNISH),
+                         ("8pages", config.SPEED_8PAGES),
+                         ("normal", config.SPEED_NORMAL)):
+        if abs(value - target) <= config.SPEED_MATCH_TOL:
+            return kind
+    return ""
 
 
 # ═══════════════════════════════════════════════
@@ -31,6 +46,12 @@ class ActionExecutor:
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
+        self._speed_recv_warned = False   # 速度未受信の警告を出したか
+        # 受信の準備（bind）が済んだことを横移動側へ伝える。
+        # VRChatは値が変わったときしか送らないので、bind前に動き出すと
+        # 立ち上がりのサンプルを永久に取りこぼす。
+        self._speed_ready = threading.Event()
+        self._receiver = None             # 監視中ずっと生かす速度受信器
 
     @property
     def uses_osc(self) -> bool:
@@ -135,12 +156,18 @@ class ActionExecutor:
         if st.waiting_for_equip:
             self._log("自爆キャンセル（アイテムロスト待ち中）")
             return
-        # 他窓が装備待ち・続行ラウンド中はフリーズ（自分が続行ラウンド中は除く）
+        # 他窓が装備待ち・続行ラウンド・速度検知フリーズ中は止まる
+        # （自分が続行ラウンド中／自分がフリーズの発生源のときは除く）
         if not st.is_continue_round:
             while self._is_running() and st.in_round:
                 eq_ok  = SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
                 con_ok = SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
-                if eq_ok and con_ok:
+                spd_ok = (st.speed_freeze_held
+                          or SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0))
+                # 自窓が張ったラウンド突入フリーズでは自爆を止めない
+                rnd_ok = (st.round_freeze_held
+                          or SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0))
+                if eq_ok and con_ok and spd_ok and rnd_ok:
                     break
         with SharedState._GLOBAL_ACTION_LOCK:
             if not self._is_running() or st.is_continue_round or not st.in_round:
@@ -173,6 +200,12 @@ class ActionExecutor:
             if not SharedState.CONTINUE_ROUND_EVENT.is_set():
                 self._log("Begin キャンセル（他窓のフリーズを検出）")
                 return False
+            if not st.speed_freeze_held and not SharedState.SPEED_FREEZE_EVENT.is_set():
+                self._log("Begin キャンセル（速度検知フリーズを検出）")
+                return False
+            if not st.round_freeze_held and not SharedState.ROUND_FREEZE_EVENT.is_set():
+                self._log("Begin キャンセル（ラウンド突入フリーズを検出）")
+                return False
         return True
 
     def _wait_other_windows(self) -> bool:
@@ -186,19 +219,28 @@ class ActionExecutor:
         （クリック・キー入力）の直前だけにすること。
         """
         st = self._st
-        if st.is_continue_round or st.waiting_for_equip:
+        if (st.is_continue_round or st.waiting_for_equip
+                or st.speed_freeze_held or st.round_freeze_held):
             return self._is_running()
         while self._is_running():
             eq_ok  = SharedState.EQUIP_WAIT_EVENT.is_set()
             con_ok = SharedState.CONTINUE_ROUND_EVENT.is_set()
-            if eq_ok and con_ok:
+            spd_ok = SharedState.SPEED_FREEZE_EVENT.is_set()
+            rnd_ok = SharedState.ROUND_FREEZE_EVENT.is_set()
+            if eq_ok and con_ok and spd_ok and rnd_ok:
                 return True
             if not eq_ok:
                 self._log("他窓の装備待ち中 → フリーズ")
             if not con_ok:
                 self._log("他窓の続行/霧ラウンド中 → フリーズ")
+            if not spd_ok:
+                self._log("他窓の速度検知フリーズ中 → フリーズ")
+            if not rnd_ok:
+                self._log("他窓のラウンド突入フリーズ中 → フリーズ")
             SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
             SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
+            SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0)
+            SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0)
         return False
 
     def _handle_item_lost(self) -> bool:
@@ -234,10 +276,18 @@ class ActionExecutor:
             if not st.is_continue_round:
                 while self._is_running():
                     if (SharedState.EQUIP_WAIT_EVENT.is_set()
-                            and SharedState.CONTINUE_ROUND_EVENT.is_set()):
+                            and SharedState.CONTINUE_ROUND_EVENT.is_set()
+                            and (st.speed_freeze_held
+                                 or SharedState.SPEED_FREEZE_EVENT.is_set())
+                            and (st.round_freeze_held
+                                 or SharedState.ROUND_FREEZE_EVENT.is_set())):
                         break
                     SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
                     SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
+                    if not st.speed_freeze_held:
+                        SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0)
+                    if not st.round_freeze_held:
+                        SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0)
                 if not self._is_running():
                     return False
             SharedState.equip_freeze_start(st)
@@ -261,126 +311,6 @@ class ActionExecutor:
         self._log("Verified Round End が来ないためBeginを中止")
         return False
 
-    # ── Begin画像認識 ─────────────────────────
-
-    def _detect_begin(self):
-        """中心に最も近い候補を (dx, dy, info) で返す。無ければ None。"""
-        cands = self._detect_begin_all()
-        if not cands:
-            return None
-        c = cands[0]
-        return c["dx"], c["dy"], {"area": c["area"], "bbox": c["bbox"]}
-
-    def _detect_begin_all(self) -> list:
-        """画面のBEGIN候補を中心に近い順で返す。
-
-        キャプチャはPrintWindowなのでフォーカスを要さない（背景の窓でも撮れる）。
-        """
-        bits, w, h = ScreenCapture.capture_window(self._cfg.hwnd)
-        if not bits:
-            return []
-        return BeginDetect.detect_all(bits, w, h)
-
-    def _is_rejected(self, c) -> bool:
-        """撃っても効かなかった候補か"""
-        r = config.BEGIN_REJECT_RADIUS_PX
-        return any(abs(c["cx"] - rx) <= r and abs(c["cy"] - ry) <= r
-                   for rx, ry in self._st.begin_reject)
-
-    def _strafe_toward(self, target: dict):
-        """対象が中心へ来る向きに横移動し、移動後の同じ対象を返す。
-
-        px→秒の係数は固定値を置かず実測で求める。距離によって変わるので毎回更新する。
-        移動後は別の塊が中心に来ている可能性があるため、係数は「中心に最も近い候補」
-        ではなく「移動前の重心に最も近い候補」と比べて測る。
-        旋回（look）は使わない。失敗したまま次のラウンドに入ると向きのズレが残り、
-        次のラウンドのBegin前移動が明後日の方向へ行くため。
-        """
-        st = self._st
-        dx = target["dx"]
-        gain = st.begin_strafe_gain
-        sec = config.BEGIN_PROBE_SEC if gain <= 0 else abs(dx) / gain
-        sec = max(config.BEGIN_STRAFE_MIN_SEC, min(config.BEGIN_STRAFE_MAX_SEC, sec))
-        # dxが0付近でも必ず最低量は動く。動かないと同じ対象を撃ち続けて固まる
-        self.move("right" if dx > 0 else "left", sec)
-
-        after = self._detect_begin_all()
-        if not after:
-            return None
-        same = min(after, key=lambda c: abs(c["cx"] - target["cx"])
-                                        + abs(c["cy"] - target["cy"]))
-        moved = abs(dx - same["dx"])
-        if moved > 5:   # ノイズを除く
-            g = moved / sec
-            if config.BEGIN_GAIN_MIN <= g <= config.BEGIN_GAIN_MAX:
-                st.begin_strafe_gain = g
-        return same
-
-    def _guided_retry_click(self) -> bool:
-        """候補を1つ選び、少し寄せてから撃つ。
-
-        BEGINと壁のINTERMISSIONは画像では見分けられないので、効かなかった候補を
-        除外して次を試す総当たりで解く。中心到達は待たない（BEGIN台は大きく、
-        文字の重心がズレていてもクロスヘアは黒い天板に乗っているため）。
-
-        戻り値は「リトライを続けてよいか」。Falseなら do_after_round を抜ける。
-        """
-        st = self._st
-        # 前回撃った対象は効かなかった（ラウンドが始まっていない）→ 除外へ
-        if st.begin_last_target is not None:
-            st.begin_reject.append(st.begin_last_target)
-            self._log("前回の対象は効かなかった → 除外（残り候補を試す）")
-            st.begin_last_target = None
-
-        cands = self._detect_begin_all()
-        if not cands:
-            self._log("BEGIN を検出できず → 今回のクリックは見送り")
-            return True
-
-        live = [c for c in cands if not self._is_rejected(c)]
-        if not live:
-            self._log("候補を一巡した → 除外をリセット")
-            st.begin_reject = []
-            live = cands
-
-        target = live[0]
-        # 必ず動く（無移動だと同じ場所を撃ち続けて固まる）
-        self._strafe_toward(target)
-
-        # 移動後に取り直す。取れなければ移動前の値でそのまま撃つ
-        after = [c for c in self._detect_begin_all() if not self._is_rejected(c)]
-        shot = after[0] if after else target
-
-        if not self._is_running() or st.in_round or st.begin_done:
-            return False
-        if not self._wait_other_windows():
-            return False
-        with SharedState._GLOBAL_ACTION_LOCK:
-            if not self._is_running() or st.in_round or st.begin_done:
-                return False
-            if not self.focus():
-                # フォーカス失敗でBeginを諦めない。他窓の自爆直後などは
-                # SetForegroundWindow が一時的に拒否される
-                return True
-            self._log(f"Beginクリック（中心から {shot['dx']:+.0f}px, area={shot['area']}）")
-            WindowOperator.click()
-        st.begin_last_target = (shot["cx"], shot["cy"])
-        return True
-
-    def _retry_move(self, attempt: int):
-        """Beginリトライ時の位置合わせ。左右交互に振れ幅を広げていく。
-
-        1回目 左0.10 → 右0.08 → 左0.10 → 右0.12 → 左0.14 … と
-        BEGIN_RETRY_STEP_INC_SEC ずつ増やし、当たりを外側へ探しに行く。
-        """
-        if attempt <= 1:
-            self.move("left", config.BEGIN_RETRY_FIRST_LEFT_SEC)
-            return
-        direction = "right" if attempt % 2 == 0 else "left"
-        sec = round(config.BEGIN_RETRY_STEP_START_SEC
-                    + config.BEGIN_RETRY_STEP_INC_SEC * (attempt - 2), 3)
-        self.move(direction, sec)
-
     def _begin_move(self):
         """Begin前の定位置移動。ラウンド種別で距離が変わる。"""
         st = self._st
@@ -395,12 +325,11 @@ class ActionExecutor:
 
     def do_after_round(self):
         """
-        ラウンド終了後: 待機 → [Begin前移動] → Beginクリック＆リトライ
+        ラウンド終了後: 待機 → [Begin前移動] → Beginクリック
 
         ロック戦略:
-          - 移動・クリック: ロックを取って実行（他窓と干渉しない）
-          - クリック後の「ラウンド開始待ち」: ロックを解放して待機
-            → 待機中に他窓が操作できる
+          - OSC窓: 移動はロック外（フォーカスを奪わない）、クリックだけロック内
+          - 非OSC窓: 移動もキー入力なので全体をロック内で行う
         """
         st = self._st
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
@@ -480,9 +409,9 @@ class ActionExecutor:
                         self._log("Beginクリック")
                         WindowOperator.click()
 
-        # ── フェーズ2a: アイテムロスト装備待ち（ロック外）──
-        # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合はスキップし、
-        # フェーズ2のBegin確認・リトライへ進む（解除はBEGIN_DONEイベント側で行う）
+        # ── フェーズ2: アイテムロスト装備待ち（ロック外）──
+        # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない
+        # （フリーズ解除はBEGIN_DONEイベント側で行う）
         if st.waiting_for_equip and not st.item_id:
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
@@ -494,67 +423,155 @@ class ActionExecutor:
             if st.in_round:
                 return
 
-        # ── フェーズ2: Begin確認待ち＆リトライ（ロック外）──
-        if st.begin_done:
-            return
-        for attempt in range(1, config.BEGIN_RETRY_MAX + 1):
-            self._log(f"Begin確認待ち… [{attempt - 1}/{config.BEGIN_RETRY_MAX}]")
-            waited = 0.0
-            while waited < config.BEGIN_RETRY_WAIT_SEC:
-                time.sleep(0.2)
-                waited += 0.2
-                if not self._is_running():
-                    return
-                if st.begin_done:
-                    return
-                # OSC窓は移動を止めないため、ここでは待たずクリック直前で待つ
-                if not self.uses_osc and not st.is_continue_round and not st.waiting_for_equip:
-                    if not SharedState.EQUIP_WAIT_EVENT.is_set():
-                        self._log("Begin待機中に他窓がアイテムロスト → 一時フリーズ")
-                        while self._is_running() and not SharedState.EQUIP_WAIT_EVENT.is_set():
-                            SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
-                    if not SharedState.CONTINUE_ROUND_EVENT.is_set():
-                        self._log("Begin待機中に他窓が続行ラウンド開始 → 一時フリーズ")
-                        while self._is_running() and not SharedState.CONTINUE_ROUND_EVENT.is_set():
-                            SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
-            if not self._is_running():
-                return
-            if attempt < config.BEGIN_RETRY_MAX:
-                self._log(f"Verified未確認 → リトライ {attempt}/{config.BEGIN_RETRY_MAX}")
-                if self.uses_osc and config.BEGIN_DETECT_ENABLED:
-                    # 画面のBEGINを見て寄せてから撃つ。見えなければ撃たない。
-                    if not self._guided_retry_click():
-                        return
-                elif self.uses_osc:
-                    # 位置合わせはOSC（ロック不要・フリーズ中でも実行）、
-                    # クリックだけ他窓の解除を待ってロック内で行う
-                    self._retry_move(attempt)
-                    time.sleep(0.1)
-                    if st.in_round or st.begin_done:
-                        return
-                    if not self._wait_other_windows():
-                        return
-                    if st.in_round or st.begin_done:
-                        return
-                    with SharedState._GLOBAL_ACTION_LOCK:
-                        if not self._is_running() or st.in_round or st.begin_done:
-                            return
-                        if not self.focus():
-                            return
-                        WindowOperator.click()
-                else:
-                    with SharedState._GLOBAL_ACTION_LOCK:
-                        if not self._is_running() or st.in_round or st.begin_done:
-                            return
-                        if not self.focus():
-                            return
-                        self._retry_move(attempt)
-                        time.sleep(0.1)
-                        if st.in_round or st.begin_done:
-                            return
-                        WindowOperator.click()
+    # ── 速度によるラウンド種別の検知 ────────────
+    #  判定（do_speed_detect）と横移動（do_speed_strafe）は独立している。
+    #  判定は受信するだけなのでどのインスタンスでも動く。
+    #  横移動はマクロなのでprivate系インスタンスでのみ動かす。
 
-        self._log(f"Begin {config.BEGIN_RETRY_MAX}回試行しましたがVerified未確認")
+    def _speed_voice(self, kind: str) -> str:
+        return {"8pages": self._cfg.voice_8pages,
+                "punish": self._cfg.voice_punish}.get(kind, "")
+
+    def start_velocity_receiver(self) -> bool:
+        """速度受信を始める（監視開始時に1回だけ）。
+
+        プローブのたびに bind/close すると開き直しの間の値を取りこぼす。
+        VRChatは送信専用なのでポートを持ち続けても競合しない。
+        """
+        if not self._cfg.osc_port:
+            self._speed_ready.set()   # 機能は使えないが待たせない
+            return False
+        if self._receiver is not None:
+            self._speed_ready.set()
+            return True
+        receiver = OSCReceiver.VelocityReceiver(self._cfg.osc_port + 1, self._log)
+        if not receiver.start():
+            self._log("速度受信を開始できないため種別検知を無効化します")
+            self._speed_ready.set()
+            return False
+        self._receiver = receiver
+        self._speed_ready.set()
+        return True
+
+    def stop_velocity_receiver(self):
+        """速度受信を止める（監視停止時）"""
+        receiver, self._receiver = self._receiver, None
+        self._speed_ready.clear()
+        if receiver is not None:
+            receiver.stop()
+
+    def do_speed_detect(self):
+        """Begin受理からラウンド開始までの移動速度でラウンド種別を判定する。
+
+        ToNはラウンド種別で移動速度を変える。8 Pagesは横移動だけ 6.5、
+        Punishedは前後左右すべてが 4.0 になる。水平速度の大きさを見るので、
+        横移動でも前後移動でも Punished は 4.0 として拾える。
+
+        こちらからは動かさない（受信のみ）。どのインスタンスでも動かしてよい。
+        """
+        st = self._st
+        if not SharedState.get_speed_detect():
+            return
+        receiver = self._receiver
+        if receiver is None:
+            return
+        round_seq = st.round_seq
+        deadline = time.time() + config.SPEED_PROBE_TIMEOUT_SEC
+        try:
+            while (self._is_running() and not st.in_round
+                   and st.round_seq == round_seq and time.time() <= deadline):
+                self._sample_speed(receiver)
+                time.sleep(0.05)
+        finally:
+            # 常時監視なので ever_received はセッションを通じて溜まる。
+            # 一度でも受信できていれば以後この警告は出ない。
+            if not receiver.ever_received and not self._speed_recv_warned:
+                self._speed_recv_warned = True
+                self._log("速度を受信できないため種別検知を無効化します"
+                          "（アバターに VelocityMagnitude がありません）")
+
+    def do_speed_strafe(self):
+        """Begin受理後に横移動する（判定用の動きを作るマクロ）。
+
+        右 → 左 の1往復だけ。繰り返さない。
+        OSCなのでフォーカスもロックも要らず、他窓を妨げない。
+        アイテムロスト後は動かさない（拾いに行く操作の邪魔をしないため）。
+        """
+        st = self._st
+        if not SharedState.get_speed_detect() or not self._cfg.osc_port:
+            return
+        if st.waiting_for_equip:
+            self._log("アイテムロスト後のため速度検知の横移動はしません")
+            return
+        # 受信のbindが済むまで待つ。待てなくても移動はする（受信が使えなくても
+        # 横移動そのものは他を壊さない）。
+        if not self._speed_ready.wait(timeout=config.SPEED_READY_TIMEOUT_SEC):
+            self._log("速度受信の準備を待てませんでした（移動は行います）")
+        round_seq = st.round_seq
+        for direction, sec in (("right", config.SPEED_PROBE_RIGHT_SEC),
+                               ("left", config.SPEED_PROBE_LEFT_SEC)):
+            if not self._is_running() or st.in_round or st.round_seq != round_seq:
+                return
+            self.move(direction, sec)
+
+    def _sample_speed(self, receiver):
+        """速度を1つ拾って判定する。
+
+        VelocityMagnitude は落下・ジャンプのY成分も含む3次元の大きさなので、
+        接地していないサンプルは水平速度と一致しない。捨てる。
+        """
+        speed = receiver.stable_value
+        if speed is None or receiver.stable_for < config.SPEED_STABLE_SEC:
+            return
+        if not receiver.grounded:
+            return
+        kind = classify_speed(speed)
+        if kind and kind != self._st.speed_round_kind:
+            self._st.speed_round_kind = kind
+            self._announce_speed_kind(kind, speed)
+
+    def _announce_speed_kind(self, kind: str, speed: float):
+        """判定した種別を知らせる。平常時は鳴らさない（毎ラウンドは邪魔）。"""
+        label = {"normal": "平常", "8pages": "8 Pages", "punish": "Punished"}.get(kind, kind)
+        self._log(f"⏩ 速度{speed:.2f} → {label}")
+        self._freeze_for_speed_kind(kind)
+        if kind == "normal" or self._hands_free():
+            return
+        PlaySound.play_sound(self._speed_voice(kind))
+
+    def _freeze_for_speed_kind(self, kind: str):
+        """設定がONの種別なら全窓を止め、アイテムを取りに行く時間を作る。
+
+        解除条件は種別で違う（8 Pages=アイテム取得 / Punished=ラウンド開始）ので、
+        どちらで張ったかを覚えておく。平常では止めない。
+        """
+        st = self._st
+        if kind == "8pages" and self._cfg.freeze_on_8pages:
+            message = "⏸ 8 Pages 検知 → 全窓フリーズ（アイテム取得で解除）"
+        elif kind == "punish" and self._cfg.freeze_on_punish:
+            message = "⏸ Punished 検知 → 全窓フリーズ（ラウンド開始で解除）"
+        else:
+            return
+        st.speed_freeze_kind = kind
+        # 前面化するのは最初に張った窓だけ。後から張った窓が奪うと、
+        # プレイヤーが操作している最中の窓を横取りしてしまう。
+        first = SharedState.get_speed_freeze_count() == 0
+        SharedState.speed_freeze_start(st)
+        self._log(message)
+        if first:
+            self._focus_for_speed_freeze()
+
+    def _focus_for_speed_freeze(self):
+        """どの窓を操作すればよいか分かるように前面化する。
+
+        付随機能なので、フォーカスを取れなくてもフリーズは維持する。
+        既存の作法どおりロックを取ってから切り替える（数秒待たされてもよい）。
+        """
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if WindowOperator.focus_window(self._cfg.hwnd):
+                self._log("この窓を前面化しました（速度検知フリーズ）")
+            else:
+                self._log("⚠ 前面化に失敗（フリーズは継続）")
 
     # ── AFK防止ループ ─────────────────────────
 

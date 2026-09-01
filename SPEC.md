@@ -122,6 +122,8 @@ LogMonitor._process(event): WindowState を更新し、種別ごとに分岐
 | `ActionExecutor.do_after_round` | ROUND_OVER（`LogMonitor.py:529`） | ラウンド**間** | **畳んでよい** |
 | `LogMonitor._release_equip_wait_after_delay` | BEGIN_DONE（`LogMonitor.py:415`） | **後始末** | **畳んではいけない** |
 | `LogMonitor._release_continue_freeze_after_delay` | 死亡（`LogMonitor.py:493`） | **後始末** | **畳んではいけない** |
+| `ActionExecutor.do_speed_detect` | BEGIN_DONE（Verified、`round_end_seen` 後・1ラウンド1回）| ラウンド**間**（速度で種別を判定） | **畳んでよい**。`in_round`/`round_seq` で自己停止 |
+| `ActionExecutor.do_speed_strafe` | BEGIN_DONE（Verified、private系のみ・1ラウンド1回）| ラウンド**間**（判定用の横移動） | **畳んでよい**。`in_round`/`round_seq` で自己停止 |
 
 #### 後始末タスクを畳んではいけない理由
 

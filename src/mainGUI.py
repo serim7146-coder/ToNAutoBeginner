@@ -133,6 +133,8 @@ class WindowTab(ttk.Frame):
         self.v_cancel_afk  = tk.BooleanVar(value=True)
         self.v_hoshiimo    = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
+        self.v_freeze_8pages = tk.BooleanVar(value=False)
+        self.v_freeze_punish = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="この窓を有効化",            variable=self.v_active).pack(side="left")
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
@@ -141,6 +143,18 @@ class WindowTab(ttk.Frame):
         cf2.pack(fill="x", padx=10, pady=(4, 0))
         ttk.Checkbutton(cf2, text="干し芋自動自爆",           variable=self.v_hoshiimo).pack(side="left")
         ttk.Checkbutton(cf2, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf2, text="8 Pages検知でフリーズ",      variable=self.v_freeze_8pages).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf2, text="Punished検知でフリーズ",     variable=self.v_freeze_punish).pack(side="left", padx=(12, 0))
+
+        # ラウンド突入で全窓フリーズ（張った窓自身は自爆できる）
+        cf3 = ttk.Frame(p)
+        cf3.pack(fill="x", padx=10, pady=(4, 0))
+        ttk.Label(cf3, text="突入で全窓停止:").pack(side="left")
+        self.v_freeze_rounds = {}
+        for name in config.ROUND_FREEZE_SELECTABLE:
+            var = tk.BooleanVar(value=False)
+            self.v_freeze_rounds[name] = var
+            ttk.Checkbutton(cf3, text=name, variable=var).pack(side="left", padx=(8, 0))
 
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
@@ -195,6 +209,10 @@ class WindowTab(ttk.Frame):
             cancel_afk=self.v_cancel_afk.get(),
             hoshiimo_skip=self.v_hoshiimo.get(),
             announce_intermission=self.v_announce_intermission.get(),
+            freeze_on_8pages=self.v_freeze_8pages.get(),
+            freeze_on_punish=self.v_freeze_punish.get(),
+            freeze_rounds={name for name, var in self.v_freeze_rounds.items()
+                           if var.get()},
         ), None
 
 
@@ -422,7 +440,8 @@ class App(tk.Tk):
         wf = ttk.Frame(f2)
         wf.pack(fill="x")
         ttk.Label(wf, text="窓数:").pack(side="left")
-        sb = ttk.Spinbox(wf, from_=1, to=8, textvariable=self.v_win_count, width=4,
+        sb = ttk.Spinbox(wf, from_=1, to=config.MAX_WINDOWS,
+                         textvariable=self.v_win_count, width=4,
                          command=self._on_win_count_change)
         sb.pack(side="left", padx=(4, 16))
         sb.bind("<FocusOut>", lambda e: self._on_win_count_change())
@@ -437,7 +456,8 @@ class App(tk.Tk):
         self.btn_launch.pack(side="left")
         ttk.Label(lf1, text="起動する窓数:").pack(side="left", padx=(12, 0))
         self.v_launch_count = tk.IntVar(value=0)
-        ttk.Spinbox(lf1, from_=0, to=8, textvariable=self.v_launch_count,
+        ttk.Spinbox(lf1, from_=0, to=config.MAX_WINDOWS,
+                    textvariable=self.v_launch_count,
                     width=4).pack(side="left", padx=(4, 0))
         ttk.Label(lf1, text="※ 既定は「窓数 − 起動済みの窓数」",
                   foreground=config.GUI_YLW).pack(side="left", padx=(4, 0))
@@ -516,11 +536,15 @@ class App(tk.Tk):
         self.v_voice_item_lost    = tk.StringVar(value=config.VOICE_ITEM_LOST)
         self.v_voice_intermission = tk.StringVar(value=config.VOICE_INTERMISSION)
         self.v_voice_foxy         = tk.StringVar(value=config.VOICE_FOXY)
+        self.v_voice_8pages       = tk.StringVar(value=config.VOICE_8PAGES)
+        self.v_voice_punish       = tk.StringVar(value=config.VOICE_PUNISH)
         voice_row(fv, "続行ラウンド:", self.v_voice_continue)
         voice_row(fv, "霧ラウンド:", self.v_voice_fog)
         voice_row(fv, "アイテムロスト:", self.v_voice_item_lost)
         voice_row(fv, "Intermission:", self.v_voice_intermission)
         voice_row(fv, "Foxy:", self.v_voice_foxy)
+        voice_row(fv, "8 Pages(速度先読み):", self.v_voice_8pages)
+        voice_row(fv, "Punish(速度先読み):", self.v_voice_punish)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -577,6 +601,19 @@ class App(tk.Tk):
         ttk.Label(fif, text="← ONにするとアイテムロストラウンド開始時にフォーカス＆フリーズ",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
+        # 速度によるラウンド種別の検知（全窓共通）
+        fsd = ttk.Frame(self)
+        fsd.pack(pady=(0, 4))
+        self.btn_speed_detect = tk.Button(
+            fsd, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
+            font=("Segoe UI", 11, "bold"), relief="raised", padx=12, pady=5,
+            command=self._toggle_speed_detect)
+        self.btn_speed_detect.pack(side="left")
+        ttk.Label(fsd, text="← Begin受理後の移動速度で 8 Pages / Punished を判定"
+                            "（判定は全インスタンス・横移動はプライベートのみ）",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        self._refresh_speed_detect_button()
+
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
         fl.pack(fill="both", expand=True, padx=12, pady=(0, 10))
@@ -609,7 +646,7 @@ class App(tk.Tk):
         if self._running:
             return
         try:
-            n = max(1, min(8, int(self.v_win_count.get())))
+            n = max(1, min(config.MAX_WINDOWS, int(self.v_win_count.get())))
         except (ValueError, tk.TclError):
             n = 1
         self.v_win_count.set(n)
@@ -629,7 +666,7 @@ class App(tk.Tk):
             win_count = int(self.v_win_count.get())
         except (ValueError, tk.TclError):
             return
-        opened = len(VRChatDiscovery.get_vrchat_windows_by_start_time(8))
+        opened = len(VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS))
         self.v_launch_count.set(launch_window_count(win_count, opened))
 
     def _launch_count_value(self, max_count: int) -> int:
@@ -655,6 +692,21 @@ class App(tk.Tk):
                 text="🎯 アイテム取得→Begin: OFF（全窓共通）",
                 bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
+
+    def _refresh_speed_detect_button(self):
+        on = SharedState.get_speed_detect()
+        self.btn_speed_detect.config(
+            text=f"⏩ 速度でラウンド種別を検知: {'ON' if on else 'OFF'}（全窓共通）",
+            bg="#1a3a2a" if on else config.GUI_SUB,
+            fg="#a6e3a1" if on else config.GUI_FG,
+            relief="sunken" if on else "raised")
+
+    def _toggle_speed_detect(self):
+        val = not SharedState.get_speed_detect()
+        SharedState.set_speed_detect(val)
+        self._refresh_speed_detect_button()
+        self._log("[速度検知] ON: Begin受理後にラウンド種別を判定します"
+                  if val else "[速度検知] OFF")
 
     def _toggle_hands_free(self):
         # ONにはいつでもできるが、効くのはprivate系インスタンスに居る窓だけ。
@@ -714,6 +766,9 @@ class App(tk.Tk):
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
+        self._saved_freeze_8pages = data.get("freeze_8pages", [])
+        self._saved_freeze_punish = data.get("freeze_punish", [])
+        self._saved_freeze_rounds = data.get("freeze_rounds", [])
         self._apply_saved_profiles()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -722,17 +777,30 @@ class App(tk.Tk):
         self._load_tnl(show_error=False)
 
     def _apply_saved_profiles(self):
-        """保存済みの窓ごとprofile IDを反映する"""
+        """保存済みの窓ごと設定（profile ID・フリーズ設定）を反映する"""
         for tab, pid in zip(self.tabs, getattr(self, "_saved_profiles", [])):
             try:
                 tab.v_profile.set(int(pid))
             except (ValueError, tk.TclError):
                 pass
+        for name, saved in (("v_freeze_8pages", "_saved_freeze_8pages"),
+                            ("v_freeze_punish", "_saved_freeze_punish")):
+            for tab, val in zip(self.tabs, getattr(self, saved, [])):
+                try:
+                    getattr(tab, name).set(bool(val))
+                except (ValueError, tk.TclError):
+                    pass
+        for tab, names in zip(self.tabs, getattr(self, "_saved_freeze_rounds", [])):
+            for name, var in tab.v_freeze_rounds.items():
+                try:
+                    var.set(name in (names or []))
+                except (ValueError, tk.TclError):
+                    pass
 
     def _auto_detect_windows(self):
         """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
         起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
-        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(8)
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         if not windows:
             self._log("[起動時検出] VRChatウィンドウ未検出（窓数は手動で設定してください）")
             return
@@ -791,8 +859,9 @@ class App(tk.Tk):
 
     def _start(self):
         if not self.keepOn_set:
-            messagebox.showwarning("警告", "先にtnlを読み込んでください")
-            return
+            # tnl無しでも開始できる。続行リストが空＝tnlからの続行は0件として動く
+            # （霧ラウンドや3クラ解放など、tnl以外を根拠にした続行はそのまま効く）
+            self._log("[起動] tnl未読み込み → tnlからの続行は0件として動作します")
 
         # 有効な窓のログが空なら自動割り当て
         active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
@@ -832,6 +901,8 @@ class App(tk.Tk):
             cfg.voice_item_lost    = self.v_voice_item_lost.get().strip()
             cfg.voice_intermission = self.v_voice_intermission.get().strip()
             cfg.voice_foxy          = self.v_voice_foxy.get().strip()
+            cfg.voice_8pages        = self.v_voice_8pages.get().strip()
+            cfg.voice_punish        = self.v_voice_punish.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
             mon = LogMonitor.LogMonitor(cfg, self.keepOn_set, self._log, window_idx=tab.idx + 1)
             self.monitors.append(mon)
@@ -852,6 +923,8 @@ class App(tk.Tk):
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
         SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
+        SharedState.speed_freeze_reset()         # 速度検知フリーズも解除
+        SharedState.round_freeze_reset()         # ラウンド突入フリーズも解除
         for m in self.monitors:
             m.stop()
         self.monitors.clear()
@@ -1017,7 +1090,7 @@ class App(tk.Tk):
             return
 
         desktop = self.v_desktop_mode.get()
-        baseline = {h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(8)}
+        baseline = {h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)}
         count = self._launch_count_value(len(tabs))
         if count <= 0:
             messagebox.showinfo(
@@ -1040,6 +1113,8 @@ class App(tk.Tk):
 
         def worker():
             try:
+                # まとめて投げると取りこぼす窓が出るので、1窓ずつ出現を待ってから次へ。
+                # 待ち切れなくても次に進む（残りの窓まで巻き添えにしない）。
                 for i, (window_no, profile_id, osc_index) in enumerate(launch_plan):
                     # 同じprivateインスタンスにはオーナー以外入れないため窓ごとに分ける
                     link = (VRChatLauncher.with_unique_instance(base_link, osc_index)
@@ -1048,6 +1123,11 @@ class App(tk.Tk):
                         exe, profile_id, desktop, link,
                         osc_index=osc_index if use_osc else None)
                     self._log("[起動] 窓%d: %s" % (window_no, " ".join(args[1:])))
+                    appeared = VRChatLauncher.wait_for_windows(
+                        baseline, i + 1, config.LAUNCH_EACH_WINDOW_TIMEOUT)
+                    if len(appeared) < i + 1:
+                        self._log("[起動] 窓%dのウィンドウが現れませんでした（先へ進みます）"
+                                  % window_no)
                     if i < len(launch_plan) - 1:
                         time.sleep(config.LAUNCH_STAGGER_SEC)
                 self._log("[起動] %d窓を起動。ウィンドウ出現を待っています…" % len(launch_plan))
@@ -1077,7 +1157,7 @@ class App(tk.Tk):
     def _wait_logs_then_assign(self, expected: int, waited: float):
         """ログファイルが起動時刻で紐づけられるようになり次第、割り当てる。
         固定待ちだとウィンドウ出現から無駄に待つため、準備でき次第すぐ進める。"""
-        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(8)
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         candidates = VRChatDiscovery.find_latest_logs(
             config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
         ready = VRChatDiscovery.count_time_matched_logs(
@@ -1085,15 +1165,40 @@ class App(tk.Tk):
         if ready >= expected:
             self._log("[起動] ログ生成を確認（%.1f秒）" % waited)
             self._assign_logs()
+            self._report_join_status()
             self._run_ton_entry()
             return
         if waited >= config.LAUNCH_LOG_TIMEOUT:
             self._log("[起動] ログ生成待ちがタイムアウト（%d/%d）" % (ready, expected))
             self._assign_logs()
+            self._report_join_status()
             self._run_ton_entry()
             return
         self.after(int(config.LAUNCH_LOG_POLL_SEC * 1000),
                    lambda: self._wait_logs_then_assign(expected, waited + config.LAUNCH_LOG_POLL_SEC))
+
+    def _report_join_status(self):
+        """どの窓がToNに入れたかをログに出す。
+
+        まとめて起動すると参加リンクを取りこぼす窓が出るため、
+        入れていない窓を名指しで分かるようにする。
+        """
+        missing = []
+        for tab in self.tabs:
+            if not tab.v_active.get():
+                continue
+            p = tab.v_log.get().strip()
+            if not p:
+                continue
+            if VRChatLauncher.joined_ton(p):
+                self._log(f"[起動] 窓{tab.idx + 1} ToN入室を確認")
+            else:
+                missing.append(tab.idx + 1)
+        if missing:
+            self._log("[起動] ⚠ ToNに入れていない窓: "
+                      + " / ".join(f"窓{n}" for n in missing)
+                      + " → 手動でJoinするか、その窓だけ起動し直してください")
+        return missing
 
     def _cancel_ton_entry(self):
         """入室時自動操作を中断する"""
@@ -1166,6 +1271,11 @@ class App(tk.Tk):
             "join_world":    self.v_join_world.get(),
             "instance_link": self.v_instance_link.get().strip(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
+            "freeze_8pages": [tab.v_freeze_8pages.get() for tab in self.tabs],
+            "freeze_punish": [tab.v_freeze_punish.get() for tab in self.tabs],
+            "freeze_rounds": [sorted(name for name, var in tab.v_freeze_rounds.items()
+                                     if var.get())
+                              for tab in self.tabs],
         })
 
     def _open_statistics(self):

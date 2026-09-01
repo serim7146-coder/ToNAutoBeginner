@@ -76,7 +76,7 @@ def get_process_start_time(hwnd: int) -> Optional[float]:
             pass
 
 
-def get_vrchat_windows_by_start_time(max_count: int = 8) -> list[tuple[int, Optional[float]]]:
+def get_vrchat_windows_by_start_time(max_count: int = config.MAX_WINDOWS) -> list[tuple[int, Optional[float]]]:
     """VRChatウィンドウを (HWND, 起動時刻) の形で起動が古い順に返す。
     起動時刻を取得できなかった窓はNoneを付けて末尾に置く（従来のZオーダー逆順）。"""
     zorder: list[int] = []
