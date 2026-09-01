@@ -19,6 +19,12 @@ class WindowConfig:
     voice_fog: str = ""
     voice_item_lost: str = ""
     voice_foxy: str = ""
+    voice_8pages: str = ""
+    voice_punish: str = ""
+    freeze_on_8pages: bool = False   # 8 Pages を検知したら全窓を止める
+    freeze_on_punish: bool = False   # Punished を検知したら全窓を止める
+    # 突入したら全窓を止めるラウンド種別（config.ROUND_FREEZE_SELECTABLE から選ぶ）
+    freeze_rounds: set = field(default_factory=set)
 
 
 @dataclass
@@ -43,11 +49,11 @@ class WindowState:
     is_continue_round: bool = False
     _skip_time: float = 0.0
     begin_done: bool = False
-    begin_strafe_gain: float = 0.0  # Begin横移動の実測係数（px/秒）。距離で変わるので毎回更新
-    # 撃っても効かなかった候補の画面上の重心 [(cx, cy), ...]
-    begin_reject: list = field(default_factory=list)
-    # 直前のリトライでクリックした候補の重心。次の呼び出しで除外に回す
-    begin_last_target: tuple | None = None
+    speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）
+    speed_probe_done: bool = False  # このラウンドで速度検知を起動したか
+    speed_freeze_held: bool = False  # この窓が速度検知フリーズを張っているか
+    round_freeze_held: bool = False  # この窓がラウンド突入フリーズを張っているか
+    speed_freeze_kind: str = ""      # "8pages" / "punish"。解除条件を覚えるため
     is_open_special_round_round: bool = False
     open_special_round_wins: int = 0
     item_id: int = 1

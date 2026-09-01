@@ -151,6 +151,29 @@ def with_unique_instance(link: str, index: int) -> str:
         lambda m: m.group(1) + str(new_instance_number(index)), link, count=1)
 
 
+def joined_world_id(log_path) -> Optional[str]:
+    """ログ末尾の最新Joining行から、入ったワールドIDを返す。無ければNone。"""
+    try:
+        path = Path(log_path)
+        if not path.exists():
+            return None
+        import LogMonitor
+        import LogParser
+        for line in LogMonitor.LogMonitor._iter_log_lines_reversed(
+                path, config.LOG_START_SCAN_CHUNK_BYTES):
+            m = LogParser.RE_JOINING.search(line)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def joined_ton(log_path) -> bool:
+    """ToNのインスタンスに入れているか"""
+    return joined_world_id(log_path) == config.TON_WORLD_ID
+
+
 def latest_user_id(log_dir) -> Optional[str]:
     """直近のログから自分のユーザーIDを取り出す（インスタンス生成に使う）"""
     try:
@@ -244,7 +267,7 @@ def wait_for_windows(
     戻り値は新しく現れたHWND（起動が古い順）。"""
     if discover is None:
         import VRChatDiscovery
-        discover = lambda: [h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(8)]
+        discover = lambda: [h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)]
     deadline = time.time() + timeout_sec
     new_hwnds: list[int] = []
     while time.time() < deadline:

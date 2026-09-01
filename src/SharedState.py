@@ -54,6 +54,22 @@ def set_hands_free(val: bool):
         _HANDS_FREE = val
 
 # ═══════════════════════════════════════════════
+#  速度によるラウンド種別の検知
+#  判定（受信のみ）と横移動（マクロ）の両方をまとめて止められる
+# ═══════════════════════════════════════════════
+_SPEED_DETECT = config.SPEED_DETECT_ENABLED
+_SPEED_DETECT_LOCK = threading.Lock()
+
+def get_speed_detect() -> bool:
+    with _SPEED_DETECT_LOCK:
+        return _SPEED_DETECT
+
+def set_speed_detect(val: bool):
+    global _SPEED_DETECT
+    with _SPEED_DETECT_LOCK:
+        _SPEED_DETECT = val
+
+# ═══════════════════════════════════════════════
 #  アイテム取得→Beginモード
 # ═══════════════════════════════════════════════
 _ITEM_BEGIN_MODE = False
@@ -112,6 +128,92 @@ def equip_freeze_reset():
 def get_equip_freeze_count() -> int:
     with _EQUIP_FREEZE_LOCK:
         return _EQUIP_FREEZE_COUNT
+
+# ═══════════════════════════════════════════════
+#  速度検知フリーズ（8 Pages / Punished）
+#  set() = 通常動作可能、clear() = フリーズ中（他窓のアクションをブロック）
+#  適切なアイテム（スキャナー/ナッツ）を取りに行く時間を作るために止める。
+#  窓ごとの多重登録・多重解除は WindowState.speed_freeze_held で防ぐ。
+# ═══════════════════════════════════════════════
+SPEED_FREEZE_EVENT = threading.Event()
+SPEED_FREEZE_EVENT.set()  # 初期値は通常動作可能
+_SPEED_FREEZE_COUNT = 0
+_SPEED_FREEZE_LOCK = threading.Lock()
+
+def speed_freeze_start(st):
+    """窓stを速度検知フリーズの保持者として登録（登録済みなら何もしない）"""
+    global _SPEED_FREEZE_COUNT
+    with _SPEED_FREEZE_LOCK:
+        if st.speed_freeze_held:
+            return
+        st.speed_freeze_held = True
+        _SPEED_FREEZE_COUNT += 1
+        SPEED_FREEZE_EVENT.clear()
+
+def speed_freeze_end(st):
+    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
+    global _SPEED_FREEZE_COUNT
+    with _SPEED_FREEZE_LOCK:
+        if not st.speed_freeze_held:
+            return
+        st.speed_freeze_held = False
+        _SPEED_FREEZE_COUNT = max(0, _SPEED_FREEZE_COUNT - 1)
+        if _SPEED_FREEZE_COUNT == 0:
+            SPEED_FREEZE_EVENT.set()
+
+def speed_freeze_reset():
+    """停止時など強制リセット"""
+    global _SPEED_FREEZE_COUNT
+    with _SPEED_FREEZE_LOCK:
+        _SPEED_FREEZE_COUNT = 0
+        SPEED_FREEZE_EVENT.set()
+
+def get_speed_freeze_count() -> int:
+    with _SPEED_FREEZE_LOCK:
+        return _SPEED_FREEZE_COUNT
+
+# ═══════════════════════════════════════════════
+#  ラウンド突入フリーズ（Alternate/Unbound/Ghost 等）
+#  set() = 通常動作可能、clear() = フリーズ中（他窓のアクションをブロック）
+#  続行ラウンドと違い、張った窓自身の自爆は止めない。止めるのは他窓だけ。
+#  窓ごとの多重登録・多重解除は WindowState.round_freeze_held で防ぐ。
+# ═══════════════════════════════════════════════
+ROUND_FREEZE_EVENT = threading.Event()
+ROUND_FREEZE_EVENT.set()  # 初期値は通常動作可能
+_ROUND_FREEZE_COUNT = 0
+_ROUND_FREEZE_LOCK = threading.Lock()
+
+def round_freeze_start(st):
+    """窓stをラウンド突入フリーズの保持者として登録（登録済みなら何もしない）"""
+    global _ROUND_FREEZE_COUNT
+    with _ROUND_FREEZE_LOCK:
+        if st.round_freeze_held:
+            return
+        st.round_freeze_held = True
+        _ROUND_FREEZE_COUNT += 1
+        ROUND_FREEZE_EVENT.clear()
+
+def round_freeze_end(st):
+    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
+    global _ROUND_FREEZE_COUNT
+    with _ROUND_FREEZE_LOCK:
+        if not st.round_freeze_held:
+            return
+        st.round_freeze_held = False
+        _ROUND_FREEZE_COUNT = max(0, _ROUND_FREEZE_COUNT - 1)
+        if _ROUND_FREEZE_COUNT == 0:
+            ROUND_FREEZE_EVENT.set()
+
+def round_freeze_reset():
+    """停止時など強制リセット"""
+    global _ROUND_FREEZE_COUNT
+    with _ROUND_FREEZE_LOCK:
+        _ROUND_FREEZE_COUNT = 0
+        ROUND_FREEZE_EVENT.set()
+
+def get_round_freeze_count() -> int:
+    with _ROUND_FREEZE_LOCK:
+        return _ROUND_FREEZE_COUNT
 
 # ═══════════════════════════════════════════════
 #  続行・霧ラウンド中フリーズイベント

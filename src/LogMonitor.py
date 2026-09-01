@@ -53,13 +53,14 @@ class LogMonitor:
     def start(self):
         self._running = True
         self._stop_event.clear()
-        # 過去ログからインスタンスタイプを検出（ワールド入室後の起動に対応）
-        self._detect_instance_from_log()
+        # 速度受信は監視中ずっと生かす（プローブごとに開き直すと取りこぼす）
+        self._action.start_velocity_receiver()
         self._thread = self._start_daemon(self._run)
 
     def stop(self):
         self._running = False
         self._stop_event.set()
+        self._action.stop_velocity_receiver()
 
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
@@ -134,6 +135,21 @@ class LogMonitor:
             return
         self._learn_periodic(st.pending_verified_time)
         st.pending_verified_time = 0.0
+
+    def _release_round_freeze_after_delay(self, round_seq: int):
+        """死亡から一定時間後にラウンド突入フリーズを解除する。
+
+        猶予は霧ラウンドと同じ。待機中に次のラウンドが始まっていたら何もしない
+        （ROUND_START 側で解除済み）。
+        """
+        time.sleep(config.FOG_FREEZE_RELEASE_DELAY_SEC)
+        st = self.st
+        if not self._running or st.round_seq != round_seq:
+            return
+        if st.round_freeze_held:
+            SharedState.round_freeze_end(st)
+            self._log(f"ラウンド突入フリーズ解除（死亡から"
+                      f"{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒）")
 
     def _release_equip_wait_after_delay(self):
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
@@ -231,6 +247,10 @@ class LogMonitor:
             self._log(f"ログが見つかりません: {cfg.log_path}")
             return
         self.st.log_pos = cfg.log_path.stat().st_size
+        # 過去ログからインスタンスタイプを検出（ワールド入室後の起動に対応）。
+        # log_pos を確定させた後に行う。先に検出すると、その間にVRChatが追記した行が
+        # 「起動前からあった行」として読み飛ばされる。
+        self._detect_instance_from_log()
         self._log("監視開始")
         try:
             with open(cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -462,14 +482,42 @@ class LogMonitor:
                 self._log("Verified を無視（定期シグナル）")
                 return
 
+            # Begin は Verified Round End の後にしか押せない。それより前の Verified は
+            # 定義上 Begin 受理ではありえない（RoundOver直後のラウンド結果検証のもの）。
+            if not st.round_end_seen:
+                self._log("Verified を無視（Verified Round End より前）")
+                return
+
             # 本物として採用。Everything recieved が続くかで事後確認する
             st.pending_verified_time = now
             st.begin_done = True
             self._log("✅ Connecting")
+            # 速度検知の起動はここではなく EVENT_STRING_DOWNLOAD 側で行う。
+            # Verified は自分がBeginを押したときしか出ないため、他人がインマスの
+            # マルチでは1ラウンドも発火しない。
             # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
             if st.waiting_for_equip and st.item_id:
                 st.waiting_for_equip = False
                 self._start_daemon(self._release_equip_wait_after_delay)
+            return
+
+        if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
+            # Beginが押されるとラウンドデータの取得が始まる。これは【誰が押しても】
+            # 出るため、他人がインマスのマルチでも先読みできる。
+            # 実測: Verified Round End 後の最初のDLは ROUND_START の 9〜16秒前。
+            # URLは複数種類あるので判定に使わない。round_end_seen と
+            # speed_probe_done の2ガードだけで区間内の最初の1件に絞れる。
+            if not st.round_end_seen:
+                return
+            if st.speed_probe_done:
+                return
+            if not SharedState.get_speed_detect():
+                return
+            st.speed_probe_done = True
+            self._log("ラウンドデータ取得を検知 → 速度でラウンド種別を判定します")
+            self._start_daemon(self._action.do_speed_detect)
+            if st.instance_type == config.INSTANCE_PRIVATE:
+                self._start_daemon(self._action.do_speed_strafe)
             return
 
         if event.kind == LogParser.EVENT_EVERYTHING_RECEIVED:
@@ -490,9 +538,20 @@ class LogMonitor:
             st.statistics_sent             = False
             st.fog                         = False
             st.begin_done                  = False
-            st.begin_strafe_gain           = 0.0
-            st.begin_reject                = []
-            st.begin_last_target           = None
+            st.speed_round_kind            = ""
+            st.speed_probe_done            = False
+            # 速度検知フリーズは種別に関わらずここで必ず解除する。
+            # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
+            # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
+            if st.speed_freeze_held:
+                st.speed_freeze_kind = ""
+                SharedState.speed_freeze_end(st)
+                self._log("ラウンド開始 → 速度検知フリーズ解除")
+            # ラウンド突入フリーズも、種別を判定する前に必ず解除する。
+            # 死亡せずに終わった場合（生存・切断など）の永久フリーズを防ぐ保険。
+            if st.round_freeze_held:
+                SharedState.round_freeze_end(st)
+                self._log("ラウンド開始 → ラウンド突入フリーズ解除")
             st.is_open_special_round_round = False
             st.item_id_at_round_start      = st.item_id
             st.item_lost_announced         = False
@@ -518,6 +577,13 @@ class LogMonitor:
                 self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
             elif self._round_start_loses_item():
                 self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
+
+            # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
+            # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
+            if st.round_type in self.cfg.freeze_rounds and not self._hands_free():
+                SharedState.round_freeze_start(st)
+                self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
+                          f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
 
             if st.round_type == "Run":
                 st.is_continue_round = False
@@ -555,6 +621,9 @@ class LogMonitor:
             # 猶予中に手動で視点調整などを挟めるようにするため。
             if st.is_continue_round:
                 self._start_daemon(self._release_continue_freeze_after_delay,
+                                   st.round_seq)
+            if st.round_freeze_held:
+                self._start_daemon(self._release_round_freeze_after_delay,
                                    st.round_seq)
             if st.round_type == "Run":
                 self._mark_item_lost("Run死亡: アイテムロスト")
@@ -670,6 +739,11 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
             self._track_randomizer_item_change(event)
             st.item_id = event.item_id
+            if st.speed_freeze_kind == "8pages":
+                # 8 Pages はスキャナーを取れたら再開してよい
+                st.speed_freeze_kind = ""
+                SharedState.speed_freeze_end(st)
+                self._log("✅ アイテム取得 → 速度検知フリーズ解除")
             if st.died_this_round and st.item_id:
                 st.item_equipped_after_death = True
             self._log(f"✅ アイテム装備 (id={st.item_id})")
