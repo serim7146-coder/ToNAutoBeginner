@@ -18,6 +18,13 @@ UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 # ── 設定ファイル（前回のtnlパスなどを保存） ──
 SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "settings.json"
 
+# ── ToN ListTool の主催リスト追従 ──
+# ToN ListTool が %APPDATA% に書いている統合リストを読んで続行判定に使う。
+# 参加者の続行希望が変わると数秒で追従する。
+HOST_SAVE_PATH = os.path.join(
+    os.environ.get("APPDATA", ""), "ToN ListTool", "host_save.json.gz")
+HOST_SAVE_POLL_SEC = 3.0
+
 EMERGENCY_STOP_KEY = "p"
 EMERGENCY_STOP_POLL_MS = 200
 
@@ -158,6 +165,9 @@ FOCUS_RETRY_WAIT_SEC = 0.12  # 前面化要求後に反映を待つ時間
 
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
+# 自爆キーをフォーカス無しで送る（Trueで背面送信、Falseで従来のフォーカス方式）
+# 背面送信が使えない状況では自動的にフォーカス方式へ落ちる
+SUICIDE_BACKGROUND = True
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
 SUICIDE_FOCUS_SETTLE_SEC = 0.25  # 自爆前にVRChatへフォーカスが移るのを待つ時間
 

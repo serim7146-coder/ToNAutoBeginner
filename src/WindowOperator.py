@@ -1,3 +1,5 @@
+import ctypes
+from ctypes import wintypes
 import time
 import win32gui
 import win32con
@@ -67,6 +69,104 @@ def focus_window(hwnd: int) -> bool:
         return win32gui.GetForegroundWindow() == hwnd
     except Exception:
         return False
+
+# 背面キー送信で使う定数。pywin32にラッパが無いので ctypes で user32 を直に叩く
+# （win32ui を落としたときと同じ方針。新しい依存は足さない）。
+# テストから差し替えられるようモジュール変数に持たせる。
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+# GetCurrentThreadId は kernel32 側のエクスポート。user32 には無い。
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+WM_ACTIVATE        = 0x0006
+WM_NCACTIVATE      = 0x0086
+WM_KEYDOWN         = 0x0100
+WM_KEYUP           = 0x0101
+WA_ACTIVE          = 1
+SMTO_ABORTIFHUNG   = 0x0002
+MAPVK_VK_TO_VSC_EX = 4
+ACTIVATE_TIMEOUT_MS = 200
+
+# VkKeyScanExW は SHORT を返す。既定の c_int のままだと上位バイト（シフト状態）に
+# ゴミが混じりうるので、戻り値の型だけ明示しておく。
+try:
+    user32.VkKeyScanExW.restype = ctypes.c_short
+except Exception:
+    pass
+
+
+def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
+    """フォーカスを奪わずにキーを押しっぱなしにする。送り切れたら True。
+
+    PostMessage だけでは足りない。Unityは GetKeyState / GetKeyboardState でも
+    キーを読むため、AttachThreadInput で入力状態を共有したうえで
+    SetKeyboardState で対象スレッドのキー状態にも押下を書き込む。
+
+    戻り値は「背面送信を最後まで実行できたか」。ゲーム側が反応したかは見ない
+    （それはログ側の既存の仕組みで判定する）。False のときは呼び出し側が
+    従来のフォーカス方式へ落とすこと。
+    """
+    if not hwnd or sec <= 0.0 or len(key) != 1:
+        return False
+    try:
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        if not target_tid:
+            return False
+        if user32.IsIconic(hwnd):
+            # 最小化中は送れない。ここで復元すると窓が出てきて背面化の意味が消える
+            return False
+
+        hkl = user32.GetKeyboardLayout(target_tid)
+        scan_state = user32.VkKeyScanExW(ctypes.c_wchar(key), hkl)
+        if scan_state in (-1, 0xFFFF):
+            return False
+        vk = scan_state & 0xFF
+        if (scan_state >> 8) & 0xFF:
+            return False    # Shift併用キーは対象外。黙って別のキーを送らない
+
+        scan = user32.MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, hkl)
+        if not scan:
+            return False
+        ext = 1 if (scan >> 8) & 0xFF in (0xE0, 0xE1) else 0
+        scan &= 0xFF
+        lparam_down = 1 | (scan << 16) | (ext << 24)
+        lparam_up = lparam_down | (1 << 30) | (1 << 31)
+    except Exception:
+        return False
+
+    self_tid = 0            # finally から参照するので先に置く
+    attached = False
+    try:
+        self_tid = kernel32.GetCurrentThreadId()
+        attached = bool(user32.AttachThreadInput(self_tid, target_tid, True))
+        result = wintypes.DWORD()
+        for msg, wparam in ((WM_NCACTIVATE, 1), (WM_ACTIVATE, WA_ACTIVE)):
+            user32.SendMessageTimeoutW(hwnd, msg, wparam, 0, SMTO_ABORTIFHUNG,
+                                       ACTIVATE_TIMEOUT_MS, ctypes.byref(result))
+        user32.SetFocus(hwnd)
+
+        state = (ctypes.c_ubyte * 256)()
+        saved = None
+        if user32.GetKeyboardState(ctypes.byref(state)):
+            saved = bytes(state)
+            state[vk] = 0x80
+            user32.SetKeyboardState(ctypes.byref(state))
+
+        user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam_down)
+        time.sleep(sec)
+        user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
+
+        if saved is not None:
+            restore = (ctypes.c_ubyte * 256)(*saved)
+            restore[vk] = 0
+            user32.SetKeyboardState(ctypes.byref(restore))
+        return True
+    except Exception:
+        return False
+    finally:
+        # アタッチしたまま抜けると、ユーザーの操作が対象窓へ流れ込む
+        if attached:
+            user32.AttachThreadInput(self_tid, target_tid, False)
+
 
 def hold_key(key: str, sec: float):
     if sec <= 0.0:
