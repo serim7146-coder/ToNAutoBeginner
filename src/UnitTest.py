@@ -5,6 +5,8 @@ import time
 import sys
 import json
 import tempfile
+import gzip
+import ctypes
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +19,7 @@ import WindowOperator
 import ConnectDB
 import PlaySound
 import LogParser
+import MatchTNL
 import RoundDecision
 import Statistics
 import StatisticsGUI
@@ -1116,6 +1119,524 @@ class TestAppTabLifecycle(unittest.TestCase):
 
         app._rebuild_tabs.assert_not_called()
         app._sync_launch_count.assert_called_once()
+
+
+class TestLoadHostSave(unittest.TestCase):
+    """ToN ListTool の主催リストを keepOn_set の形で読む"""
+
+    CLASSIC = "Classic/クラシック"
+    FOG = "Fog/霧"
+    FOG_ALT = "Fog (Alternate)/霧 (Alternate)"
+
+    def _member(self, data):
+        return {"vrc_name": "someone", "original_name": "someone",
+                "data": data, "memo": "", "created_at": "", "is_visible": False}
+
+    def _write(self, raw):
+        path = Path(self._dir.name) / "host_save.json.gz"
+        with gzip.open(str(path), "wb") as f:
+            f.write(json.dumps(raw).encode("utf-8"))
+        return str(path)
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def test_two_participants_are_ored(self):
+        path = self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"1": 1, "2": 0}}),
+                             self._member({self.CLASSIC: {"3": 1}})]}]})
+
+        keep_on, meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 3}})
+        self.assertEqual(meta["participants"], 2)
+
+    def test_waiting_is_not_included(self):
+        """待機列はその場にいない。続行判定に混ぜない"""
+        path = self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"1": 1}})],
+            "waiting": [self._member({self.CLASSIC: {"99": 1}})]}]})
+
+        keep_on, meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.CLASSIC: {1}})
+        self.assertEqual(meta["participants"], 1, "waiting は人数にも数えない")
+
+    def test_all_tabs_are_folded_regardless_of_active_tab(self):
+        path = self._write({"version": 5, "active_tab": 2, "tabs": [
+            {"participants": [self._member({self.CLASSIC: {"1": 1}})]},
+            {"participants": [self._member({self.CLASSIC: {"2": 1}})]},
+            {"participants": [self._member({self.FOG: {"7": 1}})]}]})
+
+        keep_on, meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 2}, self.FOG: {7}})
+        self.assertEqual((meta["participants"], meta["tabs"]), (3, 3))
+
+    def test_zero_slots_are_dropped(self):
+        path = self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"1": 0, "2": 0},
+                                           self.FOG: {"5": 2}})]}]})
+
+        keep_on, _meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.FOG: {5}}, "全部0のラウンドキーは残さない")
+
+    def test_alternate_fog_key_is_ignored(self):
+        """host_save 側にだけあるキー。既存は LOG_TO_TNL で通常Fogに寄せている"""
+        path = self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.FOG_ALT: {"1": 1},
+                                           self.CLASSIC: {"2": 1}})]}]})
+
+        keep_on, _meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.CLASSIC: {2}})
+        self.assertNotIn(1, keep_on.get(self.FOG, set()), "通常Fogへ畳まないこと")
+
+    def test_broken_gzip_raises(self):
+        """呼び出し側が握って前の値を保持する。ここでは握り潰さない"""
+        path = Path(self._dir.name) / "broken.json.gz"
+        path.write_bytes(b"not a gzip file at all")
+
+        with self.assertRaises(Exception):
+            MatchTNL.load_host_save(str(path))
+
+    def test_missing_tabs_gives_an_empty_set(self):
+        for raw in ({"version": 5},
+                    {"version": 5, "tabs": []},
+                    {"version": 5, "tabs": [{"participants": []}]}):
+            keep_on, meta = MatchTNL.load_host_save(self._write(raw))
+
+            self.assertEqual(keep_on, {}, raw)
+            self.assertEqual(meta["participants"], 0, raw)
+
+    def test_unknown_version_is_still_read(self):
+        """あちらのバージョンが上がっても、読める形なら読む"""
+        path = self._write({"version": 99, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"1": 1}})]}]})
+
+        keep_on, _meta = MatchTNL.load_host_save(path)
+
+        self.assertEqual(keep_on, {self.CLASSIC: {1}})
+
+
+class TestApplyKeepOn(unittest.TestCase):
+    """続行リストの差し替えは in-place（LogMonitor が同じ dict を掴んでいる）"""
+
+    def _app(self):
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = {"Classic/クラシック": {1}}
+        return app
+
+    def test_updates_in_place(self):
+        app = self._app()
+        before = app.keepOn_set
+
+        mainGUI.App._apply_keep_on(app, {"Fog/霧": {7}})
+
+        self.assertIs(app.keepOn_set, before, "同じ dict オブジェクトのままにすること")
+        self.assertEqual(app.keepOn_set, {"Fog/霧": {7}})
+
+    def test_running_monitor_sees_the_new_list(self):
+        app = self._app()
+        monitor = LogMonitor.LogMonitor(WindowConfig(), app.keepOn_set,
+                                        lambda _m: None, window_idx=1)
+
+        mainGUI.App._apply_keep_on(app, {"Fog/霧": {7}})
+
+        self.assertEqual(monitor.keepOn_set, {"Fog/霧": {7}},
+                         "走行中のモニタにも効くこと")
+
+
+class TestFollowHostSave(unittest.TestCase):
+    """主催リストへの追従（読めない・0人なら前のリストを保持）"""
+
+    CLASSIC = "Classic/クラシック"
+
+    class FakeVar:
+        def __init__(self, value):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+    def _app(self, follow=True):
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = {self.CLASSIC: {1}}
+        app.v_follow_host = TestFollowHostSave.FakeVar(follow)
+        app._host_save_stamp = None
+        app._host_save_warned = False
+        app.logs = []
+        app._log = app.logs.append
+        app.lbl_tnl = MagicMock()
+        # App のメソッドを unbound で呼ぶので、自分自身を呼び返す分だけ結び直す
+        app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
+        app._warn_host_save_once = lambda msg: mainGUI.App._warn_host_save_once(app, msg)
+        return app
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self._dir.name) / "host_save.json.gz")
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _write(self, raw):
+        with gzip.open(self.path, "wb") as f:
+            f.write(json.dumps(raw).encode("utf-8"))
+
+    def _member(self, data):
+        return {"vrc_name": "someone", "data": data}
+
+    def _refresh(self, app):
+        with patch.object(config, "HOST_SAVE_PATH", self.path):
+            mainGUI.App._refresh_host_save(app)
+
+    def test_participants_are_applied(self):
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5}})
+        self.assertTrue(any("続行対象" in m for m in app.logs), app.logs)
+
+    def test_zero_participants_keeps_the_previous_list(self):
+        """空を適用すると全ラウンドが自爆対象になる。実際に起きうる状態"""
+        self._write({"version": 5, "tabs": [{"participants": [],
+                                             "waiting": [self._member({})]}]})
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}}, "前のリストを残すこと")
+        self.assertTrue(any("参加者がいません" in m for m in app.logs), app.logs)
+
+    def test_zero_participants_warns_once(self):
+        self._write({"version": 5, "tabs": [{"participants": []}]})
+        app = self._app()
+
+        for _ in range(3):
+            self._refresh(app)
+
+        hits = [m for m in app.logs if "参加者がいません" in m]
+        self.assertEqual(len(hits), 1, app.logs)
+
+    def test_broken_file_keeps_the_previous_list_and_warns_once(self):
+        """別プロセスが書いている最中を掴みうる。3秒ごとに同じ行を出さない"""
+        Path(self.path).write_bytes(b"half written garbage")
+        app = self._app()
+
+        for _ in range(3):
+            self._refresh(app)
+
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
+        hits = [m for m in app.logs if "読み込み失敗" in m]
+        self.assertEqual(len(hits), 1, app.logs)
+
+    def test_recovery_after_a_failure_is_logged_again(self):
+        Path(self.path).write_bytes(b"half written garbage")
+        app = self._app()
+        self._refresh(app)
+
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        self._refresh(app)
+        Path(self.path).write_bytes(b"broken again")
+        self._refresh(app)
+
+        hits = [m for m in app.logs if "読み込み失敗" in m]
+        self.assertEqual(len(hits), 2, app.logs)
+
+    def test_unchanged_file_is_not_reread(self):
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        app = self._app()
+        self._refresh(app)
+
+        with patch.object(MatchTNL, "load_host_save") as mock_load:
+            self._refresh(app)
+
+        mock_load.assert_not_called()
+
+    def test_a_rewrite_of_the_same_size_is_picked_up(self):
+        """mtime だけだと同じ秒内の書き換えを取りこぼす"""
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        app = self._app()
+        self._refresh(app)
+        app._host_save_stamp = (app._host_save_stamp[0], -1)
+
+        with patch.object(MatchTNL, "load_host_save",
+                          return_value=({self.CLASSIC: {9}},
+                                        {"participants": 1, "tabs": 1})) as mock_load:
+            self._refresh(app)
+
+        mock_load.assert_called_once()
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {9}})
+
+    def test_missing_file_keeps_the_previous_list(self):
+        app = self._app()
+
+        for _ in range(3):
+            self._refresh(app)
+
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
+        hits = [m for m in app.logs if "読めません" in m]
+        self.assertEqual(len(hits), 1, app.logs)
+
+    def test_reloading_the_tnl_lets_the_host_list_win_again(self):
+        """追従ONのまま再読み込みしても、次のtickで主催リストが戻ること"""
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        app = self._app()
+        self._refresh(app)
+        tnl = Path(self._dir.name) / "list.tnl"
+        tnl.write_text(json.dumps({"list_name": "L", "creator": "", "created_at": "",
+                                   "data": {self.CLASSIC: {"1": 1}}}), encoding="utf-8")
+        app.v_tnl = TestFollowHostSave.FakeVar(str(tnl))
+        app.lbl_tnl = MagicMock()
+
+        with patch.object(mainGUI, "save_settings"),              patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._load_tnl(app, show_error=False)
+
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
+
+        self.assertIsNone(app._host_save_stamp, "覚えている更新時刻を捨てること")
+
+    def test_poll_does_nothing_while_off(self):
+        self._write({"version": 5, "tabs": [{
+            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+        app = self._app(follow=False)
+        app.after = MagicMock()
+        app._poll_host_save = lambda: None
+
+        with patch.object(mainGUI.App, "_refresh_host_save") as mock_refresh:
+            mainGUI.App._poll_host_save(app)
+
+        mock_refresh.assert_not_called()
+        app.after.assert_called_once()
+
+    def test_poll_reschedules_even_when_the_read_throws(self):
+        app = self._app()
+        app.after = MagicMock()
+        app._poll_host_save = lambda: None
+
+        with patch.object(mainGUI.App, "_refresh_host_save",
+                          side_effect=OSError("boom")):
+            mainGUI.App._poll_host_save(app)
+
+        app.after.assert_called_once()
+
+
+class TestHoldKeyBackground(unittest.TestCase):
+    """自爆キーをフォーカス無しで送る（送り切れたらTrue）"""
+
+    VK = 0xDE       # ^ (JIS)
+    SCAN = 0x0D
+
+    def _user32(self, **over):
+        """正常系の user32 モック。over で個別の戻り値を差し替える"""
+        u = MagicMock()
+        u.GetWindowThreadProcessId.return_value = 4321
+        u.IsIconic.return_value = 0
+        u.GetKeyboardLayout.return_value = 0x04110411
+        u.VkKeyScanExW.return_value = self.VK          # シフト状態 0
+        u.MapVirtualKeyExW.return_value = self.SCAN
+        u.AttachThreadInput.return_value = 1
+        u.GetKeyboardState.return_value = 1
+        for name, value in over.items():
+            getattr(u, name).return_value = value
+        return u
+
+    def _send(self, u, key="^", sec=0.0, hwnd=0x1234, kernel=None):
+        k = kernel or MagicMock()
+        if kernel is None:
+            k.GetCurrentThreadId.return_value = 99
+        with patch.object(WindowOperator, "user32", u), \
+             patch.object(WindowOperator, "kernel32", k), \
+             patch.object(WindowOperator.time, "sleep"):
+            return WindowOperator.hold_key_background(hwnd, key, sec or 3.0)
+
+    def test_unmappable_key_is_refused(self):
+        u = self._user32(VkKeyScanExW=-1)
+
+        self.assertFalse(self._send(u))
+        u.PostMessageW.assert_not_called()
+
+    def test_shifted_key_is_refused(self):
+        """Shift併用キーは対象外。黙って別のキーを送らない"""
+        u = self._user32(VkKeyScanExW=(1 << 8) | self.VK)
+
+        self.assertFalse(self._send(u))
+        u.PostMessageW.assert_not_called()
+
+    def test_unmappable_scan_code_is_refused(self):
+        u = self._user32(MapVirtualKeyExW=0)
+
+        self.assertFalse(self._send(u))
+        u.PostMessageW.assert_not_called()
+
+    def test_minimized_window_is_refused(self):
+        """最小化中は送れない。ここで復元すると背面化の意味が消える"""
+        u = self._user32(IsIconic=1)
+
+        self.assertFalse(self._send(u))
+        u.AttachThreadInput.assert_not_called()
+        u.PostMessageW.assert_not_called()
+
+    def test_unknown_thread_is_refused(self):
+        u = self._user32(GetWindowThreadProcessId=0)
+
+        self.assertFalse(self._send(u))
+        u.AttachThreadInput.assert_not_called()
+
+    def test_multi_char_key_is_refused(self):
+        """"f13" のような複数文字キーは VkKeyScanExW で解決できない"""
+        u = self._user32()
+
+        self.assertFalse(self._send(u, key="f13"))
+        u.PostMessageW.assert_not_called()
+
+    def test_happy_path_order(self):
+        u = self._user32()
+        order = []
+        u.AttachThreadInput.side_effect = lambda a, b, f: order.append(
+            "attach" if f else "detach") or 1
+        u.SetKeyboardState.side_effect = lambda *_a: order.append("state") or 1
+        u.PostMessageW.side_effect = lambda h, msg, *_a: order.append(
+            "down" if msg == WindowOperator.WM_KEYDOWN else "up") or 1
+
+        self.assertTrue(self._send(u))
+
+        self.assertEqual(order[0], "attach")
+        self.assertEqual(order[-1], "detach")
+        self.assertEqual([o for o in order if o in ("down", "up")], ["down", "up"])
+        self.assertIn("state", order[:3], "押下はキー状態にも書き込むこと")
+
+    def test_lparam_values(self):
+        u = self._user32()
+
+        self.assertTrue(self._send(u))
+
+        posts = [c.args for c in u.PostMessageW.call_args_list]
+        self.assertEqual(len(posts), 2)
+        (_h1, msg_down, vk_down, lp_down) = posts[0]
+        (_h2, msg_up, vk_up, lp_up) = posts[1]
+        self.assertEqual((msg_down, vk_down, lp_down),
+                         (WindowOperator.WM_KEYDOWN, self.VK, 0x000D0001))
+        self.assertEqual((msg_up, vk_up, lp_up),
+                         (WindowOperator.WM_KEYUP, self.VK, 0xC00D0001))
+
+    def test_detach_runs_even_on_error(self):
+        """アタッチしたまま抜けるとユーザーの操作が対象窓へ流れ込む"""
+        u = self._user32()
+        u.PostMessageW.side_effect = OSError("boom")
+
+        self.assertFalse(self._send(u))
+
+        detaches = [c.args for c in u.AttachThreadInput.call_args_list
+                    if not c.args[2]]
+        self.assertEqual(len(detaches), 1, u.AttachThreadInput.call_args_list)
+
+    def test_used_win32_apis_exist_on_real_dlls(self):
+        """user32/kernel32 の取り違えはモックでは出ない。実物で名前だけ確かめる"""
+        u = ctypes.WinDLL("user32")
+        k = ctypes.WinDLL("kernel32")
+
+        for name in ("GetWindowThreadProcessId", "IsIconic", "GetKeyboardLayout",
+                     "VkKeyScanExW", "MapVirtualKeyExW", "AttachThreadInput",
+                     "SendMessageTimeoutW", "SetFocus", "GetKeyboardState",
+                     "SetKeyboardState", "PostMessageW"):
+            self.assertTrue(hasattr(u, name), "user32." + name)
+        self.assertTrue(hasattr(k, "GetCurrentThreadId"), "kernel32.GetCurrentThreadId")
+
+    def test_thread_id_failure_does_not_escape(self):
+        """スレッドID取得で落ちても False を返す（例外を投げるとフォールバックが走らない）"""
+        u = self._user32()
+        k = MagicMock()
+        k.GetCurrentThreadId.side_effect = AttributeError("not found")
+
+        self.assertFalse(self._send(u, kernel=k))
+        u.PostMessageW.assert_not_called()
+        u.AttachThreadInput.assert_not_called()
+
+    def test_key_state_is_restored(self):
+        u = self._user32()
+
+        self.assertTrue(self._send(u))
+
+        # 最後の SetKeyboardState では対象キーが離された状態に戻っている
+        last = u.SetKeyboardState.call_args_list[-1].args[0]
+        self.assertEqual(last._obj[self.VK], 0)
+
+
+class TestSuicideBackgroundRouting(unittest.TestCase):
+    """do_skip の送信経路（背面 → 失敗ならフォーカス方式）"""
+
+    def setUp(self):
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.speed_freeze_reset()
+        SharedState.round_freeze_reset()
+        SharedState.set_suicide_key("^")
+
+    tearDown = setUp
+
+    def _executor(self):
+        cfg = WindowConfig(hwnd=123, do_skip=True)
+        st = WindowState(in_round=True)
+        logs = []
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append), st, logs
+
+    def test_background_success_does_not_take_focus(self):
+        ex, st, _logs = self._executor()
+
+        with patch.object(config, "SUICIDE_BACKGROUND", True), \
+             patch.object(WindowOperator, "hold_key_background",
+                          return_value=True) as mock_bg, \
+             patch.object(WindowOperator, "focus_window") as mock_focus, \
+             patch.object(WindowOperator, "hold_key") as mock_hold, \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_skip()
+
+        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC)
+        mock_focus.assert_not_called()
+        mock_hold.assert_not_called()
+        self.assertGreater(st._skip_time, 0, "死亡判定用の時刻は残すこと")
+
+    def test_background_failure_falls_back_to_focus(self):
+        ex, _st, logs = self._executor()
+
+        with patch.object(config, "SUICIDE_BACKGROUND", True), \
+             patch.object(WindowOperator, "hold_key_background",
+                          return_value=False), \
+             patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus, \
+             patch.object(WindowOperator, "hold_key") as mock_hold, \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_skip()
+
+        mock_focus.assert_called_once_with(123)
+        mock_hold.assert_called_once_with("^", config.SUICIDE_HOLD_SEC)
+        self.assertTrue(any("フォーカス方式へ" in m for m in logs), logs)
+
+    def test_disabled_uses_the_old_path_only(self):
+        ex, _st, _logs = self._executor()
+
+        with patch.object(config, "SUICIDE_BACKGROUND", False), \
+             patch.object(WindowOperator, "hold_key_background") as mock_bg, \
+             patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus, \
+             patch.object(WindowOperator, "hold_key") as mock_hold, \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_skip()
+
+        mock_bg.assert_not_called()
+        mock_focus.assert_called_once_with(123)
+        mock_hold.assert_called_once_with("^", config.SUICIDE_HOLD_SEC)
 
 
 class TestHoldKey(unittest.TestCase):

@@ -1,3 +1,4 @@
+import os
 import json
 import threading
 import time
@@ -368,7 +369,11 @@ class App(tk.Tk):
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
+        # LogMonitor がこの dict をそのまま掴むので、以後は差し替えず中身を入れ替える
         self.keepOn_set: dict = {}
+        self.v_follow_host = tk.BooleanVar(value=False)
+        self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
+        self._host_save_warned = False               # 失敗・0人の警告は1回だけ
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._running = False
         self._overlay: LogOverlay | None = None
@@ -384,6 +389,7 @@ class App(tk.Tk):
         self._start_update_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._start_emergency_stop_polling()
+        self._start_host_save_polling()
 
     def _start_emergency_stop_polling(self):
         if keyboard is None:
@@ -432,6 +438,10 @@ class App(tk.Tk):
         ttk.Button(f1, text="再読み込み", command=self._load_tnl).pack(side="left", padx=(4, 0))
         self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
+        ttk.Checkbutton(f1, text="ToN ListTool の主催リストに追従（participants）",
+                        variable=self.v_follow_host,
+                        command=self._on_follow_host_toggled
+                        ).pack(side="left", padx=(12, 0))
 
         # ② 自爆キー設定
         fk = ttk.Frame(self)
@@ -770,6 +780,82 @@ class App(tk.Tk):
             self.v_tnl.set(p)
             self._load_tnl()
 
+    def _apply_keep_on(self, new_set: dict):
+        """keepOn_set の中身を入れ替える。
+
+        LogMonitor は生成時に渡された dict を掴んだままなので、差し替え
+        （再代入）ではなく in-place で更新する。走行中の全窓に即座に効く。
+        """
+        self.keepOn_set.clear()
+        self.keepOn_set.update(new_set)
+
+    def _on_follow_host_toggled(self):
+        save_settings({**load_settings(), "follow_host_save": self.v_follow_host.get()})
+        self._host_save_stamp = None
+        self._host_save_warned = False
+        if self.v_follow_host.get():
+            self._log("[主催リスト] 追従ON")
+            self._refresh_host_save()
+        else:
+            self._log("[主催リスト] 追従OFF → tnlに戻します")
+            self._load_tnl(show_error=False)
+
+    def _start_host_save_polling(self):
+        self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
+
+    def _poll_host_save(self):
+        try:
+            if self.v_follow_host.get():
+                self._refresh_host_save()
+        except Exception:
+            pass
+        try:
+            self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
+        except tk.TclError:
+            pass
+
+    def _warn_host_save_once(self, msg: str):
+        """3秒ごとに同じ行が流れるので、失敗が続く間は最初の1回だけ出す"""
+        if not self._host_save_warned:
+            self._host_save_warned = True
+            self._log(msg)
+
+    def _refresh_host_save(self):
+        """主催リストが書き換わっていたら読み直して続行リストへ反映する"""
+        path = config.HOST_SAVE_PATH
+        try:
+            stat = os.stat(path)
+        except OSError as e:
+            self._warn_host_save_once(f"[主催リスト] ⚠ 読めません: {e}")
+            return
+        stamp = (stat.st_mtime, stat.st_size)   # 同じ秒内の書き換えを取りこぼさない
+        if stamp == self._host_save_stamp:
+            return
+
+        try:
+            keep_on, meta = MatchTNL.load_host_save(path)
+        except Exception as e:
+            # 別プロセスが書いている最中を掴みうる。前の値を保持して次のtickで再試行
+            self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
+            return
+
+        if not meta["participants"]:
+            # 空のリストを適用すると全ラウンドが自爆対象になる
+            self._warn_host_save_once("[主催リスト] ⚠ 主催リストに参加者がいません。前のリストを使います")
+            self._host_save_stamp = stamp
+            return
+
+        self._host_save_stamp = stamp
+        self._host_save_warned = False
+        changed = keep_on != self.keepOn_set
+        self._apply_keep_on(keep_on)
+        if changed:
+            total = sum(len(v) for v in self.keepOn_set.values())
+            msg = (f"[主催リスト] 参加者{meta['participants']}人 / "
+                   f"{len(self.keepOn_set)}ラウンド / {total}件 続行対象")
+            self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
+            self._log(msg)
+
     def _load_tnl(self, show_error: bool = True):
         p = self.v_tnl.get().strip()
         if not p or not Path(p).exists():
@@ -779,11 +865,15 @@ class App(tk.Tk):
                 self._log(f"[TNL] 前回のtnlが見つかりません: {p}")
             return
         try:
-            self.keepOn_set, meta = MatchTNL.load_tnl(p)
+            keep_on, meta = MatchTNL.load_tnl(p)
+            self._apply_keep_on(keep_on)
             total = sum(len(v) for v in self.keepOn_set.values())
-            msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 スキップ対象"
+            msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 続行対象"
             self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(f"[TNL] {msg}")
+            # 追従ONのまま再読み込みするとtnlで上書きされる。次のtickで
+            # 主催リストを読み直せるよう、覚えている更新時刻を捨てておく
+            self._host_save_stamp = None
             save_settings({**load_settings(), "tnl_path": p})
         except Exception as e:
             if show_error:
@@ -809,6 +899,7 @@ class App(tk.Tk):
             var.set(name in _as_round_names(data.get("freeze_rounds")))
         self._apply_freeze_settings()
         self._apply_saved_profiles()
+        self.v_follow_host.set(bool(data.get("follow_host_save", False)))
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
             return

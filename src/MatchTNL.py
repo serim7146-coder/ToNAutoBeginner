@@ -1,3 +1,4 @@
+import gzip
 import json
 
 
@@ -77,6 +78,56 @@ def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
             keepOn_set[round_key] = ids
     meta = {k: raw.get(k, "") for k in ("list_name", "creator", "created_at")}
     return keepOn_set, meta
+
+
+# host_save 側にだけ存在するラウンドキー。ログ側は LOG_TO_TNL で通常の
+# Fog/Ghost に寄せているので、ここで畳むと既存の判定が変わる。無視する。
+HOST_SAVE_IGNORED_KEYS = frozenset({
+    "Fog (Alternate)/霧 (Alternate)",
+    "Ghost (Alternate)/ゴースト (Alternate)",
+})
+
+
+def load_host_save(path: str) -> tuple[dict[str, set[int]], dict]:
+    """ToN ListTool の主催リストを keepOn_set の形で読む。
+
+    全タブの participants の続行希望を OR で畳む。waiting（待機列）は
+    含めない——その場にいない人のために生き残ってしまうため。
+    active_tab は見ない（UIの選択状態で判定が変わらないように）。
+
+    ToN ListTool の内部ファイルで公開仕様ではないので、想定外の形は
+    黙って読み飛ばす。gzip/JSON として壊れている場合だけ例外を投げる
+    （書き込み中を掴んだ可能性があるので、呼び出し側で握って再試行する）。
+    """
+    with gzip.open(path, "rb") as f:
+        raw = json.loads(f.read().decode("utf-8"))
+
+    keepOn_set: dict[str, set[int]] = {}
+    tabs = raw.get("tabs") if isinstance(raw, dict) else None
+    tabs = tabs if isinstance(tabs, list) else []
+    participants = 0
+    for tab in tabs:
+        if not isinstance(tab, dict):
+            continue
+        members = tab.get("participants")
+        if not isinstance(members, list):
+            continue
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            participants += 1
+            data = member.get("data")
+            if not isinstance(data, dict):
+                continue
+            for round_key, slots in data.items():
+                if not isinstance(slots, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
+                    continue
+                ids = {int(k) for k, v in slots.items()
+                       if isinstance(v, int) and v != 0}
+                if ids:
+                    keepOn_set.setdefault(round_key, set()).update(ids)
+
+    return keepOn_set, {"participants": participants, "tabs": len(tabs)}
 
 def should_continue(keepOn_set: dict, tnl_key: str, terror_ids: list[int]) -> bool:
     if tnl_key not in keepOn_set:

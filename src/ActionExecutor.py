@@ -175,12 +175,21 @@ class ActionExecutor:
             if st.waiting_for_equip:
                 self._log("自爆キャンセル（ロック取得後にアイテムロスト待ち検出）")
                 return
+            key = SharedState.get_suicide_key()
+            if config.SUICIDE_BACKGROUND:
+                # フォーカスを奪わずに送る。送り切れなければ従来方式へ落とす
+                st._skip_time = time.time()
+                self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
+                if WindowOperator.hold_key_background(
+                        self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
+                    return
+                self._log("背面送信できず → フォーカス方式へ")
             if not self.focus():
                 return
             st._skip_time = time.time()
             self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒)…")
             time.sleep(config.SUICIDE_FOCUS_SETTLE_SEC)
-            WindowOperator.hold_key(SharedState.get_suicide_key(), config.SUICIDE_HOLD_SEC)
+            WindowOperator.hold_key(key, config.SUICIDE_HOLD_SEC)
 
     def _begin_precheck(self, check_freeze: bool = True) -> bool:
         """Begin実行前の中止条件を確認する。続行してよければTrue。
