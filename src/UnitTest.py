@@ -5422,22 +5422,24 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
         self.assertEqual(started, ["_delayed_group_decision"])
 
-    def test_a_skip_only_round_does_not_wait(self):
-        """Bloodbath は問答無用スキップ。待ってもテラーIDを見ないので即決める"""
+    def test_every_round_waits_for_the_variant(self):
+        """ラウンド種別で待ちを分けない。0.3秒で、確定した時点で打ち切る"""
+        for round_type, ids in (("Bloodbath", [config.CURIOUS_CREATURE_ID, 2, 3]),
+                                ("8 Pages", [config.CURIOUS_CREATURE_ID, 2])):
+            monitor = self._monitor()
+
+            started = self._round(monitor, round_type, ids)
+
+            self.assertEqual(started, ["_delayed_group_decision"], round_type)
+
+    def test_the_wait_still_reaches_the_same_answer(self):
+        """待ち明けの結論は待たない場合と同じ（Bloodbathは問答無用スキップ）"""
         monitor = self._monitor()
+        monitor._running = True
+        monitor.st.round_type = "Bloodbath"
+        monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID, 2, 3]
 
-        started = self._round(monitor, "Bloodbath",
-                              [config.CURIOUS_CREATURE_ID, 2, 3])
-
-        self.assertEqual(started, ["do_skip"])
-
-    def test_an_always_continue_round_does_not_wait(self):
-        monitor = self._monitor()
-
-        started = self._round(monitor, "8 Pages",
-                              [config.CURIOUS_CREATURE_ID, 2])
-
-        self.assertEqual(started, [])
+        self.assertIn("do_skip", self._run_delayed(monitor, "Bloodbath"))
 
     def test_the_classic_wait_is_about_a_second(self):
         """実測ではVariantの出現ログは Killers行と同じ秒に出る"""
@@ -5454,18 +5456,17 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
-    def test_the_wait_length_depends_on_the_round_type(self):
-        """枠ごとに出現がずれるBloodbathはClassicより長く待つ"""
+    def test_the_wait_length_is_one_value(self):
+        """待つのは Classic だけになったので、ラウンド種別で変えない"""
         monitor = self._monitor()
-        monitor.st.round_type = "Classic"
-        classic_wait = monitor._variant_wait_sec()
-        monitor.st.round_type = "Bloodbath"
-        bloodbath_wait = monitor._variant_wait_sec()
-        monitor.st.round_type = "未知のラウンド"
-        default_wait = monitor._variant_wait_sec()
+        waits = []
+        for round_type in ("Classic", "Bloodbath", "未知のラウンド"):
+            monitor.st.round_type = round_type
+            waits.append(monitor._variant_wait_sec())
 
-        self.assertGreater(bloodbath_wait, classic_wait)
-        self.assertEqual(default_wait, config.TERROR_VARIANT_WAIT_DEFAULT_SEC)
+        self.assertEqual(set(waits), {config.TERROR_VARIANT_WAIT_SEC})
+        self.assertLessEqual(config.TERROR_VARIANT_WAIT_SEC, 1.0,
+                             "出現ログは Killers行と同じ秒に出る")
 
     def test_the_wait_ends_in_a_skip_when_no_marker_arrives(self):
         monitor = self._monitor()

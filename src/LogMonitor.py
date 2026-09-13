@@ -472,8 +472,7 @@ class LogMonitor:
         self._send_round_statistics_once()
 
     def _variant_wait_sec(self) -> float:
-        return config.TERROR_VARIANT_WAIT_SEC.get(
-            self.st.round_type, config.TERROR_VARIANT_WAIT_DEFAULT_SEC)
+        return config.TERROR_VARIANT_WAIT_SEC
 
     def _round_still_active(self, round_seq: int) -> bool:
         return self._running and self.st.in_round and self.st.round_seq == round_seq
@@ -976,9 +975,9 @@ class LogMonitor:
         # 干し芋/焼き芋のラウンド判定。Variant確定を待たずに決めると
         # ClassicのVariantを取り逃がすので、待ちは分岐の外で見る
         if is_group_skip:
-            # 待つのは Classic だけ。問答無用スキップも全続行もテラーIDを
-            # 見ないので、待っても結論は変わらず自爆が遅れるだけになる
-            if st.round_type == "Classic" and self._waiting_for_group_variant():
+            # Variantが確定しうるラウンドはどれも待つ。0.3秒で、確定した時点で
+            # 打ち切るので、待ちが結論を変えないラウンドでも実害は出ない
+            if self._waiting_for_group_variant():
                 wait = self._variant_wait_sec()
                 self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
                 self._start_daemon(self._delayed_group_decision, round_type,
