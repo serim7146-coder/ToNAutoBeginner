@@ -1150,7 +1150,7 @@ class TestGroupRoundTable(unittest.TestCase):
         self.assertEqual(self._both("Bloodbath"), {GroupRound.SKIP})
 
     def test_classic_exe_and_randomizer_are_skipped_even_with_a_variant(self):
-        """バリアント例外なし"""
+        """Variant例外なし"""
         for round_type in ("Classic.exe", "Randomizer"):
             self.assertEqual(self._both(round_type, [192]), {GroupRound.SKIP},
                              round_type)
@@ -3700,7 +3700,7 @@ class TestGigabytesDetect(unittest.TestCase):
 
 
 class TestAtrachedDetect(unittest.TestCase):
-    """atrached は Sonic のバリアント。IDでは判別できないのでログ行で拾う"""
+    """atrached は Sonic のVariant。IDでは判別できないのでログ行で拾う"""
 
     LINE = "2026.09.12 20:23:15 Debug      -  Lets play a game..."
 
@@ -4860,9 +4860,9 @@ class TestSkipRoundsByType(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
-    # ── バリアント例外 ────────────────────────
+    # ── Variant例外 ────────────────────────
     def test_the_variant_exemption_falls_through(self):
-        """例外ONのときは待ち明けに判断する。バリアントなら通常判定へ"""
+        """例外ONのときは待ち明けに判断する。Variantなら通常判定へ"""
         monitor = self._monitor(exempt=True,
                                 keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
         monitor._running = True
@@ -4959,7 +4959,7 @@ class TestSkipRoundsByType(unittest.TestCase):
 
         self.assertIn("do_skip", started, "放置モードの即自爆が効いていること")
 
-    # ── バリアント待ち ────────────────────────
+    # ── Variant待ち ────────────────────────
     def test_the_wait_happens_only_when_configured(self):
         monitor = self._monitor(exempt=True)
 
@@ -5413,7 +5413,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertNotIn("do_skip", started)
         self.assertTrue(monitor.st.is_continue_round, "放置モードを通っていないこと")
 
-    # ── バリアント判定待ち ────────────────────
+    # ── Variant判定待ち ────────────────────
     def test_a_single_terror_classic_waits_for_gigabytes(self):
         """元IDが毎回違うのでIDから予測できない。1体構成は常に待つ"""
         monitor = self._monitor()
@@ -5440,7 +5440,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertEqual(started, [])
 
     def test_the_classic_wait_is_about_a_second(self):
-        """実測ではバリアントの出現ログは Killers行と同じ秒に出る"""
+        """実測ではVariantの出現ログは Killers行と同じ秒に出る"""
         monitor = self._monitor()
         monitor.st.round_type = "Classic"
 
@@ -5519,7 +5519,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         mock_thread.assert_not_called()
 
     def test_the_wait_falls_through_to_the_normal_judgement(self):
-        """バリアントが確定したら通常判定へ回すこと（待ちの間に抜けている）"""
+        """Variantが確定したら通常判定へ回すこと（待ちの間に抜けている）"""
         monitor = self._monitor(keep_on={"Classic/クラシック": {config.ATRACHED_ID}})
         monitor._running = True
         monitor.st.round_type = "Classic"

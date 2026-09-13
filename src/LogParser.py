@@ -47,7 +47,7 @@ RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!
 # The Gigabytes はテラーIDでは判別できない（実測6件でIDが毎回異なる）。
 # この行だけが固有の手がかり。Killers have been set と同じ秒に出る。
 RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
-# Sonic(classic 40)のバリアント。同IDで稀に差し替わるためIDでは判別できない。
+# Sonic(classic 40)のVariant。同IDで稀に差し替わるためIDでは判別できない。
 RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
 RE_STRING_DOWNLOAD = re.compile(
     r"^\[String Download\] Attempting to load String from URL '(.+)'")

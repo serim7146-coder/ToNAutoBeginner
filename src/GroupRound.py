@@ -15,7 +15,7 @@ CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウン
 SKIP     = "skip"       # 問答無用スキップ（グループ自動自爆）
 NORMAL   = "normal"     # 通常判定（RoundDecision.decide_killers）へ委譲
 
-# 問答無用スキップ（バリアント例外なし）
+# 問答無用スキップ（Variant例外なし）
 ALWAYS_SKIP_ROUNDS = frozenset({"Bloodbath", "Classic.exe", "Randomizer"})
 
 # 全続行（自爆しないだけ）
@@ -41,7 +41,7 @@ GROUP_INSTANCES = frozenset({config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO})
 
 
 def is_variant(terror_ids) -> bool:
-    """Classicで通常判定に回すバリアントテラーがいるか"""
+    """Classicで通常判定に回すVariantテラーがいるか"""
     return any(tid in config.VARIANT_TERROR_IDS for tid in terror_ids)
 
 
@@ -79,7 +79,7 @@ def decide(
         return NORMAL
 
     if round_type == "Classic":
-        # バリアント確定を待たずに呼ぶと取り逃がす。呼び出し側で待つこと
+        # Variant確定を待たずに呼ぶと取り逃がす。呼び出し側で待つこと
         return NORMAL if is_variant(terror_ids) else SKIP
 
     if round_type in ALWAYS_SKIP_ROUNDS:

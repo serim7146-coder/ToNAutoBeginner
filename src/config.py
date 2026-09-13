@@ -223,14 +223,14 @@ CBPS_SKIP_ROUNDS = {
     "Sabotage",
 }
 
-# ── テラーバリアント判定待ち ──
+# ── テラーVariant判定待ち ──
 # Bloodthirsty Creature / Hungry Home Invader はテラー出現時にログ行が出る。
 # 該当テラーがいるラウンドでは、出現を待ってから自動自爆の可否を判断する。
-# グループ判定でこれを待つのは Classic だけ（バリアントかどうかで結論が
+# グループ判定でこれを待つのは Classic だけ（Variantかどうかで結論が
 # 反転するのは Classic だけで、他のラウンドは待っても結論が変わらない）。
-# 実測(手元ログ): バリアントの出現ログは Killers行と同じ秒に出る
+# 実測(手元ログ): Variantの出現ログは Killers行と同じ秒に出る
 # ——Gigabytes 12件・atrached 2件とも差0秒。ログのtail間隔(0.3秒)を
-# 見込んでも1秒あれば足りる。バリアントが確定した時点で待ちは打ち切る。
+# 見込んでも1秒あれば足りる。Variantが確定した時点で待ちは打ち切る。
 TERROR_VARIANT_WAIT_SEC = {
     "Classic":      1.0,
 }
@@ -310,7 +310,7 @@ ATRACHED_LOG = "Lets play a game..."
 GIGABYTES_ID = 314
 GIGABYTES_LOG = "The Gigabytes have come."
 
-# バリアントテラー（Classicでもこれなら通常判定に回す）
+# Variantテラー（Classicでもこれなら通常判定に回す）
 VARIANT_TERROR_IDS = frozenset({
     HUNGRY_HOME_INVADER_ID, ATRACHED_ID, BLOODTHIRSTY_CREATURE_ID, GIGABYTES_ID,
 })

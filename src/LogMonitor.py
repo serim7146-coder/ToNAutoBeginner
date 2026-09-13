@@ -409,7 +409,7 @@ class LogMonitor:
     def _waiting_for_group_variant(self) -> bool:
         """グループの続行/スキップを決める前に待つべきか。
 
-        Classic は「バリアントなら通常判定、そうでなければ問答無用スキップ」
+        Classic は「Variantなら通常判定、そうでなければ問答無用スキップ」
         なので、確定を待たずに自爆すると取り逃がす。
         """
         return self._waiting_for_terror_variant() or self._waiting_for_gigabytes()
@@ -533,11 +533,11 @@ class LogMonitor:
                 self.cfg.cancel_afk):
             return False        # 3クラ解放が勝つ。通常判定へ落とす
         if self.cfg.skip_variant_exempt and GroupRound.is_variant(st.terror_ids):
-            return False        # バリアントは自爆しない。通常判定へ落とす
+            return False        # Variantは自爆しない。通常判定へ落とす
         return True
 
     def _waiting_for_round_skip_variant(self) -> bool:
-        """ラウンド指定自爆でバリアント確定を待つべきか。
+        """ラウンド指定自爆でVariant確定を待つべきか。
 
         設定していない窓に待ちを増やさないこと。`_waiting_for_terror_variant()`
         は統計登録のゲートも兼ねているので、波及すると統計が遅れる。
@@ -550,7 +550,7 @@ class LogMonitor:
 
     def _delayed_round_skip(self, killers_round_type: str, wait_sec: float,
                             round_seq: int):
-        """バリアント確定を待ってからラウンド指定自爆の可否を決める"""
+        """Variant確定を待ってからラウンド指定自爆の可否を決める"""
         deadline = time.time() + wait_sec
         while time.time() < deadline:
             if not self._round_still_active(round_seq):
@@ -574,14 +574,14 @@ class LogMonitor:
 
     def _delayed_group_decision(self, killers_round_type: str, wait_sec: float,
                                 round_seq: int):
-        """テラー出現ログ(バリアント判定)を待ってからグループの判定を出す。
+        """テラー出現ログ(Variant判定)を待ってからグループの判定を出す。
         Bloodbath等は枠ごとに出現時刻がずれるためラウンド種別ごとに待ち時間を変える。"""
         deadline = time.time() + wait_sec
         while time.time() < deadline:
             if not self._round_still_active(round_seq):
                 return
             if not self._waiting_for_group_variant():
-                break  # バリアント確定 → 残り時間を待たずに判断へ
+                break  # Variant確定 → 残り時間を待たずに判断へ
             time.sleep(config.TERROR_VARIANT_POLL_SEC)
         if not self._round_still_active(round_seq):
             return
@@ -664,8 +664,8 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
-            # Sonicのバリアント
-            self._log("🎮 atrached 出現（Sonicのバリアント）")
+            # SonicのVariant
+            self._log("🎮 atrached 出現（SonicのVariant）")
             self._mark_atrached_variant()
             return
 
@@ -973,14 +973,14 @@ class LogMonitor:
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
-        # 干し芋/焼き芋のラウンド判定。バリアント確定を待たずに決めると
-        # Classicのバリアントを取り逃がすので、待ちは分岐の外で見る
+        # 干し芋/焼き芋のラウンド判定。Variant確定を待たずに決めると
+        # ClassicのVariantを取り逃がすので、待ちは分岐の外で見る
         if is_group_skip:
             # 待つのは Classic だけ。問答無用スキップも全続行もテラーIDを
             # 見ないので、待っても結論は変わらず自爆が遅れるだけになる
             if st.round_type == "Classic" and self._waiting_for_group_variant():
                 wait = self._variant_wait_sec()
-                self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
+                self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
                 self._start_daemon(self._delayed_group_decision, round_type,
                                    wait, st.round_seq)
                 return
@@ -1024,7 +1024,7 @@ class LogMonitor:
         if is_private and self.cfg.skip_rounds:
             if self._waiting_for_round_skip_variant():
                 wait = self._variant_wait_sec()
-                self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
+                self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
                 self._start_daemon(self._delayed_round_skip, round_type,
                                    wait, st.round_seq)
                 return

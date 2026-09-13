@@ -16,7 +16,7 @@ class WindowConfig:
     announce_intermission: bool = False
     # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する
     skip_rounds: set = field(default_factory=set)
-    skip_variant_exempt: bool = False   # バリアント/Gigabytesは自爆しない
+    skip_variant_exempt: bool = False   # Variant/Gigabytesは自爆しない
     voice_continue: str = ""
     voice_fog: str = ""
     voice_item_lost: str = ""

@@ -195,7 +195,7 @@ class WindowTab(ttk.Frame):
                 column=i % config.SKIP_ROUND_COLUMNS,
                 sticky="w", padx=(0, 12), pady=1)
         self.v_skip_variant_exempt = tk.BooleanVar(value=False)
-        ttk.Checkbutton(skip.content, text="バリアント/Gigabytes は自爆しない",
+        ttk.Checkbutton(skip.content, text="Variant/Gigabytes は自爆しない",
                         variable=self.v_skip_variant_exempt
                         ).pack(anchor="w", padx=10, pady=(4, 0))
 
