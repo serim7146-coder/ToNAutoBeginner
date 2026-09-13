@@ -32,7 +32,9 @@ SABOTAGE_MURDER_KEY = MatchTNL.LOG_TO_TNL["Sabotage murder"]
 # 焼き芋 Fog でオルタネイト枠とみなす、Killers 行の round_type
 FOG_ALTERNATE_ROUND_TYPE = "Fog (Alternate)"
 
-# Fog行はFoxy検出などで "Fog (Alternate)" に更新されることがある
+# Foxy が出ると LogMonitor の EVENT_FOXY ハンドラが st.round_type を
+# "Fog (Alternate)" に書き換えてから _on_killers を呼ぶ。両方を Fog 行として
+# 扱わないと、その場合だけ Fog のルールから外れる
 FOG_ROUND_TYPES = frozenset({"Fog", FOG_ALTERNATE_ROUND_TYPE})
 
 GROUP_INSTANCES = frozenset({config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO})
@@ -97,9 +99,12 @@ def decide(
     if round_type in FOG_ROUND_TYPES:
         if instance_type == config.INSTANCE_HOSHIIMO:
             return CONTINUE
-        # 焼き芋: オルタネイト枠のFogだけが対象。あとは続行リスト次第。
-        # Fogは68ラウンド中63で revealed が来ない。来なければここには入らない
-        # （`Killers is unknown` の時点では何も決めない）
+        if not killers_round_type:
+            # Killers行を見ていない。判定材料が無いときは自爆しない側へ倒す
+            # （通常の経路では `Killers is unknown` のまま _on_killers を
+            # 通らないので、ここには来ない）
+            return CONTINUE
+        # 焼き芋: オルタネイト枠のFogだけが対象。あとは続行リスト次第
         return NORMAL if is_fog_alternate(killers_round_type) else SKIP
 
     if round_type == "Sabotage":

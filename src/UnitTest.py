@@ -1178,6 +1178,12 @@ class TestGroupRoundTable(unittest.TestCase):
             self._decide(self.YAKIIMO, "Fog", [7], killers_round_type="Fog"),
             GroupRound.SKIP)
 
+    def test_an_unknown_killers_round_type_does_not_skip(self):
+        """判定材料が無いときは自爆しない側へ倒す（通常の経路では来ない）"""
+        self.assertEqual(
+            self._decide(self.YAKIIMO, "Fog", [7], killers_round_type=""),
+            GroupRound.CONTINUE)
+
     def test_yakiimo_fog_updated_by_foxy_is_still_the_fog_row(self):
         """Foxy検出で st.round_type が Fog (Alternate) に更新されることがある"""
         self.assertEqual(
@@ -4612,6 +4618,23 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
         self.assertIn("do_skip", started)
 
+    def test_foxy_in_fog_still_follows_the_fog_rule(self):
+        """Foxy検出は st.round_type を Fog (Alternate) に書き換えてから
+        _on_killers を呼ぶ。書き換え後も Fog の行から外れないこと"""
+        monitor = self._monitor()      # 干し芋 → Fog は全続行
+        monitor.st.round_type = "Fog"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("foxy the pirate turned evil!")
+
+        self.assertEqual(monitor.st.round_type, "Fog (Alternate)")
+        self.assertEqual([c.kwargs["target"].__func__.__name__
+                          for c in mock_thread.call_args_list
+                          if "target" in c.kwargs], [],
+                         "全続行のまま。自爆も通常判定も走らせないこと")
+
     def test_killers_unknown_decides_nothing(self):
         """Fogは68ラウンド中63で revealed が来ない。その間は何もしない"""
         monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
@@ -4709,6 +4732,19 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
+    def test_the_wait_length_depends_on_the_round_type(self):
+        """枠ごとに出現がずれるBloodbathはClassicより長く待つ"""
+        monitor = self._monitor()
+        monitor.st.round_type = "Classic"
+        classic_wait = monitor._variant_wait_sec()
+        monitor.st.round_type = "Bloodbath"
+        bloodbath_wait = monitor._variant_wait_sec()
+        monitor.st.round_type = "未知のラウンド"
+        default_wait = monitor._variant_wait_sec()
+
+        self.assertGreater(bloodbath_wait, classic_wait)
+        self.assertEqual(default_wait, config.TERROR_VARIANT_WAIT_DEFAULT_SEC)
+
     def test_the_wait_ends_in_a_skip_when_no_marker_arrives(self):
         monitor = self._monitor()
         monitor._running = True
@@ -4775,6 +4811,19 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
 
     # ── 既存の取りこぼし対策 ──────────────────
+    def test_round_start_clears_stale_continue_state(self):
+        """グループルールとは独立した既存挙動。ラウンド開始で続行状態を落とす"""
+        monitor = self._monitor()
+        monitor.st.is_continue_round = True
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Classic")
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(monitor.st.round_type, "Classic")
+
     def test_group_skip_clears_stale_continue_state(self):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
