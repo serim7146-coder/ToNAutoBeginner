@@ -7,6 +7,7 @@ import json
 import tempfile
 import gzip
 import ctypes
+import io
 from datetime import datetime
 from pathlib import Path
 
@@ -2130,6 +2131,27 @@ class TestHostListSource(unittest.TestCase):
 
         self.assertEqual(len(called), 1)
         app.after.assert_called_once()
+
+
+class TestSuicideKeyFixed(unittest.TestCase):
+    """自爆キーは config 固定。GUIの入力欄は消えている"""
+
+    def tearDown(self):
+        SharedState.set_suicide_key(config.SELF_SUICIDE_KEY)
+
+    def test_the_gui_has_no_input_for_it(self):
+        self.assertNotIn("v_suicide_key", io.open(
+            "mainGUI.py", encoding="utf-8").read(),
+            "入力欄と適用ボタンは削除されていること")
+
+    def test_the_default_comes_from_config(self):
+        self.assertEqual(SharedState.get_suicide_key(), config.SELF_SUICIDE_KEY)
+
+    def test_the_setter_is_kept_for_tests(self):
+        """GUIから呼ばれなくなるだけ。テストが4箇所で使っている"""
+        SharedState.set_suicide_key("q")
+
+        self.assertEqual(SharedState.get_suicide_key(), "q")
 
 
 class TestFollowHostSettingRemoved(unittest.TestCase):

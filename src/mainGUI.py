@@ -122,14 +122,20 @@ class WindowTab(ttk.Frame):
     def _build(self):
         p = self
 
+        # HWNDとログは自動割り当てで決まるので既定は畳んでおく。
+        # タブごとに別インスタンスなので、窓ごとに独立して開閉する
+        assign = CollapsibleFrame(p, text="窓の割り当て", collapsed=True)
+        assign.pack(fill="x")
+        a = assign.content
+
         def section(text):
-            ttk.Label(p, text=text, background=config.GUI_BG, foreground=config.GUI_ACC,
+            ttk.Label(a, text=text, background=config.GUI_BG, foreground=config.GUI_ACC,
                       font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
 
         # ── VRChatウィンドウ ──
         section("■ VRChatウィンドウ")
         self.v_hwnd_sel = tk.StringVar(value="未選択")
-        hf = ttk.Frame(p)
+        hf = ttk.Frame(a)
         hf.pack(fill="x", padx=10, pady=2)
         self.cb_hwnd = ttk.Combobox(hf, textvariable=self.v_hwnd_sel,
                                      state="readonly", width=36)
@@ -139,14 +145,14 @@ class WindowTab(ttk.Frame):
         # ── ログファイル ──
         section("■ ログファイル")
         self.v_log = tk.StringVar()
-        lf = ttk.Frame(p)
+        lf = ttk.Frame(a)
         lf.pack(fill="x", padx=10, pady=2)
         ttk.Entry(lf, textvariable=self.v_log, width=80).pack(side="left", padx=(0, 4))
         ttk.Button(lf, text="…", width=3, command=self._browse_log).pack(side="left")
 
         # ── 起動プロファイル ──
         section("■ 起動プロファイル（VRChat起動時に使用）")
-        pf = ttk.Frame(p)
+        pf = ttk.Frame(a)
         pf.pack(fill="x", padx=10, pady=2)
         ttk.Label(pf, text="--profile=").pack(side="left")
         self.v_profile = tk.IntVar(value=0)
@@ -154,7 +160,7 @@ class WindowTab(ttk.Frame):
         ttk.Label(pf, text="※ 同じ番号の窓は同じアカウント設定を共有します",
                   foreground=config.GUI_YLW).pack(side="left")
 
-        # ── ON/OFF ──
+        # ── ON/OFF ──（畳む対象の外。常に見える）
         ttk.Separator(p, orient="horizontal").pack(fill="x", padx=10, pady=8)
         cf = ttk.Frame(p)
         cf.pack(fill="x", padx=10)
@@ -362,8 +368,8 @@ class App(tk.Tk):
             self.iconbitmap(default=str(icon_path))
 
         self.title("ToNAutoBeginner")
-        self.geometry("980x1080")
-        self.minsize(880, 900)
+        # 大きさは中身に任せる。固定すると折りたたんでも縦が縮まない
+        self.minsize(880, 600)
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
@@ -440,17 +446,6 @@ class App(tk.Tk):
         self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
 
-        # ② 自爆キー設定
-        fk = ttk.Frame(self)
-        fk.pack(fill="x", padx=12, pady=(0, 4))
-        ttk.Label(fk, text="自爆キー:").pack(side="left")
-        self.v_suicide_key = tk.StringVar(value=config.SELF_SUICIDE_KEY)
-        ek = ttk.Entry(fk, textvariable=self.v_suicide_key, width=6)
-        ek.pack(side="left", padx=(6, 4))
-        ttk.Button(fk, text="適用",
-                   command=lambda: SharedState.set_suicide_key(self.v_suicide_key.get().strip())
-                   ).pack(side="left")
-
         # ③ 窓数・ログ
         f2 = CollapsibleFrame(self, text="② 窓数・ログ設定")
         f2.pack(fill="x", padx=12, pady=4)
@@ -467,8 +462,12 @@ class App(tk.Tk):
                    command=self._assign_logs).pack(side="left")
 
         # ── VRChat起動 ──
-        ttk.Separator(f2, orient="horizontal").pack(fill="x", pady=6)
-        lf1 = ttk.Frame(f2)
+        # 毎回触るものではないので既定は畳んでおく。ヘッダの区切り線が
+        # これまでの Separator を兼ねる
+        f2_launch = CollapsibleFrame(f2, text="VRChat起動", collapsed=True)
+        f2_launch.pack(fill="x", pady=(6, 0))
+        f2_launch = f2_launch.content
+        lf1 = ttk.Frame(f2_launch)
         lf1.pack(fill="x")
         self.btn_launch = ttk.Button(lf1, text="🚀 VRChatを起動", command=self._launch_vrchat)
         self.btn_launch.pack(side="left")
@@ -488,7 +487,7 @@ class App(tk.Tk):
         self.lbl_launch = ttk.Label(lf1, text="", foreground=config.GUI_GRN)
         self.lbl_launch.pack(side="left", padx=(10, 0))
 
-        lf2 = ttk.Frame(f2)
+        lf2 = ttk.Frame(f2_launch)
         lf2.pack(fill="x", pady=(4, 0))
         self.v_join_world = tk.BooleanVar(value=False)
         ttk.Checkbutton(lf2, text="ToNへ自動的にJoin",
@@ -500,7 +499,7 @@ class App(tk.Tk):
         ttk.Label(lf2, text="※ 空欄ならToNの新規インスタンスを自動生成（窓ごとに別インスタンス）",
                   foreground=config.GUI_YLW).pack(side="left", padx=(8, 0))
 
-        lf25 = ttk.Frame(f2)
+        lf25 = ttk.Frame(f2_launch)
         lf25.pack(fill="x", pady=(4, 0))
         self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
         ttk.Checkbutton(lf25, text="入室後の選択画面を自動突破",
@@ -511,7 +510,7 @@ class App(tk.Tk):
         ttk.Label(lf25, text="※ 警告同意→Casual→BGMあり→LET ME PLAY の順に押します",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
-        lf3 = ttk.Frame(f2)
+        lf3 = ttk.Frame(f2_launch)
         lf3.pack(fill="x", pady=(2, 0))
         ttk.Label(lf3, text="起動exe:").pack(side="left")
         self.v_vrchat_exe = tk.StringVar()
@@ -522,7 +521,8 @@ class App(tk.Tk):
 
 
         self.lbl_win_warn = ttk.Label(
-            f2, text="※ 窓数はマクロ起動前に設定してください", foreground=config.GUI_YLW)
+            f2_launch, text="※ 窓数はマクロ起動前に設定してください",
+            foreground=config.GUI_YLW)
         self.lbl_win_warn.pack(anchor="w")
 
         # ③ 窓タブ

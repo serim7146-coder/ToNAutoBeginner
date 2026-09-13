@@ -24,7 +24,7 @@ def set_instance_type(t: str):
         _CURRENT_INSTANCE_TYPE = t
 
 # ═══════════════════════════════════════════════
-#  自爆キー（GUIから変更可能）
+#  自爆キー（config の既定値。テストから差し替え可能）
 # ═══════════════════════════════════════════════
 _SUICIDE_KEY = config.SELF_SUICIDE_KEY
 _SUICIDE_KEY_LOCK = threading.Lock()
