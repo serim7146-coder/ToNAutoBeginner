@@ -2079,6 +2079,76 @@ class TestHostListSource(unittest.TestCase):
 
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}})
 
+    def test_a_rewrite_of_the_same_size_is_picked_up(self):
+        """(mtime, size) の組で見ている理由。片方だけ変わっても拾うこと"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+        mtime, size = app._host_save_stamp
+
+        # サイズは同じで mtime だけ違う（同じ秒内の書き換え相当）
+        app._host_save_stamp = (mtime - 1, size)
+        with patch.object(MatchTNL, "load_host_save",
+                          return_value=({"x": {1}}, {"participants": 1, "tabs": 1},
+                                        {})) as mock_load:
+            self._refresh(app)
+        mock_load.assert_called_once()
+
+        # mtime は同じでサイズだけ違う
+        app._host_save_stamp = (app._host_save_stamp[0], size - 1)
+        with patch.object(MatchTNL, "load_host_save",
+                          return_value=({"y": {2}}, {"participants": 1, "tabs": 1},
+                                        {})) as mock_load:
+            self._refresh(app)
+        mock_load.assert_called_once()
+
+    def test_recovery_after_a_failure_is_logged_again(self):
+        """失敗中は1回だけ。成功で復帰して、また失敗したらまた1回出る"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+
+        Path(self.path).write_bytes(b"half written garbage")
+        self._refresh(app)
+        self._refresh(app)
+        self._write(4)
+        self._refresh(app)                      # 復帰
+        Path(self.path).write_bytes(b"broken again")
+        self._refresh(app)
+
+        hits = [m for m in app.logs if "読み込み失敗" in m]
+        self.assertEqual(len(hits), 2, app.logs)
+
+    def test_the_tick_survives_a_read_failure(self):
+        """プロセス判定ではなく、読み込み側が投げても tick が止まらないこと"""
+        self._write(3)
+        app = self._app()
+        app.after = MagicMock()
+        app._poll_host_save = lambda: None
+        app._refresh_host_source = lambda: mainGUI.App._refresh_host_source(app)
+
+        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(ProcessCheck, "is_process_running", return_value=True), \
+             patch.object(mainGUI.os, "stat", side_effect=RuntimeError("boom")):
+            mainGUI.App._poll_host_save(app)
+
+        app.after.assert_called_once()
+
+    def test_a_stat_failure_falls_back_to_the_tnl(self):
+        """OSError 以外で落ちても供給元だけは決まること"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+
+        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(ProcessCheck, "is_process_running", return_value=True), \
+             patch.object(mainGUI.os, "stat", side_effect=OSError("gone")), \
+             patch.object(mainGUI, "save_settings"), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._refresh_host_source(app)
+
+        self.assertEqual(app._host_source, "tnl")
+
     # ── 参加者別の希望 ────────────────────────
     def test_switching_to_the_tnl_clears_the_wishes(self):
         """古い希望が残ると Sabotage の判定に効いてしまう"""
