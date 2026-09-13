@@ -12,6 +12,8 @@ import ConnectDB
 import ReadJson
 import LogParser
 import RoundDecision
+import RoundSequence
+import GroupRound
 from ActionExecutor import ActionExecutor
 from State import WindowConfig, WindowState
 
@@ -34,12 +36,16 @@ def format_terror_ids(ids: list[int]) -> str:
 #  窓操作（自爆・Begin・AFK防止）は ActionExecutor に委譲する。
 # ═══════════════════════════════════════════════
 class LogMonitor:
-    def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0):
+    def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0,
+                 host_wishes: dict | None = None):
         self.cfg = cfg
         self.keepOn_set = keepOn_set
+        # 参加者別の続行希望。追従OFFのときは空（＝Sabotageは通常判定へ落ちる）
+        self.host_wishes = host_wishes if host_wishes is not None else {}
         self.logger = logger
         self.window_idx = window_idx
         self.st = WindowState()
+        self.sequence = RoundSequence.RoundSequence()
         self._running = False
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -362,11 +368,51 @@ class LogMonitor:
             and not self.st.hungry_home_invader_variant
         )
 
+    def _apply_atrached_variant(self, ids: list[int], round_type: str) -> list[int]:
+        if not self.st.atrached_variant or round_type != "Classic":
+            return ids
+        return [
+            config.ATRACHED_ID if tid == config.SONIC_ID else tid
+            for tid in ids
+        ]
+
+    def _waiting_for_atrached_variant(self) -> bool:
+        return (
+            self.st.round_type == "Classic"
+            and config.SONIC_ID in self.st.terror_ids
+            and not self.st.atrached_variant
+        )
+
+    def _waiting_for_gigabytes(self) -> bool:
+        """The Gigabytes は元IDが毎回違うのでIDから予測できない。
+        Classicの1体構成は常に候補として出現ログを待つ。"""
+        return (
+            self.st.round_type == "Classic"
+            and len(self.st.terror_ids) == 1
+            and not self.st.gigabytes
+        )
+
     def _waiting_for_terror_variant(self) -> bool:
+        """テラーIDがまだ確定していないか。統計登録の待ち合わせにも使う。
+
+        ここに入れてよいのは「元IDから変異しうると分かる」ものだけ。
+        Gigabytes は元IDが不定でClassicの1体構成すべてが候補になり、
+        入れると統計登録がほぼ全Classicで遅れる（privateの挙動が変わる）ので
+        含めない。グループ判定の待ちは `_waiting_for_group_variant()`。
+        """
         return (
             self._waiting_for_bloodthirsty_creature_variant()
             or self._waiting_for_hungry_home_invader_variant()
+            or self._waiting_for_atrached_variant()
         )
+
+    def _waiting_for_group_variant(self) -> bool:
+        """グループの続行/スキップを決める前に待つべきか。
+
+        Classic は「バリアントなら通常判定、そうでなければ問答無用スキップ」
+        なので、確定を待たずに自爆すると取り逃がす。
+        """
+        return self._waiting_for_terror_variant() or self._waiting_for_gigabytes()
 
     def _mark_bloodthirsty_creature_variant(self):
         st = self.st
@@ -398,18 +444,32 @@ class LogMonitor:
         else:
             self._log("Hungry Home Invader variant detected")
 
-    def _should_skip_group_round(self) -> bool:
-        """干し芋/焼き芋の自動自爆をしてよいか。
-        バリアントテラー(Bloodthirsty / Hungry Home Invader)なら自爆しない。
-        干し芋・焼き芋の両方、かつ自爆対象ラウンド全種に適用する。"""
+    def _mark_atrached_variant(self):
         st = self.st
-        if config.BLOODTHIRSTY_CREATURE_ID in st.terror_ids:
-            self._log("グループ自動自爆キャンセル: Wild Yet Bloodthirsty Creature")
-            return False
-        if config.HUNGRY_HOME_INVADER_ID in st.terror_ids:
-            self._log("グループ自動自爆キャンセル: Hungry Home Invader")
-            return False
-        return True
+        if st.round_type != "Classic":
+            return
+        st.atrached_variant = True
+        changed = False
+        for i, tid in enumerate(st.terror_ids):
+            if tid == config.SONIC_ID:
+                st.terror_ids[i] = config.ATRACHED_ID
+                changed = True
+        if changed:
+            self._log("Sonic -> Atrached")
+            self._send_round_statistics_once()
+        else:
+            self._log("atrached variant detected")
+
+    def _mark_gigabytes(self):
+        """元IDが不定なので「置換」ではなく terror_ids ごと差し替える"""
+        st = self.st
+        st.gigabytes = True
+        if not st.terror_ids or st.terror_ids == [config.GIGABYTES_ID]:
+            # Killers 行より先に来た場合。差し替えは _on_killers 側で行う
+            return
+        st.terror_ids = [config.GIGABYTES_ID]
+        self._log("The Gigabytes -> テラーIDを差し替え")
+        self._send_round_statistics_once()
 
     def _variant_wait_sec(self) -> float:
         return config.TERROR_VARIANT_WAIT_SEC.get(
@@ -420,27 +480,57 @@ class LogMonitor:
 
     def _start_group_skip(self):
         st = self.st
-        self._log(f"干し芋自動自爆: {st.round_type}")
+        self._log(f"グループ自動自爆: {st.round_type}")
         if st.is_continue_round:
             st.is_continue_round = False
             SharedState.continue_round_end()
-        self._start_daemon(self._action.do_skip)
+        # cfg.do_skip は全体スイッチ。OFFなら判定だけ出して自爆はしない
+        if self.cfg.do_skip:
+            self._start_daemon(self._action.do_skip)
 
-    def _delayed_group_skip(self, wait_sec: float, round_seq: int):
-        """テラー出現ログ(バリアント判定)を待ってから自動自爆の可否を決める。
+    def _group_decision(self, killers_round_type: str) -> str:
+        """このラウンドをグループのルールでどう扱うか"""
+        st = self.st
+        return GroupRound.decide(
+            st.instance_type,
+            st.round_type,
+            st.terror_ids,
+            killers_round_type=killers_round_type,
+            moon_repeat=st.moon_repeat,
+            sus_players=st.sus_players,
+            host_wishes=self.host_wishes,
+            follow_host=bool(self.host_wishes),
+        )
+
+    def _apply_group_decision(self, killers_round_type: str) -> bool:
+        """スキップ/全続行なら処理してTrueを返す。通常判定に回すならFalse。"""
+        decision = self._group_decision(killers_round_type)
+        if decision == GroupRound.SKIP:
+            self._start_group_skip()
+            return True
+        if decision == GroupRound.CONTINUE:
+            # 「全続行」は自爆しないだけ。続行アナウンスも他窓フリーズもしない
+            self._log(f"グループ判定: {self.st.round_type} 【全続行】")
+            return True
+        return False
+
+    def _delayed_group_decision(self, killers_round_type: str, wait_sec: float,
+                                round_seq: int):
+        """テラー出現ログ(バリアント判定)を待ってからグループの判定を出す。
         Bloodbath等は枠ごとに出現時刻がずれるためラウンド種別ごとに待ち時間を変える。"""
         deadline = time.time() + wait_sec
         while time.time() < deadline:
             if not self._round_still_active(round_seq):
                 return
-            if not self._waiting_for_terror_variant():
+            if not self._waiting_for_group_variant():
                 break  # バリアント確定 → 残り時間を待たずに判断へ
             time.sleep(config.TERROR_VARIANT_POLL_SEC)
         if not self._round_still_active(round_seq):
             return
-        if not self._should_skip_group_round():
+        if self._apply_group_decision(killers_round_type):
             return
-        self._start_group_skip()
+        # 通常判定へ回すぶんはここで続ける（待っている間に _on_killers は抜けている）
+        self._decide_with_keep_on_set(killers_round_type)
 
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
@@ -457,11 +547,20 @@ class LogMonitor:
             self._mark_hungry_home_invader_variant()
             return
 
+        if event.kind == LogParser.EVENT_MASTER_SWITCHED:
+            # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
+            self.sequence.on_master_switched()
+            return
+
         if event.kind == LogParser.EVENT_USER_AUTH:
             st.local_player_name = event.player_name
             return
 
         if event.kind == LogParser.EVENT_SUS_PLAYER:
+            # 選出者は全員ぶん貯める。ROUND_START と同じ秒に来るので、
+            # クリアは Verified Round End 側（ROUND_START では消さない）
+            if event.player_name not in st.sus_players:
+                st.sus_players.append(event.player_name)
             if self._same_player_name(event.player_name, st.local_player_name):
                 if st.in_round and st.round_type == "Sabotage":
                     self._mark_sabotage_murder()
@@ -502,13 +601,14 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_GIGABYTES:
-            # 知らせるだけ。自爆・続行・フリーズの判断には使わない
             self._log("👾 The Gigabytes 出現")
+            self._mark_gigabytes()
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
-            # Sonicのバリアント。知らせるだけ。自爆・続行・フリーズの判断には使わない
+            # Sonicのバリアント
             self._log("🎮 atrached 出現（Sonicのバリアント）")
+            self._mark_atrached_variant()
             return
 
         if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
@@ -543,6 +643,10 @@ class LogMonitor:
             st.round_seq                  += 1
             st.round_end_seen              = False
             st.round_type                  = event.round_type
+            # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
+            st.moon_repeat                 = self.sequence.is_moon_repeat(
+                event.round_type)
+            self.sequence.on_round(event.round_type)
             st.terror_ids                  = []
             st.map_id                      = event.map_id
             st.statistics_sent             = False
@@ -576,6 +680,8 @@ class LogMonitor:
             st.pending_sabotage_murder     = False
             st.bloodthirsty_creature_variant = False
             st.hungry_home_invader_variant = False
+            st.atrached_variant            = False
+            st.gigabytes                   = False
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -673,6 +779,9 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_VERIFIED_END:
+            # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
+            # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
+            st.sus_players = []
             if self._waiting_for_terror_variant():
                 self._send_round_statistics_once()
             if st.is_continue_round:
@@ -743,6 +852,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_JOINING:
             st.instance_type = self._parse_instance_type(event.suffix)
+            # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
+            self.sequence.reset()
             self._log(f"インスタンスタイプ: {st.instance_type}")
             return
 
@@ -781,6 +892,9 @@ class LogMonitor:
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
         ids = self._apply_bloodthirsty_creature_variant(ids)
         ids = self._apply_hungry_home_invader_variant(ids, round_type)
+        ids = self._apply_atrached_variant(ids, round_type)
+        if self.st.gigabytes:
+            ids = [config.GIGABYTES_ID]
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
         for tid in ids:
@@ -801,18 +915,17 @@ class LogMonitor:
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
-        # 干し芋グループ専用自動自爆
-        if is_group_skip and self.cfg.hoshiimo_skip:
-            if st.round_type in config.HOSHIIMO_SKIP_ROUNDS:
-                # バリアント化しうるテラーがいる場合は出現ログを待ってから判断する
-                if self._waiting_for_terror_variant():
-                    wait = self._variant_wait_sec()
-                    self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
-                    self._start_daemon(self._delayed_group_skip, wait, st.round_seq)
-                    return
-                if self._should_skip_group_round():
-                    self._start_group_skip()
-                    return
+        # 干し芋/焼き芋のラウンド判定。バリアント確定を待たずに決めると
+        # Classicのバリアントを取り逃がすので、待ちは分岐の外で見る
+        if is_group_skip:
+            if self._waiting_for_group_variant():
+                wait = self._variant_wait_sec()
+                self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
+                self._start_daemon(self._delayed_group_decision, round_type,
+                                   wait, st.round_seq)
+                return
+            if self._apply_group_decision(round_type):
+                return
 
         # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
         if not can_decide:
@@ -846,6 +959,14 @@ class LogMonitor:
                 if not st.is_continue_round and self.cfg.do_skip:
                     self._start_daemon(self._action.do_skip)
                 return
+
+        self._decide_with_keep_on_set(round_type)
+
+    # ── 通常判定（続行リスト照合） ──────────────
+    def _decide_with_keep_on_set(self, round_type: str):
+        st = self.st
+        is_private = st.instance_type == config.INSTANCE_PRIVATE
+        is_group = st.instance_type in GroupRound.GROUP_INSTANCES
 
         all_ids = st.terror_ids
         was_continue_round = st.is_continue_round
@@ -882,7 +1003,8 @@ class LogMonitor:
             elif is_open_special_round_target:
                 self._log("DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")
         else:
-            if self.cfg.do_skip and is_private:
+            # 続行にならなければ自爆する。グループもここに含める
+            if self.cfg.do_skip and (is_private or is_group):
                 self._start_daemon(self._action.do_skip)
 
     def _send_round_statistics_once(self):

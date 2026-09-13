@@ -161,7 +161,6 @@ class WindowTab(ttk.Frame):
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
         self.v_cancel_afk  = tk.BooleanVar(value=True)
-        self.v_hoshiimo    = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="この窓を有効化",            variable=self.v_active).pack(side="left")
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left", padx=(12, 0))
@@ -169,8 +168,7 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
         cf2 = ttk.Frame(p)
         cf2.pack(fill="x", padx=10, pady=(4, 0))
-        ttk.Checkbutton(cf2, text="干し芋自動自爆",           variable=self.v_hoshiimo).pack(side="left")
-        ttk.Checkbutton(cf2, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf2, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left")
 
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
@@ -223,7 +221,6 @@ class WindowTab(ttk.Frame):
             auto_begin=self.v_auto_begin.get(),
             do_skip=self.v_do_skip.get(),
             cancel_afk=self.v_cancel_afk.get(),
-            hoshiimo_skip=self.v_hoshiimo.get(),
             announce_intermission=self.v_announce_intermission.get(),
         ), None
 
@@ -371,6 +368,9 @@ class App(tk.Tk):
         self.v_win_count = tk.IntVar(value=4)
         # LogMonitor がこの dict をそのまま掴むので、以後は差し替えず中身を入れ替える
         self.keepOn_set: dict = {}
+        # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
+        # Sabotage のマーダー判定に使う。これも in-place で入れ替える
+        self.host_wishes: dict = {}
         self.v_follow_host = tk.BooleanVar(value=False)
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._host_save_warned = False               # 失敗・0人の警告は1回だけ
@@ -789,6 +789,11 @@ class App(tk.Tk):
         self.keepOn_set.clear()
         self.keepOn_set.update(new_set)
 
+    def _apply_host_wishes(self, new_wishes: dict):
+        """参加者別の希望も LogMonitor が同じ dict を掴む。in-place で更新する"""
+        self.host_wishes.clear()
+        self.host_wishes.update(new_wishes)
+
     def _on_follow_host_toggled(self):
         save_settings({**load_settings(), "follow_host_save": self.v_follow_host.get()})
         self._host_save_stamp = None
@@ -798,6 +803,7 @@ class App(tk.Tk):
             self._refresh_host_save()
         else:
             self._log("[主催リスト] 追従OFF → tnlに戻します")
+            self._apply_host_wishes({})
             self._load_tnl(show_error=False)
 
     def _start_host_save_polling(self):
@@ -833,7 +839,7 @@ class App(tk.Tk):
             return
 
         try:
-            keep_on, meta = MatchTNL.load_host_save(path)
+            keep_on, meta, wishes = MatchTNL.load_host_save(path)
         except Exception as e:
             # 別プロセスが書いている最中を掴みうる。前の値を保持して次のtickで再試行
             self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
@@ -849,6 +855,7 @@ class App(tk.Tk):
         self._host_save_warned = False
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
+        self._apply_host_wishes(wishes)
         if changed:
             total = sum(len(v) for v in self.keepOn_set.values())
             msg = (f"[主催リスト] 参加者{meta['participants']}人 / "
@@ -952,15 +959,16 @@ class App(tk.Tk):
             self._on_tab_log_selected(tab)
 
     def _on_tab_log_selected(self, tab: WindowTab):
-        """ログ選択時: ログ末尾からインスタンスタイプを検出し、
-        干し芋/焼き芋なら干し芋自動自爆を自動ONにする"""
+        """ログ選択時: ログ末尾からインスタンスタイプを検出して知らせる。
+
+        干し芋/焼き芋のルールはインスタンス種別だけで常時適用されるので、
+        ここで設定を触ることはしない。"""
         p = tab.v_log.get().strip()
         if not p:
             return
         itype = LogMonitor.LogMonitor.detect_instance_type_from_log(Path(p))
-        if itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO) and not tab.v_hoshiimo.get():
-            tab.v_hoshiimo.set(True)
-            self._log(f"[窓{tab.idx+1}] 干し芋/焼き芋インスタンス検出 → 干し芋自動自爆をON")
+        if itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            self._log(f"[窓{tab.idx+1}] {itype}インスタンス検出 → グループ判定を適用します")
 
     def _assign_logs(self):
         """
@@ -1025,7 +1033,9 @@ class App(tk.Tk):
             cfg.voice_8pages        = self.v_voice_8pages.get().strip()
             cfg.voice_punish        = self.v_voice_punish.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
-            mon = LogMonitor.LogMonitor(cfg, self.keepOn_set, self._log, window_idx=tab.idx + 1)
+            mon = LogMonitor.LogMonitor(cfg, self.keepOn_set, self._log,
+                                        window_idx=tab.idx + 1,
+                                        host_wishes=self.host_wishes)
             self.monitors.append(mon)
             mon.start()
 
