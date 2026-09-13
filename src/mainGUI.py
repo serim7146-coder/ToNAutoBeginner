@@ -164,18 +164,14 @@ class WindowTab(ttk.Frame):
         ttk.Separator(p, orient="horizontal").pack(fill="x", padx=10, pady=8)
         cf = ttk.Frame(p)
         cf.pack(fill="x", padx=10)
-        self.v_active      = tk.BooleanVar(value=True)
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
         self.v_cancel_afk  = tk.BooleanVar(value=True)
         self.v_announce_intermission = tk.BooleanVar(value=False)
-        ttk.Checkbutton(cf, text="この窓を有効化",            variable=self.v_active).pack(side="left")
-        ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
-        cf2 = ttk.Frame(p)
-        cf2.pack(fill="x", padx=10, pady=(4, 0))
-        ttk.Checkbutton(cf2, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left")
+        ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
@@ -213,8 +209,6 @@ class WindowTab(ttk.Frame):
                 self._on_log_selected(self)
 
     def get_config(self) -> "tuple[Optional[LogMonitor.WindowConfig], Optional[str]]":
-        if not self.v_active.get():
-            return None, None
         log_str = self.v_log.get().strip()
         if not log_str:
             return None, "ログファイルが未設定です"
@@ -462,12 +456,9 @@ class App(tk.Tk):
                    command=self._assign_logs).pack(side="left")
 
         # ── VRChat起動 ──
-        # 毎回触るものではないので既定は畳んでおく。ヘッダの区切り線が
-        # これまでの Separator を兼ねる
-        f2_launch = CollapsibleFrame(f2, text="VRChat起動", collapsed=True)
-        f2_launch.pack(fill="x", pady=(6, 0))
-        f2_launch = f2_launch.content
-        lf1 = ttk.Frame(f2_launch)
+        # 起動ボタンは常に見えているべきなので、折りたたみの外に置く
+        ttk.Separator(f2, orient="horizontal").pack(fill="x", pady=6)
+        lf1 = ttk.Frame(f2)
         lf1.pack(fill="x")
         self.btn_launch = ttk.Button(lf1, text="🚀 VRChatを起動", command=self._launch_vrchat)
         self.btn_launch.pack(side="left")
@@ -487,8 +478,13 @@ class App(tk.Tk):
         self.lbl_launch = ttk.Label(lf1, text="", foreground=config.GUI_GRN)
         self.lbl_launch.pack(side="left", padx=(10, 0))
 
+        # 詳細はボタンの下へ畳む。毎回触るものではないので既定は畳んだ状態
+        f2_launch = CollapsibleFrame(f2, text="VRChat起動の詳細設定", collapsed=True)
+        f2_launch.pack(fill="x", pady=(6, 0))
+        f2_launch = f2_launch.content
+
         lf2 = ttk.Frame(f2_launch)
-        lf2.pack(fill="x", pady=(4, 0))
+        lf2.pack(fill="x")
         self.v_join_world = tk.BooleanVar(value=False)
         ttk.Checkbutton(lf2, text="ToNへ自動的にJoin",
                         variable=self.v_join_world).pack(side="left")
@@ -520,8 +516,9 @@ class App(tk.Tk):
                   foreground=config.GUI_YLW).pack(side="left", padx=(6, 0))
 
 
+        # 窓数の話なので折りたたみの外
         self.lbl_win_warn = ttk.Label(
-            f2_launch, text="※ 窓数はマクロ起動前に設定してください",
+            f2, text="※ 窓数はマクロ起動前に設定してください",
             foreground=config.GUI_YLW)
         self.lbl_win_warn.pack(anchor="w")
 
@@ -598,7 +595,7 @@ class App(tk.Tk):
         fhf = ttk.Frame(self)
         fhf.pack(pady=(0, 4))
         self.btn_hands_free = tk.Button(
-            fhf, text="🤖 完全放置モード: OFF（全窓共通）",
+            fhf, text="完全放置モード: OFF",
             bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_hands_free)
@@ -611,12 +608,12 @@ class App(tk.Tk):
         fif = ttk.Frame(self)
         fif.pack(pady=(0, 4))
         self.btn_item_get_begin = tk.Button(
-            fif, text="🎯 アイテム取得→Begin: OFF（全窓共通）",
+            fif, text="アイテム取得→Begin: OFF",
             bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_item_get_begin)
         self.btn_item_get_begin.pack(side="left")
-        ttk.Label(fif, text="← ONにするとアイテムロストラウンド開始時にフォーカス＆フリーズ",
+        ttk.Label(fif, text="← ONにするとアイテムロストラウンド終了時にフォーカス＆フリーズ",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # 速度によるラウンド種別の検知（全窓共通）
@@ -627,9 +624,9 @@ class App(tk.Tk):
             font=("Segoe UI", 11, "bold"), relief="raised", padx=12, pady=5,
             command=self._toggle_speed_detect)
         self.btn_speed_detect.pack(side="left")
-        ttk.Label(fsd, text="← Begin受理後の移動速度で 8 Pages / Punished を判定"
-                            "（判定は全インスタンス・横移動はプライベートのみ）",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        # ttk.Label(fsd, text="← Begin受理後の移動速度で 8 Pages / Punished を判定"
+        #                     "（判定は全インスタンス・横移動はプライベートのみ）",
+        #           foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
         self._refresh_speed_detect_button()
 
         # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない
@@ -720,12 +717,12 @@ class App(tk.Tk):
         SharedState.set_item_begin_mode(val)
         if val:
             self.btn_item_get_begin.config(
-                text="🎯 アイテム取得→Begin: ON（全窓共通）",
+                text="アイテム取得→Begin: ON",
                 bg="#1a3a5a", fg="#89b4fa", relief="sunken")
             self._log("[アイテム取得→Begin] ON: ラウンド開始時にフォーカス＆フリーズ")
         else:
             self.btn_item_get_begin.config(
-                text="🎯 アイテム取得→Begin: OFF（全窓共通）",
+                text="アイテム取得→Begin: OFF",
                 bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
 
@@ -739,7 +736,7 @@ class App(tk.Tk):
     def _refresh_speed_detect_button(self):
         on = SharedState.get_speed_detect()
         self.btn_speed_detect.config(
-            text=f"⏩ 速度でラウンド種別を検知: {'ON' if on else 'OFF'}（全窓共通）",
+            text=f"速度検知: {'ON' if on else 'OFF'}",
             bg="#1a3a2a" if on else config.GUI_SUB,
             fg="#a6e3a1" if on else config.GUI_FG,
             relief="sunken" if on else "raised")
@@ -758,13 +755,13 @@ class App(tk.Tk):
         SharedState.set_hands_free(val)
         if val:
             self.btn_hands_free.config(
-                text="🤖 完全放置モード: ON（全窓共通）",
+                text="完全放置モード: ON",
                 bg="#3a1a1a", fg=config.GUI_RED, relief="sunken")
             self._log("[放置モード] ON: アイテムロスト無視・全ラウンド即自爆・アナウンス停止"
                       "（プライベート系の窓のみ）")
         else:
             self.btn_hands_free.config(
-                text="🤖 完全放置モード: OFF（全窓共通）",
+                text="完全放置モード: OFF",
                 bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[放置モード] OFF")
 
@@ -954,7 +951,7 @@ class App(tk.Tk):
         matched = VRChatDiscovery.match_windows_to_logs(
             windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
 
-        active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
+        active_tabs = list(self.tabs)
         for i, tab in enumerate(active_tabs):
             if i >= len(windows):
                 break
@@ -998,8 +995,8 @@ class App(tk.Tk):
             # （霧ラウンドや3クラ解放など、tnl以外を根拠にした続行はそのまま効く）
             self._log("[起動] tnl未読み込み → tnlからの続行は0件として動作します")
 
-        # 有効な窓のログが空なら自動割り当て
-        active_tabs = [tab for tab in self.tabs if tab.v_active.get()]
+        # ログが空なら自動割り当て
+        active_tabs = list(self.tabs)
         logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, len(active_tabs))
         log_idx = 0
         for tab in active_tabs:
@@ -1225,7 +1222,7 @@ class App(tk.Tk):
                 base_link = VRChatLauncher.build_ton_link(user_id)
                 self._log("[起動] ToNの新規インスタンスを生成します（%s）" % user_id)
 
-        tabs = [tab for tab in self.tabs if tab.v_active.get()]
+        tabs = list(self.tabs)
         if not tabs:
             messagebox.showerror("エラー", "有効な窓がありません")
             return
@@ -1326,8 +1323,6 @@ class App(tk.Tk):
         """
         missing = []
         for tab in self.tabs:
-            if not tab.v_active.get():
-                continue
             p = tab.v_log.get().strip()
             if not p:
                 continue
@@ -1356,7 +1351,7 @@ class App(tk.Tk):
         launched = getattr(self, "_launched_tab_indices", None)
         targets = [(tab.idx + 1, tab._get_selected_hwnd())
                    for tab in self.tabs
-                   if tab.v_active.get() and (launched is None or tab.idx in launched)]
+                   if launched is None or tab.idx in launched]
         targets = [(no, h) for no, h in targets if h]
         if not targets:
             self._log("[入室操作] 対象の窓がありません")

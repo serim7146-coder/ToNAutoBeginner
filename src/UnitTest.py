@@ -2203,6 +2203,67 @@ class TestHostListSource(unittest.TestCase):
         app.after.assert_called_once()
 
 
+class TestWindowTabAlwaysActive(unittest.TestCase):
+    """「この窓を有効化」を廃止した。窓タブの窓はすべて対象になる"""
+
+    def _source(self):
+        return Path("mainGUI.py").read_text(encoding="utf-8")
+
+    def test_the_checkbox_and_its_variable_are_gone(self):
+        self.assertNotIn("v_active", self._source())
+
+    def test_a_tab_without_a_log_reports_the_error(self):
+        """以前は無効化して (None, None) で黙って飛ばせた。その経路が消えたこと"""
+        tab = type("FakeTab", (), {})()
+        tab.v_log = TestHostListSource.FakeVar("   ")
+
+        cfg, err = mainGUI.WindowTab.get_config(tab)
+
+        self.assertIsNone(cfg)
+        self.assertEqual(err, "ログファイルが未設定です")
+
+    def test_no_tab_is_filtered_out_any_more(self):
+        """フィルタを外して list(self.tabs) になっていること"""
+        source = self._source()
+
+        self.assertNotIn("if tab.v_active", source)
+        self.assertEqual(source.count("active_tabs = list(self.tabs)"), 2)
+
+
+class TestLaunchWidgetsStillReachable(unittest.TestCase):
+    """折りたたみの親を変えても、他のメソッドが触る属性が残っていること"""
+
+    NAMES = ("btn_launch", "btn_stop_entry", "lbl_launch", "lbl_win_warn")
+
+    def setUp(self):
+        self.source = Path("mainGUI.py").read_text(encoding="utf-8")
+
+    def test_every_widget_is_still_assigned(self):
+        for name in self.NAMES:
+            self.assertIn(f"self.{name} = ", self.source, name)
+
+    def test_they_are_still_configured_elsewhere(self):
+        """config(state=...) される側なので、参照が消えていないこと"""
+        for name in self.NAMES:
+            uses = self.source.count(f"self.{name}")
+            self.assertGreater(uses, 1, f"{name} が代入だけになっている")
+
+    def test_the_launch_button_is_outside_the_collapsible(self):
+        """畳んでも「🚀 VRChatを起動」が見えていること"""
+        self.assertIn("self.btn_launch = ttk.Button(lf1", self.source)
+        self.assertIn("lf1 = ttk.Frame(f2)", self.source)
+        self.assertIn('CollapsibleFrame(f2, text="VRChat起動の詳細設定"',
+                      self.source)
+
+    def test_the_details_are_inside_the_collapsible(self):
+        for frame in ("lf2", "lf25", "lf3"):
+            self.assertIn(f"{frame} = ttk.Frame(f2_launch)", self.source, frame)
+
+    def test_the_window_count_warning_is_outside(self):
+        """※ 窓数はマクロ起動前に… は窓数の話なので畳まない"""
+        self.assertIn("self.lbl_win_warn = ttk.Label(\n            f2, ", self.source)
+
+
 class TestSuicideKeyFixed(unittest.TestCase):
     """自爆キーは config 固定。GUIの入力欄は消えている"""
 
@@ -2210,8 +2271,8 @@ class TestSuicideKeyFixed(unittest.TestCase):
         SharedState.set_suicide_key(config.SELF_SUICIDE_KEY)
 
     def test_the_gui_has_no_input_for_it(self):
-        self.assertNotIn("v_suicide_key", io.open(
-            "mainGUI.py", encoding="utf-8").read(),
+        self.assertNotIn("v_suicide_key",
+                         Path("mainGUI.py").read_text(encoding="utf-8"),
             "入力欄と適用ボタンは削除されていること")
 
     def test_the_default_comes_from_config(self):
@@ -3036,7 +3097,6 @@ class TestJoinStatus(unittest.TestCase):
         for i, in_ton in enumerate((True, False, True)):
             tab = type("FakeTab", (), {})()
             tab.idx = i
-            tab.v_active = TestMultiWindowLaunch.FakeVar(True)
             tab.v_log = TestMultiWindowLaunch.FakeVar(f"log{i}.txt")
             tab._in_ton = in_ton
             tabs.append(tab)
@@ -5020,13 +5080,29 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
         self.assertEqual(started, ["_delayed_group_decision"])
 
-    def test_a_curious_creature_waits_too(self):
+    def test_a_skip_only_round_does_not_wait(self):
+        """Bloodbath は問答無用スキップ。待ってもテラーIDを見ないので即決める"""
         monitor = self._monitor()
 
         started = self._round(monitor, "Bloodbath",
                               [config.CURIOUS_CREATURE_ID, 2, 3])
 
-        self.assertEqual(started, ["_delayed_group_decision"])
+        self.assertEqual(started, ["do_skip"])
+
+    def test_an_always_continue_round_does_not_wait(self):
+        monitor = self._monitor()
+
+        started = self._round(monitor, "8 Pages",
+                              [config.CURIOUS_CREATURE_ID, 2])
+
+        self.assertEqual(started, [])
+
+    def test_the_classic_wait_is_about_a_second(self):
+        """実測ではバリアントの出現ログは Killers行と同じ秒に出る"""
+        monitor = self._monitor()
+        monitor.st.round_type = "Classic"
+
+        self.assertLessEqual(monitor._variant_wait_sec(), 1.0)
 
     def _run_delayed(self, monitor, killers_round_type="Classic", wait_sec=0.0):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
