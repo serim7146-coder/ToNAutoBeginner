@@ -3700,7 +3700,7 @@ class TestGigabytesDetect(unittest.TestCase):
 
 
 class TestAtrachedDetect(unittest.TestCase):
-    """atrached は Sonic のVariant。IDでは判別できないのでログ行で拾う"""
+    """Atrached は Sonic のVariant。IDでは判別できないのでログ行で拾う"""
 
     LINE = "2026.09.12 20:23:15 Debug      -  Lets play a game..."
 
@@ -3729,7 +3729,7 @@ class TestAtrachedDetect(unittest.TestCase):
              patch.object(PlaySound, "play_sound") as mock_play:
             monitor._process(self.LINE)
 
-        hits = [m for m in logs if "atrached 出現" in m]
+        hits = [m for m in logs if "Atrached 出現" in m]
         self.assertEqual(len(hits), 1, logs)
         mock_thread.assert_not_called()
         mock_play.assert_not_called()
@@ -3744,7 +3744,7 @@ class TestAtrachedDetect(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process(self.LINE)
 
-        self.assertTrue(any("atrached 出現" in m for m in logs), logs)
+        self.assertTrue(any("Atrached 出現" in m for m in logs), logs)
 
     def test_sonic_is_replaced_with_atrached(self):
         """HHI(47->190)と同じ形。Sonic(40) を 191 に置換する"""

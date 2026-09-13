@@ -229,7 +229,7 @@ CBPS_SKIP_ROUNDS = {
 # グループ判定でこれを待つのは Classic だけ（Variantかどうかで結論が
 # 反転するのは Classic だけで、他のラウンドは待っても結論が変わらない）。
 # 実測(手元ログ): Variantの出現ログは Killers行と同じ秒に出る
-# ——Gigabytes 12件・atrached 2件とも差0秒。ログのtail間隔(0.3秒)を
+# ——Gigabytes 12件・Atrached 2件とも差0秒。ログのtail間隔(0.3秒)を
 # 見込んでも1秒あれば足りる。Variantが確定した時点で待ちは打ち切る。
 TERROR_VARIANT_WAIT_SEC = {
     "Classic":      1.0,

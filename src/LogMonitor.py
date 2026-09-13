@@ -458,7 +458,7 @@ class LogMonitor:
             self._log("Sonic -> Atrached")
             self._send_round_statistics_once()
         else:
-            self._log("atrached variant detected")
+            self._log("Atrached variant detected")
 
     def _mark_gigabytes(self):
         """元IDが不定なので「置換」ではなく terror_ids ごと差し替える"""
@@ -665,7 +665,7 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
-            self._log("🎮 atrached 出現（SonicのVariant）")
+            self._log("🎮 Atrached 出現（SonicのVariant）")
             self._mark_atrached_variant()
             return
 
