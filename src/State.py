@@ -11,7 +11,6 @@ class WindowConfig:
     auto_begin: bool = True
     do_skip: bool = True
     cancel_afk: bool = True
-    hoshiimo_skip: bool = False
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     voice_intermission: str = ""
     announce_intermission: bool = False
@@ -66,3 +65,9 @@ class WindowState:
     sabotage_murder_this_round: bool = False
     bloodthirsty_creature_variant: bool = False
     hungry_home_invader_variant: bool = False
+    atrached_variant: bool = False
+    gigabytes: bool = False
+    # Sabotageで選出されたマーダーの表示名（Sus player / Sus player 2）。
+    # Verified Round End でクリアする——ROUND_START と同じ秒に積まれるため
+    sus_players: list[str] = field(default_factory=list)
+    moon_repeat: bool = False   # このmoonが2回目以降か（ROUND_STARTで確定）

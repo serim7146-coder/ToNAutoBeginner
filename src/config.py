@@ -196,12 +196,7 @@ YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
 # ── グループインスタンスで、自動自爆するラウンド ──
-HOSHIIMO_SKIP_ROUNDS = {
-    "Classic",
-    "Classic.exe",
-    "Bloodbath",
-    "Randomizer",
-}
+# 干し芋/焼き芋の判定は GroupRound へ移した（ラウンドごとにルールが違うため）
 CBPS_SKIP_ROUNDS = {
     "Classic",
     "Bloodbath",
@@ -291,6 +286,18 @@ BLOODTHIRSTY_CREATURE_LOG = "The creature is bloodthirsty today..."
 SLENDER_ID = 47
 HUNGRY_HOME_INVADER_ID = 190
 HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
+SONIC_ID = 40
+ATRACHED_ID = 191
+ATRACHED_LOG = "Lets play a game..."
+# 元IDが毎回違う（実測12件すべて別ID）ので、IDからは予測できない。
+# Classicの1体構成は常に候補として出現ログを待つ
+GIGABYTES_ID = 314
+GIGABYTES_LOG = "The Gigabytes have come."
+
+# バリアントテラー（Classicでもこれなら通常判定に回す）
+VARIANT_TERROR_IDS = frozenset({
+    HUNGRY_HOME_INVADER_ID, ATRACHED_ID, BLOODTHIRSTY_CREATURE_ID, GIGABYTES_ID,
+})
 
 # ── 音量 ──
 DEFAULT_SOUND_VOLUME = 1.0

@@ -88,12 +88,16 @@ HOST_SAVE_IGNORED_KEYS = frozenset({
 })
 
 
-def load_host_save(path: str) -> tuple[dict[str, set[int]], dict]:
+def load_host_save(path: str) -> tuple[dict[str, set[int]], dict, dict]:
     """ToN ListTool の主催リストを keepOn_set の形で読む。
 
     全タブの participants の続行希望を OR で畳む。waiting（待機列）は
     含めない——その場にいない人のために生き残ってしまうため。
     active_tab は見ない（UIの選択状態で判定が変わらないように）。
+
+    3つ目に参加者別の希望 `{vrc_name: {round_key: set(ids)}}` も返す。
+    畳んだ `keepOn_set` では「誰の希望か」が消えるため、Sabotage の
+    マーダー判定には使えないため。
 
     ToN ListTool の内部ファイルで公開仕様ではないので、想定外の形は
     黙って読み飛ばす。gzip/JSON として壊れている場合だけ例外を投げる
@@ -103,6 +107,7 @@ def load_host_save(path: str) -> tuple[dict[str, set[int]], dict]:
         raw = json.loads(f.read().decode("utf-8"))
 
     keepOn_set: dict[str, set[int]] = {}
+    wishes: dict[str, dict[str, set[int]]] = {}
     tabs = raw.get("tabs") if isinstance(raw, dict) else None
     tabs = tabs if isinstance(tabs, list) else []
     participants = 0
@@ -119,6 +124,8 @@ def load_host_save(path: str) -> tuple[dict[str, set[int]], dict]:
             data = member.get("data")
             if not isinstance(data, dict):
                 continue
+            name = member.get("vrc_name")
+            mine = wishes.setdefault(name, {}) if isinstance(name, str) and name else None
             for round_key, slots in data.items():
                 if not isinstance(slots, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
                     continue
@@ -126,8 +133,11 @@ def load_host_save(path: str) -> tuple[dict[str, set[int]], dict]:
                        if isinstance(v, int) and v != 0}
                 if ids:
                     keepOn_set.setdefault(round_key, set()).update(ids)
+                    if mine is not None:
+                        # 同名が複数タブにいることがある。畳んで持つ
+                        mine.setdefault(round_key, set()).update(ids)
 
-    return keepOn_set, {"participants": participants, "tabs": len(tabs)}
+    return keepOn_set, {"participants": participants, "tabs": len(tabs)}, wishes
 
 def should_continue(keepOn_set: dict, tnl_key: str, terror_ids: list[int]) -> bool:
     if tnl_key not in keepOn_set:

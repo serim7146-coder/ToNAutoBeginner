@@ -20,6 +20,8 @@ import ConnectDB
 import PlaySound
 import LogParser
 import MatchTNL
+import RoundSequence
+import GroupRound
 import RoundDecision
 import Statistics
 import StatisticsGUI
@@ -1121,6 +1123,523 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._sync_launch_count.assert_called_once()
 
 
+class TestGroupRoundTable(unittest.TestCase):
+    """第1部: 干し芋/焼き芋のラウンド判定表"""
+
+    HOSHIIMO = config.INSTANCE_HOSHIIMO
+    YAKIIMO = config.INSTANCE_YAKIIMO
+    SONIC = 40
+
+    def _decide(self, instance_type, round_type, terror_ids=(1,), **kw):
+        return GroupRound.decide(instance_type, round_type, list(terror_ids), **kw)
+
+    def _both(self, round_type, terror_ids=(1,), **kw):
+        return {self._decide(self.HOSHIIMO, round_type, terror_ids, **kw),
+                self._decide(self.YAKIIMO, round_type, terror_ids, **kw)}
+
+    def test_classic_without_a_variant_is_skipped(self):
+        self.assertEqual(self._both("Classic", [self.SONIC]), {GroupRound.SKIP})
+
+    def test_classic_with_each_variant_falls_through(self):
+        for tid in (190, 191, 192, 314):
+            self.assertEqual(self._both("Classic", [tid]), {GroupRound.NORMAL}, tid)
+
+    def test_bloodbath_is_skipped(self):
+        self.assertEqual(self._both("Bloodbath"), {GroupRound.SKIP})
+
+    def test_classic_exe_and_randomizer_are_skipped_even_with_a_variant(self):
+        """バリアント例外なし"""
+        for round_type in ("Classic.exe", "Randomizer"):
+            self.assertEqual(self._both(round_type, [192]), {GroupRound.SKIP},
+                             round_type)
+
+    def test_double_trouble_and_bloodbath_ex_use_the_normal_judgement(self):
+        for round_type in ("Double Trouble", "Bloodbath EX"):
+            self.assertEqual(self._both(round_type), {GroupRound.NORMAL}, round_type)
+
+    def test_eight_pages_and_run_always_continue(self):
+        for round_type in ("8 Pages", "Run"):
+            self.assertEqual(self._both(round_type), {GroupRound.CONTINUE}, round_type)
+
+    def test_hoshiimo_fog_always_continues(self):
+        self.assertEqual(self._decide(self.HOSHIIMO, "Fog", [7]),
+                         GroupRound.CONTINUE)
+
+    def test_yakiimo_fog_revealed_as_alternate_is_judged(self):
+        alternate = MatchTNL.ALTERNATE_OFFSET + 5
+
+        self.assertEqual(
+            self._decide(self.YAKIIMO, "Fog", [alternate],
+                         killers_round_type="Fog (Alternate)"),
+            GroupRound.NORMAL)
+
+    def test_yakiimo_fog_revealed_as_plain_fog_is_skipped(self):
+        self.assertEqual(
+            self._decide(self.YAKIIMO, "Fog", [7], killers_round_type="Fog"),
+            GroupRound.SKIP)
+
+    def test_yakiimo_fog_updated_by_foxy_is_still_the_fog_row(self):
+        """Foxy検出で st.round_type が Fog (Alternate) に更新されることがある"""
+        self.assertEqual(
+            self._decide(self.YAKIIMO, "Fog (Alternate)", [140],
+                         killers_round_type="Fog (Alternate)"),
+            GroupRound.NORMAL)
+        self.assertEqual(
+            self._decide(self.HOSHIIMO, "Fog (Alternate)", [140]),
+            GroupRound.CONTINUE)
+
+    def test_a_repeated_moon_is_skipped(self):
+        for moon in RoundSequence.MOONS:
+            self.assertEqual(self._both(moon, moon_repeat=True),
+                             {GroupRound.SKIP}, moon)
+
+    def test_yakiimo_skips_the_first_mystic_moon_and_solstice(self):
+        for moon in ("Mystic Moon", "Solstice"):
+            self.assertEqual(self._decide(self.YAKIIMO, moon), GroupRound.SKIP, moon)
+
+    def test_yakiimo_plays_the_first_blood_moon_and_twilight(self):
+        for moon in ("Blood Moon", "Twilight"):
+            self.assertEqual(self._decide(self.YAKIIMO, moon),
+                             GroupRound.CONTINUE, moon)
+
+    def test_hoshiimo_plays_every_first_moon(self):
+        for moon in RoundSequence.MOONS:
+            self.assertEqual(self._decide(self.HOSHIIMO, moon),
+                             GroupRound.CONTINUE, moon)
+
+    def test_anything_else_uses_the_normal_judgement(self):
+        for round_type in ("Midnight", "Punished", "Cracked", "Ghost", "Unbound"):
+            self.assertEqual(self._both(round_type), {GroupRound.NORMAL}, round_type)
+
+    def test_private_is_never_touched(self):
+        for round_type in ("Classic", "Bloodbath", "8 Pages", "Fog", "Sabotage"):
+            self.assertEqual(
+                self._decide(config.INSTANCE_PRIVATE, round_type),
+                GroupRound.NORMAL, round_type)
+
+    def test_other_instances_are_never_touched(self):
+        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_CBPS,
+                      config.INSTANCE_OTHER_GROUP):
+            self.assertEqual(self._decide(itype, "Classic"),
+                             GroupRound.NORMAL, itype)
+
+
+class TestGroupRoundSabotage(unittest.TestCase):
+    """第2部: Sabotage の選出者判定"""
+
+    STAR = GroupRound.SABOTAGE_STAR_KEY
+    MURDER = GroupRound.SABOTAGE_MURDER_KEY
+
+    def _decide(self, instance_type, terror_ids=(5,), sus=(), wishes=None,
+                follow_host=True):
+        return GroupRound.decide(
+            instance_type, "Sabotage", list(terror_ids),
+            sus_players=list(sus),
+            host_wishes=wishes if wishes is not None else {},
+            follow_host=follow_host,
+        )
+
+    def test_a_murderer_missing_from_the_list_has_no_wish(self):
+        """実測では28人中7人が未掲載。珍しくない"""
+        wishes = {"ほかのひと": {self.STAR: {99}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO, sus=["のってないひと"],
+                         wishes=wishes),
+            GroupRound.SKIP)
+
+    def test_yakiimo_skips_when_a_murderer_wants_the_murder_slot(self):
+        wishes = {"ソノア7": {self.MURDER: {5}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes),
+            GroupRound.SKIP)
+
+    def test_one_of_two_murderers_is_enough(self):
+        wishes = {"ソノア7": {self.MURDER: {99}},
+                  "ユウナ2858": {self.MURDER: {5}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO,
+                         sus=["ソノア7", "ユウナ2858"], wishes=wishes),
+            GroupRound.SKIP)
+
+    def test_a_non_murderer_wanting_the_star_slot_continues(self):
+        wishes = {"ソノア7": {self.MURDER: {99}},
+                  "みているひと": {self.STAR: {5}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes),
+            GroupRound.CONTINUE)
+
+    def test_the_murderers_own_star_wish_does_not_count(self):
+        wishes = {"ソノア7": {self.STAR: {5}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes),
+            GroupRound.SKIP)
+
+    def test_hoshiimo_ignores_the_murder_slot(self):
+        """干し芋はマーダー側の判定をしない"""
+        wishes = {"ソノア7": {self.MURDER: {5}},
+                  "みているひと": {self.STAR: {5}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_HOSHIIMO, sus=["ソノア7"], wishes=wishes),
+            GroupRound.CONTINUE, "マーダー希望があっても star で続行になること")
+
+    def test_hoshiimo_skips_without_a_star_wish(self):
+        wishes = {"みているひと": {self.STAR: {99}}}
+
+        self.assertEqual(
+            self._decide(config.INSTANCE_HOSHIIMO, sus=["ソノア7"], wishes=wishes),
+            GroupRound.SKIP)
+
+    def test_following_off_falls_back_to_the_normal_judgement(self):
+        """追従OFFでは誰の希望か分からない。従来どおり keepOn_set で判定する"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            self.assertEqual(
+                self._decide(itype, sus=["ソノア7"], wishes={}, follow_host=False),
+                GroupRound.NORMAL, itype)
+
+    def test_following_on_but_empty_list_also_falls_back(self):
+        """0人のときは前のリストを保持しているので、希望が空なら判断できない"""
+        self.assertEqual(
+            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes={}),
+            GroupRound.NORMAL)
+
+
+class TestRoundSequence(unittest.TestCase):
+    """ラウンド並び(N/S)の推定と moon の解放判定"""
+
+    def _seq(self, *round_types):
+        seq = RoundSequence.RoundSequence()
+        for round_type in round_types:
+            seq.on_round(round_type)
+        return seq
+
+    def _label(self, seq, index):
+        return seq.labels()[index][1]
+
+    def test_ghost_is_normal_when_followed_by_a_special(self):
+        """Classic → Ghost → Midnight。Midnight(S)はN連が要るのでGhostはN"""
+        seq = self._seq("Classic", "Ghost", "Midnight")
+
+        self.assertEqual(self._label(seq, 1), "N")
+
+    def test_ghost_is_special_when_followed_by_a_normal(self):
+        """Classic → Ghost → Run。GhostもNだとN連3になるのでGhostはS"""
+        seq = self._seq("Classic", "Ghost", "Run")
+
+        self.assertEqual(self._label(seq, 1), "S")
+
+    def test_two_overrides_in_a_row_are_resolved(self):
+        seq = self._seq("Classic", "Unbound", "Ghost", "Bloodbath")
+
+        self.assertEqual(self._label(seq, 1), "S", "Unbound")
+        self.assertEqual(self._label(seq, 2), "N", "Ghost")
+
+    def test_master_switch_allows_a_special_after_a_special(self):
+        """通常なら S は連続しない。master切替の次だけ許す"""
+        seq = self._seq("Classic", "Ghost", "Midnight")   # Midnight で run=0
+        seq.on_master_switched()
+
+        seq.on_round("Bloodbath")
+
+        self.assertEqual(self._label(seq, 3), "S")
+        self.assertTrue(seq._hyps, "矛盾で仮説が空になっていないこと")
+
+    def test_master_switch_applies_only_to_the_next_round(self):
+        seq = self._seq("Classic", "Ghost", "Midnight")
+        seq.on_master_switched()
+        seq.on_round("Bloodbath")
+
+        self.assertFalse(seq.force_special, "1ラウンドで使い切ること")
+
+    def test_classics_may_repeat_before_the_first_special(self):
+        """3クラ未解放の間は Classic しか来ない。N連の上限を当てはめない"""
+        seq = self._seq(*["Classic"] * 6)
+
+        self.assertTrue(seq._hyps, "矛盾扱いにしないこと")
+        self.assertFalse(seq.special_seen)
+        self.assertEqual([lab for _t, lab in seq.labels()], ["N"] * 6)
+
+    def test_first_moon_can_be_either_but_a_repeat_is_special(self):
+        first = RoundSequence.RoundSequence()
+        self.assertEqual(
+            first._candidate_labels("Mystic Moon", False, True), ("N", "S"))
+
+        repeat = RoundSequence.RoundSequence()
+        repeat.moon_done["Mystic Moon"] = True
+        self.assertEqual(
+            repeat._candidate_labels("Mystic Moon", False, False), ("S",))
+
+    def test_a_moon_flags_only_itself(self):
+        seq = self._seq("Classic", "Mystic Moon")
+
+        self.assertTrue(seq.is_moon_repeat("Mystic Moon"))
+        for other in ("Blood Moon", "Twilight", "Solstice"):
+            self.assertFalse(seq.is_moon_repeat(other), other)
+
+    def test_the_flag_is_set_even_if_the_round_is_skipped(self):
+        """焼き芋は1回目の Mystic Moon をスキップするが、出た事実は変わらない"""
+        seq = RoundSequence.RoundSequence()
+        seq.on_round("Classic")
+
+        was_repeat = seq.is_moon_repeat("Mystic Moon")
+        seq.on_round("Mystic Moon")     # スキップしても on_round は通す
+
+        self.assertFalse(was_repeat, "判定時点では1回目")
+        self.assertTrue(seq.is_moon_repeat("Mystic Moon"))
+
+    def test_alternate_confirmed_normal_unlocks_all_four(self):
+        seq = self._seq("Classic", "Alternate", "Midnight")
+
+        self.assertEqual(self._label(seq, 1), "N")
+        self.assertTrue(seq.moons_unlocked())
+
+    def test_alternate_confirmed_special_unlocks_nothing(self):
+        """直前にNが2つ続いていれば Alternate は S しか取れない"""
+        seq = self._seq("Classic", "Ghost", "Bloodbath", "Classic", "Classic",
+                        "Alternate")
+
+        self.assertEqual(self._label(seq, 5), "S")
+        self.assertFalse(seq.moons_unlocked())
+
+    def test_an_undetermined_alternate_does_not_unlock(self):
+        """未確定のうちは経路Bを発火させない（未解放扱い）"""
+        seq = self._seq("Alternate", "Classic")
+
+        self.assertEqual(self._label(seq, 0), "", "まだ決まらないこと")
+        self.assertFalse(seq.moons_unlocked())
+
+    def test_a_later_round_can_unlock_retroactively(self):
+        seq = self._seq("Alternate")
+        self.assertFalse(seq.moons_unlocked())
+
+        seq.on_round("Midnight")
+
+        self.assertEqual(self._label(seq, 0), "N")
+        self.assertTrue(seq.moons_unlocked(), "確定した時点で4種立てること")
+
+    def test_reset_clears_everything(self):
+        seq = self._seq("Classic", "Mystic Moon", "Alternate", "Midnight")
+        self.assertTrue(seq.moons_unlocked())
+
+        seq.reset()
+
+        self.assertFalse(any(seq.moon_done.values()))
+        self.assertEqual(seq.labels(), [])
+        self.assertFalse(seq.special_seen)
+        self.assertEqual(seq._hyps, {(run, ()) for run in range(3)})
+
+    def test_a_contradiction_falls_back_to_unknown(self):
+        """前提が崩れても以後の判定を殺さない（仮説を空のままにしない）"""
+        seq = RoundSequence.RoundSequence()
+        seq.special_seen = True
+        seq._hyps = {(2, ())}          # N連が上限。次にNは来られない
+
+        seq.on_round("Classic")
+
+        self.assertEqual(seq._hyps, {(run, ()) for run in range(3)})
+
+
+class TestRoundSequenceWiring(unittest.TestCase):
+    """LogMonitor 側の配線（ラウンド並びの前進とリセット）"""
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        return monitor
+
+    def _round_start(self, monitor, round_type):
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("This round is taking place at Facility (12) "
+                             f"and the round type is {round_type}")
+
+    def test_round_start_advances_the_sequence(self):
+        monitor = self._monitor()
+
+        self._round_start(monitor, "Classic")
+
+        self.assertEqual(monitor.sequence.labels(), [("Classic", "N")])
+
+    def test_moon_repeat_is_decided_before_the_flag_is_set(self):
+        """1回目は moon_repeat=False、同じmoonの2回目で True"""
+        monitor = self._monitor()
+
+        self._round_start(monitor, "Classic")
+        self._round_start(monitor, "Mystic Moon")
+        first = monitor.st.moon_repeat
+        self._round_start(monitor, "Mystic Moon")
+
+        self.assertFalse(first, "出た本人のラウンドは1回目")
+        self.assertTrue(monitor.st.moon_repeat)
+
+    def test_master_switch_line_is_wired(self):
+        monitor = self._monitor()
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("2026.09.11 23:50:50 Debug      -  "
+                             "[Behaviour] OnMasterClientSwitched")
+
+        self.assertTrue(monitor.sequence.force_special)
+
+    def test_joining_resets_the_sequence(self):
+        monitor = self._monitor()
+        self._round_start(monitor, "Classic")
+        self._round_start(monitor, "Mystic Moon")
+        self.assertTrue(monitor.sequence.is_moon_repeat("Mystic Moon"))
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("2026.09.05 14:00:00 Debug      -  [Behaviour] "
+                             "Joining wrld_1234:5678~group(grp_x)")
+
+        self.assertFalse(monitor.sequence.is_moon_repeat("Mystic Moon"))
+        self.assertEqual(monitor.sequence.labels(), [])
+
+
+class TestSusPlayers(unittest.TestCase):
+    """Sabotage の選出者を貯める（リセットは Verified Round End）"""
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        monitor.st.local_player_name = "わたし"
+        return monitor
+
+    def _feed(self, monitor, line):
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process(line)
+
+    def test_one_murderer_is_collected(self):
+        monitor = self._monitor()
+
+        self._feed(monitor, "Sus player = 3 ソノア7")
+
+        self.assertEqual(monitor.st.sus_players, ["ソノア7"])
+
+    def test_two_murderers_are_collected(self):
+        monitor = self._monitor()
+
+        self._feed(monitor, "Sus player = 3 ソノア7")
+        self._feed(monitor, "Sus player 2 = 0 ユウナ2858")
+
+        self.assertEqual(monitor.st.sus_players, ["ソノア7", "ユウナ2858"])
+
+    def test_the_same_name_is_not_doubled(self):
+        monitor = self._monitor()
+
+        self._feed(monitor, "Sus player = 3 ソノア7")
+        self._feed(monitor, "Sus player = 3 ソノア7")
+
+        self.assertEqual(monitor.st.sus_players, ["ソノア7"])
+
+    def test_round_start_does_not_clear_them(self):
+        """ROUND_START は Sus player と同じ秒に来る。ここで消すと選出者が消える"""
+        monitor = self._monitor()
+        self._feed(monitor, "Sus player = 3 ソノア7")
+
+        self._feed(monitor, "This round is taking place at Facility (12) "
+                            "and the round type is Sabotage")
+
+        self.assertEqual(monitor.st.sus_players, ["ソノア7"])
+
+    def test_verified_round_end_clears_them(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Sus player = 3 ソノア7")
+
+        self._feed(monitor, "Verified Round End")
+
+        self.assertEqual(monitor.st.sus_players, [])
+
+    def test_the_existing_self_check_still_works(self):
+        """自分がマーダーかの記録（アイテムロスト判定用）は残すこと"""
+        monitor = self._monitor()
+        monitor.st.in_round = True
+        monitor.st.round_type = "Sabotage"
+
+        self._feed(monitor, "Sus player = 3 わたし")
+
+        self.assertTrue(monitor.st.sabotage_murder_this_round)
+        self.assertEqual(monitor.st.sus_players, ["わたし"])
+
+
+class TestHostSaveWishes(unittest.TestCase):
+    """参加者別の続行希望（Sabotage のマーダー判定に使う）"""
+
+    CLASSIC = "Classic/クラシック"
+    MURDER = "Sabotage murder/サボタージュマーダー"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _write(self, raw):
+        path = Path(self._dir.name) / "host_save.json.gz"
+        with gzip.open(str(path), "wb") as f:
+            f.write(json.dumps(raw).encode("utf-8"))
+        return str(path)
+
+    def _member(self, name, data):
+        return {"vrc_name": name, "data": data}
+
+    def test_wishes_are_kept_per_participant(self):
+        path = self._write({"version": 5, "tabs": [{"participants": [
+            self._member("ソノア7", {self.CLASSIC: {"1": 1}}),
+            self._member("ユウナ2858", {self.MURDER: {"5": 1}})]}]})
+
+        keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+
+        self.assertEqual(wishes["ソノア7"], {self.CLASSIC: {1}})
+        self.assertEqual(wishes["ユウナ2858"], {self.MURDER: {5}})
+        self.assertEqual(keep_on, {self.CLASSIC: {1}, self.MURDER: {5}},
+                         "畳んだ方はこれまでどおり")
+
+    def test_waiting_players_are_not_listed(self):
+        path = self._write({"version": 5, "tabs": [{
+            "participants": [self._member("ソノア7", {self.CLASSIC: {"1": 1}})],
+            "waiting": [self._member("まちびと", {self.CLASSIC: {"9": 1}})]}]})
+
+        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+
+        self.assertEqual(list(wishes), ["ソノア7"])
+
+    def test_the_same_name_in_two_tabs_is_merged(self):
+        path = self._write({"version": 5, "tabs": [
+            {"participants": [self._member("ソノア7", {self.CLASSIC: {"1": 1}})]},
+            {"participants": [self._member("ソノア7", {self.CLASSIC: {"2": 1}})]}]})
+
+        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+
+        self.assertEqual(wishes["ソノア7"], {self.CLASSIC: {1, 2}})
+
+    def test_names_with_unusual_characters_are_kept_as_is(self):
+        """完全一致で引く。正規化しない（実測で一致することを確認済み）"""
+        names = ["Dynamic_Naël", "Miyα", "えだまめ-Salt", "あんてな〜"]
+        path = self._write({"version": 5, "tabs": [{"participants": [
+            self._member(n, {self.CLASSIC: {"1": 1}}) for n in names]}]})
+
+        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+
+        self.assertEqual(sorted(wishes), sorted(names))
+
+    def test_apply_host_wishes_updates_in_place(self):
+        app = type("FakeApp", (), {})()
+        app.host_wishes = {"だれか": {self.CLASSIC: {1}}}
+        before = app.host_wishes
+
+        mainGUI.App._apply_host_wishes(app, {"べつのひと": {self.MURDER: {5}}})
+
+        self.assertIs(app.host_wishes, before, "同じ dict のままにすること")
+        self.assertEqual(app.host_wishes, {"べつのひと": {self.MURDER: {5}}})
+
+
 class TestLoadHostSave(unittest.TestCase):
     """ToN ListTool の主催リストを keepOn_set の形で読む"""
 
@@ -1149,7 +1668,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 1, "2": 0}}),
                              self._member({self.CLASSIC: {"3": 1}})]}]})
 
-        keep_on, meta = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1, 3}})
         self.assertEqual(meta["participants"], 2)
@@ -1160,7 +1679,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 1}})],
             "waiting": [self._member({self.CLASSIC: {"99": 1}})]}]})
 
-        keep_on, meta = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1}})
         self.assertEqual(meta["participants"], 1, "waiting は人数にも数えない")
@@ -1171,7 +1690,7 @@ class TestLoadHostSave(unittest.TestCase):
             {"participants": [self._member({self.CLASSIC: {"2": 1}})]},
             {"participants": [self._member({self.FOG: {"7": 1}})]}]})
 
-        keep_on, meta = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1, 2}, self.FOG: {7}})
         self.assertEqual((meta["participants"], meta["tabs"]), (3, 3))
@@ -1181,7 +1700,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 0, "2": 0},
                                            self.FOG: {"5": 2}})]}]})
 
-        keep_on, _meta = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.FOG: {5}}, "全部0のラウンドキーは残さない")
 
@@ -1191,7 +1710,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.FOG_ALT: {"1": 1},
                                            self.CLASSIC: {"2": 1}})]}]})
 
-        keep_on, _meta = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {2}})
         self.assertNotIn(1, keep_on.get(self.FOG, set()), "通常Fogへ畳まないこと")
@@ -1208,7 +1727,7 @@ class TestLoadHostSave(unittest.TestCase):
         for raw in ({"version": 5},
                     {"version": 5, "tabs": []},
                     {"version": 5, "tabs": [{"participants": []}]}):
-            keep_on, meta = MatchTNL.load_host_save(self._write(raw))
+            keep_on, meta, _wishes = MatchTNL.load_host_save(self._write(raw))
 
             self.assertEqual(keep_on, {}, raw)
             self.assertEqual(meta["participants"], 0, raw)
@@ -1218,7 +1737,7 @@ class TestLoadHostSave(unittest.TestCase):
         path = self._write({"version": 99, "tabs": [{
             "participants": [self._member({self.CLASSIC: {"1": 1}})]}]})
 
-        keep_on, _meta = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1}})
 
@@ -1272,8 +1791,10 @@ class TestFollowHostSave(unittest.TestCase):
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
+        app.host_wishes = {}
         # App のメソッドを unbound で呼ぶので、自分自身を呼び返す分だけ結び直す
         app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
+        app._apply_host_wishes = lambda new: mainGUI.App._apply_host_wishes(app, new)
         app._warn_host_save_once = lambda msg: mainGUI.App._warn_host_save_once(app, msg)
         return app
 
@@ -1373,7 +1894,7 @@ class TestFollowHostSave(unittest.TestCase):
 
         with patch.object(MatchTNL, "load_host_save",
                           return_value=({self.CLASSIC: {9}},
-                                        {"participants": 1, "tabs": 1})) as mock_load:
+                                        {"participants": 1, "tabs": 1}, {})) as mock_load:
             self._refresh(app)
 
         mock_load.assert_called_once()
@@ -2689,8 +3210,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
         self.assertTrue(any("インスタンス制限" in m for m in logs), logs)
 
     def test_logged_when_hoshiimo_skip_decides(self):
-        monitor = self._monitor(instance_type=config.INSTANCE_HOSHIIMO,
-                                hoshiimo_skip=True)
+        monitor = self._monitor(instance_type=config.INSTANCE_HOSHIIMO)
 
         logs = self._on_killers(monitor)
 
@@ -2766,15 +3286,47 @@ class TestGigabytesDetect(unittest.TestCase):
         mock_thread.assert_not_called()
         mock_play.assert_not_called()
 
-    def test_no_state_is_touched(self):
-        """自爆・続行・フリーズの判断には影響させない"""
+    def test_only_the_gigabytes_flag_is_set(self):
+        """立てるのは gigabytes だけ。他の状態は動かさない"""
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
         before = dict(vars(monitor.st))
 
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process(self.LINE)
 
-        self.assertEqual(dict(vars(monitor.st)), before, "状態を変えないこと")
+        after = dict(vars(monitor.st))
+        self.assertTrue(after.pop("gigabytes"))
+        before.pop("gigabytes")
+        self.assertEqual(after, before, "gigabytes 以外は変えないこと")
+
+    def test_terror_ids_are_replaced_wholesale(self):
+        """元IDが毎回違うので「置換」ではなく差し替える"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [91]
+
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process(self.LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [config.GIGABYTES_ID])
+
+    def test_line_before_killers_leaves_ids_to_on_killers(self):
+        """Killers 行より先に来ることがある。空のまま差し替えて統計を送らない"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._process(self.LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        mock_send.assert_not_called()
+
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._on_killers([91], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.GIGABYTES_ID])
 
 
 class TestAtrachedDetect(unittest.TestCase):
@@ -2824,15 +3376,49 @@ class TestAtrachedDetect(unittest.TestCase):
 
         self.assertTrue(any("atrached 出現" in m for m in logs), logs)
 
-    def test_no_state_is_touched(self):
-        """自爆・続行・フリーズの判断には影響させない"""
+    def test_sonic_is_replaced_with_atrached(self):
+        """HHI(47->190)と同じ形。Sonic(40) を 191 に置換する"""
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
-        before = dict(vars(monitor.st))
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [config.SONIC_ID]
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process(self.LINE)
+
+        self.assertTrue(monitor.st.atrached_variant)
+        self.assertEqual(monitor.st.terror_ids, [config.ATRACHED_ID])
+
+    def test_line_before_killers_still_marks_the_variant(self):
+        """Killers 行より先に来ても、後から来たIDに適用されること"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._process(self.LINE)
+        mock_send.assert_not_called()
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._on_killers([config.SONIC_ID], "Classic", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.ATRACHED_ID])
+
+    def test_other_round_types_are_ignored(self):
+        """Classic 以外では置換しない（HHIと同じ扱い）"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.in_round = True
+        monitor.st.round_type = "Midnight"
+        monitor.st.terror_ids = [config.SONIC_ID]
 
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process(self.LINE)
 
-        self.assertEqual(dict(vars(monitor.st)), before, "状態を変えないこと")
+        self.assertFalse(monitor.st.atrached_variant)
+        self.assertEqual(monitor.st.terror_ids, [config.SONIC_ID])
 
 
 class TestStringDownloadTrigger(unittest.TestCase):
@@ -3771,7 +4357,56 @@ class TestLogMonitorRuntimeHelpers(unittest.TestCase):
         mock_name.assert_called_once_with(9999, config.TERRORS)
 
 
-class TestLogMonitorHoshiimo(unittest.TestCase):
+class TestLegacySettings(unittest.TestCase):
+    """「干し芋自動自爆」チェックを消した後の古い settings.json"""
+
+    LEGACY = {
+        "tnl_path": "C:/list/my.tnl",
+        "hoshiimo_skip": True,          # 消したキー
+        "profiles": [1, 2],
+        "freeze_8pages": True,
+    }
+
+    def test_a_legacy_file_still_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps(self.LEGACY), encoding="utf-8")
+
+            with patch.object(config, "SETTINGS_PATH", path):
+                data = mainGUI.load_settings()
+
+            self.assertEqual(data.get("tnl_path"), "C:/list/my.tnl")
+            self.assertTrue(data.get("hoshiimo_skip"), "読めること自体は変わらない")
+
+    def test_saving_drops_the_removed_key_without_failing(self):
+        """保存時に書き直されるだけ。落ちない"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps(self.LEGACY), encoding="utf-8")
+
+            with patch.object(config, "SETTINGS_PATH", path):
+                mainGUI.save_settings({**mainGUI.load_settings(),
+                                       "tnl_path": "C:/list/other.tnl"})
+                data = mainGUI.load_settings()
+
+            self.assertEqual(data.get("tnl_path"), "C:/list/other.tnl")
+
+    def test_window_config_has_no_hoshiimo_switch(self):
+        self.assertFalse(hasattr(WindowConfig(), "hoshiimo_skip"))
+        with self.assertRaises(TypeError):
+            WindowConfig(hoshiimo_skip=True)
+
+
+class TestLogMonitorGroupRules(unittest.TestCase):
+    """干し芋/焼き芋のラウンド判定を LogMonitor 越しに見る（第1部の統合側）
+
+    「全続行」= 自爆しないだけ。続行アナウンスも他窓フリーズもしない。
+    「通常判定」= 続行リストに無ければ自爆する。
+    """
+
+    DT_KEY = "Double Trouble/ダブルトラブル"
+    FOG_KEY = "Fog/霧"
+
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
@@ -3785,252 +4420,371 @@ class TestLogMonitorHoshiimo(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
 
-    def _monitor(
-        self,
-        *,
-        hoshiimo_skip: bool = True,
-        keep_on: dict | None = None,
-        instance_type: str = config.INSTANCE_HOSHIIMO,
-    ):
-        cfg = WindowConfig(
-            hoshiimo_skip=hoshiimo_skip,
-            do_skip=True,
-            voice_continue="continue.mp3",
-        )
-        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+    def _monitor(self, *, do_skip=True, keep_on=None,
+                 instance_type=config.INSTANCE_HOSHIIMO, host_wishes=None):
+        cfg = WindowConfig(do_skip=do_skip, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None,
+                                        window_idx=1, host_wishes=host_wishes)
         monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
         return monitor
 
-    def test_hoshiimo_allows_continue_voice_outside_skip_rounds(self):
-        monitor = self._monitor(
-            hoshiimo_skip=True,
-            keep_on={"Double Trouble/ダブルトラブル": {42}},
-        )
-        monitor.st.in_round = True
-        monitor.st.round_type = "Double Trouble"
+    def _killers(self, monitor, ids, killers_round_type=None, revealed=False):
+        """_on_killers を回して、起動したスレッドの target 名を返す"""
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids),
+                                killers_round_type or monitor.st.round_type,
+                                revealed=revealed)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
 
-        with patch.object(PlaySound, "play_sound") as mock_play:
+    def _round(self, monitor, round_type, ids=(99,), **kw):
+        monitor.st.round_type = round_type
+        return self._killers(monitor, ids, **kw)
+
+    # ── 問答無用スキップ ──────────────────────
+    def _classic_monitor(self, tid, keep_on=None,
+                         instance_type=config.INSTANCE_HOSHIIMO):
+        """テラーが確定した Classic ラウンド。
+
+        Classicの1体構成は常に Gigabytes 待ちに入るので、判定は待ち明け
+        （`_delayed_group_decision`）で出る。そこを直接動かして確かめる。
+        """
+        monitor = self._monitor(instance_type=instance_type, keep_on=keep_on)
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [tid]
+        return monitor
+
+    def test_classic_without_a_variant_is_skipped(self):
+        """続行リストに載っていても問答無用でスキップする"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._classic_monitor(
+                99, keep_on={"Classic/クラシック": {99}}, instance_type=itype)
+
+            started = self._run_delayed(monitor)
+
+            self.assertIn("do_skip", started, itype)
+            self.assertFalse(monitor.st.is_continue_round, itype)
+
+    def test_classic_with_each_variant_uses_the_keep_list(self):
+        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
+                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
+            monitor = self._classic_monitor(tid, keep_on={"Classic/クラシック": {tid}})
+
+            started = self._run_delayed(monitor)
+
+            self.assertTrue(monitor.st.is_continue_round, tid)
+            self.assertNotIn("do_skip", started, tid)
+
+    def test_classic_with_a_variant_still_skips_when_not_wanted(self):
+        monitor = self._classic_monitor(config.ATRACHED_ID)
+
+        started = self._run_delayed(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_bloodbath_is_skipped(self):
+        monitor = self._monitor()
+
+        started = self._round(monitor, "Bloodbath", [1, 2, 3])
+
+        self.assertIn("do_skip", started)
+
+    def test_classic_exe_and_randomizer_are_skipped_even_with_a_variant(self):
+        for round_type in ("Classic.exe", "Randomizer"):
+            monitor = self._monitor()
+            monitor.st.bloodthirsty_creature_variant = True
+
+            started = self._round(monitor, round_type,
+                                  [config.BLOODTHIRSTY_CREATURE_ID])
+
+            self.assertIn("do_skip", started, round_type)
+
+    # ── 全続行（自爆しないだけ） ───────────────
+    def test_always_continue_rounds_do_nothing(self):
+        for round_type in ("8 Pages", "Run"):
+            monitor = self._monitor()
+
+            with patch.object(PlaySound, "play_sound") as mock_play:
+                started = self._round(monitor, round_type, [1, 2])
+
+            self.assertEqual(started, [], round_type)
+            self.assertFalse(monitor.st.is_continue_round, round_type)
+            mock_play.assert_not_called()
+
+    def test_always_continue_does_not_freeze_other_windows(self):
+        monitor = self._monitor()
+
+        self._round(monitor, "8 Pages", [1, 2])
+
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_hoshiimo_fog_always_continues(self):
+        monitor = self._monitor()
+
+        started = self._round(monitor, "Fog", [7], killers_round_type="Fog",
+                              revealed=True)
+
+        self.assertEqual(started, [])
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_run_keeps_its_existing_round_start_behaviour(self):
+        """「死亡待ち・アイテム購入予定」の既存挙動は変えない"""
+        logs = []
+        cfg = WindowConfig(do_skip=True)
+        monitor = LogMonitor.LogMonitor(cfg, {}, logs.append, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        monitor.st.is_continue_round = True
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Run")
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertTrue(any("死亡待ち・アイテム購入予定" in m for m in logs), logs)
+
+    # ── moon ────────────────────────────────
+    def test_a_repeated_moon_is_skipped(self):
+        monitor = self._monitor()
+        monitor.st.moon_repeat = True
+
+        started = self._round(monitor, "Blood Moon", [7])
+
+        self.assertIn("do_skip", started)
+
+    def test_hoshiimo_plays_every_first_moon(self):
+        for moon in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
+            monitor = self._monitor()
+
+            started = self._round(monitor, moon, [7])
+
+            self.assertEqual(started, [], moon)
+
+    def test_yakiimo_skips_the_first_mystic_moon_and_solstice(self):
+        for moon in ("Mystic Moon", "Solstice"):
+            monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+
+            started = self._round(monitor, moon, [7])
+
+            self.assertIn("do_skip", started, moon)
+
+    def test_yakiimo_plays_the_first_blood_moon_and_twilight(self):
+        for moon in ("Blood Moon", "Twilight"):
+            monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+
+            started = self._round(monitor, moon, [7])
+
+            self.assertEqual(started, [], moon)
+
+    # ── 焼き芋 Fog ──────────────────────────
+    def test_yakiimo_fog_revealed_as_alternate_uses_the_keep_list(self):
+        alternate = MatchTNL.ALTERNATE_OFFSET + 3
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO,
+                                keep_on={self.FOG_KEY: {alternate}})
+        monitor.st.round_type = "Fog"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers([3], "Fog (Alternate)", revealed=True)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual([c.kwargs["target"].__func__.__name__
+                          for c in mock_thread.call_args_list
+                          if "target" in c.kwargs], [])
+
+    def test_yakiimo_fog_revealed_as_alternate_but_unwanted_is_skipped(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+        monitor.st.round_type = "Fog"
+
+        started = self._killers(monitor, [3], "Fog (Alternate)", revealed=True)
+
+        self.assertIn("do_skip", started)
+
+    def test_yakiimo_fog_revealed_as_plain_fog_is_skipped(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO,
+                                keep_on={self.FOG_KEY: {7}})
+        monitor.st.round_type = "Fog"
+
+        started = self._killers(monitor, [7], "Fog", revealed=True)
+
+        self.assertIn("do_skip", started)
+
+    def test_killers_unknown_decides_nothing(self):
+        """Fogは68ラウンド中63で revealed が来ない。その間は何もしない"""
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process("Killers is unknown - ??? // x // Round type is Fog")
+
+        mock_thread.assert_not_called()
+        self.assertEqual(monitor.st.round_type, "Fog")
+
+    # ── 通常判定（続行リスト照合） ──────────────
+    def test_normal_judgement_continues_and_announces(self):
+        monitor = self._monitor(keep_on={self.DT_KEY: {42}})
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor.st.round_type = "Double Trouble"
             monitor._on_killers([42], "Double Trouble", revealed=False)
 
+        self.assertTrue(monitor.st.is_continue_round)
         mock_play.assert_called_once_with("continue.mp3")
+
+    def test_normal_judgement_skips_when_not_wanted(self):
+        """挙動が変わるところ: グループでも続行リストに無ければ自爆する"""
+        monitor = self._monitor(keep_on={self.DT_KEY: {42}})
+
+        started = self._round(monitor, "Double Trouble", [99])
+
+        self.assertIn("do_skip", started)
+
+    def test_auto_skip_off_never_skips(self):
+        monitor = self._monitor(do_skip=False)
+
+        started = self._round(monitor, "Double Trouble", [99])
+
+        self.assertNotIn("do_skip", started)
+
+    def test_auto_skip_off_also_blocks_the_group_skip(self):
+        """cfg.do_skip は全体スイッチ。問答無用スキップもここで止まる"""
+        monitor = self._monitor(do_skip=False)
+
+        started = self._round(monitor, "Bloodbath", [1, 2, 3])
+
+        self.assertNotIn("do_skip", started)
+
+    def test_private_is_unaffected(self):
+        """private では新ルールが一切効かない（Classicでも続行リスト次第）"""
+        monitor = self._monitor(instance_type=config.INSTANCE_PRIVATE,
+                                keep_on={"Classic/クラシック": {99}})
+
+        started = self._round(monitor, "Classic", [99])
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_public_still_only_gets_the_voice(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC)
+
+        started = self._round(monitor, "Classic", [99])
+
+        self.assertNotIn("do_skip", started)
+
+    def test_hands_free_stays_private_only(self):
+        """放置モードの自動操作は private 限定のまま"""
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(keep_on={self.DT_KEY: {42}})
+
+        started = self._round(monitor, "Double Trouble", [42])
+
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round, "放置モードを通っていないこと")
+
+    # ── バリアント判定待ち ────────────────────
+    def test_a_single_terror_classic_waits_for_gigabytes(self):
+        """元IDが毎回違うのでIDから予測できない。1体構成は常に待つ"""
+        monitor = self._monitor()
+
+        started = self._round(monitor, "Classic", [99])
+
+        self.assertEqual(started, ["_delayed_group_decision"])
+
+    def test_a_curious_creature_waits_too(self):
+        monitor = self._monitor()
+
+        started = self._round(monitor, "Bloodbath",
+                              [config.CURIOUS_CREATURE_ID, 2, 3])
+
+        self.assertEqual(started, ["_delayed_group_decision"])
+
+    def _run_delayed(self, monitor, killers_round_type="Classic", wait_sec=0.0):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._delayed_group_decision(killers_round_type, wait_sec,
+                                            monitor.st.round_seq)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_the_wait_ends_in_a_skip_when_no_marker_arrives(self):
+        monitor = self._monitor()
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [99]
+
+        self.assertIn("do_skip", self._run_delayed(monitor))
+
+    def test_the_wait_is_cancelled_by_the_gigabytes_line(self):
+        monitor = self._monitor()
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [99]
+        monitor.keepOn_set["Classic/クラシック"] = {config.GIGABYTES_ID}
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("The Gigabytes have come.")
+
+        self.assertEqual(self._run_delayed(monitor), [],
+                         "問答無用スキップではなく通常判定に回ること")
+        self.assertEqual(monitor.st.terror_ids, [config.GIGABYTES_ID])
         self.assertTrue(monitor.st.is_continue_round)
 
-    def test_hoshiimo_does_not_run_normal_skip_for_non_skip_rounds(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Double Trouble"
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([99], "Double Trouble", revealed=False)
-
-        mock_thread.assert_not_called()
-
-    def test_hoshiimo_hands_free_still_only_allows_voice(self):
-        """放置モード: 干し芋の窓では自動操作をしない。
-
-        放置モードはprivate系の窓でしか効かないので、干し芋の窓では
-        アナウンスは従来どおり鳴る（TestHandsFreePerWindow を参照）。
-        """
-        SharedState.set_hands_free(True)
-        monitor = self._monitor(
-            hoshiimo_skip=True,
-            keep_on={"Double Trouble/ダブルトラブル": {42}},
-        )
-        monitor.st.in_round = True
-        monitor.st.round_type = "Double Trouble"
-
-        with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([42], "Double Trouble", revealed=False)
-
-        mock_play.assert_called_once_with("continue.mp3")
-        mock_thread.assert_not_called()
-
-    def test_hoshiimo_skip_round_still_uses_dedicated_skip(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([99], "Classic", revealed=False)
-
-        mock_thread.assert_called_once()
-
-    def test_hoshiimo_classic_bloodthirsty_does_not_skip(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
-
-        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_thread.assert_not_called()
-
-    def test_hoshiimo_classic_curious_creature_defers_decision(self):
-        """Curious Creatureがいる間は即自爆せず、出現ログ待ちに入る"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
-
-        self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
-        # 即自爆ではなく、判定待ちスレッドが起動する
-        mock_thread.assert_called_once()
-        self.assertEqual(mock_thread.call_args.kwargs["target"].__func__,
-                         LogMonitor.LogMonitor._delayed_group_skip)
-
-    # ── バリアント判定待ちの挙動 ──────────────
-
-    def _run_delayed(self, monitor, wait_sec=0.0):
-        """_delayed_group_skip を待ち時間ゼロ相当で実行する"""
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._delayed_group_skip(wait_sec, monitor.st.round_seq)
-        return mock_thread
-
-    def test_delayed_skip_fires_when_marker_never_arrives(self):
-        """通常のCurious Creatureなら待機後に自爆する（自動自爆を失わない）"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor._running = True
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
-
-        mock_thread = self._run_delayed(monitor)
-        mock_thread.assert_called_once()
-
-    def test_delayed_skip_cancelled_when_bloodthirsty_marker_arrives(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor._running = True
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
-        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)  # 出現時のログ
-
-        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_thread = self._run_delayed(monitor)
-        mock_thread.assert_not_called()
-
-    def test_delayed_skip_cancelled_when_hungry_home_invader_marker_arrives(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor._running = True
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor.st.terror_ids = [config.SLENDER_ID]
-        monitor._process(config.HUNGRY_HOME_INVADER_LOG)
-
-        self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_thread = self._run_delayed(monitor)
-        mock_thread.assert_not_called()
-
-    def test_delayed_skip_aborts_when_round_changed(self):
-        """待機中に次のラウンドが始まったら自爆しない"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor._running = True
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._delayed_group_skip(0.0, monitor.st.round_seq + 1)  # 別ラウンドの予約
-        mock_thread.assert_not_called()
-
-    def test_slender_defers_in_hoshiimo(self):
-        """Slenderも出現ログ待ちに入る（Hungry Home Invader対策）"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
-
-        self.assertEqual(mock_thread.call_args.kwargs["target"].__func__,
-                         LogMonitor.LogMonitor._delayed_group_skip)
-
-    def test_yakiimo_bloodthirsty_does_not_skip(self):
-        """焼き芋でもバリアント例外が効く（従来は干し芋のみ有効だった）"""
-        monitor = self._monitor(hoshiimo_skip=True, instance_type=config.INSTANCE_YAKIIMO)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
-
-        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_thread.assert_not_called()
-
-    def test_yakiimo_hungry_home_invader_does_not_skip(self):
-        monitor = self._monitor(hoshiimo_skip=True, instance_type=config.INSTANCE_YAKIIMO)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor._process(config.HUNGRY_HOME_INVADER_LOG)
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
-
-        self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_thread.assert_not_called()
-
-    def test_bloodthirsty_in_bloodbath_does_not_skip(self):
-        """Classic以外の自爆対象ラウンドでもバリアント例外が効く"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Bloodbath"
-        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([config.CURIOUS_CREATURE_ID, 3, 4], "Bloodbath", revealed=False)
-
-        self.assertIn(config.BLOODTHIRSTY_CREATURE_ID, monitor.st.terror_ids)
-        mock_thread.assert_not_called()
-
-    def test_bloodbath_uses_longer_variant_wait(self):
-        """枠ごとに出現がずれるBloodbathはClassicより長く待つ"""
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.round_type = "Classic"
-        classic_wait = monitor._variant_wait_sec()
-        monitor.st.round_type = "Bloodbath"
-        bloodbath_wait = monitor._variant_wait_sec()
-        monitor.st.round_type = "未知のラウンド"
-        default_wait = monitor._variant_wait_sec()
-
-        self.assertGreater(bloodbath_wait, classic_wait)
-        self.assertEqual(default_wait, config.TERROR_VARIANT_WAIT_DEFAULT_SEC)
-
-    def test_yakiimo_skip_round_uses_hoshiimo_dedicated_skip(self):
-        monitor = self._monitor(hoshiimo_skip=True, instance_type=config.INSTANCE_YAKIIMO)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([99], "Classic", revealed=False)
-
-        mock_thread.assert_called_once()
-
-    def test_hoshiimo_skip_clears_stale_continue_state(self):
-        monitor = self._monitor(hoshiimo_skip=True)
-        monitor.st.in_round = True
-        monitor.st.round_type = "Classic"
-        monitor.st.is_continue_round = True
-
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._on_killers([99], "Classic", revealed=False)
-
-        self.assertFalse(monitor.st.is_continue_round)
-        mock_thread.assert_called_once()
-
-    def test_round_start_clears_stale_continue_state(self):
+    def test_the_wait_is_cancelled_by_the_atrached_line(self):
         monitor = self._monitor()
-        monitor.st.is_continue_round = True
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [config.SONIC_ID]
+        monitor.keepOn_set["Classic/クラシック"] = {config.ATRACHED_ID}
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("Lets play a game...")
+        monitor.st.gigabytes = True     # Gigabytes待ちは別。ここでは切り離す
 
-        monitor._process("This round is taking place at Facility (12) and the round type is Classic")
+        self.assertEqual(self._run_delayed(monitor), [],
+                         "問答無用スキップではなく通常判定に回ること")
+        self.assertEqual(monitor.st.terror_ids, [config.ATRACHED_ID])
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_the_wait_aborts_when_the_round_changed(self):
+        monitor = self._monitor()
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [99]
+        monitor.st.round_seq = 5
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._delayed_group_decision("Classic", 0.0, 4)
+
+        mock_thread.assert_not_called()
+
+    def test_the_wait_falls_through_to_the_normal_judgement(self):
+        """バリアントが確定したら通常判定へ回すこと（待ちの間に抜けている）"""
+        monitor = self._monitor(keep_on={"Classic/クラシック": {config.ATRACHED_ID}})
+        monitor._running = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [config.ATRACHED_ID]
+        monitor.st.atrached_variant = True
+        monitor.st.gigabytes = True
+
+        started = self._run_delayed(monitor)
+
+        self.assertEqual(started, [])
+        self.assertTrue(monitor.st.is_continue_round)
+
+    # ── 既存の取りこぼし対策 ──────────────────
+    def test_group_skip_clears_stale_continue_state(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
+        monitor.st.is_continue_round = True
+        SharedState.continue_round_start()
+
+        self._killers(monitor, [1, 2, 3])
 
         self.assertFalse(monitor.st.is_continue_round)
-        self.assertEqual(monitor.st.round_type, "Classic")
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
 
 
 class TestLogMonitorBeginDone(unittest.TestCase):

@@ -25,6 +25,7 @@ EVENT_EVERYTHING_RECEIVED = "everything_received"
 EVENT_STRING_DOWNLOAD = "string_download"
 EVENT_GIGABYTES = "gigabytes"
 EVENT_ATRACHED = "atrached"
+EVENT_MASTER_SWITCHED = "master_switched"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -58,6 +59,7 @@ RE_HUNGRY_HOME_INVADER = re.compile(r"^I hear strange sounds coming from the kit
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
+RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,9 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_ATRACHED.match(line):
         return LogEvent(EVENT_ATRACHED)
+
+    if RE_MASTER_SWITCHED.match(line):
+        return LogEvent(EVENT_MASTER_SWITCHED)
 
     m = RE_STRING_DOWNLOAD.match(line)
     if m:
