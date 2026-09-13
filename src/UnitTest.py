@@ -1088,7 +1088,7 @@ class TestAppTabLifecycle(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.nb = FakeNotebook()
         app._on_tab_log_selected = lambda tab: None
-        app._apply_saved_profiles = lambda: None
+        app._apply_saved_window_settings = lambda: None
         app.tabs = [OldTab(), OldTab()]
         old_tabs = list(app.tabs)
 
@@ -4765,6 +4765,348 @@ class TestLegacySettings(unittest.TestCase):
         self.assertFalse(hasattr(WindowConfig(), "hoshiimo_skip"))
         with self.assertRaises(TypeError):
             WindowConfig(hoshiimo_skip=True)
+
+
+class TestSkipRoundsByType(unittest.TestCase):
+    """privateのラウンド指定自爆（続行リストより優先、3クラ解放は例外）"""
+
+    CLASSIC_KEY = "Classic/クラシック"
+    DTM = LogMonitor.DTM_TERROR_ID
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+
+    def _monitor(self, *, skip_rounds=("Classic",), exempt=False, do_skip=True,
+                 cancel_afk=True, keep_on=None,
+                 instance_type=config.INSTANCE_PRIVATE):
+        cfg = WindowConfig(do_skip=do_skip, cancel_afk=cancel_afk,
+                           voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds),
+                           skip_variant_exempt=exempt)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        return monitor
+
+    def _killers(self, monitor, ids=(99,), round_type=None):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), round_type or monitor.st.round_type,
+                                revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 基本 ────────────────────────────────
+    def test_an_unlisted_round_uses_the_normal_judgement(self):
+        monitor = self._monitor(skip_rounds=("Bloodbath",),
+                                keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_a_listed_round_is_skipped(self):
+        monitor = self._monitor()
+
+        started = self._killers(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_the_skip_beats_the_keep_list(self):
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_auto_skip_off_does_not_skip(self):
+        monitor = self._monitor(do_skip=False)
+
+        started = self._killers(monitor)
+
+        self.assertNotIn("do_skip", started)
+
+    def test_no_announce_and_no_freeze(self):
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
+        monitor.st.is_continue_round = True
+        SharedState.continue_round_start()
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._on_killers([99], "Classic", revealed=False)
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        mock_play.assert_not_called()
+
+    def _run_delayed(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._delayed_round_skip("Classic", 0.0, monitor.st.round_seq)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── バリアント例外 ────────────────────────
+    def test_the_variant_exemption_falls_through(self):
+        """例外ONのときは待ち明けに判断する。バリアントなら通常判定へ"""
+        monitor = self._monitor(exempt=True,
+                                keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
+        monitor._running = True
+        monitor.st.terror_ids = [config.ATRACHED_ID]
+
+        started = self._run_delayed(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_the_exemption_covers_all_four_variants(self):
+        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
+                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
+            monitor = self._monitor(exempt=True,
+                                    keep_on={self.CLASSIC_KEY: {tid}})
+            monitor._running = True
+            monitor.st.terror_ids = [tid]
+
+            started = self._run_delayed(monitor)
+
+            self.assertNotIn("do_skip", started, tid)
+            self.assertTrue(monitor.st.is_continue_round, tid)
+
+    def test_the_exemption_still_skips_a_plain_terror(self):
+        monitor = self._monitor(exempt=True)
+        monitor.st.gigabytes = True     # 待ちを済ませた状態
+
+        started = self._killers(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_without_the_exemption_a_variant_is_skipped_too(self):
+        monitor = self._monitor(exempt=False,
+                                keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
+        monitor.st.atrached_variant = True
+
+        started = self._killers(monitor, [config.ATRACHED_ID])
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+
+    # ── 3クラ解放が勝つ ───────────────────────
+    def test_the_three_classic_unlock_wins(self):
+        """DTMが出たラウンドは自爆指定を無視する（3クラ稼ぎを壊さない）"""
+        monitor = self._monitor()
+
+        started = self._killers(monitor, [self.DTM])
+
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_the_skip_applies_once_three_wins_are_done(self):
+        monitor = self._monitor()
+        monitor.st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+
+        started = self._killers(monitor, [self.DTM])
+
+        self.assertIn("do_skip", started)
+
+    def test_the_skip_applies_when_cancel_afk_is_off(self):
+        monitor = self._monitor(cancel_afk=False)
+
+        started = self._killers(monitor, [self.DTM])
+
+        self.assertIn("do_skip", started)
+
+    # ── 他のインスタンス ──────────────────────
+    def test_group_instances_are_untouched(self):
+        """干し芋/焼き芋は GroupRound の結論が先に出る"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(skip_rounds=("8 Pages",),
+                                    instance_type=itype)
+            monitor.st.round_type = "8 Pages"
+
+            started = self._killers(monitor, [1, 2])
+
+            self.assertEqual(started, [], itype)   # 全続行のまま
+
+    def test_public_is_untouched(self):
+        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP):
+            monitor = self._monitor(instance_type=itype)
+
+            started = self._killers(monitor)
+
+            self.assertEqual(started, [], itype)
+
+    def test_hands_free_still_decides_first(self):
+        """放置モードの3分岐はこの判定より前。そのまま"""
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(skip_rounds=())
+        monitor.st.item_id = 0
+
+        started = self._killers(monitor)
+
+        self.assertIn("do_skip", started, "放置モードの即自爆が効いていること")
+
+    # ── バリアント待ち ────────────────────────
+    def test_the_wait_happens_only_when_configured(self):
+        monitor = self._monitor(exempt=True)
+
+        started = self._killers(monitor)
+
+        self.assertEqual(started, ["_delayed_round_skip"])
+
+    def test_no_wait_without_the_exemption(self):
+        monitor = self._monitor(exempt=False)
+
+        self.assertIn("do_skip", self._killers(monitor))
+
+    def test_no_wait_for_an_unlisted_round(self):
+        """設定していない private の窓に待ちを増やさないこと"""
+        monitor = self._monitor(skip_rounds=("Bloodbath",), exempt=True,
+                                keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertNotIn("_delayed_round_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_no_wait_when_nothing_is_selected(self):
+        monitor = self._monitor(skip_rounds=(), exempt=True,
+                                keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertEqual(started, [])
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_the_wait_ends_in_a_skip_without_a_variant(self):
+        monitor = self._monitor(exempt=True)
+        monitor._running = True
+        monitor.st.terror_ids = [99]
+
+        self.assertIn("do_skip", self._run_delayed(monitor))
+
+    def test_the_wait_falls_through_when_a_variant_arrives(self):
+        monitor = self._monitor(exempt=True,
+                                keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
+        monitor._running = True
+        monitor.st.terror_ids = [config.GIGABYTES_ID]
+        monitor.st.gigabytes = True
+
+        started = self._run_delayed(monitor)
+
+        self.assertEqual(started, [])
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_the_wait_aborts_when_the_round_changed(self):
+        monitor = self._monitor(exempt=True)
+        monitor._running = True
+        monitor.st.terror_ids = [99]
+        monitor.st.round_seq = 5
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._delayed_round_skip("Classic", 0.0, 4)
+
+        mock_thread.assert_not_called()
+
+
+class TestSkipRoundsSettings(unittest.TestCase):
+    """窓ごとの保存と復元"""
+
+    class FakeVar:
+        def __init__(self, value=False):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, v):
+            self._v = v
+
+    def _tab(self, names=(), exempt=False):
+        tab = type("FakeTab", (), {})()
+        tab.v_profile = TestSkipRoundsSettings.FakeVar(0)
+        tab.v_skip_rounds = {n: TestSkipRoundsSettings.FakeVar(n in names)
+                             for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_skip_variant_exempt = TestSkipRoundsSettings.FakeVar(exempt)
+        return tab
+
+    def test_the_selectable_list_drives_the_variables(self):
+        made = mainGUI.skip_round_vars(lambda: object())
+
+        self.assertEqual(list(made), config.SKIP_ROUND_SELECTABLE)
+
+    def test_settings_are_saved_per_window(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(("Classic", "Fog"), exempt=True), self._tab()]
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish"):
+            setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
+        app.v_freeze_rounds = {}
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["skip_rounds"], [["Classic", "Fog"], []])
+        self.assertEqual(saved["skip_variant_exempt"], [True, False])
+
+    def test_saved_settings_are_restored_per_window(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(), self._tab()]
+        app._saved_profiles = []
+        app._saved_skip_rounds = [["Classic", "Fog"], []]
+        app._saved_skip_variant_exempt = [True, False]
+
+        mainGUI.App._apply_saved_window_settings(app)
+
+        first = {n for n, v in app.tabs[0].v_skip_rounds.items() if v.get()}
+        second = {n for n, v in app.tabs[1].v_skip_rounds.items() if v.get()}
+        self.assertEqual(first, {"Classic", "Fog"})
+        self.assertEqual(second, set())
+        self.assertTrue(app.tabs[0].v_skip_variant_exempt.get())
+        self.assertFalse(app.tabs[1].v_skip_variant_exempt.get())
+
+    def test_a_legacy_settings_file_without_the_keys_is_fine(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(("Classic",), exempt=True)]
+        app._saved_profiles = []
+
+        mainGUI.App._apply_saved_window_settings(app)   # キーが無い状態
+
+        self.assertTrue(app.tabs[0].v_skip_rounds["Classic"].get(),
+                        "キーが無ければ触らないこと")
+
+    def test_a_malformed_entry_is_ignored(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(("Classic",))]
+        app._saved_profiles = []
+        app._saved_skip_rounds = ["Classic"]     # 文字列（配列ではない）
+        app._saved_skip_variant_exempt = []
+
+        mainGUI.App._apply_saved_window_settings(app)
+
+        self.assertTrue(app.tabs[0].v_skip_rounds["Classic"].get())
+
+    def test_the_window_config_defaults_to_nothing_selected(self):
+        cfg = WindowConfig()
+
+        self.assertEqual(cfg.skip_rounds, set())
+        self.assertFalse(cfg.skip_variant_exempt)
 
 
 class TestLogMonitorGroupRules(unittest.TestCase):

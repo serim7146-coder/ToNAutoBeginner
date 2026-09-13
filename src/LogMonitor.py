@@ -478,12 +478,17 @@ class LogMonitor:
     def _round_still_active(self, round_seq: int) -> bool:
         return self._running and self.st.in_round and self.st.round_seq == round_seq
 
-    def _start_group_skip(self):
+    def _clear_stale_continue_round(self):
+        """問答無用スキップの前に、前のラウンドの続行状態を落とす"""
         st = self.st
-        self._log(f"グループ自動自爆: {st.round_type}")
         if st.is_continue_round:
             st.is_continue_round = False
             SharedState.continue_round_end()
+
+    def _start_group_skip(self):
+        st = self.st
+        self._log(f"グループ自動自爆: {st.round_type}")
+        self._clear_stale_continue_round()
         # cfg.do_skip は全体スイッチ。OFFなら判定だけ出して自爆はしない
         if self.cfg.do_skip:
             self._start_daemon(self._action.do_skip)
@@ -513,6 +518,59 @@ class LogMonitor:
             self._log(f"グループ判定: {self.st.round_type} 【全続行】")
             return True
         return False
+
+    def _should_skip_by_round(self) -> bool:
+        """privateで「このラウンドは問答無用で自爆」に当たるか。
+
+        続行リストより優先するが、3クラ解放だけは自爆指定より優先する
+        （Classicを指定していると3クラ稼ぎが黙って壊れるため）。
+        """
+        st = self.st
+        if st.round_type not in self.cfg.skip_rounds:
+            return False
+        if RoundDecision.is_open_special_round_target(
+                st.terror_ids, st.round_type, st.open_special_round_wins,
+                self.cfg.cancel_afk):
+            return False        # 3クラ解放が勝つ。通常判定へ落とす
+        if self.cfg.skip_variant_exempt and GroupRound.is_variant(st.terror_ids):
+            return False        # バリアントは自爆しない。通常判定へ落とす
+        return True
+
+    def _waiting_for_round_skip_variant(self) -> bool:
+        """ラウンド指定自爆でバリアント確定を待つべきか。
+
+        設定していない窓に待ちを増やさないこと。`_waiting_for_terror_variant()`
+        は統計登録のゲートも兼ねているので、波及すると統計が遅れる。
+        """
+        return (
+            self.cfg.skip_variant_exempt
+            and self.st.round_type in self.cfg.skip_rounds
+            and self._waiting_for_group_variant()
+        )
+
+    def _delayed_round_skip(self, killers_round_type: str, wait_sec: float,
+                            round_seq: int):
+        """バリアント確定を待ってからラウンド指定自爆の可否を決める"""
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            if not self._round_still_active(round_seq):
+                return
+            if not self._waiting_for_group_variant():
+                break
+            time.sleep(config.TERROR_VARIANT_POLL_SEC)
+        if not self._round_still_active(round_seq):
+            return
+        if self._should_skip_by_round():
+            self._start_round_skip()
+            return
+        self._decide_with_keep_on_set(killers_round_type)
+
+    def _start_round_skip(self):
+        st = self.st
+        self._log(f"ラウンド指定自爆: {st.round_type}")
+        self._clear_stale_continue_round()
+        if self.cfg.do_skip:
+            self._start_daemon(self._action.do_skip)
 
     def _delayed_group_decision(self, killers_round_type: str, wait_sec: float,
                                 round_seq: int):
@@ -960,6 +1018,18 @@ class LogMonitor:
                 self._log(f"放置モード(DTM/Waldo以外): 即自爆 {st.terror_ids} / {st.round_type}")
                 if not st.is_continue_round and self.cfg.do_skip:
                     self._start_daemon(self._action.do_skip)
+                return
+
+        # privateのラウンド指定自爆。続行リストより優先する
+        if is_private and self.cfg.skip_rounds:
+            if self._waiting_for_round_skip_variant():
+                wait = self._variant_wait_sec()
+                self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
+                self._start_daemon(self._delayed_round_skip, round_type,
+                                   wait, st.round_seq)
+                return
+            if self._should_skip_by_round():
+                self._start_round_skip()
                 return
 
         self._decide_with_keep_on_set(round_type)

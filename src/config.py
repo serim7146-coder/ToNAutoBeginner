@@ -138,6 +138,19 @@ ROUND_FREEZE_SELECTABLE = [
     "Alternate", "Unbound", "Ghost", "Midnight", "Punished", "8 Pages",
 ]
 
+# ── ラウンドごとの自動自爆（privateのみ） ──
+# 選んだラウンドは続行リストを見ずに自爆する。
+# 並び順はこのリストのまま表示する。ソートも独自順序も作らない
+# （このリストを編集して表示順と項目を変えられるようにするため）。
+SKIP_ROUND_SELECTABLE = [
+    "Classic", "Classic.exe", "Randomizer",
+    "Bloodbath", "Bloodbath EX", "Double Trouble",
+    "Fog", "Ghost", "Punished", "Sabotage", "Cracked",
+    "Alternate", "Midnight", "Unbound", "8 Pages", "Run",
+    "Mystic Moon", "Blood Moon", "Twilight", "Solstice",
+]
+SKIP_ROUND_COLUMNS = 5   # チェックボックスの折り返し列数
+
 # ── 速度によるラウンド種別の先読み ──
 # ToNはラウンド種別で移動速度を変える。Beginを押した直後から効くので、
 # ROUND_STARTを待たずに種別が分かる（8 Pagesならスキャナー、Punishならナッツを持てる）。

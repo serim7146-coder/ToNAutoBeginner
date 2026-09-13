@@ -14,6 +14,9 @@ class WindowConfig:
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     voice_intermission: str = ""
     announce_intermission: bool = False
+    # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する
+    skip_rounds: set = field(default_factory=set)
+    skip_variant_exempt: bool = False   # バリアント/Gigabytesは自爆しない
     voice_continue: str = ""
     voice_fog: str = ""
     voice_item_lost: str = ""

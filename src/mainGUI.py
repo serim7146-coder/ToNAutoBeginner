@@ -29,6 +29,14 @@ except ImportError:
 
 
 # ── 設定ファイル（前回のtnlパス等の永続化） ──────
+def skip_round_vars(make_var) -> dict:
+    """ラウンド指定自爆のチェックボックス用の変数を作る。
+
+    並び順は config.SKIP_ROUND_SELECTABLE のまま。ソートも独自順序も作らない。
+    """
+    return {name: make_var() for name in config.SKIP_ROUND_SELECTABLE}
+
+
 def freeze_round_vars(make_var) -> dict:
     """突入フリーズのチェックボックス用の変数を作る。
 
@@ -173,6 +181,24 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
+        # ── ラウンド指定自爆（privateのみ） ──
+        skip = CollapsibleFrame(
+            p, text="自爆するラウンド（このインスタンスがプラベのときだけ）",
+            collapsed=True)
+        skip.pack(fill="x", pady=(4, 0))
+        sc = ttk.Frame(skip.content)
+        sc.pack(fill="x", padx=10)
+        self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
+        for i, (name, var) in enumerate(self.v_skip_rounds.items()):
+            ttk.Checkbutton(sc, text=name, variable=var).grid(
+                row=i // config.SKIP_ROUND_COLUMNS,
+                column=i % config.SKIP_ROUND_COLUMNS,
+                sticky="w", padx=(0, 12), pady=1)
+        self.v_skip_variant_exempt = tk.BooleanVar(value=False)
+        ttk.Checkbutton(skip.content, text="バリアント/Gigabytes は自爆しない",
+                        variable=self.v_skip_variant_exempt
+                        ).pack(anchor="w", padx=10, pady=(4, 0))
+
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
     def _refresh_hwnds(self, hwnd_count: int):
@@ -223,6 +249,9 @@ class WindowTab(ttk.Frame):
             do_skip=self.v_do_skip.get(),
             cancel_afk=self.v_cancel_afk.get(),
             announce_intermission=self.v_announce_intermission.get(),
+            skip_rounds={name for name, var in self.v_skip_rounds.items()
+                         if var.get()},
+            skip_variant_exempt=self.v_skip_variant_exempt.get(),
         ), None
 
 
@@ -673,7 +702,7 @@ class App(tk.Tk):
             tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected)
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
-        self._apply_saved_profiles()
+        self._apply_saved_window_settings()
 
     def _on_win_count_change(self):
         if self._running:
@@ -907,26 +936,37 @@ class App(tk.Tk):
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
+        # 古い settings.json にはキーが無い。無くても落ちないこと
+        self._saved_skip_rounds = data.get("skip_rounds", [])
+        self._saved_skip_variant_exempt = data.get("skip_variant_exempt", [])
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
         for name, var in self.v_freeze_rounds.items():
             var.set(name in _as_round_names(data.get("freeze_rounds")))
         self._apply_freeze_settings()
-        self._apply_saved_profiles()
+        self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
             return
         self.v_tnl.set(tnl_path)
         self._load_tnl(show_error=False)
 
-    def _apply_saved_profiles(self):
-        """保存済みの窓ごとprofile IDを反映する"""
+    def _apply_saved_window_settings(self):
+        """保存済みの窓ごと設定（profile ID・ラウンド指定自爆）を反映する"""
         for tab, pid in zip(self.tabs, getattr(self, "_saved_profiles", [])):
             try:
                 tab.v_profile.set(int(pid))
             except (ValueError, tk.TclError):
                 pass
+        for tab, names in zip(self.tabs, getattr(self, "_saved_skip_rounds", [])):
+            if not isinstance(names, (list, tuple, set)):
+                continue
+            for name, var in tab.v_skip_rounds.items():
+                var.set(name in names)
+        for tab, on in zip(self.tabs,
+                           getattr(self, "_saved_skip_variant_exempt", [])):
+            tab.v_skip_variant_exempt.set(bool(on))
 
     def _auto_detect_windows(self):
         """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
@@ -1407,6 +1447,10 @@ class App(tk.Tk):
             "join_world":    self.v_join_world.get(),
             "instance_link": self.v_instance_link.get().strip(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
+            "skip_rounds":   [sorted(name for name, var in tab.v_skip_rounds.items()
+                                     if var.get()) for tab in self.tabs],
+            "skip_variant_exempt": [tab.v_skip_variant_exempt.get()
+                                    for tab in self.tabs],
             "freeze_8pages": self.v_freeze_8pages.get(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
