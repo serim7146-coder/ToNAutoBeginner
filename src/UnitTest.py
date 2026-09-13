@@ -20,6 +20,7 @@ import ConnectDB
 import PlaySound
 import LogParser
 import MatchTNL
+import ProcessCheck
 import RoundSequence
 import GroupRound
 import RoundDecision
@@ -1776,10 +1777,109 @@ class TestApplyKeepOn(unittest.TestCase):
                          "走行中のモニタにも効くこと")
 
 
-class TestFollowHostSave(unittest.TestCase):
-    """主催リストへの追従（読めない・0人なら前のリストを保持）"""
+class TestProcessCheck(unittest.TestCase):
+    """プロセスの生死。実プロセスには依存させない（kernel32 を差し替える）"""
+
+    def _kernel32(self, names, snapshot=1234):
+        """指定した名前のプロセスが並んでいる ToolHelp スナップショットを装う"""
+        state = {"i": 0}
+        k = MagicMock()
+        k.CreateToolhelp32Snapshot.return_value = snapshot
+
+        def fill(_snap, ref):
+            entry = ref._obj
+            if state["i"] >= len(names):
+                return 0
+            entry.szExeFile = names[state["i"]]
+            state["i"] += 1
+            return 1
+
+        k.Process32FirstW.side_effect = fill
+        k.Process32NextW.side_effect = fill
+        return k
+
+    def _running(self, k, name="ton_listtool.exe"):
+        with patch.object(ProcessCheck, "kernel32", k):
+            return ProcessCheck.is_process_running(name)
+
+    def test_a_listed_process_is_found(self):
+        k = self._kernel32(["explorer.exe", "ToN_ListTool.exe", "VRChat.exe"])
+
+        self.assertTrue(self._running(k))
+
+    def test_the_comparison_is_case_insensitive(self):
+        """実物は ToN_ListTool.exe。小文字化して完全一致で見る"""
+        k = self._kernel32(["TON_LISTTOOL.EXE"])
+
+        self.assertTrue(self._running(k))
+
+    def test_a_partial_name_does_not_match(self):
+        k = self._kernel32(["ton_listtool_updater.exe", "ton-gui.exe"])
+
+        self.assertFalse(self._running(k))
+
+    def test_an_absent_process_is_not_found(self):
+        k = self._kernel32(["explorer.exe", "VRChat.exe"])
+
+        self.assertFalse(self._running(k))
+
+    def test_a_failed_snapshot_is_false(self):
+        """True に倒すと、呼び出し側が古いファイルを読む側へ倒れる"""
+        k = self._kernel32([], snapshot=0)
+
+        self.assertFalse(self._running(k))
+
+    def test_an_invalid_handle_is_false(self):
+        k = self._kernel32([], snapshot=ProcessCheck.INVALID_HANDLE_VALUE)
+
+        self.assertFalse(self._running(k))
+
+    def test_an_exception_is_false(self):
+        k = MagicMock()
+        k.CreateToolhelp32Snapshot.side_effect = OSError("boom")
+
+        self.assertFalse(self._running(k))
+
+    def test_an_empty_name_never_matches(self):
+        k = self._kernel32(["explorer.exe"])
+
+        self.assertFalse(self._running(k, name=""))
+        k.CreateToolhelp32Snapshot.assert_not_called()
+
+    def test_the_snapshot_is_closed(self):
+        k = self._kernel32(["ToN_ListTool.exe"])
+
+        self._running(k)
+
+        k.CloseHandle.assert_called_once_with(1234)
+
+    def test_the_snapshot_is_closed_even_on_error(self):
+        k = self._kernel32(["ToN_ListTool.exe"])
+        k.Process32FirstW.side_effect = OSError("boom")
+
+        self.assertFalse(self._running(k))
+        k.CloseHandle.assert_called_once_with(1234)
+
+
+class TestHostListSource(unittest.TestCase):
+    """続行リストの供給元を状況から決める（チェックボックスは無い）
+
+    ToN ListTool が動いていて参加者がいれば主催リスト、それ以外は .tnl。
+    ツールを閉じてもファイルは残るので、鮮度はプロセスの生死で見る。
+    """
 
     CLASSIC = "Classic/クラシック"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self._dir.name) / "host_save.json.gz")
+        self.tnl = Path(self._dir.name) / "list.tnl"
+        self.tnl.write_text(json.dumps(
+            {"list_name": "L", "creator": "", "created_at": "",
+             "data": {self.CLASSIC: {"1": 1}}}), encoding="utf-8")
+
+    def tearDown(self):
+        self._dir.cleanup()
 
     class FakeVar:
         def __init__(self, value):
@@ -1788,100 +1888,176 @@ class TestFollowHostSave(unittest.TestCase):
         def get(self):
             return self._v
 
-    def _app(self, follow=True):
+    def _app(self):
         app = type("FakeApp", (), {})()
-        app.keepOn_set = {self.CLASSIC: {1}}
-        app.v_follow_host = TestFollowHostSave.FakeVar(follow)
+        app.keepOn_set = {}
+        app.host_wishes = {}
+        app._host_source = None
         app._host_save_stamp = None
         app._host_save_warned = False
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
-        app.host_wishes = {}
-        # App のメソッドを unbound で呼ぶので、自分自身を呼び返す分だけ結び直す
-        app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
-        app._apply_host_wishes = lambda new: mainGUI.App._apply_host_wishes(app, new)
-        app._warn_host_save_once = lambda msg: mainGUI.App._warn_host_save_once(app, msg)
+        app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
+        for name in ("_apply_keep_on", "_apply_host_wishes",
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
+            setattr(app, name, self._bind(app, name))
         return app
 
-    def setUp(self):
-        self._dir = tempfile.TemporaryDirectory()
-        self.path = str(Path(self._dir.name) / "host_save.json.gz")
+    @staticmethod
+    def _bind(app, name):
+        method = getattr(mainGUI.App, name)
+        return lambda *a, **kw: method(app, *a, **kw)
 
-    def tearDown(self):
-        self._dir.cleanup()
-
-    def _write(self, raw):
+    def _write(self, participants):
+        members = [{"vrc_name": f"ひと{n}", "data": {self.CLASSIC: {str(n + 5): 1}}}
+                   for n in range(participants)]
         with gzip.open(self.path, "wb") as f:
-            f.write(json.dumps(raw).encode("utf-8"))
+            f.write(json.dumps({"version": 5,
+                                "tabs": [{"participants": members}]}).encode("utf-8"))
 
-    def _member(self, data):
-        return {"vrc_name": "someone", "data": data}
+    def _refresh(self, app, running=True):
+        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(ProcessCheck, "is_process_running", return_value=running), \
+             patch.object(mainGUI, "save_settings"), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._refresh_host_source(app)
 
-    def _refresh(self, app):
-        with patch.object(config, "HOST_SAVE_PATH", self.path):
-            mainGUI.App._refresh_host_save(app)
+    def _switch_logs(self, app):
+        return [m for m in app.logs if "[続行リスト]" in m]
 
-    def test_participants_are_applied(self):
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+    # ── 供給元の選択 ──────────────────────────
+    def test_a_closed_list_tool_uses_the_tnl(self):
+        self._write(3)
         app = self._app()
 
-        self._refresh(app)
+        with patch.object(MatchTNL, "load_host_save") as mock_load:
+            self._refresh(app, running=False)
 
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5}})
-        self.assertTrue(any("続行対象" in m for m in app.logs), app.logs)
-
-    def test_zero_participants_keeps_the_previous_list(self):
-        """空を適用すると全ラウンドが自爆対象になる。実際に起きうる状態"""
-        self._write({"version": 5, "tabs": [{"participants": [],
-                                             "waiting": [self._member({})]}]})
-        app = self._app()
-
-        self._refresh(app)
-
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}}, "前のリストを残すこと")
-        self.assertTrue(any("参加者がいません" in m for m in app.logs), app.logs)
-
-    def test_zero_participants_warns_once(self):
-        self._write({"version": 5, "tabs": [{"participants": []}]})
-        app = self._app()
-
-        for _ in range(3):
-            self._refresh(app)
-
-        hits = [m for m in app.logs if "参加者がいません" in m]
-        self.assertEqual(len(hits), 1, app.logs)
-
-    def test_broken_file_keeps_the_previous_list_and_warns_once(self):
-        """別プロセスが書いている最中を掴みうる。3秒ごとに同じ行を出さない"""
-        Path(self.path).write_bytes(b"half written garbage")
-        app = self._app()
-
-        for _ in range(3):
-            self._refresh(app)
-
+        mock_load.assert_not_called()
+        self.assertEqual(app._host_source, "tnl")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
-        hits = [m for m in app.logs if "読み込み失敗" in m]
-        self.assertEqual(len(hits), 1, app.logs)
 
-    def test_recovery_after_a_failure_is_logged_again(self):
-        Path(self.path).write_bytes(b"half written garbage")
+    def test_a_running_list_tool_with_participants_uses_the_host_list(self):
+        self._write(3)
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(app._host_source, "host")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}})
+        self.assertEqual(len(app.host_wishes), 3)
+
+    def test_zero_participants_falls_back_to_the_tnl(self):
+        self._write(0)
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
+
+    def test_closing_the_list_tool_returns_to_the_tnl(self):
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+        self.assertEqual(app._host_source, "host")
+
+        self._refresh(app, running=False)
+
+        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
+
+    def test_starting_a_lap_switches_to_the_host_list(self):
+        self._write(0)
+        app = self._app()
+        self._refresh(app)
+        self.assertEqual(app._host_source, "tnl")
+
+        self._write(2)
+        self._refresh(app)
+
+        self.assertEqual(app._host_source, "host")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6}})
+
+    def test_a_missing_file_falls_back_to_the_tnl(self):
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(app._host_source, "tnl")
+
+    # ── ログ ────────────────────────────────
+    def test_the_same_source_logs_once(self):
+        self._write(3)
+        app = self._app()
+
+        for _ in range(3):
+            self._refresh(app)
+
+        self.assertEqual(len(self._switch_logs(app)), 1, app.logs)
+
+    def test_every_switch_is_logged(self):
+        self._write(3)
+        app = self._app()
+
+        self._refresh(app)                 # → host
+        self._refresh(app, running=False)  # → tnl
+        self._refresh(app)                 # → host
+
+        self.assertEqual(len(self._switch_logs(app)), 3, app.logs)
+
+    def test_the_reason_is_in_the_message(self):
+        self._write(0)
+        app = self._app()
+        self._refresh(app)
+        self._write(3)
+        self._refresh(app)
+        self._refresh(app, running=False)
+
+        joined = "\n".join(self._switch_logs(app))
+        self.assertIn("周回の参加者がいません", joined)
+        self.assertIn("主催リストへ切替（参加者3人）", joined)
+        self.assertIn("ToN ListTool が起動していません", joined)
+
+    def test_a_content_change_is_still_logged(self):
+        self._write(2)
         app = self._app()
         self._refresh(app)
 
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
-        self._refresh(app)
-        Path(self.path).write_bytes(b"broken again")
+        self._write(4)
         self._refresh(app)
 
-        hits = [m for m in app.logs if "読み込み失敗" in m]
+        hits = [m for m in app.logs if "続行対象" in m]
         self.assertEqual(len(hits), 2, app.logs)
 
-    def test_unchanged_file_is_not_reread(self):
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+    # ── 一時的な失敗は供給元を変えない ──────────
+    def test_a_decode_failure_keeps_the_current_source(self):
+        """書き込み中を掴みうる。ここで tnl へ倒すと3秒ごとに往復する"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+
+        Path(self.path).write_bytes(b"half written garbage")
+        self._refresh(app)
+
+        self.assertEqual(app._host_source, "host", "供給元を変えないこと")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}}, "前の値を保持")
+
+    def test_a_repeated_failure_warns_once(self):
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+        Path(self.path).write_bytes(b"half written garbage")
+
+        for _ in range(3):
+            self._refresh(app)
+
+        hits = [m for m in app.logs if "読み込み失敗" in m]
+        self.assertEqual(len(hits), 1, app.logs)
+
+    def test_an_unchanged_file_is_not_reread(self):
+        self._write(3)
         app = self._app()
         self._refresh(app)
 
@@ -1890,74 +2066,110 @@ class TestFollowHostSave(unittest.TestCase):
 
         mock_load.assert_not_called()
 
-    def test_a_rewrite_of_the_same_size_is_picked_up(self):
-        """mtime だけだと同じ秒内の書き換えを取りこぼす"""
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+    def test_a_returning_source_rereads_even_if_unchanged(self):
+        """tnl を経由して戻ってきたら、同じファイルでも読み直すこと"""
+        self._write(3)
         app = self._app()
         self._refresh(app)
-        app._host_save_stamp = (app._host_save_stamp[0], -1)
+        self._refresh(app, running=False)
+        app.keepOn_set.clear()
 
-        with patch.object(MatchTNL, "load_host_save",
-                          return_value=({self.CLASSIC: {9}},
-                                        {"participants": 1, "tabs": 1}, {})) as mock_load:
-            self._refresh(app)
+        self._refresh(app)
 
-        mock_load.assert_called_once()
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {9}})
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}})
 
-    def test_missing_file_keeps_the_previous_list(self):
-        app = self._app()
-
-        for _ in range(3):
-            self._refresh(app)
-
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
-        hits = [m for m in app.logs if "読めません" in m]
-        self.assertEqual(len(hits), 1, app.logs)
-
-    def test_reloading_the_tnl_lets_the_host_list_win_again(self):
-        """追従ONのまま再読み込みしても、次のtickで主催リストが戻ること"""
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
+    # ── 参加者別の希望 ────────────────────────
+    def test_switching_to_the_tnl_clears_the_wishes(self):
+        """古い希望が残ると Sabotage の判定に効いてしまう"""
+        self._write(3)
         app = self._app()
         self._refresh(app)
-        tnl = Path(self._dir.name) / "list.tnl"
-        tnl.write_text(json.dumps({"list_name": "L", "creator": "", "created_at": "",
-                                   "data": {self.CLASSIC: {"1": 1}}}), encoding="utf-8")
-        app.v_tnl = TestFollowHostSave.FakeVar(str(tnl))
+        self.assertTrue(app.host_wishes)
+
+        self._refresh(app, running=False)
+
+        self.assertEqual(app.host_wishes, {})
+
+    def test_switching_to_a_missing_tnl_clears_the_host_list(self):
+        """tnl未設定のまま ListTool が落ちても、古い主催リストを残さない"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+        app.v_tnl = TestHostListSource.FakeVar("")      # tnl 未設定
+
+        self._refresh(app, running=False)
+
+        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(app.keepOn_set, {}, "続行0件として動く")
+        self.assertEqual(app.host_wishes, {})
+
+    # ── tick ────────────────────────────────
+    def test_the_tick_survives_a_process_check_failure(self):
+        """供給元の判定が投げても、次の tick が予約されること"""
+        app = self._app()
+        app.after = MagicMock()
+        app._poll_host_save = lambda: None
+
+        def boom():
+            raise OSError("boom")
+        app._refresh_host_source = boom
+
+        mainGUI.App._poll_host_save(app)
+
+        app.after.assert_called_once()
+
+    def test_the_tick_needs_no_switch_to_run(self):
+        """チェックボックスは無い。常に供給元を見に行く"""
+        app = self._app()
+        app.after = MagicMock()
+        app._poll_host_save = lambda: None
+        called = []
+        app._refresh_host_source = lambda: called.append(1)
+
+        mainGUI.App._poll_host_save(app)
+
+        self.assertEqual(len(called), 1)
+        app.after.assert_called_once()
+
+
+class TestFollowHostSettingRemoved(unittest.TestCase):
+    """廃止した follow_host_save キーの後始末"""
+
+    def test_a_legacy_settings_file_still_loads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(json.dumps({"tnl_path": "C:/list/my.tnl",
+                                        "follow_host_save": False}),
+                            encoding="utf-8")
+
+            with patch.object(config, "SETTINGS_PATH", path):
+                data = mainGUI.load_settings()
+
+            self.assertEqual(data.get("tnl_path"), "C:/list/my.tnl")
+
+    def test_the_key_is_no_longer_saved(self):
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = {}
+        app.logs = []
+        app._log = app.logs.append
         app.lbl_tnl = MagicMock()
+        app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
+        with tempfile.TemporaryDirectory() as tmp:
+            tnl = Path(tmp) / "list.tnl"
+            tnl.write_text(json.dumps({"list_name": "L", "creator": "",
+                                       "created_at": "", "data": {}}),
+                           encoding="utf-8")
+            app.v_tnl = TestHostListSource.FakeVar(str(tnl))
+            saved = {}
+            with patch.object(mainGUI, "save_settings", saved.update), \
+                 patch.object(mainGUI, "load_settings", return_value={}):
+                mainGUI.App._load_tnl(app, show_error=False)
 
-        with patch.object(mainGUI, "save_settings"),              patch.object(mainGUI, "load_settings", return_value={}):
-            mainGUI.App._load_tnl(app, show_error=False)
+        self.assertNotIn("follow_host_save", saved)
 
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
-
-        self.assertIsNone(app._host_save_stamp, "覚えている更新時刻を捨てること")
-
-    def test_poll_does_nothing_while_off(self):
-        self._write({"version": 5, "tabs": [{
-            "participants": [self._member({self.CLASSIC: {"5": 1}})]}]})
-        app = self._app(follow=False)
-        app.after = MagicMock()
-        app._poll_host_save = lambda: None
-
-        with patch.object(mainGUI.App, "_refresh_host_save") as mock_refresh:
-            mainGUI.App._poll_host_save(app)
-
-        mock_refresh.assert_not_called()
-        app.after.assert_called_once()
-
-    def test_poll_reschedules_even_when_the_read_throws(self):
-        app = self._app()
-        app.after = MagicMock()
-        app._poll_host_save = lambda: None
-
-        with patch.object(mainGUI.App, "_refresh_host_save",
-                          side_effect=OSError("boom")):
-            mainGUI.App._poll_host_save(app)
-
-        app.after.assert_called_once()
+    def test_the_app_has_no_follow_switch(self):
+        self.assertFalse(hasattr(mainGUI.App, "_on_follow_host_toggled"))
+        self.assertFalse(hasattr(mainGUI.App, "_refresh_host_save"))
 
 
 class TestHoldKeyBackground(unittest.TestCase):

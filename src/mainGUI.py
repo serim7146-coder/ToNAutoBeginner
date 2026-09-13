@@ -15,6 +15,7 @@ import LogMonitor
 import SharedState
 import PlaySound
 import MatchTNL
+import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
 import ToNEntry
@@ -371,9 +372,9 @@ class App(tk.Tk):
         # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
         # Sabotage のマーダー判定に使う。これも in-place で入れ替える
         self.host_wishes: dict = {}
-        self.v_follow_host = tk.BooleanVar(value=False)
+        self._host_source: str | None = None         # "host" | "tnl" | None
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
-        self._host_save_warned = False               # 失敗・0人の警告は1回だけ
+        self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._running = False
         self._overlay: LogOverlay | None = None
@@ -438,10 +439,6 @@ class App(tk.Tk):
         ttk.Button(f1, text="再読み込み", command=self._load_tnl).pack(side="left", padx=(4, 0))
         self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
-        ttk.Checkbutton(f1, text="ToN ListTool の主催リストに追従（participants）",
-                        variable=self.v_follow_host,
-                        command=self._on_follow_host_toggled
-                        ).pack(side="left", padx=(12, 0))
 
         # ② 自爆キー設定
         fk = ttk.Frame(self)
@@ -794,25 +791,12 @@ class App(tk.Tk):
         self.host_wishes.clear()
         self.host_wishes.update(new_wishes)
 
-    def _on_follow_host_toggled(self):
-        save_settings({**load_settings(), "follow_host_save": self.v_follow_host.get()})
-        self._host_save_stamp = None
-        self._host_save_warned = False
-        if self.v_follow_host.get():
-            self._log("[主催リスト] 追従ON")
-            self._refresh_host_save()
-        else:
-            self._log("[主催リスト] 追従OFF → tnlに戻します")
-            self._apply_host_wishes({})
-            self._load_tnl(show_error=False)
-
     def _start_host_save_polling(self):
         self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
 
     def _poll_host_save(self):
         try:
-            if self.v_follow_host.get():
-                self._refresh_host_save()
+            self._refresh_host_source()
         except Exception:
             pass
         try:
@@ -826,37 +810,67 @@ class App(tk.Tk):
             self._host_save_warned = True
             self._log(msg)
 
-    def _refresh_host_save(self):
-        """主催リストが書き換わっていたら読み直して続行リストへ反映する"""
+    def _fall_back_to_tnl(self, reason: str):
+        """続行リストの供給元を .tnl に戻す。切り替わったときだけログを出す"""
+        if self._host_source == "tnl":
+            return
+        self._host_source = "tnl"
+        self._host_save_stamp = None
+        self._host_save_warned = False
+        self._log(f"[続行リスト] tnlへ切替（{reason}）")
+        # 参加者別の希望を残すと Sabotage の判定に古い希望が効いてしまう
+        self._apply_host_wishes({})
+        # tnlが未設定だと _load_tnl は何もせず、主催リストが居座る。それでは
+        # 「古いリストで判定しない」という目的を果たせないので先に空にする
+        # （tnlが読めればこの直後に上書きされる。読めなければ続行0件）
+        self._apply_keep_on({})
+        self._load_tnl(show_error=False)
+
+    def _refresh_host_source(self):
+        """続行リストの供給元を状況から決める。
+
+        ToN ListTool が動いていて参加者がいれば主催リスト、それ以外は .tnl。
+        ツールを閉じても host_save.json.gz はディスクに残るので、鮮度は
+        mtime ではなくプロセスの生死で見る（古いファイルを掴まないため）。
+        """
+        if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
+            self._fall_back_to_tnl("ToN ListTool が起動していません")
+            return
+
         path = config.HOST_SAVE_PATH
         try:
             stat = os.stat(path)
         except OSError as e:
-            self._warn_host_save_once(f"[主催リスト] ⚠ 読めません: {e}")
+            self._fall_back_to_tnl(f"host_save が読めません: {e}")
             return
+
         stamp = (stat.st_mtime, stat.st_size)   # 同じ秒内の書き換えを取りこぼさない
-        if stamp == self._host_save_stamp:
+        if stamp == self._host_save_stamp and self._host_source == "host":
             return
 
         try:
             keep_on, meta, wishes = MatchTNL.load_host_save(path)
         except Exception as e:
-            # 別プロセスが書いている最中を掴みうる。前の値を保持して次のtickで再試行
+            # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
+            # 往復しかねないので、前の値を保持して次のtickで再試行する
             self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
             return
 
         if not meta["participants"]:
-            # 空のリストを適用すると全ラウンドが自爆対象になる
-            self._warn_host_save_once("[主催リスト] ⚠ 主催リストに参加者がいません。前のリストを使います")
-            self._host_save_stamp = stamp
+            # 周回が動いていない。空のリストを適用すると全ラウンドが自爆対象になる
+            self._fall_back_to_tnl("周回の参加者がいません")
             return
 
         self._host_save_stamp = stamp
         self._host_save_warned = False
+        switched = self._host_source != "host"
+        self._host_source = "host"
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
         self._apply_host_wishes(wishes)
-        if changed:
+        if switched:
+            self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")
+        if changed or switched:
             total = sum(len(v) for v in self.keepOn_set.values())
             msg = (f"[主催リスト] 参加者{meta['participants']}人 / "
                    f"{len(self.keepOn_set)}ラウンド / {total}件 続行対象")
@@ -878,9 +892,6 @@ class App(tk.Tk):
             msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 続行対象"
             self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(f"[TNL] {msg}")
-            # 追従ONのまま再読み込みするとtnlで上書きされる。次のtickで
-            # 主催リストを読み直せるよう、覚えている更新時刻を捨てておく
-            self._host_save_stamp = None
             save_settings({**load_settings(), "tnl_path": p})
         except Exception as e:
             if show_error:
@@ -906,7 +917,6 @@ class App(tk.Tk):
             var.set(name in _as_round_names(data.get("freeze_rounds")))
         self._apply_freeze_settings()
         self._apply_saved_profiles()
-        self.v_follow_host.set(bool(data.get("follow_host_save", False)))
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
             return
