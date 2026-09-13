@@ -505,6 +505,80 @@ class TestOscAvailability(unittest.TestCase):
             self.assertFalse(OSCClient.osc_available_for(0x1234, 0))
 
 
+class TestUdpPortsByPid(unittest.TestCase):
+    """UDPの待ち受け表は netstat 1回で全PIDぶん取る"""
+
+    NETSTAT = (
+        chr(10).join([
+            "",
+            "アクティブな接続",
+            "",
+            "  プロトコル  ローカル アドレス      外部アドレス            PID",
+            "  UDP         0.0.0.0:9000           *:*                     4321",
+            "  UDP         0.0.0.0:9010           *:*                     4321",
+            "  UDP         127.0.0.1:5353         *:*                     999",
+            "  UDP         [::]:9020              *:*                     555",
+            "  TCP         0.0.0.0:80             0.0.0.0:0    LISTENING  111",
+        ])
+    )
+
+    def _run_result(self, stdout):
+        result = MagicMock()
+        result.stdout = stdout
+        return result
+
+    def test_output_is_split_per_pid(self):
+        with patch.object(OSCClient.subprocess, "run",
+                          return_value=self._run_result(self.NETSTAT)) as mock_run:
+            table = OSCClient.udp_ports_by_pid()
+
+        mock_run.assert_called_once()
+        self.assertEqual(table[4321], {9000, 9010})
+        self.assertEqual(table[999], {5353})
+        self.assertEqual(table[555], {9020}, "IPv6表記も拾うこと")
+        self.assertNotIn(111, table, "TCPは含めないこと")
+
+    def test_failure_returns_none(self):
+        """「失敗」と「成功したがポート無し」を区別する"""
+        with patch.object(OSCClient.subprocess, "run", side_effect=OSError("boom")):
+            self.assertIsNone(OSCClient.udp_ports_by_pid())
+
+    def test_of_process_delegates(self):
+        with patch.object(OSCClient, "udp_ports_by_pid",
+                          return_value={4321: {9000}}):
+            self.assertEqual(OSCClient.udp_ports_of_process(4321), {9000})
+            self.assertEqual(OSCClient.udp_ports_of_process(9999), set())
+
+    def test_of_process_survives_a_failure(self):
+        with patch.object(OSCClient, "udp_ports_by_pid", return_value=None):
+            self.assertEqual(OSCClient.udp_ports_of_process(4321), set())
+
+    def test_passing_the_table_does_not_run_netstat(self):
+        table = {4321: {9010}}
+        with patch.object(OSCClient.subprocess, "run") as mock_run, \
+             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
+            self.assertTrue(OSCClient.osc_available_for(0x1234, 1, table))
+
+        mock_run.assert_not_called()
+
+    def test_missing_pid_in_the_table_is_unavailable_without_falling_back(self):
+        """辞書にPIDが無いのは「ポートを持っていない」＝利用不可。撃ち直さない"""
+        with patch.object(OSCClient.subprocess, "run") as mock_run, \
+             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
+            self.assertFalse(OSCClient.osc_available_for(0x1234, 1, {999: {9010}}))
+
+        mock_run.assert_not_called()
+
+    def test_none_table_falls_back_per_window(self):
+        """netstat失敗時は窓ごとの個別取得へ落ちる（全窓を巻き添えにしない）"""
+        with patch.object(OSCClient, "udp_ports_of_process",
+                          return_value={9010}) as mock_ports, \
+             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
+            self.assertTrue(OSCClient.osc_available_for(0x1234, 1, None))
+
+        mock_ports.assert_called_once_with(4321)
+
+
 class TestVRChatLauncher(unittest.TestCase):
     """VRChat起動機構"""
 
@@ -1703,6 +1777,697 @@ class _ImmediateThread:
         pass
 
 
+class TestFreezeSettings(unittest.TestCase):
+    """フリーズ設定は全窓共通（フリーズ自体が全窓を止めるため）"""
+
+    def setUp(self):
+        SharedState.set_freeze_on_8pages(False)
+        SharedState.set_freeze_on_punish(False)
+        SharedState.set_freeze_rounds(())
+
+    tearDown = setUp
+
+    def test_flags_round_trip(self):
+        SharedState.set_freeze_on_8pages(True)
+        SharedState.set_freeze_on_punish(True)
+
+        self.assertTrue(SharedState.get_freeze_on_8pages())
+        self.assertTrue(SharedState.get_freeze_on_punish())
+
+    def test_rounds_round_trip(self):
+        SharedState.set_freeze_rounds(["Alternate", "Ghost"])
+
+        self.assertEqual(SharedState.get_freeze_rounds(), {"Alternate", "Ghost"})
+
+    def test_rounds_accepts_any_iterable(self):
+        SharedState.set_freeze_rounds(name for name in ("Midnight",))
+
+        self.assertEqual(SharedState.get_freeze_rounds(), {"Midnight"})
+
+    def test_getter_returns_a_copy(self):
+        """返した set を書き換えても内部状態は変わらない"""
+        SharedState.set_freeze_rounds(["Alternate"])
+
+        got = SharedState.get_freeze_rounds()
+        got.add("Unbound")
+        got.discard("Alternate")
+
+        self.assertEqual(SharedState.get_freeze_rounds(), {"Alternate"})
+
+    def test_checkbox_order_follows_the_config_list(self):
+        """ソートせず ROUND_FREEZE_SELECTABLE の順序で並べる"""
+        made = mainGUI.freeze_round_vars(lambda: object())
+
+        self.assertEqual(list(made), list(config.ROUND_FREEZE_SELECTABLE))
+
+
+class TestFreezeSettingsMigration(unittest.TestCase):
+    """旧形式（窓ごとの配列）の settings.json も読めること"""
+
+    def test_flag_array_is_any(self):
+        self.assertTrue(mainGUI._as_flag([False, True, False]))
+        self.assertFalse(mainGUI._as_flag([False, False]))
+
+    def test_flag_scalar_and_missing(self):
+        self.assertTrue(mainGUI._as_flag(True))
+        self.assertFalse(mainGUI._as_flag(None))
+        self.assertFalse(mainGUI._as_flag([]))
+
+    def test_round_arrays_are_unioned(self):
+        value = [["Alternate"], [], ["Ghost", "Alternate"], ["Midnight"]]
+
+        self.assertEqual(mainGUI._as_round_names(value),
+                         {"Alternate", "Ghost", "Midnight"})
+
+    def test_new_format_flat_list(self):
+        self.assertEqual(mainGUI._as_round_names(["Alternate", "Punished"]),
+                         {"Alternate", "Punished"})
+
+    def test_missing_or_broken_falls_back_to_empty(self):
+        self.assertEqual(mainGUI._as_round_names(None), set())
+        self.assertEqual(mainGUI._as_round_names([]), set())
+        self.assertEqual(mainGUI._as_round_names([None, 5]), set())
+
+
+class TestSpeedFreeze(unittest.TestCase):
+    """速度検知で 8 Pages / Punished を掴んだら全窓を止める"""
+
+    def setUp(self):
+        SharedState.speed_freeze_reset()
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_freeze_on_8pages(False)
+        SharedState.set_freeze_on_punish(False)
+
+    tearDown = setUp
+
+    def _executor(self):
+        cfg = WindowConfig(hwnd=123, osc_port=9000,
+                           voice_8pages="8p.mp3", voice_punish="pn.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
+
+    def _detect(self, ex, kind):
+        with patch.object(ActionExecutor.PlaySound, "play_sound"), \
+             patch.object(WindowOperator, "focus_window", return_value=True):
+            ex._announce_speed_kind(kind, 6.5)
+
+    def test_eight_pages_freezes_when_enabled(self):
+        SharedState.set_freeze_on_8pages(True)
+        ex, st = self._executor()
+
+        self._detect(ex, "8pages")
+
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertTrue(st.speed_freeze_held)
+        self.assertEqual(st.speed_freeze_kind, "8pages")
+
+    def test_eight_pages_does_not_freeze_when_disabled(self):
+        ex, st = self._executor()
+
+        self._detect(ex, "8pages")
+
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertFalse(st.speed_freeze_held)
+
+    def test_punish_freezes_when_enabled(self):
+        SharedState.set_freeze_on_punish(True)
+        ex, st = self._executor()
+
+        self._detect(ex, "punish")
+
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertEqual(st.speed_freeze_kind, "punish")
+
+    def test_normal_never_freezes(self):
+        SharedState.set_freeze_on_8pages(True)
+        SharedState.set_freeze_on_punish(True)
+        ex, st = self._executor()
+
+        self._detect(ex, "normal")
+
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertFalse(st.speed_freeze_held)
+
+    def test_first_window_is_brought_to_front(self):
+        SharedState.set_freeze_on_8pages(True)
+        ex, _st = self._executor()
+
+        with patch.object(ActionExecutor.PlaySound, "play_sound"), \
+             patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus:
+            ex._announce_speed_kind("8pages", 6.5)
+
+        mock_focus.assert_called_once_with(123)
+
+    def test_second_window_does_not_steal_focus(self):
+        SharedState.set_freeze_on_8pages(True)
+        other = WindowState()
+        SharedState.speed_freeze_start(other)
+        ex, st = self._executor()
+
+        with patch.object(ActionExecutor.PlaySound, "play_sound"), \
+             patch.object(WindowOperator, "focus_window") as mock_focus:
+            ex._announce_speed_kind("8pages", 6.5)
+
+        mock_focus.assert_not_called()
+        self.assertTrue(st.speed_freeze_held, "フリーズ自体は張ること")
+
+    def test_item_equip_releases_eight_pages_freeze(self):
+        monitor = self._monitor()
+        monitor.st.speed_freeze_kind = "8pages"
+        SharedState.speed_freeze_start(monitor.st)
+
+        monitor._process("Equipping 42.")
+
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+
+    def test_item_equip_does_not_release_punish_freeze(self):
+        monitor = self._monitor()
+        monitor.st.speed_freeze_kind = "punish"
+        SharedState.speed_freeze_start(monitor.st)
+
+        monitor._process("Equipping 42.")
+
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set())
+
+    def test_round_start_releases_any_freeze(self):
+        """保険: アイテムを取らないままラウンドが始まっても必ず解除する"""
+        for kind in ("8pages", "punish"):
+            SharedState.speed_freeze_reset()
+            monitor = self._monitor()
+            monitor.st.speed_freeze_kind = kind
+            SharedState.speed_freeze_start(monitor.st)
+
+            with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(LogMonitor.threading, "Thread"):
+                monitor._process("This round is taking place at Facility (12) "
+                                 "and the round type is Classic")
+
+            self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set(), kind)
+            self.assertFalse(monitor.st.speed_freeze_held, kind)
+
+    def test_two_windows_hold_the_freeze_independently(self):
+        a, b = WindowState(), WindowState()
+        SharedState.speed_freeze_start(a)
+        SharedState.speed_freeze_start(b)
+
+        SharedState.speed_freeze_end(a)
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set(), "まだ止まっていること")
+
+        SharedState.speed_freeze_end(b)
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+
+    def test_the_window_that_froze_does_not_wait_for_itself(self):
+        SharedState.set_freeze_on_8pages(True)
+        ex, _st = self._executor()
+        self._detect(ex, "8pages")
+
+        self.assertTrue(ex._wait_other_windows(), "自分が張ったフリーズで詰まらない")
+
+
+class TestRoundFreeze(unittest.TestCase):
+    """指定ラウンドに突入したら全窓を止める（張った窓自身は自爆できる）"""
+
+    ROUND_LINE = ("This round is taking place at Facility (12) "
+                  "and the round type is %s")
+
+    def setUp(self):
+        SharedState.round_freeze_reset()
+        SharedState.speed_freeze_reset()
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_freeze_rounds(())
+
+    tearDown = setUp
+
+    def _monitor(self, rounds=("Alternate",)):
+        SharedState.set_freeze_rounds(rounds)
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
+
+    def _start_round(self, monitor, round_type):
+        with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process(self.ROUND_LINE % round_type)
+
+    def test_selected_round_freezes_every_window(self):
+        monitor = self._monitor(["Alternate"])
+
+        self._start_round(monitor, "Alternate")
+
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertTrue(monitor.st.round_freeze_held)
+
+    def test_unselected_round_does_not_freeze(self):
+        monitor = self._monitor(["Alternate"])
+
+        self._start_round(monitor, "Classic")
+
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+    def test_all_six_selectable_rounds_work(self):
+        for name in config.ROUND_FREEZE_SELECTABLE:
+            SharedState.round_freeze_reset()
+            monitor = self._monitor([name])
+
+            self._start_round(monitor, name)
+
+            self.assertTrue(monitor.st.round_freeze_held, name)
+
+    def test_freeze_happens_without_waiting_for_the_killers(self):
+        monitor = self._monitor(["Midnight"])
+
+        self._start_round(monitor, "Midnight")
+
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertEqual(monitor.st.terror_ids, [], "テラーはまだ判明していない")
+
+    def test_the_window_that_froze_can_still_suicide(self):
+        """★自窓の自爆は止めない。止めるのは他窓だけ"""
+        cfg = WindowConfig(hwnd=123, do_skip=True)
+        st = WindowState(in_round=True, round_freeze_held=True)
+        SharedState.ROUND_FREEZE_EVENT.clear()
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+        held = []
+
+        with patch.object(WindowOperator, "focus_window", return_value=True), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(WindowOperator, "hold_key",
+                          side_effect=lambda k, sec: held.append(k)):
+            ex.do_skip()
+
+        self.assertTrue(held, "自窓は待たずに自爆すること")
+
+    def test_next_round_releases_even_without_dying(self):
+        """保険: 死なずにラウンドが終わっても永久フリーズしない"""
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+
+        self._start_round(monitor, "Classic")
+
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertFalse(monitor.st.round_freeze_held)
+
+    def test_death_releases_after_the_delay(self):
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+
+        with patch.object(LogMonitor.time, "sleep") as mock_sleep:
+            monitor._release_round_freeze_after_delay(monitor.st.round_seq)
+
+        mock_sleep.assert_called_once_with(config.FOG_FREEZE_RELEASE_DELAY_SEC)
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+    def test_two_windows_hold_it_independently(self):
+        a, b = WindowState(), WindowState()
+        SharedState.round_freeze_start(a)
+        SharedState.round_freeze_start(b)
+
+        SharedState.round_freeze_end(a)
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+        SharedState.round_freeze_end(b)
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+    def test_reset_forces_release(self):
+        st = WindowState()
+        SharedState.round_freeze_start(st)
+
+        SharedState.round_freeze_reset()
+
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertEqual(SharedState.get_round_freeze_count(), 0)
+
+    def test_hands_free_does_not_freeze(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(["Alternate"])
+
+        self._start_round(monitor, "Alternate")
+
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+
+class TestTerrorNameAlwaysLogged(unittest.TestCase):
+    """テラー名は判定より先に出す（早期returnの手前）
+
+    _on_killers には設定・インスタンス種別による early return が5つあり、
+    以前は判定まで到達しないと名前が一切残らなかった。
+    """
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.set_hands_free(False)
+        SharedState.continue_round_reset()
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.set_hands_free(False)
+        SharedState.continue_round_reset()
+
+    def _monitor(self, instance_type=None, keep_on=None, **cfg_kw):
+        cfg = WindowConfig(voice_continue="continue.mp3", **cfg_kw)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _on_killers(self, monitor, ids=(99,), round_type="Classic", revealed=False):
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), round_type, revealed=revealed)
+        return monitor.logs
+
+    def test_logged_when_auto_skip_is_off(self):
+        logs = self._on_killers(self._monitor(do_skip=False))
+
+        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+
+    def test_logged_under_instance_restriction(self):
+        """publicなど操作しないインスタンスでも名前は残す"""
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC)
+
+        logs = self._on_killers(monitor)
+
+        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+        self.assertTrue(any("インスタンス制限" in m for m in logs), logs)
+
+    def test_logged_when_hoshiimo_skip_decides(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_HOSHIIMO,
+                                hoshiimo_skip=True)
+
+        logs = self._on_killers(monitor)
+
+        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+
+    def test_logged_in_hands_free(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(do_skip=True)
+
+        logs = self._on_killers(monitor)
+
+        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+
+    def test_unknown_id_shows_the_raw_id(self):
+        """terrors.json に無いIDは ID:xxxxx の形で出る"""
+        logs = self._on_killers(self._monitor(), ids=(99999,))
+
+        self.assertTrue(any("ID:99999" in m for m in logs), logs)
+
+    def test_decision_line_has_no_name(self):
+        """判定行は名前を落としてタグだけ"""
+        logs = self._on_killers(self._monitor())
+
+        decision = [m for m in logs if "判定:" in m]
+        self.assertEqual(len(decision), 1, logs)
+        self.assertIn("【スキップ】", decision[0])
+        self.assertNotIn("テラー", decision[0])
+
+    def test_revealed_uses_the_other_verb(self):
+        logs = self._on_killers(self._monitor(), revealed=True)
+
+        self.assertTrue(any("テラーrevealed:" in m for m in logs), logs)
+
+    def test_name_comes_before_the_decision(self):
+        logs = self._on_killers(self._monitor())
+        names = [i for i, m in enumerate(logs) if "テラーset:" in m]
+        decisions = [i for i, m in enumerate(logs) if "判定:" in m]
+
+        self.assertTrue(names and decisions)
+        self.assertLess(names[0], decisions[0], "名前を先に出すこと")
+
+
+class TestGigabytesDetect(unittest.TestCase):
+    """The Gigabytes はテラーIDで判別できないのでログ行で拾う"""
+
+    LINE = "2026.09.05 14:29:35 Debug      -  The Gigabytes have come."
+
+    def test_line_is_parsed(self):
+        event = LogParser.parse(self.LINE)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, LogParser.EVENT_GIGABYTES)
+
+    def test_similar_lines_do_not_match(self):
+        """同じラウンドに出る紛らわしい行を拾わないこと"""
+        for line in ("2026.09.05 14:29:35 Debug      -  The Gigabytes have come",
+                     "2026.09.05 14:29:35 Debug      -  BLUE GIGABYTEtriggered "
+                     "an Enrage State!",
+                     "2026.09.05 14:29:35 Debug      -  The Gigabytes have come. now"):
+            self.assertIsNone(LogParser.parse(line), line)
+
+    def test_handler_logs_once(self):
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, logs.append, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process(self.LINE)
+
+        hits = [m for m in logs if "The Gigabytes 出現" in m]
+        self.assertEqual(len(hits), 1, logs)
+        mock_thread.assert_not_called()
+        mock_play.assert_not_called()
+
+    def test_no_state_is_touched(self):
+        """自爆・続行・フリーズの判断には影響させない"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        before = dict(vars(monitor.st))
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertEqual(dict(vars(monitor.st)), before, "状態を変えないこと")
+
+
+class TestAtrachedDetect(unittest.TestCase):
+    """atrached は Sonic のバリアント。IDでは判別できないのでログ行で拾う"""
+
+    LINE = "2026.09.12 20:23:15 Debug      -  Lets play a game..."
+
+    def test_line_is_parsed(self):
+        event = LogParser.parse(self.LINE)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, LogParser.EVENT_ATRACHED)
+
+    def test_similar_lines_do_not_match(self):
+        """アポストロフィ有り・ピリオドの数違いは拾わない"""
+        prefix = "2026.09.12 20:23:15 Debug      -  "
+        for body in ("Let's play a game...",
+                     "Lets play a game.",
+                     "Lets play a game",
+                     "Lets play a game....",
+                     "Lets play a game... now"):
+            self.assertIsNone(LogParser.parse(prefix + body), body)
+
+    def test_handler_logs_once(self):
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, logs.append, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process(self.LINE)
+
+        hits = [m for m in logs if "atrached 出現" in m]
+        self.assertEqual(len(hits), 1, logs)
+        mock_thread.assert_not_called()
+        mock_play.assert_not_called()
+
+    def test_logged_even_when_auto_skip_is_off(self):
+        """自爆オフでも出す（早期returnより前に置いてあること）"""
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=False), {},
+                                        logs.append, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PUBLIC
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertTrue(any("atrached 出現" in m for m in logs), logs)
+
+    def test_no_state_is_touched(self):
+        """自爆・続行・フリーズの判断には影響させない"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        before = dict(vars(monitor.st))
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertEqual(dict(vars(monitor.st)), before, "状態を変えないこと")
+
+
+class TestStringDownloadTrigger(unittest.TestCase):
+    """速度検知の起点はラウンドデータの取得（誰がBeginを押しても出る）"""
+
+    DL = ("[String Download] Attempting to load String from URL "
+          "'https://pastebin.com/raw/E36sLedn'")
+    DL_ALT = ("[String Download] Attempting to load String from URL "
+              "'https://pastebin.com/raw/apPVH4KD'")
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def _monitor(self, instance_type=None):
+        monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9000), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
+        monitor.st.round_end_seen = True
+        return monitor
+
+    def _started(self, monitor, line=None):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process(line or self.DL)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_download_line_is_parsed(self):
+        event = LogParser.parse("2026.08.23 17:53:12 Debug      -  " + self.DL)
+
+        self.assertEqual(event.kind, LogParser.EVENT_STRING_DOWNLOAD)
+        self.assertEqual(event.url, "https://pastebin.com/raw/E36sLedn")
+
+    def test_clearing_queue_line_does_not_match(self):
+        """同じ [String Download] で始まる別の行を拾わないこと"""
+        event = LogParser.parse("2026.08.23 17:53:12 Debug      -  "
+                                "[String Download] Clearing string download queue")
+
+        self.assertIsNone(event)
+
+    def test_download_starts_both_modules_in_private(self):
+        started = self._started(self._monitor(config.INSTANCE_PRIVATE))
+
+        self.assertIn("do_speed_detect", started)
+        self.assertIn("do_speed_strafe", started)
+
+    def test_download_starts_detection_only_outside_private(self):
+        started = self._started(self._monitor(config.INSTANCE_HOSHIIMO))
+
+        self.assertIn("do_speed_detect", started)
+        self.assertNotIn("do_speed_strafe", started)
+
+    def test_download_before_round_end_starts_nothing(self):
+        monitor = self._monitor()
+        monitor.st.round_end_seen = False
+
+        self.assertEqual(self._started(monitor), [])
+        self.assertFalse(monitor.st.speed_probe_done)
+
+    def test_three_downloads_in_one_round_start_it_once(self):
+        """区間内にDLが複数来ても起動は1回だけ"""
+        monitor = self._monitor()
+
+        first = self._started(monitor)
+        second = self._started(monitor)
+        third = self._started(monitor)
+
+        self.assertIn("do_speed_detect", first)
+        self.assertEqual(second, [])
+        self.assertEqual(third, [])
+
+    def test_either_url_starts_it(self):
+        """URLで絞っていないこと（ラウンドデータのURLは複数ある）"""
+        for line in (self.DL, self.DL_ALT):
+            started = self._started(self._monitor(), line)
+            self.assertIn("do_speed_detect", started, line)
+
+    def test_toggle_off_starts_nothing(self):
+        SharedState.set_speed_detect(False)
+
+        self.assertEqual(self._started(self._monitor()), [])
+
+    def test_round_start_allows_the_next_round(self):
+        monitor = self._monitor()
+        self._started(monitor)
+        self.assertTrue(monitor.st.speed_probe_done)
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Classic")
+
+        self.assertFalse(monitor.st.speed_probe_done)
+
+    def test_verified_no_longer_starts_the_probe(self):
+        """Verified からは起動しない（起点の移設）"""
+        monitor = self._monitor()
+
+        started = self._started(monitor, "Verified")
+
+        self.assertEqual(started, [])
+        self.assertFalse(monitor.st.speed_probe_done)
+
+    def test_verified_still_marks_begin_done(self):
+        """Verified の既存動作（自分がBeginを押せたかの記録）は残す"""
+        monitor = self._monitor()
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("Verified")
+
+        self.assertTrue(monitor.st.begin_done)
+
+    def test_verified_periodic_guard_still_works(self):
+        monitor = self._monitor()
+        monitor.st.periodic_last = 1000.0
+        monitor.st.periodic_period = 300.0
+
+        with patch.object(LogMonitor.time, "time", return_value=1302.0), \
+             patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("Verified")
+
+        self.assertFalse(monitor.st.begin_done)
+        self.assertEqual(monitor.st.periodic_last, 1302.0)
+
+    def test_verified_round_end_guard_still_works(self):
+        monitor = self._monitor()
+        monitor.st.round_end_seen = False
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("Verified")
+
+        self.assertFalse(monitor.st.begin_done)
+
+    def test_equip_wait_release_still_uses_begin_done(self):
+        """装備待ちフリーズの解除は自分のBegin（Verified）を条件に残す"""
+        monitor = self._monitor()
+        monitor.st.waiting_for_equip = True
+        monitor.st.begin_done = False
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process("Equipping 42.")
+        targets = [c.kwargs["target"].__func__.__name__
+                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+        self.assertNotIn("_release_equip_wait_after_delay", targets,
+                         "自分のBeginが無いうちは解除しないこと")
+
+        monitor.st.begin_done = True
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process("Equipping 42.")
+        targets = [c.kwargs["target"].__func__.__name__
+                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+        self.assertIn("_release_equip_wait_after_delay", targets)
+
+
 class TestSpeedClassify(unittest.TestCase):
     """速度からラウンド種別を引く（値の照合だけ。張り付き判定は受信側）"""
 
@@ -1795,11 +2560,12 @@ class TestSpeedDetect(unittest.TestCase):
 
     class FakeReceiver:
         def __init__(self, value=None, stable_for=1.0, grounded=True,
-                     ever_received=True):
+                     ever_received=True, alive=True):
             self.stable_value = value
             self.stable_for = stable_for
             self.grounded = grounded
             self.ever_received = ever_received
+            self.alive = alive
             self.stopped = False
 
         def stop(self):
@@ -1851,6 +2617,26 @@ class TestSpeedDetect(unittest.TestCase):
 
         self.assertEqual(st.speed_round_kind, "")
         self.assertEqual(played, [])
+
+    def test_stale_value_after_the_stream_dies_is_ignored(self):
+        """途絶後は判定しない。
+
+        stable_for は時間経過だけで伸びるので、送信が止まると凍結値が
+        いつまでも「安定値」として通ってしまう。
+        """
+        st, _logs, played = self._run(
+            self.FakeReceiver(4.0, stable_for=99.0, alive=False))
+
+        self.assertEqual(st.speed_round_kind, "", "凍結値で判定してはいけない")
+        self.assertEqual(played, [])
+
+    def test_live_stream_still_decides(self):
+        """受信が生きていれば従来どおり判定する（ガードで塞ぎすぎていない）"""
+        st, _logs, played = self._run(
+            self.FakeReceiver(4.0, stable_for=config.SPEED_STABLE_SEC, alive=True))
+
+        self.assertEqual(st.speed_round_kind, "punish")
+        self.assertEqual(played, ["pn.mp3"])
 
     def test_airborne_samples_are_ignored(self):
         st, _logs, played = self._run(self.FakeReceiver(6.5, grounded=False))

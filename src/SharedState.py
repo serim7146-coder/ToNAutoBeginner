@@ -70,6 +70,43 @@ def set_speed_detect(val: bool):
         _SPEED_DETECT = val
 
 # ═══════════════════════════════════════════════
+#  フリーズ設定（全窓共通）
+#  フリーズ自体が全窓を止める仕組みなので、窓ごとに分ける意味がない
+# ═══════════════════════════════════════════════
+_FREEZE_ON_8PAGES = False
+_FREEZE_ON_PUNISH = False
+_FREEZE_ROUNDS: set = set()
+_FREEZE_LOCK = threading.Lock()
+
+def get_freeze_on_8pages() -> bool:
+    with _FREEZE_LOCK:
+        return _FREEZE_ON_8PAGES
+
+def set_freeze_on_8pages(val: bool):
+    global _FREEZE_ON_8PAGES
+    with _FREEZE_LOCK:
+        _FREEZE_ON_8PAGES = bool(val)
+
+def get_freeze_on_punish() -> bool:
+    with _FREEZE_LOCK:
+        return _FREEZE_ON_PUNISH
+
+def set_freeze_on_punish(val: bool):
+    global _FREEZE_ON_PUNISH
+    with _FREEZE_LOCK:
+        _FREEZE_ON_PUNISH = bool(val)
+
+def get_freeze_rounds() -> set:
+    """突入で全窓を止めるラウンド種別。コピーを返す（呼び出し側の書き換え防止）"""
+    with _FREEZE_LOCK:
+        return set(_FREEZE_ROUNDS)
+
+def set_freeze_rounds(names):
+    global _FREEZE_ROUNDS
+    with _FREEZE_LOCK:
+        _FREEZE_ROUNDS = set(names or ())
+
+# ═══════════════════════════════════════════════
 #  アイテム取得→Beginモード
 # ═══════════════════════════════════════════════
 _ITEM_BEGIN_MODE = False

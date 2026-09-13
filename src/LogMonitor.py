@@ -501,6 +501,16 @@ class LogMonitor:
                 self._start_daemon(self._release_equip_wait_after_delay)
             return
 
+        if event.kind == LogParser.EVENT_GIGABYTES:
+            # 知らせるだけ。自爆・続行・フリーズの判断には使わない
+            self._log("👾 The Gigabytes 出現")
+            return
+
+        if event.kind == LogParser.EVENT_ATRACHED:
+            # Sonicのバリアント。知らせるだけ。自爆・続行・フリーズの判断には使わない
+            self._log("🎮 atrached 出現（Sonicのバリアント）")
+            return
+
         if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
             # Beginが押されるとラウンドデータの取得が始まる。これは【誰が押しても】
             # 出るため、他人がインマスのマルチでも先読みできる。
@@ -580,7 +590,7 @@ class LogMonitor:
 
             # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
             # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
-            if st.round_type in self.cfg.freeze_rounds and not self._hands_free():
+            if st.round_type in SharedState.get_freeze_rounds() and not self._hands_free():
                 SharedState.round_freeze_start(st)
                 self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
                           f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
@@ -777,6 +787,11 @@ class LogMonitor:
             if tid not in st.terror_ids:
                 st.terror_ids.append(tid)
 
+        # 名前は判定より先に出す。この下には設定・インスタンス種別による
+        # early return が5つあり、そこを通ると何が出たのか分からなくなるため。
+        verb = "revealed" if revealed else "set"
+        self._log(f"テラー{verb}: {format_terror_ids(st.terror_ids)} / {round_type}")
+
         if not self._waiting_for_terror_variant():
             self._send_round_statistics_once()
 
@@ -847,10 +862,9 @@ class LogMonitor:
         if was_continue_round and not st.is_continue_round:
             SharedState.continue_round_end()
 
-        verb = "revealed" if revealed else "set"
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
-        self._log(f"テラー{verb}: {format_terror_ids(all_ids)} / {round_type} {tag}")
+        self._log(f"判定: {round_type} {tag}")
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:

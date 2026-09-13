@@ -21,10 +21,6 @@ class WindowConfig:
     voice_foxy: str = ""
     voice_8pages: str = ""
     voice_punish: str = ""
-    freeze_on_8pages: bool = False   # 8 Pages を検知したら全窓を止める
-    freeze_on_punish: bool = False   # Punished を検知したら全窓を止める
-    # 突入したら全窓を止めるラウンド種別（config.ROUND_FREEZE_SELECTABLE から選ぶ）
-    freeze_rounds: set = field(default_factory=set)
 
 
 @dataclass
