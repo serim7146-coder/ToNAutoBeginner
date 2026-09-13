@@ -213,13 +213,13 @@ CBPS_SKIP_ROUNDS = {
 # ── テラーバリアント判定待ち ──
 # Bloodthirsty Creature / Hungry Home Invader はテラー出現時にログ行が出る。
 # 該当テラーがいるラウンドでは、出現を待ってから自動自爆の可否を判断する。
-# 実測値(手元ログ): Classicは Killers設定からスポーンまで最大3秒(154件)、
-# Bloodbathは枠ごとに遅れて出現し最大10秒(25件)。余裕を持たせた値にする。
+# グループ判定でこれを待つのは Classic だけ（バリアントかどうかで結論が
+# 反転するのは Classic だけで、他のラウンドは待っても結論が変わらない）。
+# 実測(手元ログ): バリアントの出現ログは Killers行と同じ秒に出る
+# ——Gigabytes 12件・atrached 2件とも差0秒。ログのtail間隔(0.3秒)を
+# 見込んでも1秒あれば足りる。バリアントが確定した時点で待ちは打ち切る。
 TERROR_VARIANT_WAIT_SEC = {
-    "Classic":      5.0,
-    "Classic.exe":  5.0,
-    "Randomizer":   5.0,
-    "Bloodbath":   15.0,
+    "Classic":      1.0,
 }
 TERROR_VARIANT_WAIT_DEFAULT_SEC = 10.0
 TERROR_VARIANT_POLL_SEC = 0.2

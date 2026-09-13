@@ -918,7 +918,9 @@ class LogMonitor:
         # 干し芋/焼き芋のラウンド判定。バリアント確定を待たずに決めると
         # Classicのバリアントを取り逃がすので、待ちは分岐の外で見る
         if is_group_skip:
-            if self._waiting_for_group_variant():
+            # 待つのは Classic だけ。問答無用スキップも全続行もテラーIDを
+            # 見ないので、待っても結論は変わらず自爆が遅れるだけになる
+            if st.round_type == "Classic" and self._waiting_for_group_variant():
                 wait = self._variant_wait_sec()
                 self._log(f"バリアント判定待ち({wait}秒): {st.round_type}")
                 self._start_daemon(self._delayed_group_decision, round_type,
