@@ -17,6 +17,8 @@ class WindowConfig:
     # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する
     skip_rounds: set = field(default_factory=set)
     skip_variant_exempt: bool = False   # Variant/Gigabytesは自爆しない
+    # 続行リストを見ずに自爆しない（privateのみ）。skip_rounds より優先する
+    continue_rounds: set = field(default_factory=set)
     voice_continue: str = ""
     voice_fog: str = ""
     voice_item_lost: str = ""

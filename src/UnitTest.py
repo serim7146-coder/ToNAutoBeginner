@@ -5022,6 +5022,190 @@ class TestSkipRoundsByType(unittest.TestCase):
         mock_thread.assert_not_called()
 
 
+class TestContinueRoundsByType(unittest.TestCase):
+    """privateの「全続行するラウンド」。自爆もせず通常判定にも落とさない"""
+
+    CLASSIC_KEY = "Classic/クラシック"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+
+    def _monitor(self, *, continue_rounds=("Classic",), skip_rounds=(),
+                 exempt=False, do_skip=True, keep_on=None,
+                 instance_type=config.INSTANCE_PRIVATE):
+        cfg = WindowConfig(do_skip=do_skip, voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds),
+                           continue_rounds=set(continue_rounds),
+                           skip_variant_exempt=exempt)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        return monitor
+
+    def _killers(self, monitor, ids=(99,)):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+        self.played = mock_play
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_a_listed_round_does_not_self_destruct(self):
+        started = self._killers(self._monitor())
+
+        self.assertEqual(started, [])
+
+    def test_nothing_else_happens_either(self):
+        monitor = self._monitor()
+
+        self._killers(monitor)
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.played.assert_not_called()
+
+    def test_it_does_not_fall_through_to_the_keep_list(self):
+        """続行リストにテラーが無くても自爆しない"""
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {1}})
+
+        started = self._killers(monitor, [99])
+
+        self.assertEqual(started, [])
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_a_keep_listed_terror_still_announces_nothing(self):
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
+
+        self._killers(monitor, [99])
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.played.assert_not_called()
+
+    def test_continue_beats_skip_when_both_are_set(self):
+        """settings.json を手編集された場合の保険。自爆しない側に倒す"""
+        monitor = self._monitor(continue_rounds=("Classic",),
+                                skip_rounds=("Classic",))
+
+        started = self._killers(monitor)
+
+        self.assertEqual(started, [])
+
+    def test_no_variant_wait_for_a_listed_round(self):
+        """先に return するので Variant 待ちにも入らない"""
+        monitor = self._monitor(continue_rounds=("Classic",),
+                                skip_rounds=("Classic",), exempt=True)
+
+        started = self._killers(monitor)
+
+        self.assertNotIn("_delayed_round_skip", started)
+
+    def test_an_unlisted_round_uses_the_normal_judgement(self):
+        monitor = self._monitor(continue_rounds=("Bloodbath",),
+                                keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_auto_skip_off_changes_nothing(self):
+        monitor = self._monitor(do_skip=False)
+
+        self.assertEqual(self._killers(monitor), [])
+
+    def test_a_stale_continue_round_is_cleared(self):
+        monitor = self._monitor()
+        monitor.st.is_continue_round = True
+        SharedState.continue_round_start()
+
+        self._killers(monitor)
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_group_instances_are_untouched(self):
+        """干し芋/焼き芋は GroupRound の結論が先に出る"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(continue_rounds=("Bloodbath",),
+                                    instance_type=itype)
+            monitor.st.round_type = "Bloodbath"
+
+            started = self._killers(monitor, [1, 2, 3])
+
+            self.assertIn("do_skip", started, itype)   # 問答無用スキップのまま
+
+    def test_public_is_untouched(self):
+        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP):
+            monitor = self._monitor(instance_type=itype)
+
+            self.assertEqual(self._killers(monitor), [], itype)
+
+    def test_nothing_selected_keeps_the_old_behaviour(self):
+        monitor = self._monitor(continue_rounds=(),
+                                keep_on={self.CLASSIC_KEY: {99}})
+
+        started = self._killers(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_the_window_config_defaults_to_nothing_selected(self):
+        self.assertEqual(WindowConfig().continue_rounds, set())
+
+
+class TestRoundListsAreExclusive(unittest.TestCase):
+    """同じラウンドを両方に入れられないこと"""
+
+    class Var:
+        def __init__(self, value=False):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, v):
+            self._v = v
+
+    def test_checking_one_clears_the_other(self):
+        skip, keep = self.Var(True), self.Var(True)
+
+        mainGUI.exclusive_check(skip, keep)
+
+        self.assertFalse(keep.get())
+        self.assertTrue(skip.get())
+
+    def test_unchecking_leaves_the_other_alone(self):
+        skip, keep = self.Var(False), self.Var(True)
+
+        mainGUI.exclusive_check(skip, keep)
+
+        self.assertTrue(keep.get(), "外したときは相手を触らない")
+
+    def test_it_works_in_both_directions(self):
+        skip, keep = self.Var(True), self.Var(False)
+
+        keep.set(True)
+        mainGUI.exclusive_check(keep, skip)
+
+        self.assertFalse(skip.get())
+
+    def test_both_lists_use_the_same_round_order(self):
+        self.assertEqual(list(mainGUI.skip_round_vars(lambda: object())),
+                         config.SKIP_ROUND_SELECTABLE)
+
+
 class TestSkipRoundsSettings(unittest.TestCase):
     """窓ごとの保存と復元"""
 
@@ -5035,11 +5219,13 @@ class TestSkipRoundsSettings(unittest.TestCase):
         def set(self, v):
             self._v = v
 
-    def _tab(self, names=(), exempt=False):
+    def _tab(self, names=(), exempt=False, keep=()):
         tab = type("FakeTab", (), {})()
         tab.v_profile = TestSkipRoundsSettings.FakeVar(0)
         tab.v_skip_rounds = {n: TestSkipRoundsSettings.FakeVar(n in names)
                              for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_continue_rounds = {n: TestSkipRoundsSettings.FakeVar(n in keep)
+                                 for n in config.SKIP_ROUND_SELECTABLE}
         tab.v_skip_variant_exempt = TestSkipRoundsSettings.FakeVar(exempt)
         return tab
 
@@ -5064,6 +5250,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
 
         self.assertEqual(saved["skip_rounds"], [["Classic", "Fog"], []])
         self.assertEqual(saved["skip_variant_exempt"], [True, False])
+        self.assertEqual(saved["continue_rounds"], [[], []])
 
     def test_saved_settings_are_restored_per_window(self):
         app = type("FakeApp", (), {})()
@@ -5107,6 +5294,43 @@ class TestSkipRoundsSettings(unittest.TestCase):
 
         self.assertEqual(cfg.skip_rounds, set())
         self.assertFalse(cfg.skip_variant_exempt)
+
+    def test_continue_rounds_are_saved_and_restored(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(keep=("8 Pages", "Run")), self._tab()]
+        app._saved_profiles = []
+        app._saved_continue_rounds = [["Fog"], []]
+
+        mainGUI.App._apply_saved_window_settings(app)
+
+        first = {n for n, v in app.tabs[0].v_continue_rounds.items() if v.get()}
+        self.assertEqual(first, {"Fog"})
+        self.assertEqual(
+            {n for n, v in app.tabs[1].v_continue_rounds.items() if v.get()}, set())
+
+    def test_a_round_in_both_lists_falls_to_continue(self):
+        """settings.json を手編集された場合の保険"""
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(names=("Classic",))]
+        app._saved_profiles = []
+        app._saved_skip_rounds = [["Classic"]]
+        app._saved_continue_rounds = [["Classic"]]
+
+        mainGUI.App._apply_saved_window_settings(app)
+
+        self.assertTrue(app.tabs[0].v_continue_rounds["Classic"].get())
+        self.assertFalse(app.tabs[0].v_skip_rounds["Classic"].get(),
+                         "自爆しない側に倒すこと")
+
+    def test_a_legacy_file_without_continue_rounds_is_fine(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = [self._tab(keep=("Run",))]
+        app._saved_profiles = []
+
+        mainGUI.App._apply_saved_window_settings(app)   # キーが無い状態
+
+        self.assertTrue(app.tabs[0].v_continue_rounds["Run"].get(),
+                        "キーが無ければ触らないこと")
 
 
 class TestLogMonitorGroupRules(unittest.TestCase):

@@ -1019,6 +1019,13 @@ class LogMonitor:
                     self._start_daemon(self._action.do_skip)
                 return
 
+        # privateのラウンド指定。全続行が先——ここで抜けるので Variant 待ちにも
+        # 入らない。続行リストは見ない
+        if is_private and st.round_type in self.cfg.continue_rounds:
+            self._log(f"ラウンド指定で続行: {st.round_type}")
+            self._clear_stale_continue_round()
+            return
+
         # privateのラウンド指定自爆。続行リストより優先する
         if is_private and self.cfg.skip_rounds:
             if self._waiting_for_round_skip_variant():

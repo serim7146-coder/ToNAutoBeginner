@@ -29,6 +29,12 @@ except ImportError:
 
 
 # ── 設定ファイル（前回のtnlパス等の永続化） ──────
+def exclusive_check(checked, other):
+    """片方を入れたら、もう片方の同じラウンドを外す"""
+    if checked.get():
+        other.set(False)
+
+
 def skip_round_vars(make_var) -> dict:
     """ラウンド指定自爆のチェックボックス用の変数を作る。
 
@@ -181,23 +187,41 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
-        # ── ラウンド指定自爆（privateのみ） ──
-        skip = CollapsibleFrame(
-            p, text="自爆するラウンド（プライベートインスタンスのみ）",
+        # ── ラウンドごとの扱い（privateのみ） ──
+        rounds = CollapsibleFrame(
+            p, text="ラウンドごとの扱い（プライベートインスタンスのみ）",
             collapsed=True)
-        skip.pack(fill="x", pady=(4, 0))
-        sc = ttk.Frame(skip.content)
-        sc.pack(fill="x", padx=10)
+        rounds.pack(fill="x", pady=(4, 0))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
-        for i, (name, var) in enumerate(self.v_skip_rounds.items()):
-            ttk.Checkbutton(sc, text=name, variable=var).grid(
-                row=i // config.SKIP_ROUND_COLUMNS,
-                column=i % config.SKIP_ROUND_COLUMNS,
-                sticky="w", padx=(0, 12), pady=1)
+        self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
+
+        self._round_grid(rounds.content, "■ 自爆する", self.v_skip_rounds,
+                         self.v_continue_rounds)
         self.v_skip_variant_exempt = tk.BooleanVar(value=False)
-        ttk.Checkbutton(skip.content, text="Variant/Gigabytes は自爆しない",
+        ttk.Checkbutton(rounds.content, text="Variant/Gigabytes は自爆しない",
                         variable=self.v_skip_variant_exempt
                         ).pack(anchor="w", padx=10, pady=(4, 0))
+        self._round_grid(rounds.content, "■ 全続行する（続行リストを見ずに生き残る）",
+                         self.v_continue_rounds, self.v_skip_rounds,
+                         pady=(8, 0))
+
+    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0)):
+        """ラウンド一覧のチェックボックスを1つ並べる。
+
+        同じラウンドを両方に入れられると意味が矛盾するので、片方を入れたら
+        もう片方を外す。並び順は config.SKIP_ROUND_SELECTABLE のまま。
+        """
+        ttk.Label(parent, text=title, foreground=config.GUI_ACC).pack(
+            anchor="w", padx=10, pady=pady)
+        grid = ttk.Frame(parent)
+        grid.pack(fill="x", padx=10)
+        for i, (name, var) in enumerate(own.items()):
+            ttk.Checkbutton(
+                grid, text=name, variable=var,
+                command=lambda v=var, o=other[name]: exclusive_check(v, o)
+            ).grid(row=i // config.SKIP_ROUND_COLUMNS,
+                   column=i % config.SKIP_ROUND_COLUMNS,
+                   sticky="w", padx=(0, 12), pady=1)
 
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
@@ -252,6 +276,8 @@ class WindowTab(ttk.Frame):
             skip_rounds={name for name, var in self.v_skip_rounds.items()
                          if var.get()},
             skip_variant_exempt=self.v_skip_variant_exempt.get(),
+            continue_rounds={name for name, var in self.v_continue_rounds.items()
+                             if var.get()},
         ), None
 
 
@@ -926,6 +952,7 @@ class App(tk.Tk):
         # 古い settings.json にはキーが無い。無くても落ちないこと
         self._saved_skip_rounds = data.get("skip_rounds", [])
         self._saved_skip_variant_exempt = data.get("skip_variant_exempt", [])
+        self._saved_continue_rounds = data.get("continue_rounds", [])
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
@@ -951,6 +978,15 @@ class App(tk.Tk):
                 continue
             for name, var in tab.v_skip_rounds.items():
                 var.set(name in names)
+        for tab, names in zip(self.tabs,
+                              getattr(self, "_saved_continue_rounds", [])):
+            if not isinstance(names, (list, tuple, set)):
+                continue
+            for name, var in tab.v_continue_rounds.items():
+                var.set(name in names)
+                if var.get():
+                    # 手編集で両方に入っていたら自爆しない側へ倒す
+                    tab.v_skip_rounds[name].set(False)
         for tab, on in zip(self.tabs,
                            getattr(self, "_saved_skip_variant_exempt", [])):
             tab.v_skip_variant_exempt.set(bool(on))
@@ -1438,6 +1474,9 @@ class App(tk.Tk):
                                      if var.get()) for tab in self.tabs],
             "skip_variant_exempt": [tab.v_skip_variant_exempt.get()
                                     for tab in self.tabs],
+            "continue_rounds": [sorted(name for name, var
+                                       in tab.v_continue_rounds.items()
+                                       if var.get()) for tab in self.tabs],
             "freeze_8pages": self.v_freeze_8pages.get(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
