@@ -27,6 +27,35 @@ except ImportError:
 
 
 # ── 設定ファイル（前回のtnlパス等の永続化） ──────
+def freeze_round_vars(make_var) -> dict:
+    """突入フリーズのチェックボックス用の変数を作る。
+
+    並び順は config.ROUND_FREEZE_SELECTABLE のまま。ソートも独自順序も作らない
+    （ユーザーがこのリストの順序を編集して表示順を変えられるようにするため）。
+    """
+    return {name: make_var() for name in config.ROUND_FREEZE_SELECTABLE}
+
+
+def _as_flag(value) -> bool:
+    """旧形式（窓ごとの配列）なら、いずれかがONならON"""
+    if isinstance(value, (list, tuple)):
+        return any(bool(v) for v in value)
+    return bool(value)
+
+
+def _as_round_names(value) -> set:
+    """旧形式（窓ごとの配列の配列）なら全窓の和集合を採る"""
+    names: set = set()
+    if not value:
+        return names
+    for item in value:
+        if isinstance(item, (list, tuple, set)):
+            names.update(str(v) for v in item)
+        elif isinstance(item, str):
+            names.add(item)
+    return names
+
+
 def load_settings() -> dict:
     """設定ファイルを読み込む。無い・壊れている場合は空dict。"""
     try:
@@ -133,8 +162,6 @@ class WindowTab(ttk.Frame):
         self.v_cancel_afk  = tk.BooleanVar(value=True)
         self.v_hoshiimo    = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
-        self.v_freeze_8pages = tk.BooleanVar(value=False)
-        self.v_freeze_punish = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="この窓を有効化",            variable=self.v_active).pack(side="left")
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
@@ -143,18 +170,6 @@ class WindowTab(ttk.Frame):
         cf2.pack(fill="x", padx=10, pady=(4, 0))
         ttk.Checkbutton(cf2, text="干し芋自動自爆",           variable=self.v_hoshiimo).pack(side="left")
         ttk.Checkbutton(cf2, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf2, text="8 Pages検知でフリーズ",      variable=self.v_freeze_8pages).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf2, text="Punished検知でフリーズ",     variable=self.v_freeze_punish).pack(side="left", padx=(12, 0))
-
-        # ラウンド突入で全窓フリーズ（張った窓自身は自爆できる）
-        cf3 = ttk.Frame(p)
-        cf3.pack(fill="x", padx=10, pady=(4, 0))
-        ttk.Label(cf3, text="突入で全窓停止:").pack(side="left")
-        self.v_freeze_rounds = {}
-        for name in config.ROUND_FREEZE_SELECTABLE:
-            var = tk.BooleanVar(value=False)
-            self.v_freeze_rounds[name] = var
-            ttk.Checkbutton(cf3, text=name, variable=var).pack(side="left", padx=(8, 0))
 
 
     # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
@@ -209,10 +224,6 @@ class WindowTab(ttk.Frame):
             cancel_afk=self.v_cancel_afk.get(),
             hoshiimo_skip=self.v_hoshiimo.get(),
             announce_intermission=self.v_announce_intermission.get(),
-            freeze_on_8pages=self.v_freeze_8pages.get(),
-            freeze_on_punish=self.v_freeze_punish.get(),
-            freeze_rounds={name for name, var in self.v_freeze_rounds.items()
-                           if var.get()},
         ), None
 
 
@@ -614,6 +625,24 @@ class App(tk.Tk):
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
         self._refresh_speed_detect_button()
 
+        # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない
+        ffz = ttk.Frame(self)
+        ffz.pack(pady=(0, 4))
+        self.v_freeze_8pages = tk.BooleanVar(value=False)
+        self.v_freeze_punish = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ffz, text="8 Pages検知でフリーズ", variable=self.v_freeze_8pages,
+                        command=self._apply_freeze_settings).pack(side="left")
+        ttk.Checkbutton(ffz, text="Punished検知でフリーズ", variable=self.v_freeze_punish,
+                        command=self._apply_freeze_settings).pack(side="left", padx=(12, 0))
+
+        ffr = ttk.Frame(self)
+        ffr.pack(pady=(0, 4))
+        ttk.Label(ffr, text="突入で全窓停止:").pack(side="left")
+        self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
+        for name, var in self.v_freeze_rounds.items():
+            ttk.Checkbutton(ffr, text=name, variable=var,
+                            command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
+
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
         fl.pack(fill="both", expand=True, padx=12, pady=(0, 10))
@@ -693,6 +722,13 @@ class App(tk.Tk):
                 bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
 
+    def _apply_freeze_settings(self):
+        """GUIのフリーズ設定を全窓共通の状態へ反映する"""
+        SharedState.set_freeze_on_8pages(self.v_freeze_8pages.get())
+        SharedState.set_freeze_on_punish(self.v_freeze_punish.get())
+        SharedState.set_freeze_rounds(
+            name for name, var in self.v_freeze_rounds.items() if var.get())
+
     def _refresh_speed_detect_button(self):
         on = SharedState.get_speed_detect()
         self.btn_speed_detect.config(
@@ -766,9 +802,12 @@ class App(tk.Tk):
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
-        self._saved_freeze_8pages = data.get("freeze_8pages", [])
-        self._saved_freeze_punish = data.get("freeze_punish", [])
-        self._saved_freeze_rounds = data.get("freeze_rounds", [])
+        # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
+        self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
+        self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
+        for name, var in self.v_freeze_rounds.items():
+            var.set(name in _as_round_names(data.get("freeze_rounds")))
+        self._apply_freeze_settings()
         self._apply_saved_profiles()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -777,25 +816,12 @@ class App(tk.Tk):
         self._load_tnl(show_error=False)
 
     def _apply_saved_profiles(self):
-        """保存済みの窓ごと設定（profile ID・フリーズ設定）を反映する"""
+        """保存済みの窓ごとprofile IDを反映する"""
         for tab, pid in zip(self.tabs, getattr(self, "_saved_profiles", [])):
             try:
                 tab.v_profile.set(int(pid))
             except (ValueError, tk.TclError):
                 pass
-        for name, saved in (("v_freeze_8pages", "_saved_freeze_8pages"),
-                            ("v_freeze_punish", "_saved_freeze_punish")):
-            for tab, val in zip(self.tabs, getattr(self, saved, [])):
-                try:
-                    getattr(tab, name).set(bool(val))
-                except (ValueError, tk.TclError):
-                    pass
-        for tab, names in zip(self.tabs, getattr(self, "_saved_freeze_rounds", [])):
-            for name, var in tab.v_freeze_rounds.items():
-                try:
-                    var.set(name in (names or []))
-                except (ValueError, tk.TclError):
-                    pass
 
     def _auto_detect_windows(self):
         """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
@@ -875,6 +901,10 @@ class App(tk.Tk):
             log_idx += 1
 
         self.monitors.clear()
+        # UDPの待ち受け表は窓ごとに撃たず1回だけ取る（netstatは1回で0.1秒前後）。
+        # 失敗時は None が返り、osc_available_for が窓ごとの個別取得へ落とす
+        # （一時的な失敗で全窓を巻き添えにしないため）。
+        ports_by_pid = OSCClient.udp_ports_by_pid()
         for tab in self.tabs:
             cfg, err = tab.get_config()
             if cfg is not None and cfg.hwnd:
@@ -882,7 +912,7 @@ class App(tk.Tk):
                 # 付けて起動した窓だけが該当ポートを掴んでいる。手動起動の
                 # 2窓目以降はポート競合でOSCが無効なので従来方式になる。
                 port, _out = OSCClient.ports_for_window(tab.idx)
-                if OSCClient.osc_available_for(cfg.hwnd, tab.idx):
+                if OSCClient.osc_available_for(cfg.hwnd, tab.idx, ports_by_pid):
                     cfg.osc_port = port
                     self._log(f"[窓{tab.idx+1}] OSC利用可（ポート{port}）→ 移動はOSC、排他はクリックと自爆のみ")
                 else:
@@ -1271,11 +1301,10 @@ class App(tk.Tk):
             "join_world":    self.v_join_world.get(),
             "instance_link": self.v_instance_link.get().strip(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
-            "freeze_8pages": [tab.v_freeze_8pages.get() for tab in self.tabs],
-            "freeze_punish": [tab.v_freeze_punish.get() for tab in self.tabs],
-            "freeze_rounds": [sorted(name for name, var in tab.v_freeze_rounds.items()
-                                     if var.get())
-                              for tab in self.tabs],
+            "freeze_8pages": self.v_freeze_8pages.get(),
+            "freeze_punish": self.v_freeze_punish.get(),
+            "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
+                                    if var.get()),
         })
 
     def _open_statistics(self):

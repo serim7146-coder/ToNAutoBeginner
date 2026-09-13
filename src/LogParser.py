@@ -23,6 +23,8 @@ EVENT_HUNGRY_HOME_INVADER = "hungry_home_invader"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
 EVENT_STRING_DOWNLOAD = "string_download"
+EVENT_GIGABYTES = "gigabytes"
+EVENT_ATRACHED = "atrached"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -41,6 +43,11 @@ RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!
 # Beginが押されるとラウンドデータの取得が始まる。誰が押しても出る。
 # 同じ [String Download] で始まる "Clearing string download queue" と区別するため、
 # "Attempting to load String from URL" まで含めてマッチさせる。
+# The Gigabytes はテラーIDでは判別できない（実測6件でIDが毎回異なる）。
+# この行だけが固有の手がかり。Killers have been set と同じ秒に出る。
+RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
+# Sonic(classic 40)のバリアント。同IDで稀に差し替わるためIDでは判別できない。
+RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
 RE_STRING_DOWNLOAD = re.compile(
     r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
@@ -80,6 +87,12 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_EVERYTHING_RECEIVED.match(line):
         return LogEvent(EVENT_EVERYTHING_RECEIVED)
+
+    if RE_GIGABYTES.match(line):
+        return LogEvent(EVENT_GIGABYTES)
+
+    if RE_ATRACHED.match(line):
+        return LogEvent(EVENT_ATRACHED)
 
     m = RE_STRING_DOWNLOAD.match(line)
     if m:

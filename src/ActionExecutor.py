@@ -520,6 +520,10 @@ class ActionExecutor:
         VelocityMagnitude は落下・ジャンプのY成分も含む3次元の大きさなので、
         接地していないサンプルは水平速度と一致しない。捨てる。
         """
+        # 受信が途絶えると stable_for は時間経過だけで伸びるため、凍結した値が
+        # 「安定値」として通ってしまう。読む前に弾く。
+        if not receiver.alive:
+            return
         speed = receiver.stable_value
         if speed is None or receiver.stable_for < config.SPEED_STABLE_SEC:
             return
@@ -546,9 +550,9 @@ class ActionExecutor:
         どちらで張ったかを覚えておく。平常では止めない。
         """
         st = self._st
-        if kind == "8pages" and self._cfg.freeze_on_8pages:
+        if kind == "8pages" and SharedState.get_freeze_on_8pages():
             message = "⏸ 8 Pages 検知 → 全窓フリーズ（アイテム取得で解除）"
-        elif kind == "punish" and self._cfg.freeze_on_punish:
+        elif kind == "punish" and SharedState.get_freeze_on_punish():
             message = "⏸ Punished 検知 → 全窓フリーズ（ラウンド開始で解除）"
         else:
             return

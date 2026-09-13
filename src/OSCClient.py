@@ -157,9 +157,17 @@ def ports_for_window(index: int) -> tuple[int, int]:
     return base, base + 1
 
 
-def udp_ports_of_process(pid: int) -> set:
-    """指定プロセスが待ち受けているUDPポートの集合を返す"""
-    ports = set()
+def udp_ports_by_pid():
+    """全プロセスのUDP待ち受けポートを {pid: {port, ...}} で返す。失敗時は None。
+
+    netstatの起動は1回だけ。窓ごとに撃つと窓数ぶんプロセスが立ち上がり、
+    GUIスレッドを数百ミリ秒占有する。
+
+    失敗を None にするのは「netstatが失敗した」と「成功したがそのPIDは
+    UDPポートを持っていない」を区別するため。空dictで返すと、OSCを使って
+    いない窓でも毎回フォールバックが走って1回化の意味がなくなる。
+    """
+    ports_by_pid: dict = {}
     try:
         out = subprocess.run(
             ["netstat", "-ano", "-p", "UDP"],
@@ -167,28 +175,37 @@ def udp_ports_of_process(pid: int) -> set:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except Exception:
-        return ports
+        return None
     for line in out.splitlines():
         parts = line.split()
         # 例: UDP  0.0.0.0:9000  *:*  40320
         if len(parts) >= 4 and parts[0].upper() == "UDP" and parts[-1].isdigit():
-            if int(parts[-1]) != pid:
-                continue
             local = parts[1]
-            if ":" in local:
-                try:
-                    ports.add(int(local.rsplit(":", 1)[1]))
-                except ValueError:
-                    pass
-    return ports
+            if ":" not in local:
+                continue
+            try:
+                port = int(local.rsplit(":", 1)[1])
+            except ValueError:
+                continue
+            ports_by_pid.setdefault(int(parts[-1]), set()).add(port)
+    return ports_by_pid
 
 
-def osc_available_for(hwnd: int, window_index: int) -> bool:
+def udp_ports_of_process(pid: int) -> set:
+    """指定プロセスが待ち受けているUDPポートの集合を返す"""
+    return (udp_ports_by_pid() or {}).get(pid, set())
+
+
+def osc_available_for(hwnd: int, window_index: int,
+                      ports_by_pid: dict = None) -> bool:
     """この窓がOSCを受信できるか（起動時に1回だけ判定する想定）。
 
     このツールが --osc= を付けて起動した窓なら、割り当てたポートを
     掴んでいる。手動起動の窓は既定の9000しか使えず、2窓目以降は
     ポート競合でOSC自体が無効になる。
+
+    ports_by_pid を渡すと netstat を起動しない（窓数ぶん撃たないため）。
+    None のときだけ窓ごとに取り直す（一時的な失敗で全窓を巻き添えにしない）。
     """
     try:
         import win32process
@@ -198,7 +215,12 @@ def osc_available_for(hwnd: int, window_index: int) -> bool:
     if not pid:
         return False
     expected, _out = ports_for_window(window_index)
-    return expected in udp_ports_of_process(pid)
+    if ports_by_pid is None:
+        # 呼び出し側が渡さなかった、またはnetstatが失敗した → 窓ごとに取り直す
+        return expected in udp_ports_of_process(pid)
+    # 辞書にPIDが無いのは「netstatは成功したがポートを持っていない」＝利用不可。
+    # ここでフォールバックすると1回化の意味がなくなる。
+    return expected in ports_by_pid.get(pid, set())
 
 
 def osc_launch_arg(index: int, host: str = "127.0.0.1") -> str:
