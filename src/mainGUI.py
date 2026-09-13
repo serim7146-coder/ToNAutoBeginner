@@ -183,7 +183,7 @@ class WindowTab(ttk.Frame):
 
         # ── ラウンド指定自爆（privateのみ） ──
         skip = CollapsibleFrame(
-            p, text="自爆するラウンド（このインスタンスがプラベのときだけ）",
+            p, text="自爆するラウンド（プライベートインスタンスのみ）",
             collapsed=True)
         skip.pack(fill="x", pady=(4, 0))
         sc = ttk.Frame(skip.content)
@@ -483,6 +483,11 @@ class App(tk.Tk):
         sb.bind("<FocusOut>", lambda e: self._on_win_count_change())
         ttk.Button(wf, text="📄 最新ログを自動割り当て",
                    command=self._assign_logs).pack(side="left")
+        
+        self.lbl_win_warn = ttk.Label(
+            f2, text="※ 窓数はマクロ起動前に設定してください",
+            foreground=config.GUI_YLW)
+        self.lbl_win_warn.pack(anchor="w")
 
         # ── VRChat起動 ──
         # 起動ボタンは常に見えているべきなので、折りたたみの外に置く
@@ -496,8 +501,8 @@ class App(tk.Tk):
         ttk.Spinbox(lf1, from_=0, to=config.MAX_WINDOWS,
                     textvariable=self.v_launch_count,
                     width=4).pack(side="left", padx=(4, 0))
-        ttk.Label(lf1, text="※ 既定は「窓数 − 起動済みの窓数」",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(4, 0))
+        # ttk.Label(lf1, text="※ 既定は「窓数 − 起動済みの窓数」",
+        #           foreground=config.GUI_YLW).pack(side="left", padx=(4, 0))
         # デスクトップモードとOSCポート割り当ては常時有効（設定不要のため非表示）
         self.v_desktop_mode = tk.BooleanVar(value=True)
         self.v_use_osc = tk.BooleanVar(value=True)
@@ -545,12 +550,6 @@ class App(tk.Tk):
                   foreground=config.GUI_YLW).pack(side="left", padx=(6, 0))
 
 
-        # 窓数の話なので折りたたみの外
-        self.lbl_win_warn = ttk.Label(
-            f2, text="※ 窓数はマクロ起動前に設定してください",
-            foreground=config.GUI_YLW)
-        self.lbl_win_warn.pack(anchor="w")
-
         # ③ 窓タブ
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="x", expand=False, padx=12, pady=4)
@@ -587,8 +586,8 @@ class App(tk.Tk):
         voice_row(fv, "アイテムロスト:", self.v_voice_item_lost)
         voice_row(fv, "Intermission:", self.v_voice_intermission)
         voice_row(fv, "Foxy:", self.v_voice_foxy)
-        voice_row(fv, "8 Pages(速度先読み):", self.v_voice_8pages)
-        voice_row(fv, "Punish(速度先読み):", self.v_voice_punish)
+        voice_row(fv, "8 Pages(速度検知):", self.v_voice_8pages)
+        voice_row(fv, "Punish(速度検知):", self.v_voice_punish)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -629,33 +628,21 @@ class App(tk.Tk):
             relief="raised", padx=12, pady=5,
             command=self._toggle_hands_free)
         self.btn_hands_free.pack(side="left")
-        ttk.Label(fhf, text="← ONにするとアイテムロストを無視・全ラウンド即自爆"
-                            "（プライベート系の窓でのみ機能します）",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # アイテム取得→Begin
-        fif = ttk.Frame(self)
-        fif.pack(pady=(0, 4))
         self.btn_item_get_begin = tk.Button(
-            fif, text="アイテム取得→Begin: OFF",
+            fhf, text="アイテム取得→Begin: OFF",
             bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_item_get_begin)
-        self.btn_item_get_begin.pack(side="left")
-        ttk.Label(fif, text="← ONにするとアイテムロストラウンド終了時にフォーカス＆フリーズ",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        self.btn_item_get_begin.pack(side="left", padx=(8, 0))
 
         # 速度によるラウンド種別の検知（全窓共通）
-        fsd = ttk.Frame(self)
-        fsd.pack(pady=(0, 4))
         self.btn_speed_detect = tk.Button(
-            fsd, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
+            fhf, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
             font=("Segoe UI", 11, "bold"), relief="raised", padx=12, pady=5,
             command=self._toggle_speed_detect)
-        self.btn_speed_detect.pack(side="left")
-        # ttk.Label(fsd, text="← Begin受理後の移動速度で 8 Pages / Punished を判定"
-        #                     "（判定は全インスタンス・横移動はプライベートのみ）",
-        #           foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        self.btn_speed_detect.pack(side="left", padx=(8, 0))
         self._refresh_speed_detect_button()
 
         # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない
