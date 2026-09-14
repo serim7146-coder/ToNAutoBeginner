@@ -19,6 +19,7 @@ import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
 import ToolLauncher
+import HotKey
 import ToNEntry
 import OSCClient
 from StatisticsGUI import StatisticsWindow
@@ -444,6 +445,9 @@ class App(tk.Tk):
         self._overlay: LogOverlay | None = None
         self._log_line_count = 0
         self._emergency_stop_key_pressed = False
+        # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
+        self.v_emergency_key = tk.StringVar(value=config.EMERGENCY_STOP_KEY)
+        self._capturing_key = False
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._build_ui()
@@ -463,19 +467,91 @@ class App(tk.Tk):
         self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
 
     def _poll_emergency_stop_key(self):
+        if self._capturing_key:
+            # 設定しようとしているキーで停止がかかると困る
+            self._emergency_stop_key_pressed = False
+            self._reschedule_emergency_poll()
+            return
+        key = self.v_emergency_key.get()
         try:
-            now = keyboard.is_pressed(config.EMERGENCY_STOP_KEY)
+            now = keyboard.is_pressed(key)
             if now and not self._emergency_stop_key_pressed:
-                self._log("[緊急停止] Pキーが押されました")
+                self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")
                 self.after(0, self._stop)
             self._emergency_stop_key_pressed = now
         except Exception:
-            pass
+            # 不正なキーだと is_pressed が投げる。握り潰すと緊急停止が黙って
+            # 死ぬので、既定値へ戻して知らせる
+            self._fall_back_to_default_key(
+                f"[緊急停止] ⚠ {key!r} は使えないキーです")
 
         try:
             self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
         except tk.TclError:
             pass
+
+    def _reschedule_emergency_poll(self):
+        try:
+            self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
+        except tk.TclError:
+            pass
+
+    def _fall_back_to_default_key(self, reason: str):
+        """不正なキーは既定値へ倒す。効かない緊急停止を抱えたままにしない"""
+        if self.v_emergency_key.get() == config.EMERGENCY_STOP_KEY:
+            return
+        self.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+        self._emergency_stop_key_pressed = False
+        self._log(reason)
+        self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
+                  "キーに戻しました")
+
+    def _refresh_emergency_key_label(self):
+        try:
+            self.lbl_emergency.config(
+                text=f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー長押し")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _begin_capture_key(self):
+        """「キーを押して設定」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる"""
+        if self._capturing_key:
+            return
+        self._capturing_key = True
+        try:
+            self.btn_capture_key.config(text="キーを押してください…", state="disabled")
+        except tk.TclError:
+            pass
+
+        def worker():
+            key = HotKey.capture(config.EMERGENCY_KEY_CAPTURE_SEC)
+            try:
+                self.after(0, lambda: self._finish_capture_key(key))
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_capture_key(self, key):
+        self._capturing_key = False
+        self._emergency_stop_key_pressed = False
+        try:
+            self.btn_capture_key.config(text="キーを押して設定", state="normal")
+        except tk.TclError:
+            pass
+        if key is None:
+            self._log("[緊急停止] ⚠ キーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[緊急停止] ⚠ {key!r} は使えないキーです")
+            self.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+            self._refresh_emergency_key_label()
+            self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
+                      "キーに戻しました")
+            return
+        self.v_emergency_key.set(key)
+        self._refresh_emergency_key_label()
+        self._log(f"[緊急停止] {HotKey.display(key)}キーに変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -663,8 +739,13 @@ class App(tk.Tk):
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
-        ttk.Label(fc, text="緊急停止: Pキー長押し",
-                  foreground=config.GUI_ORG).pack(side="left", padx=(10, 0))
+        self.lbl_emergency = ttk.Label(fc, text="",
+                                       foreground=config.GUI_ORG)
+        self.lbl_emergency.pack(side="left", padx=(10, 0))
+        self.btn_capture_key = ttk.Button(fc, text="キーを押して設定", width=16,
+                                          command=self._begin_capture_key)
+        self.btn_capture_key.pack(side="left", padx=(6, 0))
+        self._refresh_emergency_key_label()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
@@ -978,6 +1059,13 @@ class App(tk.Tk):
         self._saved_skip_rounds = data.get("skip_rounds", [])
         self._saved_skip_variant_exempt = data.get("skip_variant_exempt", [])
         self._saved_continue_rounds = data.get("continue_rounds", [])
+        # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
+        # 不正なキーのままだと緊急停止が黙って効かなくなる
+        key = data.get("emergency_stop_key", config.EMERGENCY_STOP_KEY)
+        if not HotKey.is_valid(key):
+            key = config.EMERGENCY_STOP_KEY
+        self.v_emergency_key.set(key)
+        self._refresh_emergency_key_label()
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
@@ -1526,7 +1614,7 @@ class App(tk.Tk):
         self._entry_stop.clear()
         self.btn_stop_entry.config(state="normal")
         self._log("[入室操作] 開始します（中止は「入室操作を中止」ボタンか %sキー）"
-                  % config.EMERGENCY_STOP_KEY.upper())
+                  % HotKey.display(self.v_emergency_key.get()))
 
         def worker():
             try:
@@ -1579,6 +1667,7 @@ class App(tk.Tk):
                                     for tab in self.tabs],
             "tool_launchers": [p for p in (row.v_path.get().strip()
                                            for row in self.tool_rows) if p],
+            "emergency_stop_key": self.v_emergency_key.get(),
             "continue_rounds": [sorted(name for name, var
                                        in tab.v_continue_rounds.items()
                                        if var.get()) for tab in self.tabs],

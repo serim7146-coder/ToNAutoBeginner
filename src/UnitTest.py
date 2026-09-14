@@ -23,6 +23,7 @@ import LogParser
 import MatchTNL
 import ProcessCheck
 import ToolLauncher
+import HotKey
 import RoundSequence
 import GroupRound
 import RoundDecision
@@ -5450,6 +5451,330 @@ class TestListSourceShared(unittest.TestCase):
         self.assertEqual(SharedState.get_list_source(), "tnl")
 
 
+def _real_keyboard():
+    """本物の keyboard モジュール。UnitTest 冒頭で MagicMock に差し替えているので、
+    キー名の検証だけは実物に確かめさせる（モックでは何でも通ってしまう）"""
+    mocked = sys.modules.get("keyboard")
+    try:
+        del sys.modules["keyboard"]
+        import keyboard as real
+        return real
+    except Exception:
+        return None
+    finally:
+        sys.modules["keyboard"] = mocked
+
+
+class TestHotKey(unittest.TestCase):
+    """緊急停止キーの検証・表記・捕捉"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.real = _real_keyboard()
+
+    def setUp(self):
+        if self.real is None:
+            self.skipTest("keyboard が入っていない")
+        self._kb = patch.object(HotKey, "keyboard", self.real)
+        self._kb.start()
+
+    def tearDown(self):
+        self._kb.stop()
+
+    def test_real_key_names_are_accepted(self):
+        for name in ("p", "f9", "esc", "ctrl+p", "scroll lock", "ctrl+shift+f12"):
+            self.assertTrue(HotKey.is_valid(name), name)
+
+    def test_junk_is_rejected(self):
+        for name in ("zzz", "", "   ", None, 123, object()):
+            self.assertFalse(HotKey.is_valid(name), repr(name))
+
+    def test_without_keyboard_nothing_is_valid(self):
+        with patch.object(HotKey, "keyboard", None):
+            self.assertFalse(HotKey.is_valid("p"))       # 例外を投げないこと
+
+    def test_the_display_capitalises_each_part(self):
+        self.assertEqual(HotKey.display("p"), "P")
+        self.assertEqual(HotKey.display("ctrl+p"), "Ctrl+P")
+        self.assertEqual(HotKey.display("ctrl+shift+f12"), "Ctrl+Shift+F12")
+        self.assertEqual(HotKey.display("scroll lock"), "Scroll Lock")
+
+    def test_the_display_falls_back_for_junk(self):
+        for name in ("", "   ", None, 123):
+            self.assertEqual(HotKey.display(name),
+                             HotKey.display(config.EMERGENCY_STOP_KEY), repr(name))
+
+    def test_capture_returns_what_was_pressed(self):
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        with patch.object(HotKey.keyboard, "read_hotkey", return_value="f9"):
+            self.assertEqual(HotKey.capture(2.0), "f9")
+
+    def test_capture_never_suppresses(self):
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        """押したキーがVRChatや他のアプリに届かなくなる"""
+        with patch.object(HotKey.keyboard, "read_hotkey",
+                          return_value="p") as mock_read:
+            HotKey.capture(2.0)
+
+        self.assertEqual(mock_read.call_args.kwargs.get("suppress"), False)
+
+    def test_capture_gives_up_on_a_timeout(self):
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        started = threading.Event()
+
+        def never(**_kw):
+            started.set()
+            time.sleep(5)
+
+        with patch.object(HotKey.keyboard, "read_hotkey", never):
+            self.assertIsNone(HotKey.capture(0.2))
+        self.assertTrue(started.wait(2), "読み取りは始まっていること")
+
+    def test_capture_swallows_errors(self):
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        with patch.object(HotKey.keyboard, "read_hotkey",
+                          side_effect=RuntimeError("boom")):
+            self.assertIsNone(HotKey.capture(2.0))
+
+    def test_capture_without_keyboard_is_none(self):
+        with patch.object(HotKey, "keyboard", None):
+            self.assertIsNone(HotKey.capture(2.0))
+
+
+class TestEmergencyKeyGui(unittest.TestCase):
+    """GUI 側。App を1つ立てて確かめる"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        real = _real_keyboard()
+        if real is None:
+            self.skipTest("keyboard が入っていない")
+        self._kb = patch.object(HotKey, "keyboard", real)
+        self._kb.start()
+        self.addCleanup(self._kb.stop)
+        self.app.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+        self.app._capturing_key = False
+        self.app._emergency_stop_key_pressed = False
+        self.app.logs = []
+        self._log = patch.object(mainGUI.App, "_log",
+                                 lambda _s, m: self.app.logs.append(m))
+        self._log.start()
+
+    def tearDown(self):
+        self._log.stop()
+        self.app._capturing_key = False
+        self.app.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+
+    def test_the_default_is_p(self):
+        self.assertEqual(self.app.v_emergency_key.get(), "p")
+
+    def test_a_valid_key_is_adopted(self):
+        self.app._finish_capture_key("f9")
+
+        self.assertEqual(self.app.v_emergency_key.get(), "f9")
+        self.assertIn("F9", self.app.lbl_emergency.cget("text"))
+
+    def test_an_invalid_key_falls_back_to_the_default(self):
+        """打ち間違いを抱えたままだと緊急停止が黙って効かなくなる"""
+        self.app.v_emergency_key.set("f9")
+
+        self.app._finish_capture_key("zzz")
+
+        self.assertEqual(self.app.v_emergency_key.get(), "p")
+        self.assertTrue(any("使えないキー" in m for m in self.app.logs),
+                        self.app.logs)
+
+    def test_a_timeout_leaves_the_key_alone(self):
+        self.app.v_emergency_key.set("f9")
+
+        self.app._finish_capture_key(None)
+
+        self.assertEqual(self.app.v_emergency_key.get(), "f9")
+        self.assertTrue(any("取れませんでした" in m for m in self.app.logs))
+
+    def test_the_poll_is_paused_while_capturing(self):
+        """設定しようとしたキーで停止がかかると困る"""
+        self.app._capturing_key = True
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after"):
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        mock_keyboard.is_pressed.assert_not_called()
+
+    def test_the_poll_resumes_after_capturing(self):
+        self.app._capturing_key = True
+        self.app._finish_capture_key("f9")
+
+        self.assertFalse(self.app._capturing_key)
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after"):
+            mock_keyboard.is_pressed.return_value = False
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        mock_keyboard.is_pressed.assert_called_once_with("f9")
+
+    def test_capturing_runs_off_the_gui_thread(self):
+        """read_hotkey は待つので、GUIスレッドで呼ぶと固まる"""
+        seen = {}
+
+        def slow(_timeout):
+            seen["thread"] = threading.current_thread()
+            return "f9"
+
+        with patch.object(HotKey, "capture", slow), \
+             patch.object(self.app, "after") as mock_after:
+            self.app._begin_capture_key()
+            for _ in range(50):
+                if "thread" in seen:
+                    break
+                time.sleep(0.02)
+
+        self.assertIn("thread", seen, "捕捉が始まっていること")
+        self.assertIsNot(seen["thread"], threading.main_thread())
+        self.assertTrue(mock_after.called, "結果はGUIスレッドへ戻すこと")
+        self.app._capturing_key = False
+
+    def test_the_configured_key_stops_the_macro(self):
+        self.app.v_emergency_key.set("f9")
+        self.app._emergency_stop_key_pressed = False
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after") as mock_after:
+            mock_keyboard.is_pressed.return_value = True
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        mock_keyboard.is_pressed.assert_called_once_with("f9")
+        self.assertIn(self.app._stop, [c.args[1] for c in mock_after.call_args_list
+                                       if len(c.args) > 1])
+
+    def test_the_default_key_does_not_stop_once_changed(self):
+        self.app.v_emergency_key.set("f9")
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after"):
+            mock_keyboard.is_pressed.return_value = False
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        mock_keyboard.is_pressed.assert_called_once_with("f9")
+        self.assertNotIn("p", [c.args[0] for c in
+                               mock_keyboard.is_pressed.call_args_list])
+
+    def test_a_broken_key_at_poll_time_falls_back(self):
+        """is_pressed が投げたら握り潰さずに既定値へ倒す"""
+        self.app.v_emergency_key.set("zzz")
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after"):
+            mock_keyboard.is_pressed.side_effect = ValueError("bad")
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        self.assertEqual(self.app.v_emergency_key.get(), "p")
+        self.assertTrue(any("使えないキー" in m for m in self.app.logs),
+                        self.app.logs)
+
+    def test_the_label_follows_the_key(self):
+        self.app.v_emergency_key.set("ctrl+p")
+
+        self.app._refresh_emergency_key_label()
+
+        self.assertIn("Ctrl+P", self.app.lbl_emergency.cget("text"))
+
+    def test_no_hardcoded_p_key_remains(self):
+        source = Path("mainGUI.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("Pキー", source)
+        self.assertNotIn("EMERGENCY_STOP_KEY.upper()", source)
+
+    def test_a_missing_keyboard_module_does_not_break_startup(self):
+        with patch.object(mainGUI, "keyboard", None):
+            mainGUI.App._start_emergency_stop_polling(self.app)   # 落ちないこと
+
+
+class TestEmergencyKeySettings(unittest.TestCase):
+    """保存と復元。壊れた値で緊急停止を失わないこと"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, v):
+            self._v = v
+
+    def _app(self, key="p"):
+        app = type("FakeApp", (), {})()
+        app.v_emergency_key = TestEmergencyKeySettings.FakeVar(key)
+        app._refresh_emergency_key_label = lambda: None
+        return app
+
+    def _load(self, app, data):
+        """_load_saved_settings のうち緊急停止キーの復元部分だけを回す"""
+        key = data.get("emergency_stop_key", config.EMERGENCY_STOP_KEY)
+        if not HotKey.is_valid(key):
+            key = config.EMERGENCY_STOP_KEY
+        app.v_emergency_key.set(key)
+        app._refresh_emergency_key_label()
+
+    def test_the_key_is_saved(self):
+        app = self._app("f9")
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish"):
+            setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
+        app.v_freeze_rounds = {}
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["emergency_stop_key"], "f9")
+
+    def test_a_saved_key_is_restored(self):
+        app = self._app()
+
+        self._load(app, {"emergency_stop_key": "ctrl+p"})
+
+        self.assertEqual(app.v_emergency_key.get(), "ctrl+p")
+
+    def test_a_broken_saved_key_falls_back(self):
+        real = _real_keyboard()
+        if real is None:
+            self.skipTest("keyboard が入っていない")
+        self._kb = patch.object(HotKey, "keyboard", real)
+        self._kb.start()
+        self.addCleanup(self._kb.stop)
+        app = self._app()
+
+        self._load(app, {"emergency_stop_key": "zzz"})
+
+        self.assertEqual(app.v_emergency_key.get(), "p")
+
+    def test_a_legacy_file_without_the_key_is_fine(self):
+        app = self._app()
+
+        self._load(app, {"tnl_path": "C:/list/my.tnl"})
+
+        self.assertEqual(app.v_emergency_key.get(), "p")
+
+
 class TestToolLauncher(unittest.TestCase):
     """登録した exe を起動する（GUI 不要の部分）"""
 
@@ -5657,6 +5982,7 @@ class TestToolLauncherSettings(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
         return app
 
     def _save(self, app):
@@ -6515,6 +6841,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
         app.tool_rows = []
+        app.v_emergency_key = TestSkipRoundsSettings.FakeVar("p")
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \

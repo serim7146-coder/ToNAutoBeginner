@@ -34,8 +34,11 @@ USER_SAVE_PATH = os.path.join(
 # （ツールを閉じてもファイルはディスクに残るため）
 TON_LISTTOOL_PROCESS = "ton_listtool.exe"
 
+# 既定値。GUIで変更でき、settings.json に保存される。
+# 実行時にここを書き換えないこと（プロセス全体に効いてしまう）
 EMERGENCY_STOP_KEY = "p"
 EMERGENCY_STOP_POLL_MS = 200
+EMERGENCY_KEY_CAPTURE_SEC = 5.0   # 「キーを押して設定」で待つ時間
 
 GUI_BG  = "#1e1e2e"
 GUI_FG  = "#cdd6f4"
