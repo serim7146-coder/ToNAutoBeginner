@@ -24,6 +24,9 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 HOST_SAVE_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "ToN ListTool", "host_save.json.gz")
 HOST_SAVE_POLL_SEC = 3.0
+# 外部ツール起動ボタンの「起動中」表示を見直す間隔。
+# 続行リストの供給元判定とは別のループで回す（片方の失敗を巻き込まないため）
+TOOL_LAUNCH_POLL_SEC = 3.0
 # 主催者自身の続行リスト。host_save の participants には入らないため別に読む
 USER_SAVE_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "ToN ListTool", "user_save.json")

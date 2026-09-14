@@ -18,6 +18,7 @@ import MatchTNL
 import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
+import ToolLauncher
 import ToNEntry
 import OSCClient
 from StatisticsGUI import StatisticsWindow
@@ -454,6 +455,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._start_emergency_stop_polling()
         self._start_host_save_polling()
+        self._start_tool_poll()
 
     def _start_emergency_stop_polling(self):
         if keyboard is None:
@@ -637,6 +639,15 @@ class App(tk.Tk):
         self.lbl_volume.pack(side="left")
         self.v_volume.trace_add("write", lambda *_: self.lbl_volume.config(
             text=f"{int(self.v_volume.get()*100)}%"))
+
+        # ④ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
+        f4_wrap = CollapsibleFrame(self, text="④ 外部ツール起動", collapsed=True)
+        f4_wrap.pack(fill="x", padx=12, pady=4)
+        self.tool_frame = ttk.Frame(f4_wrap.content)
+        self.tool_frame.pack(fill="x")
+        self.tool_rows: list = []
+        ttk.Button(f4_wrap.content, text="＋ 追加",
+                   command=self._add_tool_row).pack(anchor="w", pady=(4, 0))
 
         # AFK解除設定（DTM / Waldo）
         # コントロール
@@ -967,6 +978,10 @@ class App(tk.Tk):
         self._saved_skip_rounds = data.get("skip_rounds", [])
         self._saved_skip_variant_exempt = data.get("skip_variant_exempt", [])
         self._saved_continue_rounds = data.get("continue_rounds", [])
+        # 古い settings.json にはキーが無い。無くても落ちないこと
+        for path in data.get("tool_launchers", []) or []:
+            if isinstance(path, str) and path.strip():
+                self._add_tool_row(path)
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
@@ -1247,6 +1262,79 @@ class App(tk.Tk):
         self._on_close()
 
     # ── VRChat起動 ─────────────────────────────
+    def _add_tool_row(self, path: str = ""):
+        """exe 1本ぶんの行を足す。パスを変えるとボタンの名前も追従する"""
+        row = ttk.Frame(self.tool_frame)
+        row.pack(fill="x", pady=1)
+        row.v_path = tk.StringVar(value=path)
+        ttk.Entry(row, textvariable=row.v_path, width=52).pack(side="left")
+        ttk.Button(row, text="…", width=3,
+                   command=lambda r=row: self._browse_tool_exe(r)
+                   ).pack(side="left", padx=(4, 4))
+        row.btn = ttk.Button(row, text="起動", width=22,
+                             command=lambda r=row: self._launch_tool(r))
+        row.btn.pack(side="left")
+        ttk.Button(row, text="✕", width=3,
+                   command=lambda r=row: self._remove_tool_row(r)
+                   ).pack(side="left", padx=(4, 0))
+        row.v_path.trace_add("write", lambda *_a, r=row: self._refresh_tool_row(r))
+        self.tool_rows.append(row)
+        self._refresh_tool_row(row)
+        return row
+
+    def _remove_tool_row(self, row):
+        if row in self.tool_rows:
+            self.tool_rows.remove(row)
+        row.destroy()
+
+    def _browse_tool_exe(self, row):
+        p = filedialog.askopenfilename(
+            title="起動するexeを選択",
+            filetypes=[("実行ファイル", "*.exe"), ("All", "*.*")])
+        if p:
+            row.v_path.set(p)
+
+    def _refresh_tool_row(self, row):
+        """ボタンの名前と「起動中」表示を合わせる。見た目だけ"""
+        exe = row.v_path.get().strip()
+        label = ToolLauncher.button_label(exe) or "起動"
+        running = bool(exe) and ToolLauncher.is_running(exe)
+        try:
+            row.btn.config(text=f"起動中: {label}" if running else f"▶ {label}",
+                           state="disabled" if running else "normal")
+        except tk.TclError:
+            pass
+
+    def _launch_tool(self, row):
+        """二重起動を実際に止めているのはここ。ボタンの無効化は見た目で、
+        ポーリングが遅れている隙に押されうる"""
+        exe = row.v_path.get().strip()
+        label = ToolLauncher.button_label(exe) or exe
+        if ToolLauncher.is_running(exe):
+            self._log(f"[外部ツール] {label} はすでに起動しています")
+            return
+        try:
+            ToolLauncher.launch(exe)
+            self._log(f"[外部ツール] {label} を起動しました")
+        except Exception as e:
+            self._log(f"[外部ツール] 起動に失敗: {e}")
+        self._refresh_tool_row(row)
+
+    def _start_tool_poll(self):
+        self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000), self._poll_tool_buttons)
+
+    def _poll_tool_buttons(self):
+        try:
+            for row in list(self.tool_rows):
+                self._refresh_tool_row(row)
+        except Exception:
+            pass
+        try:
+            self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000),
+                       self._poll_tool_buttons)
+        except tk.TclError:
+            pass
+
     def _browse_vrchat_exe(self):
         p = filedialog.askopenfilename(
             title="VRChatの起動exeを選択（launch.exe）",
@@ -1489,6 +1577,8 @@ class App(tk.Tk):
                                      if var.get()) for tab in self.tabs],
             "skip_variant_exempt": [tab.v_skip_variant_exempt.get()
                                     for tab in self.tabs],
+            "tool_launchers": [p for p in (row.v_path.get().strip()
+                                           for row in self.tool_rows) if p],
             "continue_rounds": [sorted(name for name, var
                                        in tab.v_continue_rounds.items()
                                        if var.get()) for tab in self.tabs],

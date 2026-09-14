@@ -22,6 +22,7 @@ import PlaySound
 import LogParser
 import MatchTNL
 import ProcessCheck
+import ToolLauncher
 import RoundSequence
 import GroupRound
 import RoundDecision
@@ -5314,6 +5315,272 @@ class TestListSourceShared(unittest.TestCase):
         self.assertEqual(SharedState.get_list_source(), "tnl")
 
 
+class TestToolLauncher(unittest.TestCase):
+    """登録した exe を起動する（GUI 不要の部分）"""
+
+    EXE = r"D:\tools\ToN_ListTool.exe"
+
+    def test_the_label_is_the_file_stem(self):
+        self.assertEqual(ToolLauncher.button_label(self.EXE), "ToN_ListTool")
+
+    def test_an_empty_path_has_no_label(self):
+        for value in ("", "   ", None):
+            self.assertEqual(ToolLauncher.button_label(value), "", repr(value))
+
+    def test_a_odd_path_does_not_raise(self):
+        for value in (123, object(), "::::"):
+            ToolLauncher.button_label(value)   # 例外を投げないこと
+
+    def test_is_running_asks_by_file_name(self):
+        with patch.object(ProcessCheck, "is_process_running",
+                          return_value=True) as mock_running:
+            self.assertTrue(ToolLauncher.is_running(self.EXE))
+
+        mock_running.assert_called_once_with("ToN_ListTool.exe")
+
+    def test_an_empty_path_is_not_running(self):
+        with patch.object(ProcessCheck, "is_process_running") as mock_running:
+            self.assertFalse(ToolLauncher.is_running(""))
+
+        mock_running.assert_not_called()
+
+    def test_launch_starts_it_in_its_own_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "ToN_ListTool.exe"
+            exe.write_bytes(b"")
+
+            with patch.object(ToolLauncher.subprocess, "Popen") as mock_popen:
+                ToolLauncher.launch(str(exe))
+
+            mock_popen.assert_called_once_with([str(exe)], cwd=str(exe.parent))
+
+    def test_launch_does_not_hide_the_window(self):
+        """GUIアプリなので CREATE_NO_WINDOW は付けない"""
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = Path(tmp) / "app.exe"
+            exe.write_bytes(b"")
+
+            with patch.object(ToolLauncher.subprocess, "Popen") as mock_popen:
+                ToolLauncher.launch(str(exe))
+
+            self.assertNotIn("creationflags", mock_popen.call_args.kwargs)
+
+    def test_an_empty_path_raises(self):
+        with self.assertRaises(ValueError):
+            ToolLauncher.launch("   ")
+
+    def test_a_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            ToolLauncher.launch(r"D:\nope\missing.exe")
+
+
+class TestToolLauncherRows(unittest.TestCase):
+    """GUI 側の行の扱い。App を1つ立てて確かめる"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        for row in list(self.app.tool_rows):
+            mainGUI.App._remove_tool_row(self.app, row)
+        self.app.logs = []
+        self._log = patch.object(mainGUI.App, "_log",
+                                 lambda _s, m: self.app.logs.append(m))
+        self._log.start()
+
+    def tearDown(self):
+        self._log.stop()
+        for row in list(self.app.tool_rows):
+            mainGUI.App._remove_tool_row(self.app, row)
+
+    def _add(self, path=""):
+        row = self.app._add_tool_row(path)
+        self.app.update_idletasks()
+        return row
+
+    def test_adding_a_row(self):
+        self._add()
+
+        self.assertEqual(len(self.app.tool_rows), 1)
+
+    def test_removing_a_row(self):
+        row = self._add()
+
+        self.app._remove_tool_row(row)
+
+        self.assertEqual(self.app.tool_rows, [])
+
+    def test_the_label_follows_the_path(self):
+        row = self._add()
+
+        with patch.object(ToolLauncher, "is_running", return_value=False):
+            row.v_path.set(r"D:\tools\ToNSaveManager.exe")
+            self.app.update_idletasks()
+
+        self.assertIn("ToNSaveManager", row.btn.cget("text"))
+
+    def test_an_empty_path_shows_the_default_label(self):
+        row = self._add()
+
+        self.assertEqual(row.btn.cget("text"), "▶ 起動")
+
+    def test_the_button_launches(self):
+        row = self._add(r"D:\tools\ToN_ListTool.exe")
+
+        with patch.object(ToolLauncher, "is_running", return_value=False), \
+             patch.object(ToolLauncher, "launch") as mock_launch:
+            self.app._launch_tool(row)
+
+        mock_launch.assert_called_once_with(r"D:\tools\ToN_ListTool.exe")
+        self.assertTrue(any("を起動しました" in m for m in self.app.logs))
+
+    def test_a_running_tool_is_not_launched_again(self):
+        """止めているのはここ。ボタンの無効化は見た目でしかない"""
+        row = self._add(r"D:\tools\ToN_ListTool.exe")
+
+        with patch.object(ToolLauncher, "is_running", return_value=True), \
+             patch.object(ToolLauncher, "launch") as mock_launch:
+            self.app._launch_tool(row)
+
+        mock_launch.assert_not_called()
+        self.assertTrue(any("すでに起動しています" in m for m in self.app.logs),
+                        self.app.logs)
+
+    def test_a_failing_launch_is_logged(self):
+        row = self._add(r"D:\nope\missing.exe")
+
+        with patch.object(ToolLauncher, "is_running", return_value=False), \
+             patch.object(ToolLauncher, "launch",
+                          side_effect=FileNotFoundError("ない")):
+            self.app._launch_tool(row)      # 落ちないこと
+
+        self.assertTrue(any("起動に失敗" in m for m in self.app.logs), self.app.logs)
+
+    def test_a_running_tool_disables_the_button(self):
+        row = self._add(r"D:\tools\ToN_ListTool.exe")
+
+        with patch.object(ToolLauncher, "is_running", return_value=True):
+            self.app._refresh_tool_row(row)
+
+        self.assertEqual(str(row.btn.cget("state")), "disabled")
+
+    def test_the_poll_survives_a_failure(self):
+        self._add(r"D:\tools\ToN_ListTool.exe")
+        calls = []
+        with patch.object(mainGUI.App, "_refresh_tool_row",
+                          side_effect=RuntimeError("boom")), \
+             patch.object(self.app, "after", lambda *a: calls.append(a)):
+            mainGUI.App._poll_tool_buttons(self.app)
+
+        self.assertEqual(len(calls), 1, "次のtickが予約されること")
+
+    def test_the_poll_is_not_the_host_save_one(self):
+        """続行リストの供給元判定とボタンの見た目は無関係"""
+        source = Path("mainGUI.py").read_text(encoding="utf-8")
+
+        self.assertIn("_poll_tool_buttons", source)
+        start = source.index("def _poll_host_save")
+        end = source.index("def ", start + 10)
+        self.assertNotIn("_refresh_tool_row", source[start:end])
+
+    def test_the_section_is_not_on_the_window_tab(self):
+        """窓タブを何枚開いてもセクションは1つだけ"""
+        self.assertFalse(hasattr(mainGUI.WindowTab, "_add_tool_row"))
+        source = Path("mainGUI.py").read_text(encoding="utf-8")
+        tab = source[source.index("class WindowTab"):source.index("class App")]
+        self.assertNotIn("tool_rows", tab)
+        self.assertNotIn("ToolLauncher", tab)
+
+
+class TestToolLauncherSettings(unittest.TestCase):
+    """保存と復元"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+    def _row(self, path):
+        row = type("FakeRow", (), {})()
+        row.v_path = TestToolLauncherSettings.FakeVar(path)
+        return row
+
+    def _app(self, paths):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = [self._row(p) for p in paths]
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
+        app.v_freeze_rounds = {}
+        return app
+
+    def _save(self, app):
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+        return saved
+
+    def test_paths_are_saved(self):
+        app = self._app([r"D:\a\one.exe", r"D:\b\two.exe"])
+
+        saved = self._save(app)
+
+        self.assertEqual(saved["tool_launchers"],
+                         [r"D:\a\one.exe", r"D:\b\two.exe"])
+
+    def test_blank_rows_are_dropped(self):
+        app = self._app([r"D:\a\one.exe", "", "   "])
+
+        saved = self._save(app)
+
+        self.assertEqual(saved["tool_launchers"], [r"D:\a\one.exe"])
+
+    def test_saved_paths_are_restored(self):
+        app = type("FakeApp", (), {})()
+        added = []
+        app._add_tool_row = added.append
+        app.v_vrchat_exe = TestToolLauncherSettings.FakeVar()
+        self._load(app, {"tool_launchers": [r"D:\a\one.exe", r"D:\b\two.exe"]})
+
+        self.assertEqual(added, [r"D:\a\one.exe", r"D:\b\two.exe"])
+
+    def test_a_legacy_file_without_the_key_is_fine(self):
+        app = type("FakeApp", (), {})()
+        added = []
+        app._add_tool_row = added.append
+
+        self._load(app, {"tnl_path": "C:/list/my.tnl"})   # キーが無い
+
+        self.assertEqual(added, [])
+
+    def test_a_malformed_entry_is_skipped(self):
+        app = type("FakeApp", (), {})()
+        added = []
+        app._add_tool_row = added.append
+
+        self._load(app, {"tool_launchers": [r"D:\a\one.exe", "", None, 42]})
+
+        self.assertEqual(added, [r"D:\a\one.exe"])
+
+    @staticmethod
+    def _load(app, data):
+        """_load_saved_settings のうち tool_launchers の復元部分だけを回す"""
+        for path in data.get("tool_launchers", []) or []:
+            if isinstance(path, str) and path.strip():
+                app._add_tool_row(path)
+
+
 class TestGroupListStatePolled(unittest.TestCase):
     """主催リストの喪失/復帰は、ラウンドを待たずに監視ループで拾う"""
 
@@ -6112,6 +6379,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        app.tool_rows = []
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -6121,6 +6389,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         self.assertEqual(saved["skip_rounds"], [["Classic", "Fog"], []])
         self.assertEqual(saved["skip_variant_exempt"], [True, False])
         self.assertEqual(saved["continue_rounds"], [[], []])
+        self.assertEqual(saved["tool_launchers"], [])
 
     def test_saved_settings_are_restored_per_window(self):
         app = type("FakeApp", (), {})()
