@@ -1233,6 +1233,141 @@ class TestGroupRoundTable(unittest.TestCase):
                              GroupRound.NORMAL, itype)
 
 
+class TestGroupMoonSkip(unittest.TestCase):
+    """自爆リストの moon は干し芋/焼き芋でも効く（1回目でも自爆）"""
+
+    HOSHIIMO = config.INSTANCE_HOSHIIMO
+    YAKIIMO = config.INSTANCE_YAKIIMO
+
+    def _decide(self, instance_type, moon, skip_moons=(), moon_repeat=False):
+        return GroupRound.decide(instance_type, moon, [7],
+                                 skip_moons=skip_moons, moon_repeat=moon_repeat)
+
+    # ── 指定すれば自爆 ────────────────────────
+    def test_hoshiimo_skips_every_checked_moon(self):
+        for moon in RoundSequence.MOONS:
+            self.assertEqual(self._decide(self.HOSHIIMO, moon, {moon}),
+                             GroupRound.SKIP, moon)
+
+    def test_a_checked_moon_skips_on_its_first_appearance(self):
+        """消化済み扱いにはしない。指定されているから自爆する"""
+        self.assertEqual(
+            self._decide(self.HOSHIIMO, "Mystic Moon", {"Mystic Moon"},
+                         moon_repeat=False),
+            GroupRound.SKIP)
+
+    def test_yakiimo_skips_a_checked_blood_moon(self):
+        """焼き芋で実際に挙動が変わるのは Blood Moon / Twilight"""
+        for moon in ("Blood Moon", "Twilight"):
+            self.assertEqual(self._decide(self.YAKIIMO, moon, {moon}),
+                             GroupRound.SKIP, moon)
+
+    def test_only_the_named_moon_is_affected(self):
+        decided = self._decide(self.HOSHIIMO, "Twilight", {"Blood Moon"})
+
+        self.assertEqual(decided, GroupRound.CONTINUE)
+
+    # ── 指定しなければ従来どおり ─────────────────
+    def test_an_unchecked_first_moon_still_plays(self):
+        for moon in RoundSequence.MOONS:
+            self.assertEqual(self._decide(self.HOSHIIMO, moon),
+                             GroupRound.CONTINUE, moon)
+
+    def test_an_unchecked_repeat_still_skips(self):
+        for moon in RoundSequence.MOONS:
+            self.assertEqual(self._decide(self.HOSHIIMO, moon, moon_repeat=True),
+                             GroupRound.SKIP, moon)
+
+    def test_yakiimo_first_moons_are_unchanged(self):
+        for moon in ("Mystic Moon", "Solstice"):
+            self.assertEqual(self._decide(self.YAKIIMO, moon),
+                             GroupRound.SKIP, moon)
+
+    def test_omitting_the_argument_keeps_the_old_behaviour(self):
+        self.assertEqual(
+            GroupRound.decide(self.HOSHIIMO, "Blood Moon", [7]),
+            GroupRound.CONTINUE)
+
+    def test_a_non_moon_in_the_set_changes_nothing(self):
+        decided = self._decide(self.HOSHIIMO, "Blood Moon",
+                               {"Classic", "Bloodbath"})
+
+        self.assertEqual(decided, GroupRound.CONTINUE)
+
+    def test_the_earlier_branches_are_untouched(self):
+        """moon の節より前の分岐に影響していないこと"""
+        self.assertEqual(
+            GroupRound.decide(self.HOSHIIMO, "Bloodbath", [1],
+                              skip_moons={"Bloodbath", "Mystic Moon"}),
+            GroupRound.SKIP)
+        self.assertEqual(
+            GroupRound.decide(self.HOSHIIMO, "8 Pages", [1],
+                              skip_moons={"8 Pages", "Mystic Moon"}),
+            GroupRound.CONTINUE)
+
+
+class TestGroupMoonSkipWiring(unittest.TestCase):
+    """LogMonitor から渡すのは moon だけ"""
+
+    def _monitor(self, skip_rounds=()):
+        cfg = WindowConfig(skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        monitor.st.round_type = "Twilight"
+        monitor.st.terror_ids = [7]
+        return monitor
+
+    def _passed(self, monitor):
+        with patch.object(GroupRound, "decide",
+                          return_value=GroupRound.SKIP) as mock_decide:
+            monitor._group_decision("Twilight")
+        return mock_decide.call_args.kwargs["skip_moons"]
+
+    def test_only_moons_are_passed(self):
+        monitor = self._monitor({"Classic", "Twilight", "Bloodbath"})
+
+        self.assertEqual(self._passed(monitor), {"Twilight"})
+
+    def test_an_empty_list_passes_an_empty_set(self):
+        monitor = self._monitor()
+
+        self.assertEqual(self._passed(monitor), set())
+
+    def test_every_moon_is_passed_through(self):
+        monitor = self._monitor(set(RoundSequence.MOONS) | {"Classic"})
+
+        self.assertEqual(self._passed(monitor), set(RoundSequence.MOONS))
+
+    def test_a_checked_moon_skips_end_to_end(self):
+        """干し芋の窓で、1回目の Twilight が自爆になること"""
+        SharedState.set_list_source("host")
+        try:
+            monitor = self._monitor({"Twilight"})
+            monitor.st.in_round = True
+            with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+                 patch.object(PlaySound, "play_sound"), \
+                 patch.object(ConnectDB, "send_ToNRoundStatistics"):
+                monitor._on_killers([7], "Twilight", revealed=False)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+        finally:
+            SharedState.set_list_source(None)
+
+        self.assertIn("do_skip", started)
+
+    def test_the_round_sequence_is_not_touched(self):
+        """消化済み扱いにしない。moon_done も is_moon_repeat も動かさない"""
+        seq = RoundSequence.RoundSequence()
+        monitor = self._monitor({"Twilight"})
+        monitor.sequence = seq
+
+        with patch.object(GroupRound, "decide", return_value=GroupRound.SKIP):
+            monitor._group_decision("Twilight")
+
+        self.assertFalse(any(seq.moon_done.values()))
+        self.assertFalse(seq.is_moon_repeat("Twilight"))
+
+
 class TestGroupRoundSabotage(unittest.TestCase):
     """第2部: Sabotage の選出者判定"""
 

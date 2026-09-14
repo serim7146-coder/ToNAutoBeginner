@@ -62,6 +62,7 @@ def decide(
     *,
     killers_round_type: str = "",
     moon_repeat: bool = False,
+    skip_moons=(),
     sus_players=(),
     host_wishes: dict | None = None,
     follow_host: bool = False,
@@ -71,6 +72,8 @@ def decide(
     `killers_round_type` は `Killers have been set/revealed` 行に出るラウンド種別。
     焼き芋 Fog のオルタネイト判定に使う。
     `moon_repeat` はこのmoonが2回目以降か（`RoundSequence.is_moon_repeat()`）。
+    `skip_moons` は窓ごとに自爆指定された moon 名。指定されていれば1回目でも
+    自爆する（消化済み扱いにはしない——ラウンド並びの推定に影響させないため）。
     `sus_players` は Sabotage で選出されたマーダーの表示名。
     `host_wishes` は `{vrc_name: {round_key: set(ids)}}`。
     `follow_host` が False のときは参加者別の情報が無いので Sabotage は
@@ -90,6 +93,8 @@ def decide(
         return CONTINUE
 
     if round_type in MOONS:
+        if round_type in skip_moons:
+            return SKIP          # 自爆指定。1回目かどうかを問わない
         if moon_repeat:
             return SKIP
         if (instance_type == config.INSTANCE_YAKIIMO

@@ -506,6 +506,10 @@ class LogMonitor:
             st.terror_ids,
             killers_round_type=killers_round_type,
             moon_repeat=st.moon_repeat,
+            # 自爆リストのうち moon だけがグループでも効く。他の項目
+            # （Classic など）は private 限定のまま
+            skip_moons={name for name in self.cfg.skip_rounds
+                        if name in GroupRound.MOONS},
             sus_players=st.sus_players,
             host_wishes=self.host_wishes,
             follow_host=bool(self.host_wishes),
