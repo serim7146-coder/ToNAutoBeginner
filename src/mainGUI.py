@@ -198,7 +198,7 @@ class WindowTab(ttk.Frame):
         self._round_grid(rounds.content, "■ 自爆する", self.v_skip_rounds,
                          self.v_continue_rounds)
         self.v_skip_variant_exempt = tk.BooleanVar(value=False)
-        ttk.Checkbutton(rounds.content, text="Variant/Gigabytes は自爆しない",
+        ttk.Checkbutton(rounds.content, text="Variant/Gigabytesではリスト準拠にする",
                         variable=self.v_skip_variant_exempt
                         ).pack(anchor="w", padx=10, pady=(4, 0))
         self._round_grid(rounds.content, "■ 全続行する（続行リストを見ずに生き残る）",
@@ -427,7 +427,6 @@ class App(tk.Tk):
         # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
         # Sabotage のマーダー判定に使う。これも in-place で入れ替える
         self.host_wishes: dict = {}
-        self._host_source: str | None = None         # "host" | "tnl" | None
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self.monitors: list[LogMonitor.LogMonitor] = []
@@ -607,6 +606,7 @@ class App(tk.Tk):
         self.v_voice_foxy         = tk.StringVar(value=config.VOICE_FOXY)
         self.v_voice_8pages       = tk.StringVar(value=config.VOICE_8PAGES)
         self.v_voice_punish       = tk.StringVar(value=config.VOICE_PUNISH)
+        self.v_voice_list_lost    = tk.StringVar(value=config.VOICE_LIST_LOST)
         voice_row(fv, "続行ラウンド:", self.v_voice_continue)
         voice_row(fv, "霧ラウンド:", self.v_voice_fog)
         voice_row(fv, "アイテムロスト:", self.v_voice_item_lost)
@@ -614,6 +614,7 @@ class App(tk.Tk):
         voice_row(fv, "Foxy:", self.v_voice_foxy)
         voice_row(fv, "8 Pages(速度検知):", self.v_voice_8pages)
         voice_row(fv, "Punish(速度検知):", self.v_voice_punish)
+        voice_row(fv, "主催リスト喪失:", self.v_voice_list_lost)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -851,9 +852,9 @@ class App(tk.Tk):
 
     def _fall_back_to_tnl(self, reason: str):
         """続行リストの供給元を .tnl に戻す。切り替わったときだけログを出す"""
-        if self._host_source == "tnl":
+        if SharedState.get_list_source() == "tnl":
             return
-        self._host_source = "tnl"
+        SharedState.set_list_source("tnl")
         self._host_save_stamp = None
         self._host_save_warned = False
         self._log(f"[続行リスト] tnlへ切替（{reason}）")
@@ -884,7 +885,7 @@ class App(tk.Tk):
             return
 
         stamp = (stat.st_mtime, stat.st_size)   # 同じ秒内の書き換えを取りこぼさない
-        if stamp == self._host_save_stamp and self._host_source == "host":
+        if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return
 
         try:
@@ -902,8 +903,8 @@ class App(tk.Tk):
 
         self._host_save_stamp = stamp
         self._host_save_warned = False
-        switched = self._host_source != "host"
-        self._host_source = "host"
+        switched = SharedState.get_list_source() != "host"
+        SharedState.set_list_source("host")
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
         self._apply_host_wishes(wishes)
@@ -1102,6 +1103,7 @@ class App(tk.Tk):
             cfg.voice_foxy          = self.v_voice_foxy.get().strip()
             cfg.voice_8pages        = self.v_voice_8pages.get().strip()
             cfg.voice_punish        = self.v_voice_punish.get().strip()
+            cfg.voice_list_lost     = self.v_voice_list_lost.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
             mon = LogMonitor.LogMonitor(cfg, self.keepOn_set, self._log,
                                         window_idx=tab.idx + 1,

@@ -518,6 +518,33 @@ class LogMonitor:
             return True
         return False
 
+    def _group_list_unavailable(self) -> bool:
+        """グループの窓なのに主催リストが使えない状態か。
+
+        周回では「誰かが欲しがっているか」で続行が決まるので、自分の tnl で
+        判断するのは意味が違う。取れないなら手を止める。
+        """
+        if self.st.instance_type not in GroupRound.GROUP_INSTANCES:
+            return False
+        return SharedState.get_list_source() != "host"
+
+    def _notify_group_list_lost(self):
+        """状態が変わったときだけ1回。ラウンドごとに鳴らさない"""
+        st = self.st
+        if st.list_lost_notified:
+            return
+        st.list_lost_notified = True
+        self._log("⚠ 主催リストが取れません → この窓の自爆を停止します")
+        if not self._hands_free():
+            PlaySound.play_sound(self.cfg.voice_list_lost)
+
+    def _notify_group_list_back(self):
+        st = self.st
+        if not st.list_lost_notified:
+            return
+        st.list_lost_notified = False
+        self._log("主催リストが戻りました → 自爆を再開します")
+
     def _should_skip_by_round(self) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
 
@@ -971,6 +998,13 @@ class LogMonitor:
         is_private   = itype == config.INSTANCE_PRIVATE
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
+
+        # 主催リストが取れないグループの窓はここで手を止める。自爆も通常判定も
+        # 走らせない（tnlの内容で判定すると他人の周回を自分のリストで裁くことになる）
+        if self._group_list_unavailable():
+            self._notify_group_list_lost()
+            return
+        self._notify_group_list_back()
 
         # 干し芋/焼き芋のラウンド判定。Variant確定を待たずに決めると
         # ClassicのVariantを取り逃がすので、待ちは分岐の外で見る

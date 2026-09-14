@@ -107,6 +107,22 @@ def set_freeze_rounds(names):
         _FREEZE_ROUNDS = set(names or ())
 
 # ═══════════════════════════════════════════════
+#  続行リストの供給元（全窓共通）
+#  "host" = ToN ListTool の主催リスト / "tnl" = tnlファイル / None = 未決定
+# ═══════════════════════════════════════════════
+_LIST_SOURCE = None
+_LIST_SOURCE_LOCK = threading.Lock()
+
+def get_list_source():
+    with _LIST_SOURCE_LOCK:
+        return _LIST_SOURCE
+
+def set_list_source(src):
+    global _LIST_SOURCE
+    with _LIST_SOURCE_LOCK:
+        _LIST_SOURCE = src
+
+# ═══════════════════════════════════════════════
 #  アイテム取得→Beginモード
 # ═══════════════════════════════════════════════
 _ITEM_BEGIN_MODE = False

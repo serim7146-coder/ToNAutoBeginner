@@ -1872,6 +1872,7 @@ class TestHostListSource(unittest.TestCase):
     CLASSIC = "Classic/クラシック"
 
     def setUp(self):
+        SharedState.set_list_source(None)
         self._dir = tempfile.TemporaryDirectory()
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
         self.tnl = Path(self._dir.name) / "list.tnl"
@@ -1880,6 +1881,7 @@ class TestHostListSource(unittest.TestCase):
              "data": {self.CLASSIC: {"1": 1}}}), encoding="utf-8")
 
     def tearDown(self):
+        SharedState.set_list_source(None)
         self._dir.cleanup()
 
     class FakeVar:
@@ -1893,7 +1895,6 @@ class TestHostListSource(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.keepOn_set = {}
         app.host_wishes = {}
-        app._host_source = None
         app._host_save_stamp = None
         app._host_save_warned = False
         app.logs = []
@@ -1936,7 +1937,7 @@ class TestHostListSource(unittest.TestCase):
             self._refresh(app, running=False)
 
         mock_load.assert_not_called()
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
 
     def test_a_running_list_tool_with_participants_uses_the_host_list(self):
@@ -1945,7 +1946,7 @@ class TestHostListSource(unittest.TestCase):
 
         self._refresh(app)
 
-        self.assertEqual(app._host_source, "host")
+        self.assertEqual(SharedState.get_list_source(), "host")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}})
         self.assertEqual(len(app.host_wishes), 3)
 
@@ -1955,30 +1956,30 @@ class TestHostListSource(unittest.TestCase):
 
         self._refresh(app)
 
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
 
     def test_closing_the_list_tool_returns_to_the_tnl(self):
         self._write(3)
         app = self._app()
         self._refresh(app)
-        self.assertEqual(app._host_source, "host")
+        self.assertEqual(SharedState.get_list_source(), "host")
 
         self._refresh(app, running=False)
 
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}})
 
     def test_starting_a_lap_switches_to_the_host_list(self):
         self._write(0)
         app = self._app()
         self._refresh(app)
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
 
         self._write(2)
         self._refresh(app)
 
-        self.assertEqual(app._host_source, "host")
+        self.assertEqual(SharedState.get_list_source(), "host")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6}})
 
     def test_a_missing_file_falls_back_to_the_tnl(self):
@@ -1986,7 +1987,7 @@ class TestHostListSource(unittest.TestCase):
 
         self._refresh(app)
 
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
 
     # ── ログ ────────────────────────────────
     def test_the_same_source_logs_once(self):
@@ -2042,7 +2043,7 @@ class TestHostListSource(unittest.TestCase):
         Path(self.path).write_bytes(b"half written garbage")
         self._refresh(app)
 
-        self.assertEqual(app._host_source, "host", "供給元を変えないこと")
+        self.assertEqual(SharedState.get_list_source(), "host", "供給元を変えないこと")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}}, "前の値を保持")
 
     def test_a_repeated_failure_warns_once(self):
@@ -2147,7 +2148,7 @@ class TestHostListSource(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._refresh_host_source(app)
 
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
 
     # ── 参加者別の希望 ────────────────────────
     def test_switching_to_the_tnl_clears_the_wishes(self):
@@ -2170,7 +2171,7 @@ class TestHostListSource(unittest.TestCase):
 
         self._refresh(app, running=False)
 
-        self.assertEqual(app._host_source, "tnl")
+        self.assertEqual(SharedState.get_list_source(), "tnl")
         self.assertEqual(app.keepOn_set, {}, "続行0件として動く")
         self.assertEqual(app.host_wishes, {})
 
@@ -3540,11 +3541,13 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.set_hands_free(False)
         SharedState.continue_round_reset()
+        SharedState.set_list_source("host")
         self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats.start()
 
     def tearDown(self):
         self._stats.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.set_hands_free(False)
         SharedState.continue_round_reset()
@@ -4777,11 +4780,13 @@ class TestSkipRoundsByType(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
         self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats.start()
 
     def tearDown(self):
         self._stats.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -5022,6 +5027,240 @@ class TestSkipRoundsByType(unittest.TestCase):
         mock_thread.assert_not_called()
 
 
+class TestListSourceShared(unittest.TestCase):
+    """続行リストの供給元は全窓共通の状態として持つ"""
+
+    def setUp(self):
+        SharedState.set_list_source(None)
+
+    tearDown = setUp
+
+    def test_it_starts_undecided(self):
+        self.assertIsNone(SharedState.get_list_source())
+
+    def test_it_round_trips(self):
+        for src in ("host", "tnl", None):
+            SharedState.set_list_source(src)
+            self.assertEqual(SharedState.get_list_source(), src)
+
+    def test_concurrent_writers_leave_a_valid_value(self):
+        """ロックの有無を見る。壊れた値が残らないこと"""
+        done = threading.Event()
+
+        def spin(src):
+            for _ in range(2000):
+                SharedState.set_list_source(src)
+                if SharedState.get_list_source() not in ("host", "tnl"):
+                    done.set()
+                    return
+
+        SharedState.set_list_source("host")
+        threads = [threading.Thread(target=spin, args=(s,), daemon=True)
+                   for s in ("host", "tnl")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+
+        self.assertFalse(done.is_set(), "想定外の値が観測された")
+        self.assertIn(SharedState.get_list_source(), ("host", "tnl"))
+
+    def test_the_gui_switch_updates_it(self):
+        """mainGUI が供給元を切り替えたら SharedState 側も変わる"""
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = {}
+        app.host_wishes = {}
+        app._host_save_stamp = None
+        app._host_save_warned = False
+        app.logs = []
+        app._log = app.logs.append
+        app.lbl_tnl = MagicMock()
+        app.v_tnl = TestHostListSource.FakeVar("")
+        app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
+        app._apply_host_wishes = lambda new: mainGUI.App._apply_host_wishes(app, new)
+        app._load_tnl = lambda **kw: None
+
+        SharedState.set_list_source("host")
+        mainGUI.App._fall_back_to_tnl(app, "テスト")
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+
+
+class TestGroupNeedsHostList(unittest.TestCase):
+    """干し芋/焼き芋は主催リストが無いと手を止める"""
+
+    CLASSIC_KEY = "Classic/クラシック"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_HOSHIIMO, *,
+                 voice="lost.mp3", keep_on=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           voice_list_lost=voice)
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Bloodbath"
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _killers(self, monitor, ids=(1, 2, 3)):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+        self.played = mock_play
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 止まること ───────────────────────────
+    def test_a_group_window_stops_without_the_host_list(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            for src in ("tnl", None):
+                SharedState.set_list_source(src)
+                monitor = self._monitor(itype)
+
+                started = self._killers(monitor)
+
+                self.assertEqual(started, [], f"{itype}/{src}")
+                self.assertFalse(monitor.st.is_continue_round, f"{itype}/{src}")
+
+    def test_the_normal_judgement_does_not_run_either(self):
+        """tnlの内容で続行判定してアナウンスを出すのも誤り"""
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor(keep_on={"Bloodbath/ブラッドバス": {1}})
+
+        self._killers(monitor, [1])
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_the_host_list_lets_it_run(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype)
+
+            started = self._killers(monitor)
+
+            self.assertIn("do_skip", started, itype)   # Bloodbathは問答無用スキップ
+
+    def test_private_is_untouched(self):
+        for src in ("tnl", None):
+            SharedState.set_list_source(src)
+            monitor = self._monitor(config.INSTANCE_PRIVATE,
+                                    keep_on={"Bloodbath/ブラッドバス": {1}})
+
+            started = self._killers(monitor, [1])
+
+            self.assertTrue(monitor.st.is_continue_round, src)
+            self.assertNotIn("do_skip", started, src)
+
+    def test_the_helper_is_false_for_private(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor(config.INSTANCE_PRIVATE)
+
+        self.assertFalse(monitor._group_list_unavailable())
+
+    # ── 通知 ────────────────────────────────
+    def test_it_logs_and_plays_once(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        self._killers(monitor)
+
+        self.assertEqual(
+            len([m for m in monitor.logs if "主催リストが取れません" in m]), 1,
+            monitor.logs)
+        self.played.assert_called_once_with("lost.mp3")
+
+    def test_three_rounds_still_notify_once(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        for _ in range(3):
+            self._killers(monitor)
+
+        self.assertEqual(
+            len([m for m in monitor.logs if "主催リストが取れません" in m]), 1,
+            monitor.logs)
+
+    def test_the_terror_line_is_still_logged(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        self._killers(monitor)
+
+        self.assertTrue(any("テラーset:" in m for m in monitor.logs), monitor.logs)
+
+    def test_recovery_logs_once(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._killers(monitor)
+
+        SharedState.set_list_source("host")
+        self._killers(monitor)
+        self._killers(monitor)
+
+        back = [m for m in monitor.logs if "主催リストが戻りました" in m]
+        self.assertEqual(len(back), 1, monitor.logs)
+        self.assertFalse(monitor.st.list_lost_notified)
+
+    def test_losing_it_again_notifies_again(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._killers(monitor)
+        SharedState.set_list_source("host")
+        self._killers(monitor)
+
+        SharedState.set_list_source("tnl")
+        self._killers(monitor)
+
+        self.assertEqual(
+            len([m for m in monitor.logs if "主催リストが取れません" in m]), 2,
+            monitor.logs)
+
+    def test_an_empty_voice_is_silent(self):
+        """空文字は play_sound 側で弾かれる（他のアナウンスと同じ作り）"""
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor(voice="")
+
+        self._killers(monitor)
+
+        self.assertEqual(self.played.call_args.args, ("",))
+        with patch.object(PlaySound, "threading") as mock_threading:
+            PlaySound.play_sound("")
+        mock_threading.Thread.assert_not_called()
+
+    def test_hands_free_cannot_apply_to_a_group_window(self):
+        """放置モードはprivateの窓だけ。グループの窓では抑制にならない"""
+        SharedState.set_hands_free(True)
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        self._killers(monitor)
+
+        self.assertFalse(monitor._hands_free())
+        self.played.assert_called_once_with("lost.mp3")
+        self.assertTrue(any("主催リストが取れません" in m for m in monitor.logs))
+
+    def test_the_voice_defaults_to_empty(self):
+        self.assertEqual(WindowConfig().voice_list_lost, "")
+        self.assertEqual(config.VOICE_LIST_LOST, "")
+
+
 class TestContinueRoundsByType(unittest.TestCase):
     """privateの「全続行するラウンド」。自爆もせず通常判定にも落とさない"""
 
@@ -5031,11 +5270,13 @@ class TestContinueRoundsByType(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
         self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats.start()
 
     def tearDown(self):
         self._stats.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -5347,11 +5588,13 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")   # グループ判定は主催リストが前提
         self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats_patcher.start()
 
     def tearDown(self):
         self._stats_patcher.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -5883,11 +6126,13 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")   # グループ判定は主催リストが前提
         self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats_patcher.start()
 
     def tearDown(self):
         self._stats_patcher.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -6243,11 +6488,13 @@ class TestLogMonitorFogRound(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")   # グループ判定は主催リストが前提
         self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats_patcher.start()
 
     def tearDown(self):
         self._stats_patcher.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
@@ -6329,11 +6576,13 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")   # グループ判定は主催リストが前提
         self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats_patcher.start()
 
     def tearDown(self):
         self._stats_patcher.stop()
+        SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
