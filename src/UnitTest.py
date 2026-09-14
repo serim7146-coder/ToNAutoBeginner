@@ -5314,6 +5314,216 @@ class TestListSourceShared(unittest.TestCase):
         self.assertEqual(SharedState.get_list_source(), "tnl")
 
 
+class TestGroupListStatePolled(unittest.TestCase):
+    """主催リストの喪失/復帰は、ラウンドを待たずに監視ループで拾う"""
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_HOSHIIMO, voice="lost.mp3"):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           voice_list_lost=voice)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _tick(self, monitor):
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._check_group_list_state()
+        self.played = mock_play
+        return mock_play
+
+    def _lost(self, monitor):
+        return [m for m in monitor.logs if "主催リストが取れません" in m]
+
+    def _back(self, monitor):
+        return [m for m in monitor.logs if "主催リストが戻りました" in m]
+
+    def test_a_lost_list_is_announced_without_a_round(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        self._tick(monitor)
+
+        self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
+        self.played.assert_called_once_with("lost.mp3")
+
+    def test_ticking_again_stays_quiet(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+
+        for _ in range(5):
+            self._tick(monitor)
+
+        self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
+        self.played.assert_not_called()
+
+    def test_recovery_is_announced(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+
+        SharedState.set_list_source("host")
+        self._tick(monitor)
+
+        self.assertEqual(len(self._back(monitor)), 1, monitor.logs)
+        self.assertFalse(monitor.st.list_lost_notified)
+
+    def test_ticking_after_recovery_stays_quiet(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+        SharedState.set_list_source("host")
+        self._tick(monitor)
+
+        for _ in range(5):
+            self._tick(monitor)
+
+        self.assertEqual(len(self._back(monitor)), 1, monitor.logs)
+
+    def test_losing_it_twice_announces_twice(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+        SharedState.set_list_source("host")
+        self._tick(monitor)
+        SharedState.set_list_source("tnl")
+
+        self._tick(monitor)
+
+        self.assertEqual(len(self._lost(monitor)), 2, monitor.logs)
+        self.played.assert_called_once_with("lost.mp3")
+
+    def test_a_private_window_is_untouched(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor(config.INSTANCE_PRIVATE)
+
+        for _ in range(3):
+            self._tick(monitor)
+
+        self.assertEqual(monitor.logs, [])
+        self.played.assert_not_called()
+        self.assertFalse(monitor.st.list_lost_notified)
+
+    def test_it_fires_mid_round_too(self):
+        """ラウンド進行中に落ちてもその場で鳴らす"""
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.st.terror_ids = [99]
+
+        self._tick(monitor)
+
+        self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
+
+    def test_hands_free_is_silent_but_still_logs(self):
+        SharedState.set_hands_free(True)
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        with patch.object(LogMonitor.LogMonitor, "_hands_free", return_value=True):
+            self._tick(monitor)
+
+        self.played.assert_not_called()
+        self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
+
+    # ── _on_killers 側との関係 ───────────────
+    def test_on_killers_does_not_announce_twice(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor.st.in_round = True
+            monitor.st.round_type = "Bloodbath"
+            monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
+
+        self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
+        mock_play.assert_not_called()
+
+    def test_the_on_killers_guard_still_stops_the_round(self):
+        """通知を早めても、手を止めているのは判定時点のガードのまま"""
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+        self._tick(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor.st.in_round = True
+            monitor.st.round_type = "Bloodbath"
+            monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
+
+        self.assertEqual([c.kwargs["target"].__func__.__name__
+                          for c in mock_thread.call_args_list
+                          if "target" in c.kwargs], [])
+        self.assertFalse(monitor.st.is_continue_round)
+
+    # ── ループが止まらないこと ─────────────────
+    def test_the_loop_survives_a_failing_check(self):
+        monitor = self._monitor()
+        monitor._running = True
+        monitor._stop_event = threading.Event()
+        ticks = {"n": 0}
+
+        def boom():
+            ticks["n"] += 1
+            if ticks["n"] >= 3:
+                monitor._running = False
+            raise RuntimeError("boom")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "output_log.txt"
+            log.write_text("", encoding="utf-8")
+            monitor.cfg.log_path = log
+            with patch.object(config, "LOG_POLL_INTERVAL", 0), \
+                 patch.object(monitor, "_check_group_list_state", boom), \
+                 patch.object(monitor, "_detect_instance_from_log"):
+                monitor._run()
+
+        self.assertGreaterEqual(ticks["n"], 3, "例外のたびにループが回り続けること")
+        self.assertTrue(any("主催リストの確認に失敗" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_the_loop_calls_it_every_tick(self):
+        monitor = self._monitor()
+        monitor._running = True
+        monitor._stop_event = threading.Event()
+        calls = {"n": 0}
+
+        def count():
+            calls["n"] += 1
+            if calls["n"] >= 3:
+                monitor._running = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "output_log.txt"
+            log.write_text("", encoding="utf-8")
+            monitor.cfg.log_path = log
+            with patch.object(config, "LOG_POLL_INTERVAL", 0), \
+                 patch.object(monitor, "_check_group_list_state", count), \
+                 patch.object(monitor, "_detect_instance_from_log"):
+                monitor._run()
+
+        self.assertEqual(calls["n"], 3)
+
+
 class TestSabotageStarAnnounces(unittest.TestCase):
     """Star側の続行希望は「誰かが欲しがっている」。アナウンスとフリーズを出す"""
 

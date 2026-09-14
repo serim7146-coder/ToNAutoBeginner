@@ -277,6 +277,11 @@ class LogMonitor:
                     except Exception as e:
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
+                    try:
+                        self._check_group_list_state()
+                    except Exception as e:
+                        # 通知に失敗してもログ監視は続ける（通知は補助的なもの）
+                        self._log(f"主催リストの確認に失敗: {e}")
                     if self._stop_event.wait(config.LOG_POLL_INTERVAL):
                         break
         except Exception as e:
@@ -544,6 +549,22 @@ class LogMonitor:
         if self.st.instance_type not in GroupRound.GROUP_INSTANCES:
             return False
         return SharedState.get_list_source() != "host"
+
+    def _check_group_list_state(self):
+        """主催リストの喪失/復帰を、ラウンドと無関係に拾う。
+
+        `_on_killers()` まで待つと、落ちてから次のラウンドでテラーが確定する
+        まで気づけない（インターミッション中なら数分後、周回後の放置中なら
+        永久に出ない）。鳴った頃にはもうそのラウンドが始まっていて、
+        ToN ListTool を立て直す余地がない。
+
+        通知は `list_lost_notified` で状態が変わったときだけ出るので、
+        0.3秒ごとに呼んでも鳴り続けない。
+        """
+        if self._group_list_unavailable():
+            self._notify_group_list_lost()
+        else:
+            self._notify_group_list_back()
 
     def _notify_group_list_lost(self):
         """状態が変わったときだけ1回。ラウンドごとに鳴らさない"""
