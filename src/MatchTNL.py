@@ -88,7 +88,54 @@ HOST_SAVE_IGNORED_KEYS = frozenset({
 })
 
 
-def load_host_save(path: str) -> tuple[dict[str, set[int]], dict, dict]:
+def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
+    """1人ぶんの `data` を続行リストへ畳み込む。participants も主催者も同じ扱い"""
+    if not isinstance(data, dict):
+        return
+    for round_key, slots in data.items():
+        if not isinstance(slots, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
+            continue
+        ids = {int(k) for k, v in slots.items()
+               if isinstance(v, int) and v != 0}
+        if ids:
+            keepOn_set.setdefault(round_key, set()).update(ids)
+            if mine is not None:
+                # 同名が複数タブにいることがある。畳んで持つ
+                mine.setdefault(round_key, set()).update(ids)
+
+
+def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None:
+    """主催者自身の続行リストを足す。足せた名前を返す（足せなければ None）。
+
+    ToN ListTool の GUI に「主催者のリストを表示に含める」があるが、保存
+    ファイルの participants には主催者が入らない。設定の在り処が分からない
+    ので見ない——周回に参加しているなら常に足すのが正しい。
+
+    ここは「足せたら足す」だけ。ファイルが無い・壊れている・last_active が
+    accounts に無い、のいずれでも例外を投げずに諦める。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        name = raw.get("last_active")
+        account = (raw.get("accounts") or {}).get(name)
+        if not isinstance(name, str) or not name or not isinstance(account, dict):
+            return None
+        data = account.get("data")
+        if not isinstance(data, dict):
+            return None
+    except Exception:
+        return None
+
+    _fold_wishes(data, keepOn_set, wishes.setdefault(name, {}))
+    if not wishes[name]:
+        wishes.pop(name, None)
+    return name
+
+
+def load_host_save(path: str,
+                   user_save_path: str | None = None
+                   ) -> tuple[dict[str, set[int]], dict, dict]:
     """ToN ListTool の主催リストを keepOn_set の形で読む。
 
     全タブの participants の続行希望を OR で畳む。waiting（待機列）は
@@ -98,6 +145,11 @@ def load_host_save(path: str) -> tuple[dict[str, set[int]], dict, dict]:
     3つ目に参加者別の希望 `{vrc_name: {round_key: set(ids)}}` も返す。
     畳んだ `keepOn_set` では「誰の希望か」が消えるため、Sabotage の
     マーダー判定には使えないため。
+
+    `user_save_path` を渡すと主催者自身の希望も足す（participants には
+    入らないため）。ただし **`meta["participants"]` には数えない**——
+    そこが0人かどうかで .tnl へのフォールバックと、グループの窓を止めるか
+    が決まるので、自分を数えると「開いているだけで1人」になってしまう。
 
     ToN ListTool の内部ファイルで公開仕様ではないので、想定外の形は
     黙って読み飛ばす。gzip/JSON として壊れている場合だけ例外を投げる
@@ -126,18 +178,16 @@ def load_host_save(path: str) -> tuple[dict[str, set[int]], dict, dict]:
                 continue
             name = member.get("vrc_name")
             mine = wishes.setdefault(name, {}) if isinstance(name, str) and name else None
-            for round_key, slots in data.items():
-                if not isinstance(slots, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
-                    continue
-                ids = {int(k) for k, v in slots.items()
-                       if isinstance(v, int) and v != 0}
-                if ids:
-                    keepOn_set.setdefault(round_key, set()).update(ids)
-                    if mine is not None:
-                        # 同名が複数タブにいることがある。畳んで持つ
-                        mine.setdefault(round_key, set()).update(ids)
+            _fold_wishes(data, keepOn_set, mine)
 
-    return keepOn_set, {"participants": participants, "tabs": len(tabs)}, wishes
+    host_self = None
+    if user_save_path:
+        host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
+
+    meta = {"participants": participants,   # 自分は数えない
+            "tabs": len(tabs),
+            "host_self": host_self}
+    return keepOn_set, meta, wishes
 
 def should_continue(keepOn_set: dict, tnl_key: str, terror_ids: list[int]) -> bool:
     if tnl_key not in keepOn_set:

@@ -1863,6 +1863,191 @@ class TestProcessCheck(unittest.TestCase):
         k.CloseHandle.assert_called_once_with(1234)
 
 
+class TestHostOwnList(unittest.TestCase):
+    """主催者自身の続行リスト（host_save の participants には入らない）"""
+
+    CLASSIC = "Classic/クラシック"
+    PAGES = "8 Pages/8ページ"
+    FOG_ALT = "Fog (Alternate)/霧 (Alternate)"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+        self.user = str(Path(self._dir.name) / "user_save.json")
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _write_host(self, participants=1, name="ひと1"):
+        members = [{"vrc_name": f"{name}{n}", "data": {self.CLASSIC: {str(n + 5): 1}}}
+                   for n in range(participants)]
+        with gzip.open(self.host, "wb") as f:
+            f.write(json.dumps({"version": 5,
+                                "tabs": [{"participants": members}]}).encode("utf-8"))
+
+    def _write_user(self, raw):
+        Path(self.user).write_text(json.dumps(raw), encoding="utf-8")
+
+    def _account(self, data, name="serim01"):
+        return {"version": 200, "last_active": name,
+                "accounts": {name: {"list_name": f"{name}のリスト", "data": data}}}
+
+    def _load(self, with_user=True):
+        return MatchTNL.load_host_save(self.host, self.user if with_user else None)
+
+    # ── 足される ────────────────────────────
+    def test_the_host_wishes_are_merged(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 1, "135": 1}}))
+
+        keep_on, _meta, _wishes = self._load()
+
+        self.assertEqual(keep_on[self.PAGES], {70, 135})
+        self.assertEqual(keep_on[self.CLASSIC], {5}, "participants も残ること")
+
+    def test_the_host_appears_in_the_wishes(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 1}}))
+
+        _keep_on, _meta, wishes = self._load()
+
+        self.assertEqual(wishes["serim01"], {self.PAGES: {70}})
+
+    def test_without_the_path_nothing_changes(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 1}}))
+
+        keep_on, meta, wishes = self._load(with_user=False)
+
+        self.assertNotIn(self.PAGES, keep_on)
+        self.assertNotIn("serim01", wishes)
+        self.assertIsNone(meta["host_self"])
+
+    def test_the_name_is_reported(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 1}}, name="さぶりむ"))
+
+        _keep_on, meta, _wishes = self._load()
+
+        self.assertEqual(meta["host_self"], "さぶりむ")
+
+    # ── 人数に数えない（ここが事故のもと） ──────
+    def test_the_host_is_not_counted(self):
+        self._write_host(3)
+        self._write_user(self._account({self.PAGES: {"70": 1}}))
+
+        _keep_on, meta, _wishes = self._load()
+
+        self.assertEqual(meta["participants"], 3, "自分を足して4にしないこと")
+
+    def test_an_empty_lap_stays_empty(self):
+        """0人のままでないと .tnl へのフォールバックと「手を止める」が効かない"""
+        self._write_host(0)
+        self._write_user(self._account({self.PAGES: {"70": 1}}))
+
+        keep_on, meta, _wishes = self._load()
+
+        self.assertEqual(meta["participants"], 0)
+        self.assertEqual(keep_on[self.PAGES], {70}, "リスト自体は読めている")
+
+    # ── 諦める側 ────────────────────────────
+    def test_a_missing_file_is_ignored(self):
+        self._write_host(1)
+
+        keep_on, meta, _wishes = self._load()
+
+        self.assertIsNone(meta["host_self"])
+        self.assertEqual(keep_on, {self.CLASSIC: {5}})
+
+    def test_broken_json_is_ignored(self):
+        self._write_host(1)
+        Path(self.user).write_text("{ not json", encoding="utf-8")
+
+        _keep_on, meta, _wishes = self._load()
+
+        self.assertIsNone(meta["host_self"])
+
+    def test_an_unknown_last_active_is_ignored(self):
+        self._write_host(1)
+        raw = self._account({self.PAGES: {"70": 1}})
+        raw["last_active"] = "だれか"
+
+        self._write_user(raw)
+        _keep_on, meta, _wishes = self._load()
+
+        self.assertIsNone(meta["host_self"])
+
+    def test_a_non_dict_data_is_ignored(self):
+        self._write_host(1)
+        self._write_user(self._account("これは辞書ではない"))
+
+        _keep_on, meta, _wishes = self._load()
+
+        self.assertIsNone(meta["host_self"])
+
+    def test_a_broken_host_save_still_raises(self):
+        """host_save 側のデコード失敗は従来どおり例外（呼び出し側が握る）"""
+        Path(self.host).write_bytes(b"half written garbage")
+        self._write_user(self._account({self.PAGES: {"70": 1}}))
+
+        with self.assertRaises(Exception):
+            self._load()
+
+    # ── participants と同じ扱い ────────────────
+    def test_zero_slots_are_dropped(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 0, "135": 0},
+                                        self.CLASSIC: {"9": 1}}))
+
+        keep_on, _meta, wishes = self._load()
+
+        self.assertNotIn(self.PAGES, keep_on)
+        self.assertEqual(wishes["serim01"], {self.CLASSIC: {9}})
+
+    def test_the_alternate_keys_are_ignored(self):
+        self._write_host(1)
+        self._write_user(self._account({self.FOG_ALT: {"1": 1},
+                                        self.PAGES: {"70": 1}}))
+
+        keep_on, _meta, wishes = self._load()
+
+        self.assertNotIn(self.FOG_ALT, keep_on)
+        self.assertEqual(wishes["serim01"], {self.PAGES: {70}})
+
+    def test_a_host_with_no_wishes_is_not_listed(self):
+        self._write_host(1)
+        self._write_user(self._account({self.PAGES: {"70": 0}}))
+
+        _keep_on, meta, wishes = self._load()
+
+        self.assertEqual(meta["host_self"], "serim01", "読めてはいる")
+        self.assertNotIn("serim01", wishes, "空の希望を置かないこと")
+
+    def test_a_duplicate_name_is_merged(self):
+        """participants に同名がいても OR されるだけ"""
+        with gzip.open(self.host, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
+                {"vrc_name": "serim01",
+                 "data": {self.CLASSIC: {"5": 1}}}]}]}).encode("utf-8"))
+        self._write_user(self._account({self.CLASSIC: {"9": 1}}))
+
+        keep_on, _meta, wishes = self._load()
+
+        self.assertEqual(keep_on[self.CLASSIC], {5, 9})
+        self.assertEqual(wishes["serim01"][self.CLASSIC], {5, 9})
+
+    def test_the_real_file_is_readable(self):
+        """現物で読めること（形が変わっていたら気づけるように）"""
+        if not Path(config.USER_SAVE_PATH).exists():
+            self.skipTest("user_save.json が無い")
+        raw = json.loads(Path(config.USER_SAVE_PATH).read_text(encoding="utf-8"))
+
+        name = raw.get("last_active")
+        self.assertIsInstance(name, str)
+        self.assertIn(name, raw.get("accounts", {}))
+        self.assertIsInstance(raw["accounts"][name].get("data"), dict)
+
+
 class TestHostListSource(unittest.TestCase):
     """続行リストの供給元を状況から決める（チェックボックスは無い）
 
@@ -1876,6 +2061,7 @@ class TestHostListSource(unittest.TestCase):
         SharedState.set_list_source(None)
         self._dir = tempfile.TemporaryDirectory()
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
+        self.user_save = str(Path(self._dir.name) / "user_save.json")   # 作らない
         self.tnl = Path(self._dir.name) / "list.tnl"
         self.tnl.write_text(json.dumps(
             {"list_name": "L", "creator": "", "created_at": "",
@@ -1920,7 +2106,9 @@ class TestHostListSource(unittest.TestCase):
                                 "tabs": [{"participants": members}]}).encode("utf-8"))
 
     def _refresh(self, app, running=True):
+        # 主催者自身のリストは既定では使わない（実ファイルに引きずられないため）
         with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(config, "USER_SAVE_PATH", self.user_save), \
              patch.object(ProcessCheck, "is_process_running", return_value=running), \
              patch.object(mainGUI, "save_settings"), \
              patch.object(mainGUI, "load_settings", return_value={}):
@@ -2059,6 +2247,45 @@ class TestHostListSource(unittest.TestCase):
         hits = [m for m in app.logs if "読み込み失敗" in m]
         self.assertEqual(len(hits), 1, app.logs)
 
+    def test_a_user_save_change_is_picked_up(self):
+        """自分のリストだけ更新したときも読み直すこと"""
+        self._write(3)
+        app = self._app()
+        self._refresh(app)
+
+        Path(self.user_save).write_text(
+            json.dumps({"last_active": "serim01",
+                        "accounts": {"serim01": {"data": {}}}}), encoding="utf-8")
+        with patch.object(MatchTNL, "load_host_save",
+                          return_value=({"x": {1}}, {"participants": 1, "tabs": 1,
+                                                     "host_self": None},
+                                        {})) as mock_load:
+            self._refresh(app)
+
+        mock_load.assert_called_once()
+
+    def test_the_log_marks_the_host_being_included(self):
+        self._write(3)
+        app = self._app()
+
+        with patch.object(MatchTNL, "load_host_save",
+                          return_value=({"x": {1}},
+                                        {"participants": 3, "tabs": 1,
+                                         "host_self": "serim01"}, {})):
+            self._refresh(app)
+
+        self.assertTrue(any("(+自分)" in m for m in app.logs), app.logs)
+
+    def test_the_log_omits_it_when_the_host_is_missing(self):
+        self._write(3)
+        app = self._app()
+
+        self._refresh(app)
+
+        hits = [m for m in app.logs if "続行対象" in m]
+        self.assertTrue(hits)
+        self.assertNotIn("(+自分)", hits[0])
+
     def test_an_unchanged_file_is_not_reread(self):
         self._write(3)
         app = self._app()
@@ -2086,10 +2313,10 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
         self._refresh(app)
-        mtime, size = app._host_save_stamp
+        mtime, size, user = app._host_save_stamp
 
         # サイズは同じで mtime だけ違う（同じ秒内の書き換え相当）
-        app._host_save_stamp = (mtime - 1, size)
+        app._host_save_stamp = (mtime - 1, size, user)
         with patch.object(MatchTNL, "load_host_save",
                           return_value=({"x": {1}}, {"participants": 1, "tabs": 1},
                                         {})) as mock_load:
@@ -2097,7 +2324,7 @@ class TestHostListSource(unittest.TestCase):
         mock_load.assert_called_once()
 
         # mtime は同じでサイズだけ違う
-        app._host_save_stamp = (app._host_save_stamp[0], size - 1)
+        app._host_save_stamp = (app._host_save_stamp[0], size - 1, user)
         with patch.object(MatchTNL, "load_host_save",
                           return_value=({"y": {2}}, {"participants": 1, "tabs": 1},
                                         {})) as mock_load:

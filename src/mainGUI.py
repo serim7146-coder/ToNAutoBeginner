@@ -29,6 +29,15 @@ except ImportError:
 
 
 # ── 設定ファイル（前回のtnlパス等の永続化） ──────
+def _file_stamp(path):
+    """変更検出用の (mtime, size)。読めなければ None（無いことも状態のうち）"""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime, stat.st_size)
+
+
 def exclusive_check(checked, other):
     """片方を入れたら、もう片方の同じラウンドを外す"""
     if checked.get():
@@ -884,12 +893,15 @@ class App(tk.Tk):
             self._fall_back_to_tnl(f"host_save が読めません: {e}")
             return
 
-        stamp = (stat.st_mtime, stat.st_size)   # 同じ秒内の書き換えを取りこぼさない
+        # 自分のリストだけ更新されたときも読み直す
+        stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
+                 _file_stamp(config.USER_SAVE_PATH))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return
 
         try:
-            keep_on, meta, wishes = MatchTNL.load_host_save(path)
+            keep_on, meta, wishes = MatchTNL.load_host_save(
+                path, config.USER_SAVE_PATH)
         except Exception as e:
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する
@@ -912,7 +924,8 @@ class App(tk.Tk):
             self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")
         if changed or switched:
             total = sum(len(v) for v in self.keepOn_set.values())
-            msg = (f"[主催リスト] 参加者{meta['participants']}人 / "
+            mine = "(+自分)" if meta.get("host_self") else ""
+            msg = (f"[主催リスト] 参加者{meta['participants']}人{mine} / "
                    f"{len(self.keepOn_set)}ラウンド / {total}件 続行対象")
             self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(msg)
