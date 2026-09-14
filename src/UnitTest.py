@@ -5256,9 +5256,15 @@ class TestGroupNeedsHostList(unittest.TestCase):
         self.played.assert_called_once_with("lost.mp3")
         self.assertTrue(any("主催リストが取れません" in m for m in monitor.logs))
 
-    def test_the_voice_defaults_to_empty(self):
+    def test_the_voice_defaults_to_the_bundled_file(self):
+        self.assertTrue(config.VOICE_LIST_LOST.endswith("StopAutoSuicide.mp3"),
+                        config.VOICE_LIST_LOST)
+        self.assertTrue(Path(config.VOICE_LIST_LOST).exists(),
+                        "voice フォルダに実ファイルがあること")
+
+    def test_the_window_config_still_defaults_to_silence(self):
+        """GUIから注入されるまでは鳴らさない（他のvoiceと同じ）"""
         self.assertEqual(WindowConfig().voice_list_lost, "")
-        self.assertEqual(config.VOICE_LIST_LOST, "")
 
 
 class TestContinueRoundsByType(unittest.TestCase):

@@ -315,8 +315,8 @@ DEFAULT_SOUND_VOLUME = 1.0
 
 # ── 音声アナウンスファイルパス ──
 VOICE_CONTINUE     = str(resource_path("voice/Continue.mp3"))
-# 主催リストが取れなくなったときのアナウンス。空なら鳴らさない
-VOICE_LIST_LOST    = ""
+# 主催リストが取れなくなったときのアナウンス。欄を空にすれば鳴らない
+VOICE_LIST_LOST    = str(resource_path("voice/StopAutoSuicide.mp3"))
 VOICE_FOG          = str(resource_path("voice/Fog.mp3"))
 VOICE_ITEM_LOST    = str(resource_path("voice/ItemLost.mp3"))
 VOICE_INTERMISSION = str(resource_path("voice/intermission.mp3"))
