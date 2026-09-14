@@ -12,6 +12,7 @@ import MatchTNL
 
 # 判定結果
 CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウンスもフリーズもしない
+WANTED   = "wanted"     # 誰かがそのテラーを欲しがっている続行。アナウンスとフリーズを出す
 SKIP     = "skip"       # 問答無用スキップ（グループ自動自爆）
 NORMAL   = "normal"     # 通常判定（RoundDecision.decide_killers）へ委譲
 
@@ -65,7 +66,7 @@ def decide(
     host_wishes: dict | None = None,
     follow_host: bool = False,
 ) -> str:
-    """CONTINUE / SKIP / NORMAL のいずれかを返す。
+    """CONTINUE / WANTED / SKIP / NORMAL のいずれかを返す。
 
     `killers_round_type` は `Killers have been set/revealed` 行に出るラウンド種別。
     焼き芋 Fog のオルタネイト判定に使う。
@@ -131,11 +132,12 @@ def _decide_sabotage(instance_type, terror_ids, sus_players, host_wishes,
                 return SKIP
 
     # マーダー以外の参加者が star 枠で続行を希望している → 続行。
+    # 「誰かが欲しがっている」続行なので、全続行ではなく WANTED。
     # マーダー本人が star を持っていてもここでは数えない
     for name, wishes in host_wishes.items():
         if name in murderers:
             continue
         if ids & wishes.get(SABOTAGE_STAR_KEY, set()):
-            return CONTINUE
+            return WANTED
 
     return SKIP

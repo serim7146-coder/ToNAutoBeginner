@@ -1272,13 +1272,14 @@ class TestGroupRoundSabotage(unittest.TestCase):
                          sus=["ソノア7", "ユウナ2858"], wishes=wishes),
             GroupRound.SKIP)
 
-    def test_a_non_murderer_wanting_the_star_slot_continues(self):
+    def test_a_non_murderer_wanting_the_star_slot_is_wanted(self):
+        """誰かが欲しがっている続行。全続行とは別枠（アナウンスが要る）"""
         wishes = {"ソノア7": {self.MURDER: {99}},
                   "みているひと": {self.STAR: {5}}}
 
         self.assertEqual(
             self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes),
-            GroupRound.CONTINUE)
+            GroupRound.WANTED)
 
     def test_the_murderers_own_star_wish_does_not_count(self):
         wishes = {"ソノア7": {self.STAR: {5}}}
@@ -1294,7 +1295,7 @@ class TestGroupRoundSabotage(unittest.TestCase):
 
         self.assertEqual(
             self._decide(config.INSTANCE_HOSHIIMO, sus=["ソノア7"], wishes=wishes),
-            GroupRound.CONTINUE, "マーダー希望があっても star で続行になること")
+            GroupRound.WANTED, "マーダー希望があっても star で続行になること")
 
     def test_hoshiimo_skips_without_a_star_wish(self):
         wishes = {"みているひと": {self.STAR: {99}}}
@@ -5084,6 +5085,191 @@ class TestListSourceShared(unittest.TestCase):
         mainGUI.App._fall_back_to_tnl(app, "テスト")
 
         self.assertEqual(SharedState.get_list_source(), "tnl")
+
+
+class TestSabotageStarAnnounces(unittest.TestCase):
+    """Star側の続行希望は「誰かが欲しがっている」。アナウンスとフリーズを出す"""
+
+    STAR = GroupRound.SABOTAGE_STAR_KEY
+    MURDER = GroupRound.SABOTAGE_MURDER_KEY
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_HOSHIIMO, wishes=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(
+            cfg, {}, lambda _m: None, window_idx=1,
+            host_wishes=wishes if wishes is not None
+            else {"みているひと": {self.STAR: {5}}})
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Sabotage"
+        monitor.st.sus_players = ["ソノア7"]
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _apply(self, monitor, round_type=None):
+        monitor.st.terror_ids = [5]
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            handled = monitor._apply_group_decision(
+                round_type or monitor.st.round_type)
+        self.played = mock_play
+        return handled
+
+    # ── WANTED の処理 ─────────────────────────
+    def test_it_announces_once(self):
+        monitor = self._monitor()
+
+        self.assertTrue(self._apply(monitor))
+
+        self.played.assert_called_once_with("continue.mp3")
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    def test_it_logs_as_play(self):
+        monitor = self._monitor()
+
+        self._apply(monitor)
+
+        self.assertTrue(any("【プレイ】" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(any("続行アナウンス再生" in m for m in monitor.logs))
+
+    def test_twice_in_a_round_freezes_once(self):
+        """同じラウンドで _on_killers が複数回来ても二重にフリーズしない"""
+        monitor = self._monitor()
+
+        self._apply(monitor)
+        first = self.played.call_count
+        self._apply(monitor)
+
+        self.assertEqual(first, 1)
+        self.played.assert_not_called()
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    def test_hands_free_is_silent(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(config.INSTANCE_PRIVATE)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        self.assertTrue(monitor._hands_free())
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+
+        # 放置モードが効く窓を装って、鳴らさない側の分岐を通す
+        with patch.object(LogMonitor.LogMonitor, "_hands_free",
+                          return_value=True):
+            self._apply(monitor)
+
+        self.played.assert_not_called()
+        self.assertTrue(monitor.st.is_continue_round, "続行状態自体は立てる")
+
+    def test_both_group_types_behave_the_same(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            SharedState.continue_round_reset()
+            monitor = self._monitor(itype)
+
+            self._apply(monitor)
+
+            self.assertTrue(monitor.st.is_continue_round, itype)
+            self.played.assert_called_once_with("continue.mp3")
+
+    # ── CONTINUE は従来どおり無音 ───────────────
+    def test_plain_continue_stays_silent(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "8 Pages"
+
+        self.assertTrue(self._apply(monitor, "8 Pages"))
+
+        self.played.assert_not_called()
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_hoshiimo_fog_stays_silent(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Fog"
+
+        self._apply(monitor, "Fog")
+
+        self.played.assert_not_called()
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_yakiimo_fog_still_goes_to_the_normal_judgement(self):
+        monitor = self._monitor(config.INSTANCE_YAKIIMO)
+        monitor.st.round_type = "Fog"
+
+        handled = self._apply(monitor, "Fog (Alternate)")
+
+        self.assertFalse(handled, "NORMAL のまま（通常判定で鳴る）")
+
+    # ── 後始末 ───────────────────────────────
+    def _next_round(self, monitor, round_type, ids, wishes=None):
+        monitor.st.round_type = round_type
+        monitor.st.terror_ids = list(ids)
+        if wishes is not None:
+            monitor.host_wishes = wishes
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            return monitor._apply_group_decision(round_type)
+
+    def test_a_following_skip_releases_the_freeze(self):
+        monitor = self._monitor()
+        self._apply(monitor)
+
+        self._next_round(monitor, "Bloodbath", [1, 2, 3])
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_a_following_normal_round_releases_the_freeze(self):
+        monitor = self._monitor()
+        self._apply(monitor)
+
+        monitor.st.round_type = "Midnight"
+        monitor.st.terror_ids = [99]
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._decide_with_keep_on_set("Midnight")
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_a_following_plain_continue_releases_the_freeze(self):
+        """張りっぱなしになると全窓が止まる。ここがいちばん危ない"""
+        monitor = self._monitor()
+        self._apply(monitor)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+        self._next_round(monitor, "8 Pages", [1, 2])
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+
+    def test_round_start_also_releases_it(self):
+        """通常はこちらで落ちる（ラウンドの切れ目）"""
+        monitor = self._monitor()
+        self._apply(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is 8 Pages")
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
 
 
 class TestGroupNeedsHostList(unittest.TestCase):

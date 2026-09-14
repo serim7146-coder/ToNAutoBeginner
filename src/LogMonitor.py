@@ -512,8 +512,25 @@ class LogMonitor:
         if decision == GroupRound.SKIP:
             self._start_group_skip()
             return True
+        if decision == GroupRound.WANTED:
+            # 誰かがそのテラーを欲しがっている。通常判定で続行になったときと
+            # 同じ扱いにする（アナウンスと他窓フリーズを出す）
+            st = self.st
+            was_continue_round = st.is_continue_round
+            st.is_continue_round = True
+            self._log(f"グループ判定: {st.round_type} 【プレイ】")
+            if not was_continue_round:
+                if not self._hands_free():
+                    PlaySound.play_sound(self.cfg.voice_continue)
+                    self._log("🎙 続行アナウンス再生")
+                SharedState.continue_round_start()
+                self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
+            return True
         if decision == GroupRound.CONTINUE:
-            # 「全続行」は自爆しないだけ。続行アナウンスも他窓フリーズもしない
+            # 「全続行」は自爆しないだけ。続行アナウンスも他窓フリーズもしない。
+            # 前のラウンドのフリーズが残っていたら落とす——通常は ROUND_START が
+            # 落としているが、張りっぱなしは全窓が止まるので念のため
+            self._clear_stale_continue_round()
             self._log(f"グループ判定: {self.st.round_type} 【全続行】")
             return True
         return False
