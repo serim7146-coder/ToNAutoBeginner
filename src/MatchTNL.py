@@ -32,6 +32,11 @@ ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
 # ═══════════════════════════════════════════════
 #  ラウンドタイプ → TNLキー
 # ═══════════════════════════════════════════════
+# ToN ListTool は Variant と Moon を、ラウンド別ではなくこの13枠に
+# まとめて記録する（190/191/192/196〜199/312〜317）。ラウンド別のキーは
+# 空のままなので、ここも見ないと Variant と Moon の続行指定が空振りする。
+SPECIAL_MOON_KEY = "Special/Moon"
+
 LOG_TO_TNL = {
     "Classic":           "Classic/クラシック",
     "Classic.exe":       "Classic.exe/Classic.exe",
@@ -57,8 +62,8 @@ LOG_TO_TNL = {
     "Ghost (Alternate)": "Ghost/ゴースト",     # tnl照合は通常Ghostスロット
     "Sabotage star":     "Sabotage star/サボタージュスター",
     "Sabotage murder":   "Sabotage murder/サボタージュマーダー",
-    "Special":           "Special/Moon",
-    "Moon":              "Special/Moon",
+    "Special":           SPECIAL_MOON_KEY,
+    "Moon":              SPECIAL_MOON_KEY,
 }
 
 

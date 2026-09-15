@@ -1234,6 +1234,180 @@ class TestGroupRoundTable(unittest.TestCase):
                              GroupRound.NORMAL, itype)
 
 
+class TestSpecialMoonKey(unittest.TestCase):
+    """ToN ListTool は Variant と Moon を Special/Moon の13枠にまとめて記録する。
+
+    ラウンド別のキーは空のままなので、そちらだけ見ていると永久に空振りする。
+    ただし置き換えてはいけない——ID192 はラウンド別のキーにも入っている。
+    """
+
+    SPECIAL = MatchTNL.SPECIAL_MOON_KEY
+    CLASSIC = "Classic/クラシック"
+    FOG = "Fog/霧"
+
+    def _continue(self, round_type, terror_ids, keep_on, wins=99, cancel_afk=False):
+        return RoundDecision.decide_killers(
+            keep_on, list(terror_ids), round_type, wins, cancel_afk
+        ).is_continue_round
+
+    # ── Variant ─────────────────────────────
+    def test_each_variant_is_found_in_the_special_slot(self):
+        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
+                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
+            self.assertTrue(
+                self._continue("Classic", [tid], {self.SPECIAL: {tid}}), tid)
+
+    def test_a_variant_missing_from_the_slot_does_not_continue(self):
+        self.assertFalse(
+            self._continue("Classic", [config.ATRACHED_ID],
+                           {self.SPECIAL: {config.GIGABYTES_ID}}))
+
+    def test_an_unmutated_terror_is_not_covered(self):
+        """Sonic のまま（Variant確定前）なら Special/Moon に居ない"""
+        self.assertFalse(
+            self._continue("Classic", [config.SONIC_ID],
+                           {self.SPECIAL: {config.ATRACHED_ID}}))
+
+    def test_an_ordinary_terror_passes_straight_through(self):
+        self.assertFalse(self._continue("Classic", [42], {self.SPECIAL: {191}}))
+
+    # ── ラウンド別キーを取りこぼさない ────────────
+    def test_classic_sees_bloodthirsty_in_the_special_slot(self):
+        self.assertTrue(
+            self._continue("Classic", [config.BLOODTHIRSTY_CREATURE_ID],
+                           {self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}))
+
+    def test_a_round_key_still_wins_on_its_own(self):
+        """ID192 は Fog などラウンド別のキーにも入っている。寄せると落ちる"""
+        self.assertTrue(
+            self._continue("Fog", [config.BLOODTHIRSTY_CREATURE_ID],
+                           {self.FOG: {config.BLOODTHIRSTY_CREATURE_ID}}))
+
+    def test_other_rounds_do_not_look_at_the_special_slot(self):
+        """Special/Moon にだけ192を入れている人が、Fog などで誤続行しないこと"""
+        for round_type in ("Fog", "Ghost", "Midnight", "Punished"):
+            self.assertFalse(
+                self._continue(round_type, [config.BLOODTHIRSTY_CREATURE_ID],
+                               {self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}),
+                round_type)
+
+    def test_being_in_both_is_fine(self):
+        keep_on = {"Classic/クラシック": {config.BLOODTHIRSTY_CREATURE_ID},
+                   self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}
+
+        self.assertTrue(
+            self._continue("Classic", [config.BLOODTHIRSTY_CREATURE_ID], keep_on))
+
+    def test_the_round_list_is_classic_and_the_four_moons(self):
+        self.assertEqual(
+            RoundDecision.SPECIAL_MOON_ROUNDS,
+            {"Classic", "Mystic Moon", "Blood Moon", "Twilight", "Solstice"})
+
+    def test_a_classic_round_key_still_works(self):
+        self.assertTrue(self._continue("Classic", [42],
+                                       {"Classic/クラシック": {42}}))
+
+    def test_an_unrelated_round_key_is_untouched(self):
+        self.assertTrue(self._continue("Fog", [7], {self.FOG: {7}}))
+        self.assertFalse(self._continue("Fog", [7], {self.FOG: {8}}))
+
+    # ── Moon ────────────────────────────────
+    def test_moons_are_found_in_the_special_slot(self):
+        for round_type, tid in (("Mystic Moon", 313), ("Blood Moon", 315),
+                                ("Twilight", 316), ("Solstice", 317)):
+            self.assertTrue(
+                self._continue(round_type, [tid], {self.SPECIAL: {tid}}),
+                round_type)
+
+    def test_a_special_round_type_still_works(self):
+        for round_type in ("Special", "Moon"):
+            self.assertTrue(
+                self._continue(round_type, [313], {self.SPECIAL: {313}}),
+                round_type)
+            self.assertFalse(
+                self._continue(round_type, [313], {self.SPECIAL: {315}}),
+                round_type)
+
+    # ── 壊れない ────────────────────────────
+    def test_a_missing_special_key_is_fine(self):
+        self.assertFalse(self._continue("Classic", [191], {self.CLASSIC: {1}}))
+
+    def test_an_empty_keep_list_is_fine(self):
+        self.assertFalse(self._continue("Classic", [191], {}))
+
+    def test_an_empty_terror_list_is_fine(self):
+        self.assertFalse(self._continue("Classic", [], {self.SPECIAL: {191}}))
+
+    def test_the_open_special_round_path_is_unchanged(self):
+        dtm = LogMonitor.DTM_TERROR_ID
+        decision = RoundDecision.decide_killers({}, [dtm], "Classic", 0, True)
+
+        self.assertTrue(decision.is_open_special_round_target)
+        self.assertTrue(decision.is_continue_round)
+
+    def test_the_real_list_now_covers_atrached(self):
+        """現物で再現していた不具合。Classic/クラシックは空、191はSpecial/Moon"""
+        if not Path(config.HOST_SAVE_PATH).exists():
+            self.skipTest("host_save.json.gz が無い")
+        keep_on, _meta, _wishes = MatchTNL.load_host_save(
+            config.HOST_SAVE_PATH, config.USER_SAVE_PATH)
+        if config.ATRACHED_ID not in keep_on.get(self.SPECIAL, set()):
+            self.skipTest("現物の Special/Moon に191が無い")
+
+        self.assertNotIn(config.ATRACHED_ID, keep_on.get(self.CLASSIC, set()),
+                         "ラウンド別キーには入っていない")
+        self.assertTrue(
+            self._continue("Classic", [config.ATRACHED_ID], keep_on))
+
+
+class TestSpecialMoonKeyWiring(unittest.TestCase):
+    """インスタンス種別によらず同じに効くこと"""
+
+    SPECIAL = MatchTNL.SPECIAL_MOON_KEY
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(
+            cfg, {self.SPECIAL: {config.ATRACHED_ID}}, lambda _m: None,
+            window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor.st.atrached_variant = True   # Variant は確定済み
+        return monitor
+
+    def test_a_classic_variant_continues_everywhere(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO):
+            SharedState.continue_round_reset()
+            monitor = self._monitor(itype)
+
+            with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+                 patch.object(LogMonitor.LogMonitor, "_waiting_for_group_variant",
+                              return_value=False), \
+                 patch.object(PlaySound, "play_sound"):
+                monitor._on_killers([config.ATRACHED_ID], "Classic", revealed=False)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+            self.assertTrue(monitor.st.is_continue_round, itype)
+            self.assertNotIn("do_skip", started, itype)
+
+
 class TestGroupMoonSkip(unittest.TestCase):
     """自爆リストの moon は干し芋/焼き芋でも効く（1回目でも自爆）"""
 
