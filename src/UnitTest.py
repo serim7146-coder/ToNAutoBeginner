@@ -1128,6 +1128,80 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._sync_launch_count.assert_called_once()
 
 
+class TestEmeraldCityInstance(unittest.TestCase):
+    """Emerald City は識別だけ。判定にも自爆にも入れない"""
+
+    REAL_LINE = ("2026.09.15 14:32:17 Debug      -  [Behaviour] Joining "
+                 "wrld_a61cdabe-1218-4287-9ffc-2a4d1414e5bd:95351"
+                 "~group(grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8)"
+                 "~groupAccessType(members)~region(jp)")
+
+    def _parse(self, suffix):
+        return LogMonitor.LogMonitor._parse_instance_type(suffix)
+
+    def test_the_group_is_recognised(self):
+        suffix = f"~group({config.EMERALD_CITY_GROUP_ID})~groupAccessType(members)"
+
+        self.assertEqual(self._parse(suffix), config.INSTANCE_EMERALD_CITY)
+
+    def test_the_real_log_line_is_recognised(self):
+        event = LogParser.parse(self.REAL_LINE)
+
+        self.assertEqual(event.kind, LogParser.EVENT_JOINING)
+        self.assertEqual(self._parse(event.suffix), config.INSTANCE_EMERALD_CITY)
+
+    def test_it_is_not_a_group_round_instance(self):
+        """ここに入れると自爆が走る。依頼と逆になる"""
+        self.assertNotIn(config.INSTANCE_EMERALD_CITY, GroupRound.GROUP_INSTANCES)
+
+    def test_the_group_rules_do_not_apply(self):
+        for round_type in ("Classic", "Bloodbath", "Fog", "Mystic Moon",
+                           "Sabotage", "8 Pages"):
+            self.assertEqual(
+                GroupRound.decide(config.INSTANCE_EMERALD_CITY, round_type, [99]),
+                GroupRound.NORMAL, round_type)
+
+    def test_the_window_does_not_self_destruct(self):
+        """other_group と同じく、判定も自爆も走らない"""
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_EMERALD_CITY
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._on_killers([99], "Classic", revealed=False)
+        started = [c.kwargs["target"].__func__.__name__
+                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+        self.assertEqual(started, [])
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_an_unknown_group_is_still_other_group(self):
+        suffix = "~group(grp_0000ffff-0000-0000-0000-000000000000)"
+
+        self.assertEqual(self._parse(suffix), config.INSTANCE_OTHER_GROUP)
+
+    def test_the_imo_groups_are_unchanged(self):
+        self.assertEqual(self._parse(f"~group({config.HOSHIIMO_GROUP_ID})"),
+                         config.INSTANCE_HOSHIIMO)
+        self.assertEqual(self._parse(f"~group({config.YAKIIMO_GROUP_ID})"),
+                         config.INSTANCE_YAKIIMO)
+
+    def test_private_and_public_are_unchanged(self):
+        for marker in ("~private", "~friends", "~hidden", "~canRequestInvite"):
+            self.assertEqual(self._parse(marker), config.INSTANCE_PRIVATE, marker)
+        self.assertEqual(self._parse(""), config.INSTANCE_PUBLIC)
+        self.assertEqual(self._parse("~region(jp)"), config.INSTANCE_PUBLIC)
+
+    def test_the_group_id_is_not_empty(self):
+        """空だと group() がどのグループにも一致してしまう（CBPS_GROUP_ID の轍）"""
+        self.assertTrue(config.EMERALD_CITY_GROUP_ID.strip())
+        self.assertTrue(config.EMERALD_CITY_GROUP_ID.startswith("grp_"))
+
+
 class TestGroupRoundTable(unittest.TestCase):
     """第1部: 干し芋/焼き芋のラウンド判定表"""
 

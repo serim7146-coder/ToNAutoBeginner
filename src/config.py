@@ -217,10 +217,14 @@ INSTANCE_HOSHIIMO      = "hoshiimo"
 INSTANCE_YAKIIMO       = "yakiimo"
 INSTANCE_CBPS          = "cbps"
 INSTANCE_OTHER_GROUP   = "other_group"
+INSTANCE_EMERALD_CITY  = "emerald_city"
 
 # ── インスタンスid ──
 HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
 YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
+# 識別のみ。自爆・グループ判定の対象にはしない
+# （GroupRound.GROUP_INSTANCES に入れると自爆が走る）
+EMERALD_CITY_GROUP_ID = "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8"
 CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
 # ── グループインスタンスで、自動自爆するラウンド ──

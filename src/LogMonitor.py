@@ -78,6 +78,9 @@ class LogMonitor:
             return config.INSTANCE_HOSHIIMO
         if f"group({config.YAKIIMO_GROUP_ID})" in suffix:
             return config.INSTANCE_YAKIIMO
+        # 一般の ~group( より前に置くこと。後ろだと other_group に吸われる
+        if f"group({config.EMERALD_CITY_GROUP_ID})" in suffix:
+            return config.INSTANCE_EMERALD_CITY
         if "~group(" in suffix:
             return config.INSTANCE_OTHER_GROUP
         if any(marker in suffix for marker in ("~private", "~friends", "~hidden", "~canRequestInvite")):
