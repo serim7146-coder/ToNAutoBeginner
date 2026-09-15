@@ -7699,7 +7699,8 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor.st.round_type = "Classic"
         monitor.st.terror_ids = [config.ATRACHED_ID]
         monitor.st.atrached_variant = True
-        monitor.st.gigabytes = True
+        monitor.st.gigabytes = True     # _run_delayed は _on_killers を通らないので
+                                        # ここでは ids の差し替えは起きない
 
         started = self._run_delayed(monitor)
 
