@@ -1069,7 +1069,7 @@ class App(tk.Tk):
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
-                self._add_tool_row(path)
+                self._add_tool_row(path, save=False)
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
@@ -1350,8 +1350,11 @@ class App(tk.Tk):
         self._on_close()
 
     # ── VRChat起動 ─────────────────────────────
-    def _add_tool_row(self, path: str = ""):
-        """exe 1本ぶんの行を足す。パスを変えるとボタンの名前も追従する"""
+    def _add_tool_row(self, path: str = "", save: bool = True):
+        """exe 1本ぶんの行を足す。パスを変えるとボタンの名前も追従する。
+
+        `save=False` は設定の復元中に使う（読み込んだ端から書き戻さない）。
+        """
         row = ttk.Frame(self.tool_frame)
         row.pack(fill="x", pady=1)
         row.v_path = tk.StringVar(value=path)
@@ -1365,15 +1368,22 @@ class App(tk.Tk):
         ttk.Button(row, text="✕", width=3,
                    command=lambda r=row: self._remove_tool_row(r)
                    ).pack(side="left", padx=(4, 0))
-        row.v_path.trace_add("write", lambda *_a, r=row: self._refresh_tool_row(r))
+        row.v_path.trace_add("write", lambda *_a, r=row: self._on_tool_path_changed(r))
         self.tool_rows.append(row)
         self._refresh_tool_row(row)
+        if save:
+            self._save_settings_now()
         return row
+
+    def _on_tool_path_changed(self, row):
+        self._refresh_tool_row(row)
+        self._schedule_settings_save()
 
     def _remove_tool_row(self, row):
         if row in self.tool_rows:
             self.tool_rows.remove(row)
         row.destroy()
+        self._save_settings_now()
 
     def _browse_tool_exe(self, row):
         p = filedialog.askopenfilename(
@@ -1650,6 +1660,40 @@ class App(tk.Tk):
         self._log("[起動] 失敗: %s" % msg)
         messagebox.showerror("起動失敗", msg)
 
+    def _save_settings_now(self):
+        """いまのGUIの状態を settings.json へ書く。
+
+        タブが0枚のときは書かない——`profiles` などが空配列で上書きされる。
+        保存に失敗してもここで止める（呼び出し元を巻き込まない）。
+        """
+        if not getattr(self, "tabs", None):
+            return
+        try:
+            self._save_launch_settings()
+        except Exception as e:
+            self._log(f"設定の保存に失敗: {e}")
+
+    def _schedule_settings_save(self):
+        """少し待ってからまとめて保存する。手打ちの1文字ごとに書かないため"""
+        job = getattr(self, "_settings_save_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        try:
+            self._settings_save_job = self.after(
+                config.SETTINGS_SAVE_DEBOUNCE_MS, self._run_scheduled_save)
+        except tk.TclError:
+            self._settings_save_job = None
+
+    def _run_scheduled_save(self):
+        self._settings_save_job = None
+        try:
+            self._save_settings_now()
+        except tk.TclError:
+            pass        # ウィンドウ破棄後にタイマーが発火した
+
     def _save_launch_settings(self):
         save_settings({
             **load_settings(),
@@ -1696,5 +1740,9 @@ class App(tk.Tk):
             self.log_text.config(state="disabled")
 
     def _on_close(self):
+        # VRChat を起動しないまま閉じても設定が残るように。destroy() の後は
+        # Tk 変数を読めないので必ず先に、停止が長引いても保存は済ませたいので
+        # _stop() より前に書く
+        self._save_settings_now()
         self._stop()
         self.destroy()

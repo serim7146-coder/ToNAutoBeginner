@@ -22,6 +22,7 @@ import PlaySound
 import LogParser
 import MatchTNL
 import ProcessCheck
+import tkinter as tk
 import ToolLauncher
 import HotKey
 import RoundSequence
@@ -6465,6 +6466,224 @@ class TestToolLauncherRows(unittest.TestCase):
         tab = source[source.index("class WindowTab"):source.index("class App")]
         self.assertNotIn("tool_rows", tab)
         self.assertNotIn("ToolLauncher", tab)
+
+
+class TestSettingsArePersisted(unittest.TestCase):
+    """設定は VRChat を起動しなくても保存されること。
+
+    保存の仕組み自体は前からあったが、呼ばれるのが「VRChatを起動」ボタンの
+    中だけだった。このツールから起動しない人には何も残らなかった。
+    """
+
+    def _app(self, tabs=1, save=None):
+        app = type("FakeApp", (), {})()
+        app.tabs = [object()] * tabs
+        app.logs = []
+        app._log = app.logs.append
+        app._save_launch_settings = save or MagicMock()
+        app._save_settings_now = lambda: mainGUI.App._save_settings_now(app)
+        return app
+
+    # ── 終了時 ──────────────────────────────
+    def test_closing_saves(self):
+        app = self._app()
+        app._stop = MagicMock()
+        app.destroy = MagicMock()
+
+        mainGUI.App._on_close(app)
+
+        app._save_launch_settings.assert_called_once()
+
+    def test_it_saves_before_destroying(self):
+        """destroy() の後は Tk 変数を読めない"""
+        order = []
+        app = self._app(save=lambda: order.append("save"))
+        app._stop = lambda: order.append("stop")
+        app.destroy = lambda: order.append("destroy")
+
+        mainGUI.App._on_close(app)
+
+        self.assertLess(order.index("save"), order.index("destroy"))
+
+    def test_it_saves_before_stopping(self):
+        """停止が長引いても保存は済ませる"""
+        order = []
+        app = self._app(save=lambda: order.append("save"))
+        app._stop = lambda: order.append("stop")
+        app.destroy = lambda: order.append("destroy")
+
+        mainGUI.App._on_close(app)
+
+        self.assertLess(order.index("save"), order.index("stop"))
+
+    def test_a_failing_save_still_closes_the_window(self):
+        """閉じられなくなるほうが困る"""
+        app = self._app(save=MagicMock(side_effect=OSError("disk full")))
+        app._stop = MagicMock()
+        app.destroy = MagicMock()
+
+        mainGUI.App._on_close(app)
+
+        app.destroy.assert_called_once()
+        self.assertTrue(any("保存に失敗" in m for m in app.logs), app.logs)
+
+    def test_no_tabs_means_no_save(self):
+        """profiles などが空配列で上書きされる事故を避ける"""
+        app = self._app(tabs=0)
+
+        mainGUI.App._save_settings_now(app)
+
+        app._save_launch_settings.assert_not_called()
+
+    # ── 保存する項目は増減していない ────────────────
+    def test_the_saved_keys_are_unchanged(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
+        app.v_freeze_rounds = {}
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(set(saved), {
+            "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
+            "join_world", "instance_link", "profiles", "skip_rounds",
+            "skip_variant_exempt", "continue_rounds", "freeze_8pages",
+            "freeze_punish", "freeze_rounds", "emergency_stop_key",
+            "tool_launchers",
+        })
+
+    def test_other_keys_in_the_file_survive(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
+        app.v_freeze_rounds = {}
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings",
+                          return_value={"tnl_path": "C:/list/my.tnl"}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["tnl_path"], "C:/list/my.tnl")
+
+
+class TestToolRowsSaveOnChange(unittest.TestCase):
+    """外部ツールの行は、追加・削除・パス変更で保存される"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        for row in list(self.app.tool_rows):
+            mainGUI.App._remove_tool_row(self.app, row)
+        job = getattr(self.app, "_settings_save_job", None)
+        if job is not None:
+            self.app.after_cancel(job)
+            self.app._settings_save_job = None
+        self._save = patch.object(mainGUI.App, "_save_launch_settings")
+        self.saved = self._save.start()
+
+    def tearDown(self):
+        self._save.stop()
+        for row in list(self.app.tool_rows):
+            self.app.tool_rows.remove(row)
+            row.destroy()
+
+    def _settle(self):
+        """デバウンスのタイマーを起こす"""
+        for _ in range(60):
+            self.app.update()
+            if self.saved.called:
+                return
+            time.sleep(0.02)
+        self.app.update()
+
+    def test_adding_a_row_saves(self):
+        self.app._add_tool_row()
+
+        self.saved.assert_called_once()
+
+    def test_restoring_does_not_save(self):
+        """読み込んだ端から書き戻さない"""
+        self.app._add_tool_row(r"D:\a\one.exe", save=False)
+
+        self.saved.assert_not_called()
+
+    def test_removing_a_row_saves(self):
+        row = self.app._add_tool_row(save=False)
+
+        self.app._remove_tool_row(row)
+
+        self.saved.assert_called_once()
+
+    def test_changing_the_path_saves_after_the_debounce(self):
+        row = self.app._add_tool_row(save=False)
+
+        row.v_path.set(r"D:\a\one.exe")
+        self.assertFalse(self.saved.called, "すぐには書かないこと")
+        self._settle()
+
+        self.saved.assert_called_once()
+
+    def test_typing_saves_only_once(self):
+        row = self.app._add_tool_row(save=False)
+
+        for text in ("D", "D:", r"D:\a", r"D:\a\one.exe"):
+            row.v_path.set(text)
+            self.app.update()
+        self._settle()
+
+        self.assertEqual(self.saved.call_count, 1, "まとめて1回だけ")
+
+    def test_a_late_timer_after_destroy_does_not_raise(self):
+        """ウィンドウを閉じた後にタイマーが発火しても落ちないこと"""
+        app = type("FakeApp", (), {})()
+        app._settings_save_job = "予約済み"
+        app._save_settings_now = MagicMock(
+            side_effect=tk.TclError("application has been destroyed"))
+
+        mainGUI.App._run_scheduled_save(app)      # 例外を投げないこと
+
+        self.assertIsNone(app._settings_save_job, "予約は消しておくこと")
+
+    def test_scheduling_after_destroy_does_not_raise(self):
+        app = type("FakeApp", (), {})()
+        app._settings_save_job = None
+        app._run_scheduled_save = lambda: None
+        app.after = MagicMock(side_effect=tk.TclError("destroyed"))
+        app.after_cancel = MagicMock()
+
+        mainGUI.App._schedule_settings_save(app)
+
+        self.assertIsNone(app._settings_save_job)
+
+    def test_the_debounce_is_rescheduled_not_stacked(self):
+        row = self.app._add_tool_row(save=False)
+
+        row.v_path.set("a")
+        first = self.app._settings_save_job
+        row.v_path.set("ab")
+        second = self.app._settings_save_job
+
+        self.assertIsNotNone(first)
+        self.assertNotEqual(first, second, "前の予約を取り消して取り直すこと")
 
 
 class TestToolLauncherSettings(unittest.TestCase):
