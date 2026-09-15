@@ -1384,11 +1384,10 @@ class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
 
         self.assertIs(mock_decide.call_args.kwargs["bloodthirsty_variant"], True)
 
-    def test_the_wait_does_not_apply_to_unbound_yet(self):
-        """現状の固定。terror_ids が [283] なので 106 を見ている待ちは効かない。
+    def test_the_106_wait_still_does_not_cover_unbound(self):
+        """106 を見ている既存の待ちは Unbound では効かない（条件は広げていない）。
 
-        条件を広げるとラウンド全体の判定が遅くなるので、取りこぼしが実際に
-        起きるか確かめてから別途判断する。ここを変えるときはこのテストが落ちる。
+        Self Inserts は `_waiting_for_self_inserts_bloodthirsty()` が別に待つ。
         """
         monitor = self._monitor(bloodthirsty=False)
 
@@ -1397,6 +1396,170 @@ class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
         monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
         self.assertTrue(monitor._waiting_for_bloodthirsty_creature_variant(),
                         "106 がいるラウンドでは従来どおり待つこと")
+
+
+class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
+    """Self Inserts は Bloodthirsty 行を待ってから判定する。
+
+    実測: Variant の出現ログは Killers 行の**後**に出る（手元ログの
+    Gigabytes 12件・Atrached 3件がすべて後）。待たないと、Self Inserts の
+    強制続行がまさにその場面で発火しない。
+    """
+
+    SELF_INSERTS = config.SELF_INSERTS_ID
+    UNBOUND_KEY = "Unbound/アンバウンド"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_PRIVATE, skip_rounds=(),
+                 keep_on=None, terror_ids=(config.SELF_INSERTS_ID,)):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Unbound"
+        monitor.st.terror_ids = list(terror_ids)
+        monitor._running = True
+        return monitor
+
+    def _started(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(monitor.st.terror_ids), "Unbound",
+                                revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _run_wait(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._delayed_self_inserts_decision("Unbound", 0.0,
+                                                   monitor.st.round_seq)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 待つかどうか ─────────────────────────
+    def test_it_waits_for_self_inserts(self):
+        monitor = self._monitor()
+
+        self.assertTrue(monitor._waiting_for_self_inserts_bloodthirsty())
+
+    def test_it_stops_waiting_once_the_line_arrives(self):
+        monitor = self._monitor()
+        monitor.st.bloodthirsty_creature_variant = True
+
+        self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty())
+
+    def test_it_does_not_wait_for_other_groups(self):
+        for ids in ([265], [200], [config.CURIOUS_CREATURE_ID]):
+            monitor = self._monitor(terror_ids=ids)
+
+            self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty(), ids)
+
+    def test_it_does_not_wait_in_other_rounds(self):
+        for round_type in ("Classic", "Fog", "Midnight"):
+            monitor = self._monitor()
+            monitor.st.round_type = round_type
+
+            self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty(),
+                             round_type)
+
+    # ── 待ちに入ること ───────────────────────
+    def test_the_round_enters_the_wait(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype)
+
+            self.assertEqual(self._started(monitor),
+                             ["_delayed_self_inserts_decision"], itype)
+
+    def test_a_round_that_already_saw_the_line_does_not_wait(self):
+        monitor = self._monitor(keep_on={self.UNBOUND_KEY: {self.SELF_INSERTS}})
+        monitor.st.bloodthirsty_creature_variant = True
+
+        started = self._started(monitor)
+
+        self.assertNotIn("_delayed_self_inserts_decision", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_other_rounds_gain_no_latency(self):
+        monitor = self._monitor(terror_ids=[265])
+
+        started = self._started(monitor)
+
+        self.assertNotIn("_delayed_self_inserts_decision", started)
+
+    # ── 待ち明けの判断 ───────────────────────
+    def test_the_line_arriving_during_the_wait_continues(self):
+        monitor = self._monitor()
+        monitor.st.bloodthirsty_creature_variant = True   # 待っている間に来た
+
+        started = self._run_wait(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_without_the_line_it_follows_the_list(self):
+        monitor = self._monitor()
+
+        started = self._run_wait(monitor)
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertIn("do_skip", started, "private なのでリストに無ければ自爆")
+
+    def test_the_skip_list_is_still_honoured_after_the_wait(self):
+        """Bloodthirsty が来なければ、自爆指定はそのまま効く"""
+        monitor = self._monitor(skip_rounds=("Unbound",))
+
+        started = self._run_wait(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_the_line_beats_the_skip_list_after_the_wait(self):
+        monitor = self._monitor(skip_rounds=("Unbound",))
+        monitor.st.bloodthirsty_creature_variant = True
+
+        started = self._run_wait(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_the_skip_list_does_not_decide_before_the_wait(self):
+        """待たずに自爆指定を見ると、フラグが立つ前に自爆が決まってしまう"""
+        monitor = self._monitor(skip_rounds=("Unbound",))
+
+        started = self._started(monitor)
+
+        self.assertEqual(started, ["_delayed_self_inserts_decision"])
+
+    def test_the_wait_aborts_when_the_round_changed(self):
+        monitor = self._monitor()
+        monitor.st.round_seq = 5
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._delayed_self_inserts_decision("Unbound", 0.0, 4)
+
+        mock_thread.assert_not_called()
+
+    def test_the_wait_uses_the_shared_length(self):
+        monitor = self._monitor()
+
+        self.assertEqual(monitor._variant_wait_sec(),
+                         config.TERROR_VARIANT_WAIT_SEC)
 
 
 class TestSpecialMoonKey(unittest.TestCase):

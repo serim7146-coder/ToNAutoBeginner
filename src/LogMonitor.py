@@ -364,9 +364,8 @@ class LogMonitor:
         """Curious Creature がいる間は Bloodthirsty 化を待つ。
 
         Unbound では terror_ids が `[283]` などグループのIDなので、106 を
-        条件にしているここは効かない——つまり Self Inserts の Bloodthirsty は
-        待たずに判定する。条件を広げるとラウンド全体の判定が遅くなって
-        影響が読めないので、取りこぼしが実際に起きるか確かめてから別途判断する。
+        条件にしているここは効かない。Self Inserts の Bloodthirsty は
+        `_waiting_for_self_inserts_bloodthirsty()` が別に待つ。
         """
         return (
             config.CURIOUS_CREATURE_ID in self.st.terror_ids
@@ -628,6 +627,40 @@ class LogMonitor:
             and self.st.round_type in self.cfg.skip_rounds
             and self._waiting_for_group_variant()
         )
+
+    def _waiting_for_self_inserts_bloodthirsty(self) -> bool:
+        """Unbound の Self Inserts で Bloodthirsty 行を待つべきか。
+
+        `_waiting_for_bloodthirsty_creature_variant()` は 106 がいることを
+        条件にしていて、Unbound では terror_ids が `[283]` なので効かない。
+        実測では Variant の出現ログは Killers 行の**後**に出る（手元ログの
+        Gigabytes 12件・Atrached 3件がすべて後）。待たずに判定すると、
+        Self Inserts の強制続行がまさにその場面で発火しない。
+        """
+        st = self.st
+        return (
+            st.round_type == "Unbound"
+            and config.SELF_INSERTS_ID in st.terror_ids
+            and not st.bloodthirsty_creature_variant
+        )
+
+    def _delayed_self_inserts_decision(self, killers_round_type: str,
+                                       wait_sec: float, round_seq: int):
+        """Bloodthirsty 行を待ってから、自爆指定と通常判定へ進む"""
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            if not self._round_still_active(round_seq):
+                return
+            if not self._waiting_for_self_inserts_bloodthirsty():
+                break   # Bloodthirsty 確定 → 残り時間を待たずに判断へ
+            time.sleep(config.TERROR_VARIANT_POLL_SEC)
+        if not self._round_still_active(round_seq):
+            return
+        if (self.st.instance_type == config.INSTANCE_PRIVATE
+                and self.cfg.skip_rounds and self._should_skip_by_round()):
+            self._start_round_skip()
+            return
+        self._decide_with_keep_on_set(killers_round_type)
 
     def _delayed_round_skip(self, killers_round_type: str, wait_sec: float,
                             round_seq: int):
@@ -1113,6 +1146,16 @@ class LogMonitor:
         if is_private and st.round_type in self.cfg.continue_rounds:
             self._log(f"ラウンド指定で続行: {st.round_type}")
             self._clear_stale_continue_round()
+            return
+
+        # Unbound の Self Inserts だけは、Bloodthirsty 行が Killers 行の後に
+        # 来るので待つ。自爆指定より前に置く——待たずに自爆指定を見ると、
+        # フラグが立つ前に自爆が決まってしまう
+        if self._waiting_for_self_inserts_bloodthirsty():
+            wait = self._variant_wait_sec()
+            self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
+            self._start_daemon(self._delayed_self_inserts_decision, round_type,
+                               wait, st.round_seq)
             return
 
         # privateのラウンド指定自爆。続行リストより優先する
