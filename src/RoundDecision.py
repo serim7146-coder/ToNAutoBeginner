@@ -42,14 +42,38 @@ def is_open_special_round_target(
     )
 
 
+def is_self_inserts_bloodthirsty(
+    terror_ids: list[int],
+    round_type: str,
+    bloodthirsty_variant: bool,
+) -> bool:
+    """Unbound の Self Inserts に Bloodthirsty が出たか。
+
+    ToN ListTool は「Bloodthirsty 入りの Self Inserts」を表現できない——
+    リストに出せるのは `Self Inserts` の1枠だけ——ので、リストに頼らず
+    必ず続行する。`Pack of Wild Yet Curious(265)` は対象外（あちらは
+    リストで指定できる）。
+    """
+    return (
+        bool(bloodthirsty_variant)
+        and round_type == "Unbound"
+        and config.SELF_INSERTS_ID in terror_ids
+    )
+
+
 def decide_killers(
     keep_on_set: dict,
     terror_ids: list[int],
     round_type: str,
     wins: int,
     cancel_afk: bool,
+    bloodthirsty_variant: bool = False,
 ) -> KillerDecision:
     open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk)
+    # リストで表現できない組み合わせ。3クラ解放とは別物なので、
+    # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
+    forced = is_self_inserts_bloodthirsty(terror_ids, round_type,
+                                          bloodthirsty_variant)
     tnl_key = MatchTNL.LOG_TO_TNL.get(round_type, round_type)
     should_continue = MatchTNL.should_continue(keep_on_set, tnl_key, terror_ids)
     if not should_continue and round_type in SPECIAL_MOON_ROUNDS:
@@ -58,5 +82,5 @@ def decide_killers(
         # キーにも入っていて、寄せるとそちらの指定を取りこぼす
         should_continue = MatchTNL.should_continue(
             keep_on_set, MatchTNL.SPECIAL_MOON_KEY, terror_ids)
-    should_continue = should_continue or open_special
+    should_continue = should_continue or open_special or forced
     return KillerDecision(open_special, should_continue)

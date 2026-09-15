@@ -308,6 +308,10 @@ SLENDER_ID = 47
 HUNGRY_HOME_INVADER_ID = 190
 HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 SONIC_ID = 40
+# Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
+# ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
+# 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
+SELF_INSERTS_ID = 283
 ATRACHED_ID = 191
 ATRACHED_LOG = "Lets play a game..."
 # 元IDが毎回違う（実測12件すべて別ID）ので、IDからは予測できない。

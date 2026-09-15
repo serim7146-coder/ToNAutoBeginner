@@ -361,6 +361,13 @@ class LogMonitor:
         ]
 
     def _waiting_for_bloodthirsty_creature_variant(self) -> bool:
+        """Curious Creature がいる間は Bloodthirsty 化を待つ。
+
+        Unbound では terror_ids が `[283]` などグループのIDなので、106 を
+        条件にしているここは効かない——つまり Self Inserts の Bloodthirsty は
+        待たずに判定する。条件を広げるとラウンド全体の判定が遅くなって
+        影響が読めないので、取りこぼしが実際に起きるか確かめてから別途判断する。
+        """
         return (
             config.CURIOUS_CREATURE_ID in self.st.terror_ids
             and not self.st.bloodthirsty_creature_variant
@@ -590,8 +597,10 @@ class LogMonitor:
     def _should_skip_by_round(self) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
 
-        続行リストより優先するが、3クラ解放だけは自爆指定より優先する
-        （Classicを指定していると3クラ稼ぎが黙って壊れるため）。
+        続行リストより優先する。ただし自爆指定より上に来るものが3つある——
+        3クラ解放（Classicを指定していると3クラ稼ぎが黙って壊れる）、
+        Variant免除（設定していれば）、そして Self Inserts の Bloodthirsty
+        （リストで表現できないので、リストにも自爆指定にも頼れない）。
         """
         st = self.st
         if st.round_type not in self.cfg.skip_rounds:
@@ -602,6 +611,10 @@ class LogMonitor:
             return False        # 3クラ解放が勝つ。通常判定へ落とす
         if self.cfg.skip_variant_exempt and GroupRound.is_variant(st.terror_ids):
             return False        # Variantは自爆しない。通常判定へ落とす
+        if RoundDecision.is_self_inserts_bloodthirsty(
+                st.terror_ids, st.round_type, st.bloodthirsty_creature_variant):
+            # リストで指定する手段が無いので、自爆指定より優先して続行する
+            return False
         return True
 
     def _waiting_for_round_skip_variant(self) -> bool:
@@ -1130,6 +1143,7 @@ class LogMonitor:
             st.round_type,
             st.open_special_round_wins,
             self.cfg.cancel_afk,
+            bloodthirsty_variant=st.bloodthirsty_creature_variant,
         )
         is_open_special_round_target = decision.is_open_special_round_target
         st.is_continue_round = decision.is_continue_round

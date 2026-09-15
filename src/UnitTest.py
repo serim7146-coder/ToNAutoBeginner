@@ -1234,6 +1234,171 @@ class TestGroupRoundTable(unittest.TestCase):
                              GroupRound.NORMAL, itype)
 
 
+class TestSelfInsertsBloodthirsty(unittest.TestCase):
+    """Unbound の Self Inserts に Bloodthirsty が出たら最優先で続行する。
+
+    ToN ListTool に「Bloodthirsty 入りの Self Inserts」を指定する手段が無いので、
+    リストにも自爆指定にも頼れない。
+    """
+
+    UNBOUND_KEY = "Unbound/アンバウンド"
+    SELF_INSERTS = config.SELF_INSERTS_ID          # 283
+    PACK = 265                                     # Pack of Wild Yet Curious
+
+    def _decide(self, round_type, terror_ids, keep_on=None,
+                bloodthirsty=False, wins=99, cancel_afk=False):
+        return RoundDecision.decide_killers(
+            keep_on or {}, list(terror_ids), round_type, wins, cancel_afk,
+            bloodthirsty_variant=bloodthirsty)
+
+    # ── 強制続行 ────────────────────────────
+    def test_self_inserts_with_bloodthirsty_continues(self):
+        decided = self._decide("Unbound", [self.SELF_INSERTS], bloodthirsty=True)
+
+        self.assertTrue(decided.is_continue_round)
+
+    def test_without_bloodthirsty_it_follows_the_list(self):
+        self.assertFalse(
+            self._decide("Unbound", [self.SELF_INSERTS]).is_continue_round)
+        self.assertTrue(
+            self._decide("Unbound", [self.SELF_INSERTS],
+                         {self.UNBOUND_KEY: {self.SELF_INSERTS}}).is_continue_round)
+
+    def test_the_listed_case_is_unchanged(self):
+        """リストに283があれば Bloodthirsty でなくても続行（従来どおり）"""
+        decided = self._decide("Unbound", [self.SELF_INSERTS],
+                               {self.UNBOUND_KEY: {self.SELF_INSERTS}})
+
+        self.assertTrue(decided.is_continue_round)
+
+    # ── 対象を広げない ───────────────────────
+    def test_the_pack_is_not_covered(self):
+        """Pack of Wild Yet Curious(265) はリストで指定できるので対象外"""
+        self.assertFalse(
+            self._decide("Unbound", [self.PACK], bloodthirsty=True).is_continue_round)
+        self.assertTrue(
+            self._decide("Unbound", [self.PACK], {self.UNBOUND_KEY: {self.PACK}},
+                         bloodthirsty=True).is_continue_round)
+
+    def test_other_rounds_are_not_covered(self):
+        for round_type, ids in (("Classic", [config.BLOODTHIRSTY_CREATURE_ID]),
+                                ("Fog", [config.BLOODTHIRSTY_CREATURE_ID]),
+                                ("Midnight", [self.SELF_INSERTS])):
+            self.assertFalse(
+                self._decide(round_type, ids, bloodthirsty=True).is_continue_round,
+                round_type)
+
+    def test_another_unbound_group_is_not_covered(self):
+        self.assertFalse(
+            self._decide("Unbound", [200], bloodthirsty=True).is_continue_round)
+
+    def test_omitting_the_flag_keeps_the_old_behaviour(self):
+        decided = RoundDecision.decide_killers(
+            {}, [self.SELF_INSERTS], "Unbound", 99, False)
+
+        self.assertFalse(decided.is_continue_round)
+
+    # ── 3クラ解放と混ざらない ──────────────────
+    def test_it_does_not_set_the_open_special_flag(self):
+        """混ぜると3クラ解放の AFK 解除が誤って走る"""
+        decided = self._decide("Unbound", [self.SELF_INSERTS], bloodthirsty=True)
+
+        self.assertTrue(decided.is_continue_round)
+        self.assertFalse(decided.is_open_special_round_target)
+
+    def test_the_helper_is_precise(self):
+        ok = RoundDecision.is_self_inserts_bloodthirsty
+        self.assertTrue(ok([self.SELF_INSERTS], "Unbound", True))
+        self.assertFalse(ok([self.SELF_INSERTS], "Unbound", False))
+        self.assertFalse(ok([self.PACK], "Unbound", True))
+        self.assertFalse(ok([self.SELF_INSERTS], "Classic", True))
+        self.assertFalse(ok([], "Unbound", True))
+
+
+class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
+    """LogMonitor 側。自爆指定より優先されること"""
+
+    SELF_INSERTS = config.SELF_INSERTS_ID
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_PRIVATE, skip_rounds=(),
+                 bloodthirsty=True):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Unbound"
+        monitor.st.terror_ids = [self.SELF_INSERTS]
+        monitor.st.bloodthirsty_creature_variant = bloodthirsty
+        return monitor
+
+    def test_the_skip_list_does_not_win(self):
+        """private で Unbound を自爆指定していても続行する"""
+        monitor = self._monitor(skip_rounds=("Unbound",))
+
+        self.assertFalse(monitor._should_skip_by_round())
+
+    def test_the_skip_list_still_wins_without_bloodthirsty(self):
+        monitor = self._monitor(skip_rounds=("Unbound",), bloodthirsty=False)
+
+        self.assertTrue(monitor._should_skip_by_round())
+
+    def test_it_continues_in_every_instance_type(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO):
+            SharedState.continue_round_reset()
+            monitor = self._monitor(itype)
+
+            with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+                 patch.object(PlaySound, "play_sound"):
+                monitor._on_killers([self.SELF_INSERTS], "Unbound", revealed=False)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+            self.assertTrue(monitor.st.is_continue_round, itype)
+            self.assertNotIn("do_skip", started, itype)
+
+    def test_the_flag_reaches_decide_killers(self):
+        monitor = self._monitor()
+
+        with patch.object(RoundDecision, "decide_killers",
+                          return_value=RoundDecision.KillerDecision(False, True)
+                          ) as mock_decide, \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._decide_with_keep_on_set("Unbound")
+
+        self.assertIs(mock_decide.call_args.kwargs["bloodthirsty_variant"], True)
+
+    def test_the_wait_does_not_apply_to_unbound_yet(self):
+        """現状の固定。terror_ids が [283] なので 106 を見ている待ちは効かない。
+
+        条件を広げるとラウンド全体の判定が遅くなるので、取りこぼしが実際に
+        起きるか確かめてから別途判断する。ここを変えるときはこのテストが落ちる。
+        """
+        monitor = self._monitor(bloodthirsty=False)
+
+        self.assertFalse(monitor._waiting_for_bloodthirsty_creature_variant())
+
+        monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
+        self.assertTrue(monitor._waiting_for_bloodthirsty_creature_variant(),
+                        "106 がいるラウンドでは従来どおり待つこと")
+
+
 class TestSpecialMoonKey(unittest.TestCase):
     """ToN ListTool は Variant と Moon を Special/Moon の13枠にまとめて記録する。
 
