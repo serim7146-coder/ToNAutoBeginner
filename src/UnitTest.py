@@ -1561,6 +1561,8 @@ class TestSpecialMoonKeyWiring(unittest.TestCase):
             SharedState.continue_round_reset()
             monitor = self._monitor(itype)
 
+            # 待ちを止めるのに st.gigabytes を立ててはいけない。_on_killers が
+            # ids を [314] に差し替えるので、判定したいIDごと変わってしまう
             with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
                  patch.object(LogMonitor.LogMonitor, "_waiting_for_group_variant",
                               return_value=False), \
@@ -5596,12 +5598,16 @@ class TestSkipRoundsByType(unittest.TestCase):
             self.assertTrue(monitor.st.is_continue_round, tid)
 
     def test_the_exemption_still_skips_a_plain_terror(self):
+        # 待ちを止めるのに st.gigabytes を立ててはいけない。_on_killers が
+        # ids を [314] に差し替えるので、テラーIDごと変わってしまう
         monitor = self._monitor(exempt=True)
-        monitor.st.gigabytes = True     # 待ちを済ませた状態
 
-        started = self._killers(monitor)
+        with patch.object(LogMonitor.LogMonitor,
+                          "_waiting_for_round_skip_variant", return_value=False):
+            started = self._killers(monitor)
 
         self.assertIn("do_skip", started)
+        self.assertEqual(monitor.st.terror_ids, [99], "IDが差し替わっていないこと")
 
     def test_without_the_exemption_a_variant_is_skipped_too(self):
         monitor = self._monitor(exempt=False,
@@ -5712,7 +5718,8 @@ class TestSkipRoundsByType(unittest.TestCase):
                                 keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
         monitor._running = True
         monitor.st.terror_ids = [config.GIGABYTES_ID]
-        monitor.st.gigabytes = True
+        monitor.st.gigabytes = True     # _run_delayed は _on_killers を通らないので
+                                        # ここでは ids の差し替えは起きない
 
         started = self._run_delayed(monitor)
 
