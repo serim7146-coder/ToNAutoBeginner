@@ -1325,7 +1325,12 @@ class TestTerrorAliases(unittest.TestCase):
 
     # ── 現物 ───────────────────────────────
     def test_the_real_file_loads(self):
-        """中身は固定しない——利用者が随時書き換えるため"""
+        """現物は「読めること」だけを見る。
+
+        中身も、書き間違いの有無も、テストの対象にしない——利用者が
+        随時書き換えるファイルで、いつでも編集途中でありうる。警告が
+        正しく出ることは合成データのテストで見ている。
+        """
         if not Path(config.TERROR_ALIASES_PATH).exists():
             self.skipTest("terror_aliases.json が無い")
 
@@ -1336,7 +1341,6 @@ class TestTerrorAliases(unittest.TestCase):
         for name, tid in aliases.items():
             self.assertIsInstance(name, str, name)
             self.assertTrue(tid is None or isinstance(tid, int), name)
-        self.assertEqual(self.logs, [], "現物に書き間違いがある")
 
     def test_the_build_includes_the_table(self):
         """忘れると exe で表が効かない"""
