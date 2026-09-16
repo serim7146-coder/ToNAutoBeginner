@@ -86,6 +86,18 @@ def load_terror_aliases(path, terrors: dict, log=None) -> dict:
     return aliases
 
 
+def is_alternate_terror(tid, data: dict) -> bool:
+    """そのIDが terrors.json の alternate カテゴリに属するか。
+
+    カテゴリ間でIDは重複しないので、これだけで枠を判定できる。
+    `Killers is unknown` の行には `Fog (Alternate)` が出ないので、
+    Enrage で判明したテラーからオルタネイト枠を決めるのに使う。
+    """
+    if not isinstance(tid, int) or isinstance(tid, bool):
+        return False
+    return str(tid) in (data.get("alternate") or {})
+
+
 def terror_id_by_name(name, data: dict, aliases: dict | None = None) -> int | None:
     """名前から ID を引く。完全一致・一意のときだけ返す。
 

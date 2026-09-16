@@ -1350,6 +1350,239 @@ class TestTerrorAliases(unittest.TestCase):
                       "=terror_aliases.json", build)
 
 
+class TestIsAlternateTerror(unittest.TestCase):
+    """terrors.json のカテゴリでオルタネイト枠を判定する"""
+
+    WALPURGISNACHT = 167     # alternate
+    STARVED = 22             # classic
+    SELF_INSERTS = 283       # unbound
+
+    def test_the_categories_do_not_overlap(self):
+        """重複があると、この判定そのものが成り立たない"""
+        seen = {}
+        for category in ("classic", "alternate", "unbound"):
+            for id_ in (config.TERRORS.get(category) or {}):
+                self.assertNotIn(int(id_), seen,
+                                 f"{id_} が {seen.get(int(id_))} と重複")
+                seen[int(id_)] = category
+
+    def test_an_alternate_terror(self):
+        self.assertTrue(ReadJson.is_alternate_terror(self.WALPURGISNACHT,
+                                                     config.TERRORS))
+
+    def test_a_classic_terror(self):
+        self.assertFalse(ReadJson.is_alternate_terror(self.STARVED,
+                                                      config.TERRORS))
+
+    def test_an_unbound_terror(self):
+        self.assertFalse(ReadJson.is_alternate_terror(self.SELF_INSERTS,
+                                                      config.TERRORS))
+
+    def test_junk_does_not_raise(self):
+        for tid in (None, "167", 999999, -1, True, 1.5):
+            self.assertFalse(ReadJson.is_alternate_terror(tid, config.TERRORS),
+                             repr(tid))
+
+    def test_a_table_without_the_category_does_not_raise(self):
+        for data in ({}, {"classic": {"1": "A"}}, {"alternate": None}):
+            self.assertFalse(ReadJson.is_alternate_terror(167, data), data)
+
+    def test_every_alternate_id_is_above_the_offset_range(self):
+        """135以下だと apply_alternate_offset が二重に足してしまう"""
+        for id_ in (config.TERRORS.get("alternate") or {}):
+            self.assertGreater(int(id_), MatchTNL.ALTERNATE_LOG_MAX, id_)
+
+
+class TestEnrageFogAlternate(unittest.TestCase):
+    """Enrage の前倒しでもオルタネイト枠を伝える。
+
+    `Killers is unknown` の行には `Fog (Alternate)` が出ない。焼き芋は
+    オルタネイト枠のFogだけを続行リスト判定に回すので、枠を伝えないと
+    「リストを見ずに自爆」になる。
+    """
+
+    WALPURGISNACHT = 167     # alternate
+    HELL_BELL = 65           # classic。実ログでFogに74回出る
+    FOG_ALT = GroupRound.FOG_ALTERNATE_ROUND_TYPE
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_YAKIIMO, keep_on=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Fog"
+        monitor.st.fog = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _enrage(self, monitor, name):
+        """_apply_group_decision に渡った round_type を返す（呼ばれなければ None）"""
+        seen = []
+        real = monitor._apply_group_decision
+        with patch.object(monitor, "_apply_group_decision",
+                          side_effect=lambda rt: (seen.append(rt), real(rt))[1]), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_enrage(name)
+        return seen[0] if seen else None
+
+    # ── 焼き芋（実害が出ていたところ） ─────────────
+    def test_an_alternate_terror_reaches_the_group_rule_as_alternate(self):
+        monitor = self._monitor()
+
+        passed = self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertEqual(passed, self.FOG_ALT)
+
+    def test_it_does_not_force_a_skip(self):
+        """これが直したかった動き。枠を伝えないと問答無用の自爆になる"""
+        monitor = self._monitor()
+        self.assertEqual(monitor._group_decision("Fog"), GroupRound.SKIP,
+                         "前提: 焼き芋は枠を伝えないとFogを自爆する")
+
+        with patch.object(monitor, "_start_group_skip") as forced:
+            self._enrage(monitor, "Walpurgisnacht")
+
+        forced.assert_not_called()
+
+    def test_a_classic_terror_still_forces_a_skip(self):
+        """焼き芋の従来どおりの動き。巻き込んで弱めていないこと"""
+        monitor = self._monitor()
+
+        with patch.object(monitor, "_start_group_skip") as forced:
+            self._enrage(monitor, "Hell Bell")
+
+        forced.assert_called_once()
+
+    def test_an_alternate_terror_in_the_list_continues(self):
+        monitor = self._monitor(keep_on={"Fog/霧": {self.WALPURGISNACHT}})
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_a_classic_terror_is_unchanged(self):
+        monitor = self._monitor()
+
+        passed = self._enrage(monitor, "Hell Bell")
+
+        self.assertEqual(passed, "Fog", "従来どおり")
+
+    def test_the_hoshiimo_rule_is_unchanged(self):
+        monitor = self._monitor(config.INSTANCE_HOSHIIMO)
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertEqual(monitor._group_decision("Fog"), GroupRound.CONTINUE)
+        self.assertEqual(monitor._group_decision(self.FOG_ALT),
+                         GroupRound.CONTINUE)
+
+    # ── st.round_type は触らない ───────────────
+    def test_the_round_type_is_not_rewritten(self):
+        """書き換えると cfg.skip_rounds の「Fog」指定が黙って効かなくなる"""
+        monitor = self._monitor()
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertEqual(monitor.st.round_type, "Fog")
+
+    def test_the_round_skip_setting_still_works(self):
+        monitor = self._monitor(config.INSTANCE_PRIVATE)
+        monitor.cfg.skip_rounds = {"Fog"}
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertTrue(monitor._should_skip_by_round(),
+                        "Fog を自爆指定していたら、オルタでも自爆する")
+
+    def test_it_is_logged(self):
+        monitor = self._monitor()
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertTrue(any("オルタネイト確定" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_a_classic_terror_logs_nothing_about_alternate(self):
+        monitor = self._monitor()
+
+        self._enrage(monitor, "Hell Bell")
+
+        self.assertFalse(any("オルタネイト確定" in m for m in monitor.logs),
+                         monitor.logs)
+
+    # ── IDを壊さない ──────────────────────────
+    def test_the_offset_is_not_applied_twice(self):
+        """167 が 301 にならないこと"""
+        monitor = self._monitor()
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertEqual(monitor.st.terror_ids, [self.WALPURGISNACHT])
+        self.assertEqual(monitor.st.enrage_identified, self.WALPURGISNACHT)
+
+    def test_the_offset_helper_leaves_alternate_ids_alone(self):
+        self.assertEqual(
+            MatchTNL.apply_alternate_offset([self.WALPURGISNACHT], self.FOG_ALT),
+            [self.WALPURGISNACHT])
+
+    # ── private は変わらない ───────────────────
+    def test_private_decisions_are_unchanged(self):
+        """実ログに出た Fog の alternate テラーを、両方の枠で突き合わせる。
+        LOG_TO_TNL がどちらも `Fog/霧` へ寄せているので結論は同じになる"""
+        keep_on = {"Fog/霧": {137, 154, 163, 164, 168, 192, 315, 316}}
+        for tid in (167, 157, 151, 159, 137, 161, 153, 142, 162, 156, 160):
+            plain = RoundDecision.decide_killers(keep_on, [tid], "Fog", 0, True)
+            alt = RoundDecision.decide_killers(keep_on, [tid], self.FOG_ALT,
+                                               0, True)
+
+            self.assertEqual(plain.is_continue_round, alt.is_continue_round, tid)
+
+    def test_the_tnl_lookup_is_unchanged(self):
+        monitor = self._monitor(config.INSTANCE_PRIVATE,
+                                keep_on={"Fog/霧": {self.WALPURGISNACHT}})
+
+        self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertTrue(monitor.st.is_continue_round,
+                        "private は st.round_type で引くので従来どおり")
+
+    # ── 対象を広げない ───────────────────────
+    def test_other_rounds_still_do_nothing(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "8 Pages"
+
+        passed = self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertIsNone(passed)
+        self.assertEqual(monitor.st.terror_ids, [])
+
+    def test_the_switch_still_turns_it_off(self):
+        monitor = self._monitor()
+
+        with patch.object(config, "ENRAGE_IDENTIFY_ENABLED", False):
+            passed = self._enrage(monitor, "Walpurgisnacht")
+
+        self.assertIsNone(passed)
+        self.assertEqual(monitor.logs, [])
+
+
 class TestEnrageUsesAliases(unittest.TestCase):
     """前倒しが別名表を使うこと"""
 

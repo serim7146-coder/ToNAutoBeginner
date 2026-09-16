@@ -1101,10 +1101,21 @@ class LogMonitor:
         if tid is None:
             self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
+        # `Killers is unknown` の行には「Fog (Alternate)」が出ない。焼き芋は
+        # オルタネイト枠のFogだけを続行リスト判定に回すので、枠を伝えないと
+        # リストを見ずに自爆する。alternate のテラーが出た時点で枠は確定する
+        round_type = st.round_type
+        if (ReadJson.is_alternate_terror(tid, config.TERRORS)
+                and round_type != GroupRound.FOG_ALTERNATE_ROUND_TYPE):
+            self._log(f"オルタネイト確定: {round_type} → "
+                      f"{GroupRound.FOG_ALTERNATE_ROUND_TYPE}")
+            round_type = GroupRound.FOG_ALTERNATE_ROUND_TYPE
+        # st.round_type は書き換えない。ラウンド指定自爆（cfg.skip_rounds）が
+        # 「Fog」で持っているので、書き換えるとその指定が黙って効かなくなる
         self._log(f"🔎 テラー判明(Enrage): {name} → {format_terror_ids([tid])}")
         # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
         # 「前倒し済み」と見なされて素通りしてしまう
-        self._on_killers([tid], st.round_type, revealed=True)
+        self._on_killers([tid], round_type, revealed=True)
         st.enrage_identified = tid
 
     def _on_killers(self, ids: list[int], round_type: str, revealed: bool):
