@@ -313,6 +313,10 @@ BLOODTHIRSTY_CREATURE_LOG = "The creature is bloodthirsty today..."
 SLENDER_ID = 47
 HUNGRY_HOME_INVADER_ID = 190
 HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
+# Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
+# terrors.json に一意に一致したときだけ、判定を前倒しする
+ENRAGE_IDENTIFY_ENABLED = True
+
 SONIC_ID = 40
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、

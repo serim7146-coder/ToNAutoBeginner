@@ -722,6 +722,10 @@ class LogMonitor:
             self._mark_hungry_home_invader_variant()
             return
 
+        if event.kind == LogParser.EVENT_ENRAGE:
+            self._on_enrage(event.player_name)
+            return
+
         if event.kind == LogParser.EVENT_MASTER_SWITCHED:
             # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
             self.sequence.on_master_switched()
@@ -823,6 +827,7 @@ class LogMonitor:
                 event.round_type)
             self.sequence.on_round(event.round_type)
             st.terror_ids                  = []
+            st.enrage_identified           = None
             st.map_id                      = event.map_id
             st.statistics_sent             = False
             st.fog                         = False
@@ -1029,6 +1034,7 @@ class LogMonitor:
             st.instance_type = self._parse_instance_type(event.suffix)
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
             self.sequence.reset()
+            st.enrage_identified = None
             self._log(f"インスタンスタイプ: {st.instance_type}")
             return
 
@@ -1060,6 +1066,31 @@ class LogMonitor:
             return
 
     # ── テラー確定処理 ────────────────────────
+    def _on_enrage(self, name: str):
+        """Fog のテラー不明中に、Enrage の名前からテラーを判明させる。
+
+        名前が terrors.json に一意に一致したときだけ使う。個体名（Furnace
+        など）は表に無いので、そのときは従来どおり revealed を待つ。
+        """
+        st = self.st
+        if not config.ENRAGE_IDENTIFY_ENABLED:
+            return
+        if st.round_type not in GroupRound.FOG_ROUND_TYPES:
+            return              # Fog だけ。8 Pages は対象外
+        if st.terror_ids:
+            return              # もう判明している
+        if st.enrage_identified is not None:
+            return              # このラウンドで前倒し済み
+        tid = ReadJson.terror_id_by_name(name, config.TERRORS)
+        if tid is None:
+            self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
+            return
+        self._log(f"🔎 テラー判明(Enrage): {name} → {format_terror_ids([tid])}")
+        # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
+        # 「前倒し済み」と見なされて素通りしてしまう
+        self._on_killers([tid], st.round_type, revealed=True)
+        st.enrage_identified = tid
+
     def _on_killers(self, ids: list[int], round_type: str, revealed: bool):
         st = self.st
         st.fog = False
@@ -1083,6 +1114,15 @@ class LogMonitor:
 
         if not self._waiting_for_terror_variant():
             self._send_round_statistics_once()
+
+        if revealed and st.enrage_identified is not None:
+            # Enrage で前倒し済み。やり直すと二重にアナウンスして二重に自爆する。
+            # 食い違いは残す——前倒しの精度は半分なので、外したときに分かるように
+            if st.enrage_identified not in ids:
+                self._log(
+                    f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified])})と "
+                    f"revealed({format_terror_ids(ids)})が食い違いました")
+            return
 
         # インスタンス制限チェック
         itype        = st.instance_type

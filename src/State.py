@@ -77,5 +77,7 @@ class WindowState:
     # Verified Round End でクリアする——ROUND_START と同じ秒に積まれるため
     sus_players: list[str] = field(default_factory=list)
     moon_repeat: bool = False   # このmoonが2回目以降か（ROUND_STARTで確定）
+    # Enrage のログから前倒しで判明させたテラーID。ラウンドごとに落とす
+    enrage_identified: int | None = None
     # 主催リスト喪失を知らせたか。ラウンドごとに鳴らさないための抑制
     list_lost_notified: bool = False

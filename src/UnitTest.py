@@ -20,6 +20,7 @@ import WindowOperator
 import ConnectDB
 import PlaySound
 import LogParser
+import ReadJson
 import MatchTNL
 import ProcessCheck
 import tkinter as tk
@@ -1126,6 +1127,289 @@ class TestAppTabLifecycle(unittest.TestCase):
 
         app._rebuild_tabs.assert_not_called()
         app._sync_launch_count.assert_called_once()
+
+
+class TestTerrorIdByName(unittest.TestCase):
+    """名前 → ID の逆引き。完全一致・一意のときだけ"""
+
+    def _data(self, classic):
+        return {"classic": classic, "alternate": {}, "unbound": {}}
+
+    def test_an_exact_name_resolves(self):
+        self.assertEqual(
+            ReadJson.terror_id_by_name("The Pursuer", config.TERRORS), 99)
+
+    def test_the_fixed_spelling_resolves(self):
+        """依頼者が terrors.json を直した箇所。SOS → S.O.S"""
+        self.assertEqual(ReadJson.terror_id_by_name("S.O.S", config.TERRORS), 97)
+
+    def test_a_partial_name_does_not_resolve(self):
+        """Mona が Mona & Mona & Mona & Mona に当たらないこと"""
+        self.assertIsNone(ReadJson.terror_id_by_name("Mona", config.TERRORS))
+        self.assertEqual(
+            ReadJson.terror_id_by_name("Mona & Mona & Mona & Mona",
+                                       config.TERRORS), 233)
+
+    def test_an_individual_name_does_not_resolve(self):
+        for name in ("Furnace", "BooBooBaby", "Deal", "Stringman",
+                     "GlaggleLand Disruptor", "[REDACTED]"):
+            self.assertIsNone(ReadJson.terror_id_by_name(name, config.TERRORS),
+                              name)
+
+    def test_a_duplicate_name_resolves_to_nothing(self):
+        data = self._data({"1": "Twin", "2": "Twin", "3": "Solo"})
+
+        self.assertIsNone(ReadJson.terror_id_by_name("Twin", data))
+        self.assertEqual(ReadJson.terror_id_by_name("Solo", data), 3)
+
+    def test_junk_resolves_to_nothing(self):
+        for name in ("", "   ", None, 123):
+            self.assertIsNone(ReadJson.terror_id_by_name(name, config.TERRORS),
+                              repr(name))
+
+    def test_the_case_is_not_absorbed(self):
+        self.assertIsNone(ReadJson.terror_id_by_name("the pursuer",
+                                                     config.TERRORS))
+
+    def test_the_index_follows_a_new_table(self):
+        first = self._data({"1": "A"})
+        second = self._data({"5": "B"})
+
+        self.assertEqual(ReadJson.terror_id_by_name("A", first), 1)
+        self.assertEqual(ReadJson.terror_id_by_name("B", second), 5)
+        self.assertIsNone(ReadJson.terror_id_by_name("A", second))
+
+
+class TestEnrageLine(unittest.TestCase):
+    """Enrage 行の読み取り"""
+
+    PREFIX = "2026.09.15 10:00:00 Debug      -  "
+
+    def _parse(self, body):
+        return LogParser.parse(self.PREFIX + body)
+
+    def test_a_name_is_taken(self):
+        event = self._parse("Teuthidatriggered an Enrage State!")
+
+        self.assertEqual(event.kind, LogParser.EVENT_ENRAGE)
+        self.assertEqual(event.player_name, "Teuthida")
+
+    def test_the_later_stages_look_the_same(self):
+        for stage in ("Enrage2", "Enrage3"):
+            event = self._parse(f"Teuthidatriggered an {stage} State!")
+
+            self.assertEqual(event.kind, LogParser.EVENT_ENRAGE, stage)
+            self.assertEqual(event.player_name, "Teuthida", stage)
+
+    def test_an_empty_name_is_not_an_event(self):
+        """実データに46回ある"""
+        self.assertIsNone(self._parse("triggered an Enrage State!"))
+
+    def test_a_stun_line_is_not_an_event(self):
+        self.assertIsNone(self._parse("Teuthida was stunned."))
+
+    def test_a_name_with_spaces_survives(self):
+        event = self._parse("GlaggleLand Disruptortriggered an Enrage State!")
+
+        self.assertEqual(event.player_name, "GlaggleLand Disruptor")
+
+
+class TestEnrageIdentify(unittest.TestCase):
+    """Fog のテラー不明中に、Enrage から判定を前倒しする"""
+
+    FOG_KEY = "Fog/霧"
+    PURSUER = 99
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source(None)
+
+    def _monitor(self, instance_type=config.INSTANCE_PRIVATE, keep_on=None,
+                 round_type="Fog"):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor.st.fog = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _enrage(self, monitor, name="The Pursuer"):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._on_enrage(name)
+        self.played = mock_play
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _revealed(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=True)
+        self.played = mock_play
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 前倒しされる ────────────────────────
+    def test_a_known_name_decides_early(self):
+        monitor = self._monitor(keep_on={self.FOG_KEY: {self.PURSUER}})
+
+        self._enrage(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [self.PURSUER])
+        self.assertEqual(monitor.st.enrage_identified, self.PURSUER)
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertTrue(any("テラー判明(Enrage)" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_it_works_through_the_log_line(self):
+        monitor = self._monitor(keep_on={self.FOG_KEY: {self.PURSUER}})
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process("2026.09.15 10:00:00 Debug      -  "
+                             "The Pursuertriggered an Enrage2 State!")
+
+        self.assertEqual(monitor.st.terror_ids, [self.PURSUER])
+
+    def test_an_unknown_name_waits(self):
+        monitor = self._monitor()
+
+        started = self._enrage(monitor, "Furnace")
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        self.assertIsNone(monitor.st.enrage_identified)
+        self.assertEqual(started, [])
+        self.assertTrue(any("テラー表に無し" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_only_the_first_enrage_counts(self):
+        monitor = self._monitor(keep_on={self.FOG_KEY: {self.PURSUER}})
+        self._enrage(monitor)
+
+        started = self._enrage(monitor, "Teuthida")
+
+        self.assertEqual(started, [])
+        self.assertEqual(monitor.st.terror_ids, [self.PURSUER])
+
+    # ── 二重実行しない ──────────────────────
+    def test_the_real_reveal_does_not_skip_twice(self):
+        monitor = self._monitor()          # 続行リストは空 → 自爆する
+        first = self._enrage(monitor)
+        self.assertIn("do_skip", first)
+
+        second = self._revealed(monitor, [self.PURSUER])
+
+        self.assertNotIn("do_skip", second, "自爆は1回だけ")
+
+    def test_the_real_reveal_does_not_announce_twice(self):
+        monitor = self._monitor(keep_on={self.FOG_KEY: {self.PURSUER}})
+        self._enrage(monitor)
+        self.assertTrue(monitor.st.is_continue_round)
+
+        self._revealed(monitor, [self.PURSUER])
+
+        self.played.assert_not_called()
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    def test_a_mismatch_is_logged_but_not_redecided(self):
+        monitor = self._monitor()
+        self._enrage(monitor)
+
+        started = self._revealed(monitor, [42])
+
+        self.assertTrue(any("食い違いました" in m for m in monitor.logs),
+                        monitor.logs)
+        self.assertEqual(started, [], "やり直さないこと")
+
+    def test_a_matching_reveal_logs_nothing(self):
+        monitor = self._monitor()
+        self._enrage(monitor)
+        monitor.logs.clear()
+
+        self._revealed(monitor, [self.PURSUER])
+
+        self.assertFalse(any("食い違いました" in m for m in monitor.logs),
+                         monitor.logs)
+
+    # ── 対象を広げない ───────────────────────
+    def test_other_rounds_do_nothing(self):
+        for round_type in ("Classic", "8 Pages", "Bloodbath"):
+            monitor = self._monitor(round_type=round_type)
+
+            started = self._enrage(monitor)
+
+            self.assertEqual(monitor.st.terror_ids, [], round_type)
+            self.assertEqual(started, [], round_type)
+            self.assertEqual(monitor.logs, [], round_type)
+
+    def test_a_known_terror_is_left_alone(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [42]
+
+        self._enrage(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [42])
+        self.assertIsNone(monitor.st.enrage_identified)
+
+    def test_the_switch_turns_it_off(self):
+        monitor = self._monitor(keep_on={self.FOG_KEY: {self.PURSUER}})
+
+        with patch.object(config, "ENRAGE_IDENTIFY_ENABLED", False):
+            started = self._enrage(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        self.assertEqual(started, [])
+        self.assertEqual(monitor.logs, [])
+
+    # ── 状態のクリア ────────────────────────
+    def test_a_new_round_clears_it(self):
+        monitor = self._monitor()
+        self._enrage(monitor)
+        self.assertIsNotNone(monitor.st.enrage_identified)
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Classic")
+
+        self.assertIsNone(monitor.st.enrage_identified)
+
+    def test_a_new_instance_clears_it(self):
+        monitor = self._monitor()
+        self._enrage(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("2026.09.15 10:00:00 Debug      -  [Behaviour] "
+                             "Joining wrld_1234:5678~private(usr_x)")
+
+        self.assertIsNone(monitor.st.enrage_identified)
+
+    # ── インスタンス種別 ──────────────────────
+    def test_it_works_in_private_and_in_groups(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO):
+            SharedState.continue_round_reset()
+            monitor = self._monitor(itype, keep_on={self.FOG_KEY: {self.PURSUER}})
+
+            self._enrage(monitor)
+
+            self.assertEqual(monitor.st.terror_ids, [self.PURSUER], itype)
+            self.assertEqual(monitor.st.enrage_identified, self.PURSUER, itype)
 
 
 class TestEmeraldCityInstance(unittest.TestCase):
@@ -4584,10 +4868,14 @@ class TestGigabytesDetect(unittest.TestCase):
     def test_similar_lines_do_not_match(self):
         """同じラウンドに出る紛らわしい行を拾わないこと"""
         for line in ("2026.09.05 14:29:35 Debug      -  The Gigabytes have come",
-                     "2026.09.05 14:29:35 Debug      -  BLUE GIGABYTEtriggered "
-                     "an Enrage State!",
                      "2026.09.05 14:29:35 Debug      -  The Gigabytes have come. now"):
             self.assertIsNone(LogParser.parse(line), line)
+
+        # Enrage 行は Enrage として拾う。Gigabytes の出現行ではない
+        enrage = LogParser.parse("2026.09.05 14:29:35 Debug      -  "
+                                 "BLUE GIGABYTEtriggered an Enrage State!")
+        self.assertEqual(enrage.kind, LogParser.EVENT_ENRAGE)
+        self.assertEqual(enrage.player_name, "BLUE GIGABYTE")
 
     def test_handler_logs_once(self):
         logs = []

@@ -26,6 +26,7 @@ EVENT_STRING_DOWNLOAD = "string_download"
 EVENT_GIGABYTES = "gigabytes"
 EVENT_ATRACHED = "atrached"
 EVENT_MASTER_SWITCHED = "master_switched"
+EVENT_ENRAGE = "enrage"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -60,6 +61,9 @@ RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
 RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
+# 名前と triggered の間に空白が無い。Enrage / Enrage2 / Enrage3 は
+# 段階が違うだけで名前は同じなので、まとめて扱う
+RE_ENRAGE = re.compile(r"^(.*?)triggered an Enrage\d* State!\s*$")
 
 
 @dataclass(frozen=True)
@@ -177,6 +181,12 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_RESPAWN_GENERIC.match(line):
         return LogEvent(EVENT_RESPAWN)
+
+    m = RE_ENRAGE.match(line)
+    if m:
+        name = m.group(1).strip()
+        # 名前が空の行が実データに46回ある。取れないものはイベントにしない
+        return LogEvent(EVENT_ENRAGE, player_name=name) if name else None
 
     m = RE_USER_AUTH.search(line)
     if m:
