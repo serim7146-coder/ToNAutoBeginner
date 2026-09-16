@@ -7138,11 +7138,10 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         self.assertEqual(set(saved), {
             "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
-            "join_world", "instance_link", "profiles", "skip_rounds",
-            "skip_variant_exempt", "continue_rounds", "freeze_8pages",
+            "join_world", "instance_link", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
             "tool_launchers",
-        })
+        }, "ラウンド指定3種は保存しない")
 
     def test_other_keys_in_the_file_survive(self):
         app = type("FakeApp", (), {})()
@@ -8118,7 +8117,7 @@ class TestRoundListsAreExclusive(unittest.TestCase):
 
 
 class TestSkipRoundsSettings(unittest.TestCase):
-    """窓ごとの保存と復元"""
+    """窓ごとのラウンド指定。**保存も復元もしない**——自爆設定の持ち越しは危ない"""
 
     class FakeVar:
         def __init__(self, value=False):
@@ -8145,9 +8144,9 @@ class TestSkipRoundsSettings(unittest.TestCase):
 
         self.assertEqual(list(made), config.SKIP_ROUND_SELECTABLE)
 
-    def test_settings_are_saved_per_window(self):
+    def _save(self, tabs, stored=None):
         app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(("Classic", "Fog"), exempt=True), self._tab()]
+        app.tabs = tabs
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_instance_link",
                      "v_freeze_8pages", "v_freeze_punish"):
@@ -8158,50 +8157,68 @@ class TestSkipRoundsSettings(unittest.TestCase):
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
-             patch.object(mainGUI, "load_settings", return_value={}):
+             patch.object(mainGUI, "load_settings",
+                          return_value=dict(stored or {})):
             mainGUI.App._save_launch_settings(app)
+        return saved
 
-        self.assertEqual(saved["skip_rounds"], [["Classic", "Fog"], []])
-        self.assertEqual(saved["skip_variant_exempt"], [True, False])
-        self.assertEqual(saved["continue_rounds"], [[], []])
+    # ── 保存しない ───────────────────────────
+    def test_the_round_lists_are_not_saved(self):
+        saved = self._save([self._tab(("Classic", "Fog"), exempt=True,
+                                      keep=("Run",)), self._tab()])
+
+        for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
+            self.assertNotIn(key, saved, key)
+
+    def test_the_other_window_settings_are_still_saved(self):
+        """巻き込んでいないこと"""
+        saved = self._save([self._tab(), self._tab()])
+
+        self.assertEqual(saved["profiles"], [0, 0])
         self.assertEqual(saved["tool_launchers"], [])
+        self.assertEqual(saved["emergency_stop_key"], "p")
 
-    def test_saved_settings_are_restored_per_window(self):
+    def test_old_values_are_removed_from_the_file(self):
+        """書かないだけでは足りない——マージするので前回の値が残り続ける"""
+        saved = self._save([self._tab()], stored={
+            "skip_rounds": [["Classic"]],
+            "skip_variant_exempt": [True],
+            "continue_rounds": [["Fog"]],
+            "tnl_path": "C:/list/my.tnl",
+        })
+
+        for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
+            self.assertNotIn(key, saved, key)
+        self.assertEqual(saved["tnl_path"], "C:/list/my.tnl", "他は消さないこと")
+
+    # ── 復元しない ───────────────────────────
+    def test_the_round_lists_are_not_restored(self):
+        """古い settings.json に値が残っていても、チェックは付かない"""
         app = type("FakeApp", (), {})()
         app.tabs = [self._tab(), self._tab()]
         app._saved_profiles = []
         app._saved_skip_rounds = [["Classic", "Fog"], []]
         app._saved_skip_variant_exempt = [True, False]
+        app._saved_continue_rounds = [["Run"], []]
 
         mainGUI.App._apply_saved_window_settings(app)
 
-        first = {n for n, v in app.tabs[0].v_skip_rounds.items() if v.get()}
-        second = {n for n, v in app.tabs[1].v_skip_rounds.items() if v.get()}
-        self.assertEqual(first, {"Classic", "Fog"})
-        self.assertEqual(second, set())
-        self.assertTrue(app.tabs[0].v_skip_variant_exempt.get())
-        self.assertFalse(app.tabs[1].v_skip_variant_exempt.get())
+        for tab in app.tabs:
+            self.assertEqual(
+                {n for n, v in tab.v_skip_rounds.items() if v.get()}, set())
+            self.assertEqual(
+                {n for n, v in tab.v_continue_rounds.items() if v.get()}, set())
+            self.assertFalse(tab.v_skip_variant_exempt.get())
 
-    def test_a_legacy_settings_file_without_the_keys_is_fine(self):
+    def test_the_profiles_are_still_restored(self):
+        """巻き込んでいないこと"""
         app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(("Classic",), exempt=True)]
-        app._saved_profiles = []
-
-        mainGUI.App._apply_saved_window_settings(app)   # キーが無い状態
-
-        self.assertTrue(app.tabs[0].v_skip_rounds["Classic"].get(),
-                        "キーが無ければ触らないこと")
-
-    def test_a_malformed_entry_is_ignored(self):
-        app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(("Classic",))]
-        app._saved_profiles = []
-        app._saved_skip_rounds = ["Classic"]     # 文字列（配列ではない）
-        app._saved_skip_variant_exempt = []
+        app.tabs = [self._tab(), self._tab()]
+        app._saved_profiles = [3, 5]
 
         mainGUI.App._apply_saved_window_settings(app)
 
-        self.assertTrue(app.tabs[0].v_skip_rounds["Classic"].get())
+        self.assertEqual([tab.v_profile.get() for tab in app.tabs], [3, 5])
 
     def test_the_window_config_defaults_to_nothing_selected(self):
         cfg = WindowConfig()
@@ -8209,42 +8226,318 @@ class TestSkipRoundsSettings(unittest.TestCase):
         self.assertEqual(cfg.skip_rounds, set())
         self.assertFalse(cfg.skip_variant_exempt)
 
-    def test_continue_rounds_are_saved_and_restored(self):
+    def test_a_started_window_begins_with_nothing_selected(self):
+        """起動直後のタブから作った設定にも何も入らない"""
+        cfg = mainGUI.LogMonitor.WindowConfig(
+            skip_rounds={n for n, v in self._tab().v_skip_rounds.items()
+                         if v.get()},
+            continue_rounds={n for n, v in self._tab().v_continue_rounds.items()
+                             if v.get()},
+            skip_variant_exempt=self._tab().v_skip_variant_exempt.get())
+
+        self.assertEqual(cfg.skip_rounds, set())
+        self.assertEqual(cfg.continue_rounds, set())
+        self.assertFalse(cfg.skip_variant_exempt)
+
+
+class TestRoundSettingsAreNotLoaded(unittest.TestCase):
+    """起動時、ラウンド指定3種が未チェックで始まること。
+
+    _load_saved_settings を丸ごと回す——「復元しない」ことの検証なので、
+    途中を差し替えると意味が無い。
+    """
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, v):
+            self._v = v
+
+    def _tab(self):
+        tab = type("FakeTab", (), {})()
+        tab.v_profile = TestRoundSettingsAreNotLoaded.FakeVar(0)
+        tab.v_skip_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
+                             for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_continue_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
+                                 for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_skip_variant_exempt = \
+            TestRoundSettingsAreNotLoaded.FakeVar(False)
+        return tab
+
+    def _load(self, data):
         app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(keep=("8 Pages", "Run")), self._tab()]
-        app._saved_profiles = []
-        app._saved_continue_rounds = [["Fog"], []]
+        app.tabs = [self._tab(), self._tab()]
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
+                     "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_instance_link", "v_emergency_key", "v_freeze_8pages",
+                     "v_freeze_punish", "v_tnl"):
+            setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))
+        app.v_freeze_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
+                               for n in config.SKIP_ROUND_SELECTABLE}
+        app.added_tools = []
+        app._add_tool_row = lambda p, save=True: app.added_tools.append(p)
+        app._refresh_emergency_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app._apply_saved_window_settings = \
+            lambda: mainGUI.App._apply_saved_window_settings(app)
 
-        mainGUI.App._apply_saved_window_settings(app)
+        with patch.object(mainGUI, "load_settings", return_value=data), \
+             patch.object(HotKey, "is_valid", return_value=True):
+            mainGUI.App._load_saved_settings(app)
+        return app
 
-        first = {n for n, v in app.tabs[0].v_continue_rounds.items() if v.get()}
-        self.assertEqual(first, {"Fog"})
-        self.assertEqual(
-            {n for n, v in app.tabs[1].v_continue_rounds.items() if v.get()}, set())
+    FULL = {
+        "skip_rounds": [["Classic", "Fog"], ["Run"]],
+        "skip_variant_exempt": [True, True],
+        "continue_rounds": [["8 Pages"], ["Midnight"]],
+        "profiles": [2, 7],
+        "emergency_stop_key": "f9",
+        "tool_launchers": ["D:/tools/one.exe"],
+        "freeze_8pages": True,
+        "freeze_punish": True,
+        "freeze_rounds": ["Classic"],
+    }
 
-    def test_a_round_in_both_lists_falls_to_continue(self):
-        """settings.json を手編集された場合の保険"""
+    def test_skip_rounds_start_unchecked(self):
+        app = self._load(dict(self.FULL))
+
+        for tab in app.tabs:
+            self.assertEqual(
+                {n for n, v in tab.v_skip_rounds.items() if v.get()}, set())
+
+    def test_the_variant_exemption_starts_unchecked(self):
+        app = self._load(dict(self.FULL))
+
+        for tab in app.tabs:
+            self.assertFalse(tab.v_skip_variant_exempt.get())
+
+    def test_continue_rounds_start_unchecked(self):
+        app = self._load(dict(self.FULL))
+
+        for tab in app.tabs:
+            self.assertEqual(
+                {n for n, v in tab.v_continue_rounds.items() if v.get()}, set())
+
+    def test_the_profiles_are_restored(self):
+        app = self._load(dict(self.FULL))
+
+        self.assertEqual([tab.v_profile.get() for tab in app.tabs], [2, 7])
+
+    def test_the_other_settings_are_restored(self):
+        """freeze_* / emergency_stop_key / tool_launchers は従来どおり"""
+        app = self._load(dict(self.FULL))
+
+        self.assertEqual(app.v_emergency_key.get(), "f9")
+        self.assertEqual(app.added_tools, ["D:/tools/one.exe"])
+        self.assertTrue(app.v_freeze_8pages.get())
+        self.assertTrue(app.v_freeze_punish.get())
+        self.assertTrue(app.v_freeze_rounds["Classic"].get())
+
+
+class TestRoundSettingsClearedOnInstanceChange(unittest.TestCase):
+    """インスタンスが変わったらラウンド指定を解除する。
+
+    監視が見る側（WindowConfig）と、利用者が見る側（GUIのチェック）の
+    **両方**。片方だけだと表示と動きが食い違う。
+    """
+
+    JOIN = ("2026.09.15 10:00:00 Debug      -  [Behaviour] "
+            "Joining wrld_1234:5678~private(usr_x)")
+
+    def _monitor(self, skip=("Classic",), keep=(), exempt=False,
+                 callback="none"):
+        cfg = WindowConfig(do_skip=True, skip_rounds=set(skip),
+                           continue_rounds=set(keep),
+                           skip_variant_exempt=exempt)
+        kwargs = {} if callback == "none" else \
+            {"on_round_settings_cleared": callback}
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None,
+                                        window_idx=1, **kwargs)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _join(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.JOIN)
+
+    # ── 監視が見る側 ──────────────────────────
+    def test_the_config_is_cleared(self):
+        monitor = self._monitor(skip=("Classic", "Fog"), keep=("Run",),
+                                exempt=True)
+
+        self._join(monitor)
+
+        self.assertEqual(monitor.cfg.skip_rounds, set())
+        self.assertEqual(monitor.cfg.continue_rounds, set())
+        self.assertFalse(monitor.cfg.skip_variant_exempt)
+
+    def test_it_stops_skipping_that_round(self):
+        monitor = self._monitor(skip=("Classic",))
+        monitor.st.round_type = "Classic"
+        self.assertTrue(monitor._should_skip_by_round(), "前提")
+
+        self._join(monitor)
+
+        self.assertFalse(monitor._should_skip_by_round())
+
+    def test_the_master_switch_is_left_alone(self):
+        """「自動自爆」は従来どおり"""
+        monitor = self._monitor()
+
+        self._join(monitor)
+
+        self.assertTrue(monitor.cfg.do_skip)
+
+    def test_it_is_logged(self):
+        monitor = self._monitor()
+
+        self._join(monitor)
+
+        self.assertTrue(any("ラウンド指定を解除" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_nothing_selected_logs_nothing(self):
+        """毎回の入室で流れると邪魔になる"""
+        monitor = self._monitor(skip=())
+
+        self._join(monitor)
+
+        self.assertFalse(any("ラウンド指定を解除" in m for m in monitor.logs),
+                         monitor.logs)
+
+    # ── 利用者が見る側 ─────────────────────────
+    def test_the_callback_gets_the_window_number(self):
+        got = []
+        monitor = self._monitor(callback=got.append)
+
+        self._join(monitor)
+
+        self.assertEqual(got, [1])
+
+    def test_the_callback_is_called_even_with_nothing_selected(self):
+        """監視開始の後でチェックを付けた分は cfg に入っていない"""
+        got = []
+        monitor = self._monitor(skip=(), callback=got.append)
+
+        self._join(monitor)
+
+        self.assertEqual(got, [1])
+
+    def test_no_callback_still_works(self):
+        monitor = self._monitor()
+
+        self._join(monitor)      # 既定は None。落ちないこと
+
+        self.assertEqual(monitor.cfg.skip_rounds, set())
+
+
+class TestGuiClearsRoundChecks(unittest.TestCase):
+    """GUI側。Tk変数はメインスレッドでしか触れない"""
+
+    class FakeVar:
+        def __init__(self, value=False):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, v):
+            self._v = v
+
+    class BrokenVar:
+        def get(self):
+            return True
+
+        def set(self, v):
+            raise tk.TclError("application has been destroyed")
+
+    def _tab(self, idx, on=True):
+        make = TestGuiClearsRoundChecks.FakeVar
+        tab = type("FakeTab", (), {})()
+        tab.idx = idx
+        tab.v_skip_rounds = {n: make(on) for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_continue_rounds = {n: make(False)
+                                 for n in config.SKIP_ROUND_SELECTABLE}
+        tab.v_skip_variant_exempt = make(on)
+        return tab
+
+    def _checked(self, tab):
+        return ({n for n, v in tab.v_skip_rounds.items() if v.get()},
+                {n for n, v in tab.v_continue_rounds.items() if v.get()},
+                tab.v_skip_variant_exempt.get())
+
+    def _app(self, tabs):
         app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(names=("Classic",))]
-        app._saved_profiles = []
-        app._saved_skip_rounds = [["Classic"]]
-        app._saved_continue_rounds = [["Classic"]]
+        app.tabs = tabs
+        app.after = MagicMock()
+        app._do_clear_tab_round_settings = \
+            lambda idx: mainGUI.App._do_clear_tab_round_settings(app, idx)
+        return app
 
-        mainGUI.App._apply_saved_window_settings(app)
+    def test_the_checks_are_cleared(self):
+        app = self._app([self._tab(0)])
 
-        self.assertTrue(app.tabs[0].v_continue_rounds["Classic"].get())
-        self.assertFalse(app.tabs[0].v_skip_rounds["Classic"].get(),
-                         "自爆しない側に倒すこと")
+        mainGUI.App._do_clear_tab_round_settings(app, 1)
 
-    def test_a_legacy_file_without_continue_rounds_is_fine(self):
-        app = type("FakeApp", (), {})()
-        app.tabs = [self._tab(keep=("Run",))]
-        app._saved_profiles = []
+        self.assertEqual(self._checked(app.tabs[0]), (set(), set(), False))
 
-        mainGUI.App._apply_saved_window_settings(app)   # キーが無い状態
+    def test_only_that_window_is_cleared(self):
+        app = self._app([self._tab(0), self._tab(1)])
 
-        self.assertTrue(app.tabs[0].v_continue_rounds["Run"].get(),
-                        "キーが無ければ触らないこと")
+        mainGUI.App._do_clear_tab_round_settings(app, 2)
+
+        self.assertNotEqual(self._checked(app.tabs[0])[0], set(),
+                            "他の窓は触らないこと")
+        self.assertEqual(self._checked(app.tabs[1]), (set(), set(), False))
+
+    def test_an_unknown_window_is_ignored(self):
+        """窓数を減らした後に届いた"""
+        app = self._app([self._tab(0)])
+
+        mainGUI.App._do_clear_tab_round_settings(app, 9)
+
+        self.assertNotEqual(self._checked(app.tabs[0])[0], set())
+
+    def test_it_goes_through_the_main_thread(self):
+        app = self._app([self._tab(0)])
+
+        mainGUI.App._clear_tab_round_settings(app, 1)
+
+        app.after.assert_called_once()
+        delay, func = app.after.call_args[0]
+        self.assertEqual(delay, 0)
+        self.assertNotEqual(self._checked(app.tabs[0])[0], set(),
+                            "after を待たずに触らないこと")
+        func()
+        self.assertEqual(self._checked(app.tabs[0]), (set(), set(), False))
+
+    def test_a_destroyed_window_does_not_raise(self):
+        app = self._app([self._tab(0)])
+        app.tabs[0].v_skip_rounds["Classic"] = \
+            TestGuiClearsRoundChecks.BrokenVar()
+
+        mainGUI.App._do_clear_tab_round_settings(app, 1)   # 落ちないこと
+
+    def test_a_destroyed_window_does_not_raise_from_the_thread(self):
+        app = self._app([self._tab(0)])
+        app.after = MagicMock(side_effect=tk.TclError("destroyed"))
+
+        mainGUI.App._clear_tab_round_settings(app, 1)      # 落ちないこと
+
+    def test_after_outside_the_mainloop_does_not_raise(self):
+        """本物の Tk は mainloop の外だと RuntimeError を投げる。
+        監視スレッドで投げると、そのスレッドごと黙って止まる"""
+        app = self._app([self._tab(0)])
+        app.after = MagicMock(
+            side_effect=RuntimeError("main thread is not in main loop"))
+
+        mainGUI.App._clear_tab_round_settings(app, 1)      # 落ちないこと
 
 
 class TestLogMonitorGroupRules(unittest.TestCase):

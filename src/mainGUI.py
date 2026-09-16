@@ -1057,10 +1057,8 @@ class App(tk.Tk):
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
-        # 古い settings.json にはキーが無い。無くても落ちないこと
-        self._saved_skip_rounds = data.get("skip_rounds", [])
-        self._saved_skip_variant_exempt = data.get("skip_variant_exempt", [])
-        self._saved_continue_rounds = data.get("continue_rounds", [])
+        # ラウンド指定（skip_rounds / skip_variant_exempt / continue_rounds）は
+        # 復元しない。持ち越した自爆設定は、別のインスタンスでは危ない
         # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
         # 不正なキーのままだと緊急停止が黙って効かなくなる
         key = data.get("emergency_stop_key", config.EMERGENCY_STOP_KEY)
@@ -1086,29 +1084,43 @@ class App(tk.Tk):
         self._load_tnl(show_error=False)
 
     def _apply_saved_window_settings(self):
-        """保存済みの窓ごと設定（profile ID・ラウンド指定自爆）を反映する"""
+        """保存済みの窓ごと設定（profile ID）を反映する。
+
+        ラウンド指定はここで扱わない——毎回すべて未チェックで始める。
+        """
         for tab, pid in zip(self.tabs, getattr(self, "_saved_profiles", [])):
             try:
                 tab.v_profile.set(int(pid))
             except (ValueError, tk.TclError):
                 pass
-        for tab, names in zip(self.tabs, getattr(self, "_saved_skip_rounds", [])):
-            if not isinstance(names, (list, tuple, set)):
-                continue
-            for name, var in tab.v_skip_rounds.items():
-                var.set(name in names)
-        for tab, names in zip(self.tabs,
-                              getattr(self, "_saved_continue_rounds", [])):
-            if not isinstance(names, (list, tuple, set)):
-                continue
-            for name, var in tab.v_continue_rounds.items():
-                var.set(name in names)
-                if var.get():
-                    # 手編集で両方に入っていたら自爆しない側へ倒す
-                    tab.v_skip_rounds[name].set(False)
-        for tab, on in zip(self.tabs,
-                           getattr(self, "_saved_skip_variant_exempt", [])):
-            tab.v_skip_variant_exempt.set(bool(on))
+
+    def _clear_tab_round_settings(self, window_idx: int):
+        """監視スレッドから呼ばれる。Tk変数はメインスレッドでしか触れない"""
+        try:
+            self.after(0, lambda: self._do_clear_tab_round_settings(window_idx))
+        except (tk.TclError, RuntimeError):
+            # 破棄後は TclError、mainloop の外なら RuntimeError。どちらも
+            # 監視スレッドで投げると、そのスレッドごと黙って止まる
+            pass
+
+    def _do_clear_tab_round_settings(self, window_idx: int):
+        """インスタンスが変わった窓のチェックを外す。メインスレッドで動く。
+
+        監視が見る側（WindowConfig）は LogMonitor が自分で消している。ここは
+        利用者が見る側で、片方だけだと表示と動きが食い違う。
+        """
+        tab = next((t for t in getattr(self, "tabs", [])
+                    if t.idx == window_idx - 1), None)
+        if tab is None:
+            return              # 窓数を減らした後などに届いた
+        try:
+            for var in tab.v_skip_rounds.values():
+                var.set(False)
+            for var in tab.v_continue_rounds.values():
+                var.set(False)
+            tab.v_skip_variant_exempt.set(False)
+        except tk.TclError:
+            pass        # ウィンドウ破棄後に after が発火した
 
     def _auto_detect_windows(self):
         """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
@@ -1223,9 +1235,11 @@ class App(tk.Tk):
             cfg.voice_punish        = self.v_voice_punish.get().strip()
             cfg.voice_list_lost     = self.v_voice_list_lost.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
-            mon = LogMonitor.LogMonitor(cfg, self.keepOn_set, self._log,
-                                        window_idx=tab.idx + 1,
-                                        host_wishes=self.host_wishes)
+            mon = LogMonitor.LogMonitor(
+                cfg, self.keepOn_set, self._log,
+                window_idx=tab.idx + 1,
+                host_wishes=self.host_wishes,
+                on_round_settings_cleared=self._clear_tab_round_settings)
             self.monitors.append(mon)
             mon.start()
 
@@ -1697,7 +1711,7 @@ class App(tk.Tk):
             pass        # ウィンドウ破棄後にタイマーが発火した
 
     def _save_launch_settings(self):
-        save_settings({
+        data = {
             **load_settings(),
             "vrchat_exe":    self.v_vrchat_exe.get().strip(),
             "desktop_mode":  self.v_desktop_mode.get(),
@@ -1707,21 +1721,19 @@ class App(tk.Tk):
             "join_world":    self.v_join_world.get(),
             "instance_link": self.v_instance_link.get().strip(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
-            "skip_rounds":   [sorted(name for name, var in tab.v_skip_rounds.items()
-                                     if var.get()) for tab in self.tabs],
-            "skip_variant_exempt": [tab.v_skip_variant_exempt.get()
-                                    for tab in self.tabs],
             "tool_launchers": [p for p in (row.v_path.get().strip()
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
-            "continue_rounds": [sorted(name for name, var
-                                       in tab.v_continue_rounds.items()
-                                       if var.get()) for tab in self.tabs],
             "freeze_8pages": self.v_freeze_8pages.get(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
                                     if var.get()),
-        })
+        }
+        # load_settings() をマージしているので、書かないだけでは前回の値が
+        # ファイルに残り続ける。危ない設定は明示的に消す
+        for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
+            data.pop(key, None)
+        save_settings(data)
 
     def _open_statistics(self):
         StatisticsWindow(self)

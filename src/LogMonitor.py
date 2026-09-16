@@ -37,13 +37,17 @@ def format_terror_ids(ids: list[int]) -> str:
 # ═══════════════════════════════════════════════
 class LogMonitor:
     def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0,
-                 host_wishes: dict | None = None):
+                 host_wishes: dict | None = None,
+                 on_round_settings_cleared=None):
         self.cfg = cfg
         self.keepOn_set = keepOn_set
         # 参加者別の続行希望。追従OFFのときは空（＝Sabotageは通常判定へ落ちる）
         self.host_wishes = host_wishes if host_wishes is not None else {}
         self.logger = logger
         self.window_idx = window_idx
+        # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
+        # 渡さなければ何もしない（監視だけで使うときはこれで足りる）
+        self._on_round_settings_cleared = on_round_settings_cleared
         self.st = WindowState()
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
@@ -1035,6 +1039,17 @@ class LogMonitor:
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
             self.sequence.reset()
             st.enrage_identified = None
+            # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
+            if (self.cfg.skip_rounds or self.cfg.continue_rounds
+                    or self.cfg.skip_variant_exempt):
+                self.cfg.skip_rounds = set()
+                self.cfg.continue_rounds = set()
+                self.cfg.skip_variant_exempt = False
+                self._log("インスタンスが変わりました → ラウンド指定を解除しました")
+            # GUIのチェックは監視開始後でも変えられるので、設定が空でも呼ぶ。
+            # 片方だけ外れていると、表示と動きが食い違う
+            if self._on_round_settings_cleared:
+                self._on_round_settings_cleared(self.window_idx)
             self._log(f"インスタンスタイプ: {st.instance_type}")
             return
 
