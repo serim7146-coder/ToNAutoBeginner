@@ -1151,6 +1151,7 @@ class TestTerrorIdByName(unittest.TestCase):
                                        config.TERRORS), 233)
 
     def test_an_individual_name_does_not_resolve(self):
+        """terrors.json だけを見た場合。別名表は渡していない"""
         for name in ("Furnace", "BooBooBaby", "Deal", "Stringman",
                      "GlaggleLand Disruptor", "[REDACTED]"):
             self.assertIsNone(ReadJson.terror_id_by_name(name, config.TERRORS),
@@ -1178,6 +1179,222 @@ class TestTerrorIdByName(unittest.TestCase):
         self.assertEqual(ReadJson.terror_id_by_name("A", first), 1)
         self.assertEqual(ReadJson.terror_id_by_name("B", second), 5)
         self.assertIsNone(ReadJson.terror_id_by_name("A", second))
+
+
+class TestTerrorAliases(unittest.TestCase):
+    """terror_aliases.json。個体名からテラーIDを引けるようにする表。
+
+    中身は利用者が手で書くので、おかしな記述は黙って捨てずに知らせる。
+    """
+
+    CENSORED = 10        # classic。Fog の Enrage 行は [CENSORED] と出す
+    CENSORED_ALT = 226   # unbound '[CENSORED]'
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.path = str(Path(self._dir.name) / "terror_aliases.json")
+        self.logs = []
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _write(self, raw, text=None):
+        Path(self.path).write_text(
+            text if text is not None else json.dumps(raw, ensure_ascii=False),
+            encoding="utf-8")
+
+    def _load(self, raw=None, text=None, path=None):
+        if path is None:
+            self._write(raw, text)
+            path = self.path
+        return ReadJson.load_terror_aliases(path, config.TERRORS,
+                                            self.logs.append)
+
+    # ── 引ける ─────────────────────────────
+    def test_an_individual_name_resolves(self):
+        aliases = self._load({"Starved": ["Furnace"]})
+
+        self.assertEqual(
+            ReadJson.terror_id_by_name("Furnace", config.TERRORS, aliases),
+            ReadJson.terror_id_by_name("Starved", config.TERRORS))
+        self.assertEqual(self.logs, [])
+
+    def test_the_table_wins_over_terrors_json(self):
+        """[CENSORED] の取り違えを表で直せること"""
+        plain = ReadJson.terror_id_by_name("[CENSORED]", config.TERRORS)
+        self.assertEqual(plain, self.CENSORED_ALT, "表が無ければ unbound 側")
+
+        aliases = self._load({"CENSORED": ["[CENSORED]"]})
+
+        self.assertEqual(
+            ReadJson.terror_id_by_name("[CENSORED]", config.TERRORS, aliases),
+            self.CENSORED)
+
+    def test_a_name_outside_the_table_falls_through(self):
+        aliases = self._load({"Starved": ["Furnace"]})
+
+        self.assertEqual(
+            ReadJson.terror_id_by_name("The Pursuer", config.TERRORS, aliases), 99)
+
+    def test_a_name_in_neither_resolves_to_nothing(self):
+        aliases = self._load({"Starved": ["Furnace"]})
+
+        self.assertIsNone(
+            ReadJson.terror_id_by_name("だれでもない", config.TERRORS, aliases))
+
+    def test_the_terror_name_itself_is_allowed(self):
+        aliases = self._load({"Starved": ["Starved", "Furnace"]})
+        expected = ReadJson.terror_id_by_name("Starved", config.TERRORS)
+
+        self.assertEqual(aliases["Starved"], expected)
+        self.assertEqual(aliases["Furnace"], expected)
+        self.assertEqual(self.logs, [])
+
+    def test_omitting_the_table_keeps_the_old_behaviour(self):
+        self.assertIsNone(ReadJson.terror_id_by_name("Furnace", config.TERRORS))
+        self.assertEqual(ReadJson.terror_id_by_name("S.O.S", config.TERRORS), 97)
+
+    # ── 壊れていても落ちない ────────────────────
+    def test_a_missing_file_is_empty(self):
+        aliases = self._load(path=str(Path(self._dir.name) / "nope.json"))
+
+        self.assertEqual(aliases, {})
+        self.assertEqual(self.logs, [], "無いだけなら警告もしない")
+
+    def test_broken_json_is_empty_and_logged(self):
+        aliases = self._load(text="{ not json")
+
+        self.assertEqual(aliases, {})
+        self.assertTrue(any("読めませんでした" in m for m in self.logs), self.logs)
+
+    def test_a_non_dict_file_is_empty_and_logged(self):
+        aliases = self._load(["Furnace"])
+
+        self.assertEqual(aliases, {})
+        self.assertTrue(any("形が違います" in m for m in self.logs), self.logs)
+
+    def test_an_empty_table_is_fine(self):
+        self.assertEqual(self._load({}), {})
+        self.assertEqual(self.logs, [])
+
+    # ── おかしな記述は捨てて知らせる ────────────────
+    def test_an_unknown_terror_name_is_reported(self):
+        aliases = self._load({"存在しないテラー": ["X"], "Starved": ["Furnace"]})
+
+        self.assertNotIn("X", aliases)
+        self.assertIn("Furnace", aliases)
+        self.assertTrue(any("知らないテラー名" in m for m in self.logs), self.logs)
+
+    def test_a_non_list_value_is_reported(self):
+        aliases = self._load({"Starved": "Furnace", "The Pursuer": ["Chaser"]})
+
+        self.assertNotIn("Furnace", aliases)
+        self.assertIn("Chaser", aliases)
+        self.assertTrue(any("配列ではありません" in m for m in self.logs), self.logs)
+
+    def test_blank_entries_are_dropped_one_by_one(self):
+        aliases = self._load({"Starved": ["", "   ", 42, None, "Furnace"]})
+
+        self.assertEqual(list(aliases), ["Furnace"], "他の要素は生きること")
+        self.assertEqual(len([m for m in self.logs if "空の名前" in m]), 4,
+                         self.logs)
+
+    def test_a_name_on_two_terrors_becomes_unusable(self):
+        """曖昧なまま使うと取り違えて自爆する"""
+        aliases = self._load({"Starved": ["Furnace"], "The Pursuer": ["Furnace"]})
+
+        self.assertIsNone(aliases["Furnace"])
+        self.assertIsNone(
+            ReadJson.terror_id_by_name("Furnace", config.TERRORS, aliases))
+        self.assertTrue(any("複数のテラーに" in m for m in self.logs), self.logs)
+
+    def test_an_ambiguous_name_does_not_fall_through(self):
+        """terrors.json に同じ名前があっても、曖昧なら引かせない"""
+        aliases = self._load({"Starved": ["The Pursuer"],
+                              "CENSORED": ["The Pursuer"]})
+
+        self.assertIsNone(
+            ReadJson.terror_id_by_name("The Pursuer", config.TERRORS, aliases))
+
+    def test_the_same_name_twice_on_one_terror_is_fine(self):
+        aliases = self._load({"Starved": ["Furnace", "Furnace"]})
+
+        self.assertEqual(aliases["Furnace"],
+                         ReadJson.terror_id_by_name("Starved", config.TERRORS))
+        self.assertEqual(self.logs, [])
+
+    # ── 現物 ───────────────────────────────
+    def test_the_real_file_loads(self):
+        """中身は固定しない——利用者が随時書き換えるため"""
+        if not Path(config.TERROR_ALIASES_PATH).exists():
+            self.skipTest("terror_aliases.json が無い")
+
+        aliases = ReadJson.load_terror_aliases(
+            config.TERROR_ALIASES_PATH, config.TERRORS, self.logs.append)
+
+        self.assertIsInstance(aliases, dict)
+        for name, tid in aliases.items():
+            self.assertIsInstance(name, str, name)
+            self.assertTrue(tid is None or isinstance(tid, int), name)
+        self.assertEqual(self.logs, [], "現物に書き間違いがある")
+
+    def test_the_build_includes_the_table(self):
+        """忘れると exe で表が効かない"""
+        build = Path("main.py").read_text(encoding="utf-8")
+
+        self.assertIn("--include-data-files=terror_aliases.json"
+                      "=terror_aliases.json", build)
+
+
+class TestEnrageUsesAliases(unittest.TestCase):
+    """前倒しが別名表を使うこと"""
+
+    FOG_KEY = "Fog/霧"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def test_an_individual_name_decides_early(self):
+        starved = ReadJson.terror_id_by_name("Starved", config.TERRORS)
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {self.FOG_KEY: {starved}},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Fog"
+
+        with patch.object(config, "TERROR_ALIASES", {"Furnace": starved}), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_enrage("Furnace")
+
+        self.assertEqual(monitor.st.terror_ids, [starved])
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_an_ambiguous_name_still_waits(self):
+        cfg = WindowConfig(do_skip=True)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Fog"
+
+        with patch.object(config, "TERROR_ALIASES", {"The Pursuer": None}), \
+             patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_enrage("The Pursuer")
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        mock_thread.assert_not_called()
 
 
 class TestEnrageLine(unittest.TestCase):
@@ -1287,9 +1504,11 @@ class TestEnrageIdentify(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [self.PURSUER])
 
     def test_an_unknown_name_waits(self):
+        """どちらの表にも無い名前。現物の別名表は随時書き換わるので、
+        実在しない名前を使う（Furnace などは表に載りうる）"""
         monitor = self._monitor()
 
-        started = self._enrage(monitor, "Furnace")
+        started = self._enrage(monitor, "存在しないテラー名XYZ")
 
         self.assertEqual(monitor.st.terror_ids, [])
         self.assertIsNone(monitor.st.enrage_identified)

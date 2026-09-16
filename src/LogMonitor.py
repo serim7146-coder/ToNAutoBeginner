@@ -1081,7 +1081,8 @@ class LogMonitor:
             return              # もう判明している
         if st.enrage_identified is not None:
             return              # このラウンドで前倒し済み
-        tid = ReadJson.terror_id_by_name(name, config.TERRORS)
+        tid = ReadJson.terror_id_by_name(name, config.TERRORS,
+                                         config.TERROR_ALIASES)
         if tid is None:
             self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
