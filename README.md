@@ -1,5 +1,5 @@
 # 最新リリース
-https://github.com/serim7146-coder/ToNAutoBeginner/releases/download/0.4.0/ToNAutoBeginner.exe
+https://github.com/serim7146-coder/ToNAutoBeginner/releases/download/v0.4.0/ToNAutoBeginner.exe
 
 # ToNAutoBeginner
 **VRChatワールド「Terrors of Nowhere」向けの支援ツール**
