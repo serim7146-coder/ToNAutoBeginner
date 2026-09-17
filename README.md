@@ -17,7 +17,7 @@
 
 # 使用方法
 1. 「①続行リスト(.tnl)」にて、「参照」から.tnlファイルを選択。.tnlファイルは以下の手順で出力できます
-    1. ToN ListTool(https://booth.pm/ja/items/7722619 )を起動
+    1. [ToN ListTool](https://booth.pm/ja/items/7722619)を起動
     2. 「欲しいリスト作成・編集」を選択
     3. 続行を選ぶ
     4. 「エクスポート(.tnl)」を選択して出力
