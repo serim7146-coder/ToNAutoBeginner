@@ -1221,8 +1221,8 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         return ReadJson.normalize_terrors(
             {k: [dict(e) for e in v] for k, v in self.NEW.items()})
 
-    def _fog(self, name, aliases=None):
-        return ReadJson.fog_terror_id_by_name(name, self._data(), aliases)
+    def _fog(self, name):
+        return ReadJson.fog_terror_id_by_name(name, self._data())
 
     # ── 読める ─────────────────────────────
     def test_the_real_file_loads(self):
@@ -1301,10 +1301,17 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         self.assertIsNone(self._fog("Bear"))
         self.assertIsNone(self._fog("corrupted woody"))
 
-    def test_the_alias_table_still_wins(self):
-        self.assertEqual(self._fog("Bear5", {"Bear5": 149}), 149)
-        self.assertIsNone(self._fog("Furnace", {"Furnace": None}),
-                          "表で曖昧なら terrors.json に落とさない")
+    def test_the_alias_file_is_no_longer_read(self):
+        """terror_aliases.json は廃止した。依頼者が後で消す"""
+        self.assertFalse(hasattr(config, "TERROR_ALIASES"))
+        self.assertFalse(hasattr(config, "TERROR_ALIASES_PATH"))
+        self.assertFalse(hasattr(ReadJson, "load_terror_aliases"))
+
+    def test_the_build_no_longer_bundles_it(self):
+        build = Path("main.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("terror_aliases.json", build)
+        self.assertIn("--include-data-files=terrors.json=terrors.json", build)
 
     def test_junk_resolves_to_nothing(self):
         for name in ("", None, 123):
@@ -1318,189 +1325,12 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         monitor.st.round_type = "Fog"
 
         with patch.object(config, "TERRORS", self._data()), \
-             patch.object(config, "TERROR_ALIASES", {}), \
              patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
              patch.object(ConnectDB, "send_ToNRoundStatistics"):
             monitor._on_enrage("Corrupted Woody")
 
         self.assertEqual(monitor.st.terror_ids, [1])
-
-
-class TestTerrorAliases(unittest.TestCase):
-    """terror_aliases.json。個体名からテラーIDを引けるようにする表。
-
-    中身は利用者が手で書くので、おかしな記述は黙って捨てずに知らせる。
-    """
-
-    CENSORED = 10        # classic。Fog の Enrage 行は [CENSORED] と出す
-    CENSORED_ALT = 226   # unbound '[CENSORED]'
-
-    def setUp(self):
-        self._dir = tempfile.TemporaryDirectory()
-        self.path = str(Path(self._dir.name) / "terror_aliases.json")
-        self.logs = []
-
-    def tearDown(self):
-        self._dir.cleanup()
-
-    def _write(self, raw, text=None):
-        Path(self.path).write_text(
-            text if text is not None else json.dumps(raw, ensure_ascii=False),
-            encoding="utf-8")
-
-    def _load(self, raw=None, text=None, path=None):
-        if path is None:
-            self._write(raw, text)
-            path = self.path
-        return ReadJson.load_terror_aliases(path, config.TERRORS,
-                                            self.logs.append)
-
-    # ── 引ける ─────────────────────────────
-    def test_an_individual_name_resolves(self):
-        aliases = self._load({"Starved": ["Furnace"]})
-
-        self.assertEqual(
-            ReadJson.terror_id_by_name("Furnace", config.TERRORS, aliases),
-            ReadJson.terror_id_by_name("Starved", config.TERRORS))
-        self.assertEqual(self.logs, [])
-
-    def test_the_table_wins_over_terrors_json(self):
-        """[CENSORED] の取り違えを表で直せること。
-
-        現物の terrors.json は依頼者が書き換える（classic 10 の名前も変わった）
-        ので、取り違えが起きる形を合成して確かめる。
-        """
-        data = {"classic": {str(self.CENSORED): "CENSORED"}, "alternate": {},
-                "unbound": {str(self.CENSORED_ALT): "[CENSORED]"}}
-        plain = ReadJson.terror_id_by_name("[CENSORED]", data)
-        self.assertEqual(plain, self.CENSORED_ALT, "表が無ければ unbound 側")
-
-        self._write({"CENSORED": ["[CENSORED]"]})
-        aliases = ReadJson.load_terror_aliases(self.path, data, self.logs.append)
-
-        self.assertEqual(
-            ReadJson.terror_id_by_name("[CENSORED]", data, aliases),
-            self.CENSORED)
-
-    def test_a_name_outside_the_table_falls_through(self):
-        aliases = self._load({"Starved": ["Furnace"]})
-
-        self.assertEqual(
-            ReadJson.terror_id_by_name("The Pursuer", config.TERRORS, aliases), 99)
-
-    def test_a_name_in_neither_resolves_to_nothing(self):
-        aliases = self._load({"Starved": ["Furnace"]})
-
-        self.assertIsNone(
-            ReadJson.terror_id_by_name("だれでもない", config.TERRORS, aliases))
-
-    def test_the_terror_name_itself_is_allowed(self):
-        aliases = self._load({"Starved": ["Starved", "Furnace"]})
-        expected = ReadJson.terror_id_by_name("Starved", config.TERRORS)
-
-        self.assertEqual(aliases["Starved"], expected)
-        self.assertEqual(aliases["Furnace"], expected)
-        self.assertEqual(self.logs, [])
-
-    def test_omitting_the_table_keeps_the_old_behaviour(self):
-        self.assertIsNone(ReadJson.terror_id_by_name("Furnace", config.TERRORS))
-        self.assertEqual(ReadJson.terror_id_by_name("S.O.S", config.TERRORS), 97)
-
-    # ── 壊れていても落ちない ────────────────────
-    def test_a_missing_file_is_empty(self):
-        aliases = self._load(path=str(Path(self._dir.name) / "nope.json"))
-
-        self.assertEqual(aliases, {})
-        self.assertEqual(self.logs, [], "無いだけなら警告もしない")
-
-    def test_broken_json_is_empty_and_logged(self):
-        aliases = self._load(text="{ not json")
-
-        self.assertEqual(aliases, {})
-        self.assertTrue(any("読めませんでした" in m for m in self.logs), self.logs)
-
-    def test_a_non_dict_file_is_empty_and_logged(self):
-        aliases = self._load(["Furnace"])
-
-        self.assertEqual(aliases, {})
-        self.assertTrue(any("形が違います" in m for m in self.logs), self.logs)
-
-    def test_an_empty_table_is_fine(self):
-        self.assertEqual(self._load({}), {})
-        self.assertEqual(self.logs, [])
-
-    # ── おかしな記述は捨てて知らせる ────────────────
-    def test_an_unknown_terror_name_is_reported(self):
-        aliases = self._load({"存在しないテラー": ["X"], "Starved": ["Furnace"]})
-
-        self.assertNotIn("X", aliases)
-        self.assertIn("Furnace", aliases)
-        self.assertTrue(any("知らないテラー名" in m for m in self.logs), self.logs)
-
-    def test_a_non_list_value_is_reported(self):
-        aliases = self._load({"Starved": "Furnace", "The Pursuer": ["Chaser"]})
-
-        self.assertNotIn("Furnace", aliases)
-        self.assertIn("Chaser", aliases)
-        self.assertTrue(any("配列ではありません" in m for m in self.logs), self.logs)
-
-    def test_blank_entries_are_dropped_one_by_one(self):
-        aliases = self._load({"Starved": ["", "   ", 42, None, "Furnace"]})
-
-        self.assertEqual(list(aliases), ["Furnace"], "他の要素は生きること")
-        self.assertEqual(len([m for m in self.logs if "空の名前" in m]), 4,
-                         self.logs)
-
-    def test_a_name_on_two_terrors_becomes_unusable(self):
-        """曖昧なまま使うと取り違えて自爆する"""
-        aliases = self._load({"Starved": ["Furnace"], "The Pursuer": ["Furnace"]})
-
-        self.assertIsNone(aliases["Furnace"])
-        self.assertIsNone(
-            ReadJson.terror_id_by_name("Furnace", config.TERRORS, aliases))
-        self.assertTrue(any("複数のテラーに" in m for m in self.logs), self.logs)
-
-    def test_an_ambiguous_name_does_not_fall_through(self):
-        """terrors.json に同じ名前があっても、曖昧なら引かせない"""
-        aliases = self._load({"Starved": ["The Pursuer"],
-                              "Huggy": ["The Pursuer"]})
-
-        self.assertIsNone(
-            ReadJson.terror_id_by_name("The Pursuer", config.TERRORS, aliases))
-
-    def test_the_same_name_twice_on_one_terror_is_fine(self):
-        aliases = self._load({"Starved": ["Furnace", "Furnace"]})
-
-        self.assertEqual(aliases["Furnace"],
-                         ReadJson.terror_id_by_name("Starved", config.TERRORS))
-        self.assertEqual(self.logs, [])
-
-    # ── 現物 ───────────────────────────────
-    def test_the_real_file_loads(self):
-        """現物は「読めること」だけを見る。
-
-        中身も、書き間違いの有無も、テストの対象にしない——利用者が
-        随時書き換えるファイルで、いつでも編集途中でありうる。警告が
-        正しく出ることは合成データのテストで見ている。
-        """
-        if not Path(config.TERROR_ALIASES_PATH).exists():
-            self.skipTest("terror_aliases.json が無い")
-
-        aliases = ReadJson.load_terror_aliases(
-            config.TERROR_ALIASES_PATH, config.TERRORS, self.logs.append)
-
-        self.assertIsInstance(aliases, dict)
-        for name, tid in aliases.items():
-            self.assertIsInstance(name, str, name)
-            self.assertTrue(tid is None or isinstance(tid, int), name)
-
-    def test_the_build_includes_the_table(self):
-        """忘れると exe で表が効かない"""
-        build = Path("main.py").read_text(encoding="utf-8")
-
-        self.assertIn("--include-data-files=terror_aliases.json"
-                      "=terror_aliases.json", build)
 
 
 class TestIsAlternateTerror(unittest.TestCase):
@@ -1735,57 +1565,6 @@ class TestEnrageFogAlternate(unittest.TestCase):
 
         self.assertIsNone(passed)
         self.assertEqual(monitor.logs, [])
-
-
-class TestEnrageUsesAliases(unittest.TestCase):
-    """前倒しが別名表を使うこと"""
-
-    FOG_KEY = "Fog/霧"
-
-    def setUp(self):
-        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        SharedState.continue_round_reset()
-        SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
-        self._stats.start()
-
-    def tearDown(self):
-        self._stats.stop()
-        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
-        SharedState.continue_round_reset()
-        SharedState.set_list_source(None)
-
-    def test_an_individual_name_decides_early(self):
-        starved = ReadJson.terror_id_by_name("Starved", config.TERRORS)
-        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
-        monitor = LogMonitor.LogMonitor(cfg, {self.FOG_KEY: {starved}},
-                                        lambda _m: None, window_idx=1)
-        monitor.st.instance_type = config.INSTANCE_PRIVATE
-        monitor.st.in_round = True
-        monitor.st.round_type = "Fog"
-
-        with patch.object(config, "TERROR_ALIASES", {"Furnace": starved}), \
-             patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(PlaySound, "play_sound"):
-            monitor._on_enrage("Furnace")
-
-        self.assertEqual(monitor.st.terror_ids, [starved])
-        self.assertTrue(monitor.st.is_continue_round)
-
-    def test_an_ambiguous_name_still_waits(self):
-        cfg = WindowConfig(do_skip=True)
-        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
-        monitor.st.instance_type = config.INSTANCE_PRIVATE
-        monitor.st.in_round = True
-        monitor.st.round_type = "Fog"
-
-        with patch.object(config, "TERROR_ALIASES", {"The Pursuer": None}), \
-             patch.object(LogMonitor.threading, "Thread") as mock_thread, \
-             patch.object(PlaySound, "play_sound"):
-            monitor._on_enrage("The Pursuer")
-
-        self.assertEqual(monitor.st.terror_ids, [])
-        mock_thread.assert_not_called()
 
 
 class TestEnrageLine(unittest.TestCase):
@@ -6551,16 +6330,16 @@ class TestVerifiedStrafe(unittest.TestCase):
 
         self.assertNotIn("do_speed_strafe", self._started(monitor))
 
-    def test_a_verified_before_the_download_still_strafes(self):
-        """実測2%は Verified が先に来る。順番に頼らないこと"""
+    def test_the_strafe_comes_after_detection_has_started(self):
+        """Verified は Round End の後に来るので、横移動は必ず検知の最中に入る"""
         monitor = self._monitor()
+        monitor.st.round_end_seen = False
 
+        end = self._started(monitor, "Verified Round End")
         verified = self._started(monitor)
-        download = self._started(monitor, TestStringDownloadTrigger.DL)
 
-        self.assertIn("do_speed_strafe", verified)
-        self.assertIn("do_speed_detect", download)
-        self.assertNotIn("do_speed_strafe", download)
+        self.assertEqual(end, ["do_speed_detect"])
+        self.assertEqual(verified, ["do_speed_strafe"])
 
     def test_joining_advances_the_instance_counter(self):
         monitor = self._monitor()
@@ -6569,6 +6348,98 @@ class TestVerifiedStrafe(unittest.TestCase):
         self._started(monitor, "[Behaviour] Joining wrld_1234:5678~private(usr_me)")
 
         self.assertEqual(monitor.st.instance_seq, before + 1)
+
+
+class TestSpeedDetectNeedsOsc(unittest.TestCase):
+    """速度を受け取れるのは OSC の窓だけ。
+
+    キー操作の窓は Verified Round End を待ってから Begin 前に歩くので、検知の
+    最中に歩きが入るのではと心配された。そもそも受信を開かないので検知しない。
+    """
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def test_a_key_window_opens_no_receiver(self):
+        cfg = WindowConfig(hwnd=123, osc_port=0)
+        ex = ActionExecutor.ActionExecutor(cfg, WindowState(), lambda: True,
+                                           lambda _m: None)
+
+        with patch.object(ActionExecutor.OSCReceiver, "VelocityReceiver") as made:
+            self.assertFalse(ex.start_velocity_receiver())
+
+        made.assert_not_called()
+        self.assertIsNone(ex._receiver)
+
+    def test_a_key_window_does_not_sample_at_all(self):
+        cfg = WindowConfig(hwnd=123, osc_port=0)
+        ex = ActionExecutor.ActionExecutor(cfg, WindowState(), lambda: True,
+                                           lambda _m: None)
+        ex.start_velocity_receiver()
+
+        with patch.object(ex, "_sample_speed") as sample, \
+             patch.object(ActionExecutor.time, "sleep") as nap:
+            ex.do_speed_detect()
+
+        sample.assert_not_called()
+        nap.assert_not_called()
+
+    def test_ordinary_walking_values_are_not_a_round_kind(self):
+        """判定は定数との一致（±0.01）だけ。途中の値では決めない"""
+        for speed in (0.0, 2.0, 3.99 - 0.02, 5.0, 6.45, 6.55, 7.0):
+            self.assertEqual(ActionExecutor.classify_speed(speed), "", speed)
+
+
+class TestEightPagesFirstSlot(unittest.TestCase):
+    """8 Pages の続行判定は1枠目（A）だけ。terror_ids は [A, B] のまま"""
+
+    PAGES = "8 Pages/8ページ"
+
+    def _decide(self, keep, ids, round_type="8 Pages"):
+        return RoundDecision.decide_killers(keep, list(ids), round_type, 0, True)
+
+    def test_only_the_second_slot_listed_does_not_continue(self):
+        self.assertFalse(self._decide({self.PAGES: {23}}, [49, 23]).is_continue_round)
+
+    def test_the_first_slot_listed_continues(self):
+        self.assertTrue(self._decide({self.PAGES: {49}}, [49, 23]).is_continue_round)
+
+    def test_other_two_slot_rounds_still_use_both(self):
+        dt = "Double Trouble/ダブルトラブル"
+        self.assertTrue(self._decide({dt: {23}}, [49, 23],
+                                     "Double Trouble").is_continue_round)
+
+    def test_the_monitor_keeps_both_ids(self):
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {self.PAGES: {23}}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "8 Pages"
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics") as sent:
+            monitor._process("Killers have been set - 49 23 0 // Round type is 8 Pages")
+
+        started = [c.kwargs["target"].__func__.__name__
+                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+        self.assertEqual(monitor.st.terror_ids, [49, 23], "ログ・統計には両方")
+        self.assertEqual(sent.call_args.args[1], [49, 23])
+        self.assertIn("do_skip", started, "B だけがリストにあっても続行しない")
+        both = LogMonitor.format_terror_ids([49, 23])
+        self.assertTrue(any(both in m for m in logs), logs)
+
+    def test_the_alternate_eight_pages_is_already_one_slot(self):
+        self.assertEqual(MatchTNL.parse_terror_ids("5", "0", "0", "8 Pages (Alternate)"),
+                         [5])
 
 
 class TestSpeedDetectRunsUntilTheRound(unittest.TestCase):
@@ -6638,7 +6509,13 @@ class TestSpeedDetectRunsUntilTheRound(unittest.TestCase):
 
 
 class TestStringDownloadTrigger(unittest.TestCase):
-    """速度検知の起点はラウンドデータの取得（誰がBeginを押しても出る）"""
+    """速度検知の起点は Verified Round End。ラウンドデータの取得は使わない
+
+    String Download は Begin 以外でも定期的に出るので、区間の最初の1件という
+    前提が崩れる。Verified Round End はラウンドごとに1回で、誰が Begin しても出る。
+    """
+
+    END = "Verified Round End"
 
     DL = ("[String Download] Attempting to load String from URL "
           "'https://pastebin.com/raw/E36sLedn'")
@@ -6677,18 +6554,25 @@ class TestStringDownloadTrigger(unittest.TestCase):
 
         self.assertIsNone(event)
 
-    def test_download_starts_detection_without_strafing_in_private(self):
-        """Begin が通る前に動くと、Begin を押せなくなる"""
-        started = self._started(self._monitor(config.INSTANCE_PRIVATE))
+    def test_a_download_starts_nothing(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO):
+            monitor = self._monitor(itype)
 
-        self.assertIn("do_speed_detect", started)
-        self.assertNotIn("do_speed_strafe", started)
+            self.assertEqual(self._started(monitor), [], itype)
+            self.assertFalse(monitor.st.speed_probe_done, itype)
 
-    def test_download_starts_detection_only_outside_private(self):
-        started = self._started(self._monitor(config.INSTANCE_HOSHIIMO))
+    def test_the_round_end_starts_detection_in_every_instance(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO, config.INSTANCE_PUBLIC):
+            monitor = self._monitor(itype)
+            monitor.st.round_end_seen = False
 
-        self.assertIn("do_speed_detect", started)
-        self.assertNotIn("do_speed_strafe", started)
+            started = self._started(monitor, self.END)
+
+            self.assertIn("do_speed_detect", started, itype)
+            self.assertNotIn("do_speed_strafe", started,
+                             f"{itype}: 横移動は Verified で")
+            self.assertTrue(monitor.st.speed_probe_done, itype)
 
     def test_download_before_round_end_starts_nothing(self):
         monitor = self._monitor()
@@ -6697,32 +6581,29 @@ class TestStringDownloadTrigger(unittest.TestCase):
         self.assertEqual(self._started(monitor), [])
         self.assertFalse(monitor.st.speed_probe_done)
 
-    def test_three_downloads_in_one_round_start_it_once(self):
-        """区間内にDLが複数来ても起動は1回だけ"""
+    def test_it_starts_once_per_round(self):
         monitor = self._monitor()
 
-        first = self._started(monitor)
-        second = self._started(monitor)
-        third = self._started(monitor)
+        first = self._started(monitor, self.END)
+        second = self._started(monitor, self.END)
+        downloads = self._started(monitor)
 
         self.assertIn("do_speed_detect", first)
-        self.assertEqual(second, [])
-        self.assertEqual(third, [])
+        self.assertNotIn("do_speed_detect", second)
+        self.assertEqual(downloads, [])
 
-    def test_either_url_starts_it(self):
-        """URLで絞っていないこと（ラウンドデータのURLは複数ある）"""
+    def test_neither_url_starts_it(self):
         for line in (self.DL, self.DL_ALT):
-            started = self._started(self._monitor(), line)
-            self.assertIn("do_speed_detect", started, line)
+            self.assertEqual(self._started(self._monitor(), line), [], line)
 
     def test_toggle_off_starts_nothing(self):
         SharedState.set_speed_detect(False)
 
-        self.assertEqual(self._started(self._monitor()), [])
+        self.assertNotIn("do_speed_detect", self._started(self._monitor(), self.END))
 
     def test_round_start_allows_the_next_round(self):
         monitor = self._monitor()
-        self._started(monitor)
+        self._started(monitor, self.END)
         self.assertTrue(monitor.st.speed_probe_done)
 
         with patch.object(LogMonitor.threading, "Thread"), \
@@ -11148,7 +11029,10 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             monitor._process("Verified Round End") # ロスト判定はここ
 
         mock_play.assert_not_called()
-        mock_thread.assert_called_once()
+        started = [c.kwargs["target"].__func__.__name__
+                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+        # Begin 処理と、Verified Round End からの速度検知だけ。音声は出さない
+        self.assertEqual(sorted(started), ["do_after_round", "do_speed_detect"])
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertFalse(monitor.st.item_lost_announced)
 

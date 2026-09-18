@@ -121,6 +121,21 @@ class LogMonitor:
             SharedState.continue_round_end()
             self._log(f"続行/霧ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
 
+    def _start_speed_probe(self):
+        """次のラウンドの種別を速度で見始める（Verified Round End から）。
+
+        Verified Round End はラウンドごとに1回で、誰が Begin を押しても出る。
+        止めるのはラウンド突入（do_speed_detect 側）。横移動は本物の
+        Verified で別に始まるので、必ずこの検知の最中に入る。
+        速度を受け取れるのは OSC の窓だけ（受信が無ければ即座に抜ける）。
+        """
+        st = self.st
+        if st.speed_probe_done or not SharedState.get_speed_detect():
+            return
+        st.speed_probe_done = True
+        self._log("速度検知 開始")
+        self._start_daemon(self._action.do_speed_detect)
+
     def _learn_periodic(self, t: float):
         """定期シグナルと判定した時刻から周期を学習する。
 
@@ -725,22 +740,8 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
-            # Beginが押されるとラウンドデータの取得が始まる。これは【誰が押しても】
-            # 出るため、他人がインマスのマルチでも先読みできる。
-            # 実測: Verified Round End 後の最初のDLは ROUND_START の 9〜16秒前。
-            # URLは複数種類あるので判定に使わない。round_end_seen と
-            # speed_probe_done の2ガードだけで区間内の最初の1件に絞れる。
-            if not st.round_end_seen:
-                return
-            if st.speed_probe_done:
-                return
-            if not SharedState.get_speed_detect():
-                return
-            st.speed_probe_done = True
-            self._log("速度検知 開始")
-            # 横移動はしない。この時点では Begin が通っておらず、動くと
-            # Begin を押せなくなる。横移動は本物の Verified で始める
-            self._start_daemon(self._action.do_speed_detect)
+            # 速度検知の起点にはしない。Begin 以外でも定期的に出るので、
+            # 「区間の最初の1件」という前提が崩れる。起点は Verified Round End
             return
 
         if event.kind == LogParser.EVENT_EVERYTHING_RECEIVED:
@@ -940,6 +941,7 @@ class LogMonitor:
             if self.cfg.announce_intermission and not self._hands_free():
                 PlaySound.play_sound(self.cfg.voice_intermission)
             st.round_end_seen = True   # Beginのクリック待ちを解除する合図
+            self._start_speed_probe()
             return
 
         if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
@@ -1031,8 +1033,7 @@ class LogMonitor:
             return
         if not self._fog_terror_unknown():
             return
-        tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS,
-                                             config.TERROR_ALIASES)
+        tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
             self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return

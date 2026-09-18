@@ -78,59 +78,6 @@ def _name_index(data: dict) -> dict:
     return index
 
 
-def load_terror_aliases(path, terrors: dict, log=None) -> dict:
-    """terror_aliases.json を読んで `{Enrageに出る名前: テラーID}` を返す。
-
-    利用者が手で書くファイルなので、おかしな記述は黙って捨てずに知らせる。
-    ファイルが無い・壊れている場合は空 dict——例外は投げない（表が無くても
-    terrors.json だけで従来どおり動く）。
-
-    同じ名前が複数のテラーに書かれていたら、値を None にして**引けなく**する。
-    曖昧なまま使うと取り違えて自爆する。
-    """
-    say = log or (lambda _m: None)
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        say(f"⚠ terror_aliases: 読めませんでした（{e}）")
-        return {}
-    if not isinstance(raw, dict):
-        say("⚠ terror_aliases: 形が違います（辞書ではありません）")
-        return {}
-
-    index = _name_index(terrors)
-    aliases: dict = {}
-    owner: dict = {}
-    for key, values in raw.items():
-        if not isinstance(key, str) or key not in index:
-            say(f"⚠ terror_aliases: 知らないテラー名 {key!r}")
-            continue
-        tid = index[key]
-        if tid is None:
-            say(f"⚠ terror_aliases: {key!r} は terrors.json に複数あります")
-            continue
-        if not isinstance(values, (list, tuple)):
-            say(f"⚠ terror_aliases: {key!r} の値が配列ではありません")
-            continue
-        for alias in values:
-            if not isinstance(alias, str) or not alias.strip():
-                say(f"⚠ terror_aliases: {key!r} に空の名前が混ざっています")
-                continue
-            alias = alias.strip()
-            if alias in owner:
-                if owner[alias] != tid and aliases.get(alias) is not None:
-                    say(f"⚠ terror_aliases: {alias!r} が複数のテラーに"
-                        "書かれています（無視します）")
-                    aliases[alias] = None
-                continue
-            owner[alias] = tid
-            aliases[alias] = tid
-    return aliases
-
-
 def is_alternate_terror(tid, data: dict) -> bool:
     """そのIDが terrors.json の alternate カテゴリに属するか。
 
@@ -143,41 +90,29 @@ def is_alternate_terror(tid, data: dict) -> bool:
     return str(tid) in (data.get("alternate") or {})
 
 
-def terror_id_by_name(name, data: dict, aliases: dict | None = None) -> int | None:
-    """名前から ID を引く。完全一致・一意のときだけ返す。
-
-    `aliases`（terror_aliases.json）を先に見る。Fog の Enrage 行は
-    classic 10 を `[CENSORED]` と表示するなど、terrors.json の名前と
-    食い違うことがあるので、表に書いたほうを優先する。
-    曖昧な名前は表で None になっていて、そこで止まる（terrors.json へ
-    落ちて別のテラーに当たらないように）。
+def terror_id_by_name(name, data: dict) -> int | None:
+    """テラー名から ID を引く。完全一致・一意のときだけ返す。
 
     部分一致や大文字小文字の吸収はしない——`Mona` が
     `Mona & Mona & Mona & Mona` に当たるような取り違えを避けるため。
-    個体名が表にも無ければ None。それでよく、呼び出し側は revealed を待つ。
+    霧の Enrage の個体名は `fog_terror_id_by_name()` を使う。
     """
     if not isinstance(name, str) or not name:
         return None
-    if aliases and name in aliases:
-        return aliases[name]
     return _name_index(data).get(name)
 
 
-def fog_terror_id_by_name(name, data: dict,
-                          aliases: dict | None = None) -> int | None:
+def fog_terror_id_by_name(name, data: dict) -> int | None:
     """霧の Enrage に出た名前からテラーを引く。決まらなければ None。
 
-    1. terror_aliases.json（あれば最優先。従来どおり）
-    2. classic と alternate の、テラー名と個体名（"terrors"）から候補を集める
-    3. 一意ならそれ。複数ならテラー名そのものと一致するものを優先する
+    1. classic と alternate の、テラー名と個体名（"terrors"）から候補を集める
+    2. 一意ならそれ。複数ならテラー名そのものと一致するものを優先する
        （The Observation の The Guidance は65秒後にしか出ないので、判明前の
        The Guidance は classic の The Guidance）。それでも決まらなければ
        None——取り違えて自爆するより revealed を待つ
     """
     if not isinstance(name, str) or not name:
         return None
-    if aliases and name in aliases:
-        return aliases[name]      # None なら曖昧 → ここで止める
     individuals = data.get(INDIVIDUALS_KEY) or {}
     by_name, by_member = set(), set()
     for category in FOG_CATEGORIES:

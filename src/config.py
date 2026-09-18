@@ -73,12 +73,8 @@ def resource_path(filename: str) -> Path:
 # ── テラーIDとテラー名の対応表.json ──
 TERRORS = ReadJson.load_terrors(resource_path("terrors.json"))
 
-# Enrage に出る個体名 → テラーID。中身は利用者が管理する。
-# 読み込み時の警告はGUIのログへ出す（起動時に App がまとめて流す）
-TERROR_ALIASES_PATH = resource_path("terror_aliases.json")
-TERROR_ALIAS_WARNINGS: list[str] = []
-TERROR_ALIASES = ReadJson.load_terror_aliases(
-    TERROR_ALIASES_PATH, TERRORS, TERROR_ALIAS_WARNINGS.append)
+# Enrage に出る個体名は terrors.json の "terrors" に入っている
+# （以前の terror_aliases.json は廃止した）
 
 SPECIAL_ROUND = {
     "Classic.exe",

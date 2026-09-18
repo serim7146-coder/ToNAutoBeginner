@@ -75,7 +75,11 @@ def decide_killers(
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,
                                           bloodthirsty_variant)
     tnl_key = MatchTNL.LOG_TO_TNL.get(round_type, round_type)
-    should_continue = MatchTNL.should_continue(keep_on_set, tnl_key, terror_ids)
+    # 8 Pages は1枠目（Killers have been set - A B 0 の A）だけを続行リストの
+    # 8 Pages の項目に照らす（依頼者の指定）。terror_ids は [A, B] のまま
+    # 残す——ログ・統計・ID収集に両方使う
+    listed = terror_ids[:1] if round_type == "8 Pages" else terror_ids
+    should_continue = MatchTNL.should_continue(keep_on_set, tnl_key, listed)
     if not should_continue and round_type in SPECIAL_MOON_ROUNDS:
         # ラウンド別のキーに加えて Special/Moon 枠も見る。置き換えではない——
         # ID192(Bloodthirsty Creature) は Fog / Ghost / Midnight などラウンド別の

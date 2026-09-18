@@ -450,8 +450,6 @@ class App(tk.Tk):
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._build_ui()
         self._load_saved_settings()
-        for warning in config.TERROR_ALIAS_WARNINGS:
-            self._log(warning)
         self._auto_detect_windows()
         self._sync_launch_count()
         AutoUpdate.cleanup_old_exe()
