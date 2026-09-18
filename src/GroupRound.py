@@ -33,9 +33,8 @@ SABOTAGE_MURDER_KEY = MatchTNL.LOG_TO_TNL["Sabotage murder"]
 # 焼き芋 Fog でオルタネイト枠とみなす、Killers 行の round_type
 FOG_ALTERNATE_ROUND_TYPE = "Fog (Alternate)"
 
-# Foxy が出ると LogMonitor の EVENT_FOXY ハンドラが st.round_type を
-# "Fog (Alternate)" に書き換えてから _on_killers を呼ぶ。両方を Fog 行として
-# 扱わないと、その場合だけ Fog のルールから外れる
+# Killers 行の round_type は "Fog (Alternate)" のことがある（revealed、または
+# Enrage / Foxy の前倒しが引数で渡す）。両方を Fog 行として扱う
 FOG_ROUND_TYPES = frozenset({"Fog", FOG_ALTERNATE_ROUND_TYPE})
 
 GROUP_INSTANCES = frozenset({config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO})

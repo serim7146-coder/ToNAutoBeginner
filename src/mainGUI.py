@@ -208,10 +208,8 @@ class WindowTab(ttk.Frame):
 
         self._round_grid(rounds.content, "■ 自爆する", self.v_skip_rounds,
                          self.v_continue_rounds)
-        self.v_skip_variant_exempt = tk.BooleanVar(value=False)
-        ttk.Checkbutton(rounds.content, text="Variant/Gigabytesではリスト準拠にする",
-                        variable=self.v_skip_variant_exempt
-                        ).pack(anchor="w", padx=10, pady=(4, 0))
+        # Variant（置き換え後のテラー）はいつもリストで判定する。
+        # 以前ここにあった切り替えは廃止した
         self._round_grid(rounds.content, "■ 全続行する（続行リストを見ずに生き残る）",
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0))
@@ -286,7 +284,6 @@ class WindowTab(ttk.Frame):
             announce_intermission=self.v_announce_intermission.get(),
             skip_rounds={name for name, var in self.v_skip_rounds.items()
                          if var.get()},
-            skip_variant_exempt=self.v_skip_variant_exempt.get(),
             continue_rounds={name for name, var in self.v_continue_rounds.items()
                              if var.get()},
         ), None
@@ -1057,7 +1054,7 @@ class App(tk.Tk):
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
-        # ラウンド指定（skip_rounds / skip_variant_exempt / continue_rounds）は
+        # ラウンド指定（skip_rounds / continue_rounds）は
         # 復元しない。持ち越した自爆設定は、別のインスタンスでは危ない
         # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
         # 不正なキーのままだと緊急停止が黙って効かなくなる
@@ -1118,7 +1115,6 @@ class App(tk.Tk):
                 var.set(False)
             for var in tab.v_continue_rounds.values():
                 var.set(False)
-            tab.v_skip_variant_exempt.set(False)
         except tk.TclError:
             pass        # ウィンドウ破棄後に after が発火した
 
@@ -1731,6 +1727,8 @@ class App(tk.Tk):
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す
+        # skip_variant_exempt はチェックボックスごと廃止した。古いファイルに
+        # 残っていても読まないが、ついでに消しておく
         for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
             data.pop(key, None)
         save_settings(data)

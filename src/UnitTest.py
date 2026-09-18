@@ -29,6 +29,7 @@ import tkinter as tk
 import ToolLauncher
 import HotKey
 import RoundSequence
+import TerrorReplacement
 import GroupRound
 import RoundDecision
 import Statistics
@@ -1434,11 +1435,12 @@ class TestEnrageFogAlternate(unittest.TestCase):
         return monitor
 
     def _enrage(self, monitor, name):
-        """_apply_group_decision に渡った round_type を返す（呼ばれなければ None）"""
+        """グループのルールに渡った round_type を返す（引かれなければ None）"""
         seen = []
-        real = monitor._apply_group_decision
-        with patch.object(monitor, "_apply_group_decision",
-                          side_effect=lambda rt: (seen.append(rt), real(rt))[1]), \
+        real = monitor._group_decision
+        with patch.object(monitor, "_group_decision",
+                          side_effect=lambda rt, ids=None: (
+                              seen.append(rt), real(rt, ids))[1]), \
              patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"):
             monitor._on_enrage(name)
@@ -2201,18 +2203,466 @@ class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
 
         self.assertIs(mock_decide.call_args.kwargs["bloodthirsty_variant"], True)
 
-    def test_the_106_wait_still_does_not_cover_unbound(self):
-        """106 を見ている既存の待ちは Unbound では効かない（条件は広げていない）。
-
-        Self Inserts は `_waiting_for_self_inserts_bloodthirsty()` が別に待つ。
-        """
+    def test_the_106_row_does_not_cover_unbound(self):
+        """Unbound の terror_ids は [283]。待つのは 106 の行ではなく Self Inserts の行"""
         monitor = self._monitor(bloodthirsty=False)
 
-        self.assertFalse(monitor._waiting_for_bloodthirsty_creature_variant())
+        names = [r.name for r in monitor._pending_replacements()]
+        self.assertNotIn("Wild Yet Bloodthirsty Creature", names)
+        self.assertIn("Self Inserts (Bloodthirsty)", names)
 
         monitor.st.terror_ids = [config.CURIOUS_CREATURE_ID]
-        self.assertTrue(monitor._waiting_for_bloodthirsty_creature_variant(),
-                        "106 がいるラウンドでは従来どおり待つこと")
+        self.assertIn("Wild Yet Bloodthirsty Creature",
+                      [r.name for r in monitor._pending_replacements()],
+                      "106 がいるラウンドでは従来どおり待つこと")
+
+
+class TestTerrorReplacementTable(unittest.TestCase):
+    """置き換えテラーの表。待ち方と差し替えはすべてここを引く"""
+
+    def _row(self, name):
+        rows = [r for r in TerrorReplacement.TABLE if r.name == name]
+        self.assertEqual(len(rows), 1, name)
+        return rows[0]
+
+    def test_the_rows_from_the_requester(self):
+        classic = frozenset({"Classic"})
+        cases = {
+            "Atrached": (config.SONIC_ID, config.ATRACHED_ID, classic),
+            "Hungry Home Invader": (config.SLENDER_ID,
+                                    config.HUNGRY_HOME_INVADER_ID, classic),
+            "Wild Yet Bloodthirsty Creature": (config.CURIOUS_CREATURE_ID,
+                                               config.BLOODTHIRSTY_CREATURE_ID,
+                                               None),
+            "The Gigabytes": (None, config.GIGABYTES_ID, classic),
+            "Foxy": (config.SANIC_ID, config.FOXY_ID, None),
+        }
+        for name, (source, target, rounds) in cases.items():
+            row = self._row(name)
+            self.assertEqual((row.source, row.target_id(), row.rounds),
+                             (source, target, rounds), name)
+            self.assertTrue(row.enabled, name)
+
+    def test_the_ids_match_terrors_json(self):
+        """IDを書き間違えると、別のテラーで待つ・差し替える"""
+        names = {
+            config.SONIC_ID: "Sonic", config.ATRACHED_ID: "Atrached",
+            config.SLENDER_ID: "Slenderwheels",
+            config.HUNGRY_HOME_INVADER_ID: "Hungry Home Invader",
+            config.CURIOUS_CREATURE_ID: "Wild Yet Curious Creature",
+            config.BLOODTHIRSTY_CREATURE_ID: "Wild Yet Bloodthirsty Creature",
+            config.GIGABYTES_ID: "The Gigabytes", config.SANIC_ID: "Sanic",
+            config.FOXY_ID: "Foxy", config.FUSION_PILOT_ID: "Fusion Pilot",
+            config.SELF_INSERTS_ID: "Self Inserts",
+        }
+        for tid, name in names.items():
+            self.assertEqual(ReadJson.terror_name(tid, config.TERRORS), name, tid)
+
+    def test_the_foxy_row_is_the_alternate_sanic(self):
+        """いまのコードは霧の Foxy を 2+134=136 として判定していた（Sanic）"""
+        self.assertTrue(ReadJson.is_alternate_terror(config.SANIC_ID, config.TERRORS))
+        self.assertTrue(ReadJson.is_alternate_terror(config.FOXY_ID, config.TERRORS))
+
+    def test_self_inserts_only_raises_a_flag(self):
+        row = self._row("Self Inserts (Bloodthirsty)")
+
+        self.assertFalse(row.changes_id)
+        self.assertEqual(row.apply([config.SELF_INSERTS_ID]),
+                         [config.SELF_INSERTS_ID])
+        self.assertEqual(row.flag, "bloodthirsty_creature_variant")
+
+    def test_gigabytes_replaces_the_whole_line_up(self):
+        row = self._row("The Gigabytes")
+
+        self.assertEqual(row.apply([99]), [config.GIGABYTES_ID])
+        self.assertTrue(row.could_apply([99], "Classic"))
+        self.assertFalse(row.could_apply([1, 2], "Classic"), "1体構成だけ")
+        self.assertFalse(row.could_apply([99], "Bloodbath"))
+
+    def test_every_flag_exists_on_the_state(self):
+        st = WindowState()
+        for flag in TerrorReplacement.flags():
+            self.assertIs(getattr(st, flag), False, flag)
+
+    def test_every_target_counts_as_a_variant_except_foxy(self):
+        """Variant例外（自爆指定より優先）の対象は従来の4つのまま"""
+        self.assertEqual(config.VARIANT_TERROR_IDS, frozenset({
+            config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
+            config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID}))
+
+
+class TestNeoPilotSlot(unittest.TestCase):
+    """Neo Pilot は枠だけ。IDと合図が分かるまで無効"""
+
+    def _row(self):
+        return [r for r in TerrorReplacement.TABLE if r.name == "Neo Pilot"][0]
+
+    def _with_neo_pilot(self):
+        data = {k: dict(v) if isinstance(v, dict) else v
+                for k, v in config.TERRORS.items()}
+        data["alternate"]["999"] = "Neo Pilot"
+        return patch.object(config, "TERRORS", data)
+
+    def test_it_is_disabled_now(self):
+        row = self._row()
+
+        self.assertEqual(row.source, config.FUSION_PILOT_ID)
+        self.assertIsNone(row.target_id(), "terrors.json にまだ無い")
+        self.assertFalse(row.enabled)
+
+    def test_it_never_waits_while_disabled(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.round_type = "Alternate"
+        monitor.st.terror_ids = [config.FUSION_PILOT_ID]
+
+        self.assertEqual(monitor._pending_replacements(), [])
+
+    def test_the_id_alone_does_not_enable_it(self):
+        """合図のログが分からないまま待つと、毎回0.3秒むだに待つだけ"""
+        with self._with_neo_pilot():
+            row = self._row()
+            self.assertEqual(row.target_id(), 999)
+            self.assertFalse(row.enabled)
+
+    def test_the_id_and_the_signal_enable_it(self):
+        import dataclasses
+        with self._with_neo_pilot():
+            row = dataclasses.replace(self._row(), wired=True)
+
+            self.assertTrue(row.enabled)
+            self.assertEqual(row.apply([config.FUSION_PILOT_ID]), [999])
+
+    def test_the_signal_alone_does_not_enable_it(self):
+        import dataclasses
+        row = dataclasses.replace(self._row(), wired=True)
+
+        self.assertFalse(row.enabled, "IDが無い間は表から外れる")
+
+
+class TestReplacementWait(unittest.TestCase):
+    """判定のための待ちは「置き換えが起きると結論が変わるときだけ」"""
+
+    DT_KEY = "Double Trouble/ダブルトラブル"
+    CRACKED_KEY = "Cracked/狂気"
+    CURIOUS = config.CURIOUS_CREATURE_ID
+    BLOODTHIRSTY = config.BLOODTHIRSTY_CREATURE_ID
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self.sent = self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source(None)
+
+    def _monitor(self, round_type, keep_on=None, *, skip_rounds=(),
+                 instance_type=config.INSTANCE_PRIVATE):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor._running = True
+        return monitor
+
+    def _killers(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _delayed(self, monitor, wait_sec=0.0):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._delayed_decision(monitor.st.round_type, wait_sec,
+                                      monitor.st.round_seq)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 待つ・待たない ───────────────────────
+    def test_it_waits_when_the_replacement_is_wanted(self):
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}})
+
+        self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]),
+                         ["_delayed_decision"])
+
+    def test_it_does_not_wait_when_neither_is_wanted(self):
+        monitor = self._monitor("Double Trouble")
+
+        self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]), ["do_skip"])
+
+    def test_it_waits_when_only_the_original_is_wanted(self):
+        """続行→自爆に変わりうる。依頼者の言葉の裏返しも拾う"""
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.CURIOUS}})
+
+        self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]),
+                         ["_delayed_decision"])
+
+    def test_it_does_not_wait_when_both_are_wanted(self):
+        monitor = self._monitor("Double Trouble",
+                                {self.DT_KEY: {self.CURIOUS, self.BLOODTHIRSTY}})
+
+        started = self._killers(monitor, [self.CURIOUS, 5])
+
+        self.assertNotIn("_delayed_decision", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_private_waits_without_a_designation(self):
+        """依頼者の報告: Cracked の自爆指定は無かったのに、待たずに自爆した"""
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+
+        started = self._killers(monitor, [self.CURIOUS])
+
+        self.assertEqual(started, ["_delayed_decision"])
+        self.assertNotIn("do_skip", started)
+
+    def test_it_works_in_all_three_instance_types(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
+                      config.INSTANCE_YAKIIMO):
+            monitor = self._monitor("Double Trouble",
+                                    {self.DT_KEY: {self.BLOODTHIRSTY}},
+                                    instance_type=itype)
+
+            self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]),
+                             ["_delayed_decision"], itype)
+
+    def test_hands_free_skips_at_once(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor.st.item_id = 0
+
+        started = self._killers(monitor, [self.CURIOUS])
+
+        self.assertEqual(started, ["do_skip"], "放置モードは待たない")
+
+    def test_a_public_window_never_waits(self):
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}},
+                                instance_type=config.INSTANCE_PUBLIC)
+
+        self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]), [])
+
+    # ── 待ち明け ────────────────────────────
+    def test_the_signal_during_the_wait_continues(self):
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        self._killers(monitor, [self.CURIOUS])
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("The creature is bloodthirsty today...")
+
+        started = self._delayed(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [self.BLOODTHIRSTY])
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_no_signal_ends_in_the_original_judgement(self):
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        self._killers(monitor, [self.CURIOUS])
+
+        self.assertIn("do_skip", self._delayed(monitor))
+
+    def test_the_signal_ends_the_wait_early(self):
+        """残り時間を待たずに判定する"""
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        self._killers(monitor, [self.CURIOUS])
+        naps = []
+
+        def nap(_sec):
+            naps.append(_sec)
+            monitor._process("The creature is bloodthirsty today...")
+
+        with patch.object(LogMonitor.time, "sleep", side_effect=nap):
+            started = self._delayed(monitor, wait_sec=60.0)
+
+        self.assertEqual(len(naps), 1, "合図の直後に抜けること")
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    # ── 統計の待ち ──────────────────────────
+    def test_statistics_wait_even_when_the_decision_does_not(self):
+        monitor = self._monitor("Double Trouble")
+
+        started = self._killers(monitor, [self.CURIOUS, 5])
+
+        self.assertEqual(started, ["do_skip"], "判定は待たない")
+        self.sent.assert_not_called()
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("The creature is bloodthirsty today...")
+
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[1], [self.BLOODTHIRSTY, 5])
+
+    def test_statistics_do_not_wait_for_self_inserts(self):
+        """IDが変わらないので待つ意味が無い"""
+        monitor = self._monitor("Unbound")
+
+        self._killers(monitor, [config.SELF_INSERTS_ID])
+
+        self.sent.assert_called_once()
+
+    def test_statistics_do_not_wait_without_a_candidate(self):
+        monitor = self._monitor("Double Trouble")
+
+        self._killers(monitor, [1, 2])
+
+        self.sent.assert_called_once()
+
+    # ── 判定の比較は本番と同じ関数 ──────────────────
+    def test_the_comparison_uses_the_real_decision(self):
+        """待つかの判断が本番の判定とずれないこと"""
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}})
+        monitor.st.terror_ids = [self.CURIOUS, 5]
+        calls = []
+        real = monitor._plan
+
+        def spy(*args):
+            calls.append(args)
+            return real(*args)
+
+        with patch.object(monitor, "_plan", side_effect=spy):
+            self.assertTrue(monitor._replacement_changes_decision("Double Trouble"))
+            with patch.object(LogMonitor.threading, "Thread"), \
+                 patch.object(PlaySound, "play_sound"):
+                monitor._decide("Double Trouble")
+
+        self.assertIn(("Double Trouble", [self.CURIOUS, 5], False), calls)
+        self.assertIn(("Double Trouble", [self.BLOODTHIRSTY, 5], True), calls)
+
+    def test_every_plan_kind_has_an_outcome(self):
+        for plan in (("group", GroupRound.SKIP), ("group", GroupRound.CONTINUE),
+                     ("group", GroupRound.WANTED), ("restricted",),
+                     ("hands_free", "x"), ("continue_rounds",), ("round_skip",),
+                     ("list", True, False), ("list", True, True),
+                     ("list", False, False)):
+            self.assertIn(LogMonitor.LogMonitor._outcome(plan),
+                          {"skip", "quiet", "continue", "open_special"}, plan)
+
+
+class TestFogFoxy(unittest.TestCase):
+    """霧で Foxy が出たら Foxy(316) として判定する"""
+
+    FOG_KEY = "Fog/霧"
+    FOXY_LINE = "2026.09.18 10:00:00 Debug      -  foxy the pirate turned evil!"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, keep_on=None, *, instance_type=config.INSTANCE_PRIVATE,
+                 skip_rounds=()):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Fog"
+        monitor.st.fog = True
+        monitor._running = True
+        return monitor
+
+    def _lines(self, monitor, *lines):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            for line in lines:
+                monitor._process(line)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_it_is_judged_as_foxy(self):
+        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}})
+
+        started = self._lines(monitor, self.FOXY_LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_sanic_in_the_list_does_not_count(self):
+        """以前は Sanic(136) として判定していた"""
+        monitor = self._monitor({self.FOG_KEY: {config.SANIC_ID}})
+
+        started = self._lines(monitor, self.FOXY_LINE)
+
+        self.assertIn("do_skip", started)
+
+    def test_the_round_type_stays_fog(self):
+        monitor = self._monitor()
+
+        self._lines(monitor, self.FOXY_LINE)
+
+        self.assertEqual(monitor.st.round_type, "Fog")
+
+    def test_the_fog_skip_designation_still_applies(self):
+        """st.round_type を書き換えていた頃は、ここで自爆指定が外れていた"""
+        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}},
+                                skip_rounds=("Fog",))
+
+        self.assertTrue(monitor._should_skip_by_round([config.FOXY_ID], False))
+
+    def test_yakiimo_judges_it_by_the_list(self):
+        """焼き芋はオルタ枠の Fog だけをリスト判定に回す"""
+        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}},
+                                instance_type=config.INSTANCE_YAKIIMO)
+
+        started = self._lines(monitor, self.FOXY_LINE)
+
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_a_later_reveal_does_not_decide_again(self):
+        """二重に自爆しないこと"""
+        monitor = self._monitor()
+
+        first = self._lines(monitor, self.FOXY_LINE)
+        second = self._lines(
+            monitor,
+            "Killers have been revealed - 2 0 0 // Round type is Fog (Alternate)")
+
+        self.assertEqual(first.count("do_skip"), 1)
+        self.assertNotIn("do_skip", second)
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
+
+    def test_a_revealed_sanic_turns_into_foxy(self):
+        """Foxy の行が revealed より後に来た場合"""
+        monitor = self._monitor()
+        self._lines(monitor,
+                    "Killers have been revealed - 2 0 0 // Round type is Fog (Alternate)")
+        self.assertEqual(monitor.st.terror_ids, [config.SANIC_ID])
+
+        self._lines(monitor, self.FOXY_LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
+
+    def test_a_revealed_sanic_waits_for_foxy_when_it_matters(self):
+        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}})
+
+        started = self._lines(
+            monitor,
+            "Killers have been revealed - 2 0 0 // Round type is Fog (Alternate)")
+
+        self.assertEqual(started, ["_delayed_decision"])
 
 
 class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
@@ -2261,11 +2711,15 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
+    @staticmethod
+    def _pending(monitor):
+        return any(r.name == "Self Inserts (Bloodthirsty)"
+                   for r in monitor._pending_replacements())
+
     def _run_wait(self, monitor):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
-            monitor._delayed_self_inserts_decision("Unbound", 0.0,
-                                                   monitor.st.round_seq)
+            monitor._delayed_decision("Unbound", 0.0, monitor.st.round_seq)
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
@@ -2273,26 +2727,26 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
     def test_it_waits_for_self_inserts(self):
         monitor = self._monitor()
 
-        self.assertTrue(monitor._waiting_for_self_inserts_bloodthirsty())
+        self.assertTrue(self._pending(monitor))
 
     def test_it_stops_waiting_once_the_line_arrives(self):
         monitor = self._monitor()
         monitor.st.bloodthirsty_creature_variant = True
 
-        self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty())
+        self.assertFalse(self._pending(monitor))
 
     def test_it_does_not_wait_for_other_groups(self):
         for ids in ([265], [200], [config.CURIOUS_CREATURE_ID]):
             monitor = self._monitor(terror_ids=ids)
 
-            self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty(), ids)
+            self.assertFalse(self._pending(monitor), ids)
 
     def test_it_does_not_wait_in_other_rounds(self):
         for round_type in ("Classic", "Fog", "Midnight"):
             monitor = self._monitor()
             monitor.st.round_type = round_type
 
-            self.assertFalse(monitor._waiting_for_self_inserts_bloodthirsty(),
+            self.assertFalse(self._pending(monitor),
                              round_type)
 
     # ── 待ちに入ること ───────────────────────
@@ -2302,7 +2756,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
             monitor = self._monitor(itype)
 
             self.assertEqual(self._started(monitor),
-                             ["_delayed_self_inserts_decision"], itype)
+                             ["_delayed_decision"], itype)
 
     def test_a_round_that_already_saw_the_line_does_not_wait(self):
         monitor = self._monitor(keep_on={self.UNBOUND_KEY: {self.SELF_INSERTS}})
@@ -2310,7 +2764,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
 
         started = self._started(monitor)
 
-        self.assertNotIn("_delayed_self_inserts_decision", started)
+        self.assertNotIn("_delayed_decision", started)
         self.assertTrue(monitor.st.is_continue_round)
 
     def test_other_rounds_gain_no_latency(self):
@@ -2318,7 +2772,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
 
         started = self._started(monitor)
 
-        self.assertNotIn("_delayed_self_inserts_decision", started)
+        self.assertNotIn("_delayed_decision", started)
 
     # ── 待ち明けの判断 ───────────────────────
     def test_the_line_arriving_during_the_wait_continues(self):
@@ -2361,14 +2815,14 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
 
         started = self._started(monitor)
 
-        self.assertEqual(started, ["_delayed_self_inserts_decision"])
+        self.assertEqual(started, ["_delayed_decision"])
 
     def test_the_wait_aborts_when_the_round_changed(self):
         monitor = self._monitor()
         monitor.st.round_seq = 5
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._delayed_self_inserts_decision("Unbound", 0.0, 4)
+            monitor._delayed_decision("Unbound", 0.0, 4)
 
         mock_thread.assert_not_called()
 
@@ -2544,7 +2998,8 @@ class TestSpecialMoonKeyWiring(unittest.TestCase):
             # 待ちを止めるのに st.gigabytes を立ててはいけない。_on_killers が
             # ids を [314] に差し替えるので、判定したいIDごと変わってしまう
             with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
-                 patch.object(LogMonitor.LogMonitor, "_waiting_for_group_variant",
+                 patch.object(LogMonitor.LogMonitor,
+                              "_replacement_changes_decision",
                               return_value=False), \
                  patch.object(PlaySound, "play_sound"):
                 monitor._on_killers([config.ATRACHED_ID], "Classic", revealed=False)
@@ -5352,6 +5807,7 @@ class TestGigabytesDetect(unittest.TestCase):
     def test_only_the_gigabytes_flag_is_set(self):
         """立てるのは gigabytes だけ。他の状態は動かさない"""
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.round_type = "Classic"     # Gigabytes は Classic でしか起きない
         before = dict(vars(monitor.st))
 
         with patch.object(LogMonitor.threading, "Thread"):
@@ -6656,27 +7112,36 @@ class TestSkipRoundsByType(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
 
-    def _monitor(self, *, skip_rounds=("Classic",), exempt=False, do_skip=True,
+    def _monitor(self, *, skip_rounds=("Classic",), do_skip=True,
                  cancel_afk=True, keep_on=None,
                  instance_type=config.INSTANCE_PRIVATE):
         cfg = WindowConfig(do_skip=do_skip, cancel_afk=cancel_afk,
                            voice_continue="continue.mp3",
-                           skip_rounds=set(skip_rounds),
-                           skip_variant_exempt=exempt)
+                           skip_rounds=set(skip_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
+        monitor._running = True
         return monitor
 
-    def _killers(self, monitor, ids=(99,), round_type=None):
+    def _killers(self, monitor, ids=(99,), round_type=None, settle=True):
+        """settle: 置き換え待ちに入ったら、合図が来ないまま0.3秒経ったものとして
+        その場で判定まで進める（Classic の1体構成は Gigabytes 待ちに入りうる）"""
+        round_type = round_type or monitor.st.round_type
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
-            monitor._on_killers(list(ids), round_type or monitor.st.round_type,
-                                revealed=False)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+            monitor._on_killers(list(ids), round_type, revealed=False)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            if settle and "_delayed_decision" in started:
+                mock_thread.reset_mock()
+                monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
+                started += [c.kwargs["target"].__func__.__name__
+                            for c in mock_thread.call_args_list
+                            if "target" in c.kwargs]
+        return started
 
     # ── 基本 ────────────────────────────────
     def test_an_unlisted_round_uses_the_normal_judgement(self):
@@ -6726,16 +7191,14 @@ class TestSkipRoundsByType(unittest.TestCase):
     def _run_delayed(self, monitor):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
-            monitor._delayed_round_skip("Classic", 0.0, monitor.st.round_seq)
+            monitor._delayed_decision("Classic", 0.0, monitor.st.round_seq)
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
-    # ── Variant例外 ────────────────────────
+    # ── Variant例外（常に効く。切り替えは廃止） ───────────
     def test_the_variant_exemption_falls_through(self):
-        """例外ONのときは待ち明けに判断する。Variantなら通常判定へ"""
-        monitor = self._monitor(exempt=True,
-                                keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
-        monitor._running = True
+        """Variantなら自爆指定より優先して通常判定へ"""
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
         monitor.st.terror_ids = [config.ATRACHED_ID]
 
         started = self._run_delayed(monitor)
@@ -6746,9 +7209,7 @@ class TestSkipRoundsByType(unittest.TestCase):
     def test_the_exemption_covers_all_four_variants(self):
         for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
                     config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
-            monitor = self._monitor(exempt=True,
-                                    keep_on={self.CLASSIC_KEY: {tid}})
-            monitor._running = True
+            monitor = self._monitor(keep_on={self.CLASSIC_KEY: {tid}})
             monitor.st.terror_ids = [tid]
 
             started = self._run_delayed(monitor)
@@ -6759,24 +7220,27 @@ class TestSkipRoundsByType(unittest.TestCase):
     def test_the_exemption_still_skips_a_plain_terror(self):
         # 待ちを止めるのに st.gigabytes を立ててはいけない。_on_killers が
         # ids を [314] に差し替えるので、テラーIDごと変わってしまう
-        monitor = self._monitor(exempt=True)
+        monitor = self._monitor()
 
         with patch.object(LogMonitor.LogMonitor,
-                          "_waiting_for_round_skip_variant", return_value=False):
+                          "_replacement_changes_decision", return_value=False):
             started = self._killers(monitor)
 
         self.assertIn("do_skip", started)
         self.assertEqual(monitor.st.terror_ids, [99], "IDが差し替わっていないこと")
 
-    def test_without_the_exemption_a_variant_is_skipped_too(self):
-        monitor = self._monitor(exempt=False,
-                                keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
+    def test_a_variant_is_never_skipped_by_the_designation(self):
+        """以前は切り替え次第で自爆していた。いまは常にリストで判定する"""
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
         monitor.st.atrached_variant = True
 
         started = self._killers(monitor, [config.ATRACHED_ID])
 
-        self.assertIn("do_skip", started)
-        self.assertFalse(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_the_config_has_no_switch_any_more(self):
+        self.assertFalse(hasattr(WindowConfig(), "skip_variant_exempt"))
 
     # ── 3クラ解放が勝つ ───────────────────────
     def test_the_three_classic_unlock_wins(self):
@@ -6833,49 +7297,47 @@ class TestSkipRoundsByType(unittest.TestCase):
 
         self.assertIn("do_skip", started, "放置モードの即自爆が効いていること")
 
-    # ── Variant待ち ────────────────────────
-    def test_the_wait_happens_only_when_configured(self):
-        monitor = self._monitor(exempt=True)
+    # ── 置き換え待ち ───────────────────────
+    def test_a_designated_round_waits_when_a_variant_would_change_it(self):
+        """Gigabytes が来ればリスト判定で続行になる。来るまで待つ"""
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
 
-        started = self._killers(monitor)
+        started = self._killers(monitor, settle=False)
 
-        self.assertEqual(started, ["_delayed_round_skip"])
+        self.assertEqual(started, ["_delayed_decision"])
 
-    def test_no_wait_without_the_exemption(self):
-        monitor = self._monitor(exempt=False)
+    def test_no_wait_when_neither_side_continues(self):
+        """置き換わってもリストに無ければ、どちらにしても自爆"""
+        monitor = self._monitor()
 
-        self.assertIn("do_skip", self._killers(monitor))
+        started = self._killers(monitor, settle=False)
 
-    def test_no_wait_for_an_unlisted_round(self):
-        """設定していない private の窓に待ちを増やさないこと"""
-        monitor = self._monitor(skip_rounds=("Bloodbath",), exempt=True,
+        self.assertEqual(started, ["do_skip"])
+
+    def test_an_undesignated_round_waits_too(self):
+        """自爆指定が無くても待つ（以前は指定があるときしか待たなかった）"""
+        monitor = self._monitor(skip_rounds=("Bloodbath",),
                                 keep_on={self.CLASSIC_KEY: {99}})
 
-        started = self._killers(monitor)
+        started = self._killers(monitor, settle=False)
 
-        self.assertNotIn("_delayed_round_skip", started)
-        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual(started, ["_delayed_decision"])
 
-    def test_no_wait_when_nothing_is_selected(self):
-        monitor = self._monitor(skip_rounds=(), exempt=True,
-                                keep_on={self.CLASSIC_KEY: {99}})
+    def test_nothing_selected_and_nothing_listed_does_not_wait(self):
+        monitor = self._monitor(skip_rounds=())
 
-        started = self._killers(monitor)
+        started = self._killers(monitor, settle=False)
 
-        self.assertEqual(started, [])
-        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual(started, ["do_skip"])
 
     def test_the_wait_ends_in_a_skip_without_a_variant(self):
-        monitor = self._monitor(exempt=True)
-        monitor._running = True
+        monitor = self._monitor()
         monitor.st.terror_ids = [99]
 
         self.assertIn("do_skip", self._run_delayed(monitor))
 
     def test_the_wait_falls_through_when_a_variant_arrives(self):
-        monitor = self._monitor(exempt=True,
-                                keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
-        monitor._running = True
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
         monitor.st.terror_ids = [config.GIGABYTES_ID]
         monitor.st.gigabytes = True     # _run_delayed は _on_killers を通らないので
                                         # ここでは ids の差し替えは起きない
@@ -6886,13 +7348,12 @@ class TestSkipRoundsByType(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
 
     def test_the_wait_aborts_when_the_round_changed(self):
-        monitor = self._monitor(exempt=True)
-        monitor._running = True
+        monitor = self._monitor()
         monitor.st.terror_ids = [99]
         monitor.st.round_seq = 5
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._delayed_round_skip("Classic", 0.0, 4)
+            monitor._delayed_decision("Classic", 0.0, 4)
 
         mock_thread.assert_not_called()
 
@@ -8709,26 +9170,35 @@ class TestContinueRoundsByType(unittest.TestCase):
         SharedState.set_hands_free(False)
 
     def _monitor(self, *, continue_rounds=("Classic",), skip_rounds=(),
-                 exempt=False, do_skip=True, keep_on=None,
+                 do_skip=True, keep_on=None,
                  instance_type=config.INSTANCE_PRIVATE):
         cfg = WindowConfig(do_skip=do_skip, voice_continue="continue.mp3",
                            skip_rounds=set(skip_rounds),
-                           continue_rounds=set(continue_rounds),
-                           skip_variant_exempt=exempt)
+                           continue_rounds=set(continue_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
+        monitor._running = True
         return monitor
 
     def _killers(self, monitor, ids=(99,)):
+        """置き換え待ちに入ったら、合図が来ないまま待ち明けたものとして進める"""
+        round_type = monitor.st.round_type
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound") as mock_play:
-            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+            monitor._on_killers(list(ids), round_type, revealed=False)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            if "_delayed_decision" in started:
+                mock_thread.reset_mock()
+                monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
+                started += [c.kwargs["target"].__func__.__name__
+                            for c in mock_thread.call_args_list
+                            if "target" in c.kwargs]
         self.played = mock_play
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return started
 
     def test_a_listed_round_does_not_self_destruct(self):
         started = self._killers(self._monitor())
@@ -8773,11 +9243,12 @@ class TestContinueRoundsByType(unittest.TestCase):
     def test_no_variant_wait_for_a_listed_round(self):
         """先に return するので Variant 待ちにも入らない"""
         monitor = self._monitor(continue_rounds=("Classic",),
-                                skip_rounds=("Classic",), exempt=True)
+                                skip_rounds=("Classic",),
+                                keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
 
         started = self._killers(monitor)
 
-        self.assertNotIn("_delayed_round_skip", started)
+        self.assertNotIn("_delayed_decision", started)
 
     def test_an_unlisted_round_uses_the_normal_judgement(self):
         monitor = self._monitor(continue_rounds=("Bloodbath",),
@@ -8894,7 +9365,6 @@ class TestSkipRoundsSettings(unittest.TestCase):
                              for n in config.SKIP_ROUND_SELECTABLE}
         tab.v_continue_rounds = {n: TestSkipRoundsSettings.FakeVar(n in keep)
                                  for n in config.SKIP_ROUND_SELECTABLE}
-        tab.v_skip_variant_exempt = TestSkipRoundsSettings.FakeVar(exempt)
         return tab
 
     def test_the_selectable_list_drives_the_variables(self):
@@ -8966,7 +9436,6 @@ class TestSkipRoundsSettings(unittest.TestCase):
                 {n for n, v in tab.v_skip_rounds.items() if v.get()}, set())
             self.assertEqual(
                 {n for n, v in tab.v_continue_rounds.items() if v.get()}, set())
-            self.assertFalse(tab.v_skip_variant_exempt.get())
 
     def test_the_profiles_are_still_restored(self):
         """巻き込んでいないこと"""
@@ -8982,7 +9451,6 @@ class TestSkipRoundsSettings(unittest.TestCase):
         cfg = WindowConfig()
 
         self.assertEqual(cfg.skip_rounds, set())
-        self.assertFalse(cfg.skip_variant_exempt)
 
     def test_a_started_window_begins_with_nothing_selected(self):
         """起動直後のタブから作った設定にも何も入らない"""
@@ -8990,12 +9458,10 @@ class TestSkipRoundsSettings(unittest.TestCase):
             skip_rounds={n for n, v in self._tab().v_skip_rounds.items()
                          if v.get()},
             continue_rounds={n for n, v in self._tab().v_continue_rounds.items()
-                             if v.get()},
-            skip_variant_exempt=self._tab().v_skip_variant_exempt.get())
+                             if v.get()})
 
         self.assertEqual(cfg.skip_rounds, set())
         self.assertEqual(cfg.continue_rounds, set())
-        self.assertFalse(cfg.skip_variant_exempt)
 
 
 class TestRoundSettingsAreNotLoaded(unittest.TestCase):
@@ -9022,8 +9488,6 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
                              for n in config.SKIP_ROUND_SELECTABLE}
         tab.v_continue_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
                                  for n in config.SKIP_ROUND_SELECTABLE}
-        tab.v_skip_variant_exempt = \
-            TestRoundSettingsAreNotLoaded.FakeVar(False)
         return tab
 
     def _load(self, data):
@@ -9068,11 +9532,12 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
             self.assertEqual(
                 {n for n, v in tab.v_skip_rounds.items() if v.get()}, set())
 
-    def test_the_variant_exemption_starts_unchecked(self):
+    def test_an_old_variant_switch_in_the_file_is_ignored(self):
+        """チェックボックスは廃止した。古いファイルに残っていても読まない"""
         app = self._load(dict(self.FULL))
 
         for tab in app.tabs:
-            self.assertFalse(tab.v_skip_variant_exempt.get())
+            self.assertFalse(hasattr(tab, "v_skip_variant_exempt"))
 
     def test_continue_rounds_start_unchecked(self):
         app = self._load(dict(self.FULL))
@@ -9107,11 +9572,9 @@ class TestRoundSettingsClearedOnInstanceChange(unittest.TestCase):
     JOIN = ("2026.09.15 10:00:00 Debug      -  [Behaviour] "
             "Joining wrld_1234:5678~private(usr_x)")
 
-    def _monitor(self, skip=("Classic",), keep=(), exempt=False,
-                 callback="none"):
+    def _monitor(self, skip=("Classic",), keep=(), callback="none"):
         cfg = WindowConfig(do_skip=True, skip_rounds=set(skip),
-                           continue_rounds=set(keep),
-                           skip_variant_exempt=exempt)
+                           continue_rounds=set(keep))
         kwargs = {} if callback == "none" else \
             {"on_round_settings_cleared": callback}
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None,
@@ -9126,14 +9589,12 @@ class TestRoundSettingsClearedOnInstanceChange(unittest.TestCase):
 
     # ── 監視が見る側 ──────────────────────────
     def test_the_config_is_cleared(self):
-        monitor = self._monitor(skip=("Classic", "Fog"), keep=("Run",),
-                                exempt=True)
+        monitor = self._monitor(skip=("Classic", "Fog"), keep=("Run",))
 
         self._join(monitor)
 
         self.assertEqual(monitor.cfg.skip_rounds, set())
         self.assertEqual(monitor.cfg.continue_rounds, set())
-        self.assertFalse(monitor.cfg.skip_variant_exempt)
 
     def test_it_stops_skipping_that_round(self):
         monitor = self._monitor(skip=("Classic",))
@@ -9220,15 +9681,13 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
         tab = type("FakeTab", (), {})()
         tab.idx = idx
         tab.v_skip_rounds = {n: make(on) for n in config.SKIP_ROUND_SELECTABLE}
-        tab.v_continue_rounds = {n: make(False)
+        tab.v_continue_rounds = {n: make(on)
                                  for n in config.SKIP_ROUND_SELECTABLE}
-        tab.v_skip_variant_exempt = make(on)
         return tab
 
     def _checked(self, tab):
         return ({n for n, v in tab.v_skip_rounds.items() if v.get()},
-                {n for n, v in tab.v_continue_rounds.items() if v.get()},
-                tab.v_skip_variant_exempt.get())
+                {n for n, v in tab.v_continue_rounds.items() if v.get()})
 
     def _app(self, tabs):
         app = type("FakeApp", (), {})()
@@ -9243,7 +9702,7 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
 
         mainGUI.App._do_clear_tab_round_settings(app, 1)
 
-        self.assertEqual(self._checked(app.tabs[0]), (set(), set(), False))
+        self.assertEqual(self._checked(app.tabs[0]), (set(), set()))
 
     def test_only_that_window_is_cleared(self):
         app = self._app([self._tab(0), self._tab(1)])
@@ -9252,7 +9711,7 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
 
         self.assertNotEqual(self._checked(app.tabs[0])[0], set(),
                             "他の窓は触らないこと")
-        self.assertEqual(self._checked(app.tabs[1]), (set(), set(), False))
+        self.assertEqual(self._checked(app.tabs[1]), (set(), set()))
 
     def test_an_unknown_window_is_ignored(self):
         """窓数を減らした後に届いた"""
@@ -9273,7 +9732,7 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
         self.assertNotEqual(self._checked(app.tabs[0])[0], set(),
                             "after を待たずに触らないこと")
         func()
-        self.assertEqual(self._checked(app.tabs[0]), (set(), set(), False))
+        self.assertEqual(self._checked(app.tabs[0]), (set(), set()))
 
     def test_a_destroyed_window_does_not_raise(self):
         app = self._app([self._tab(0)])
@@ -9332,15 +9791,26 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor.st.in_round = True
         return monitor
 
-    def _killers(self, monitor, ids, killers_round_type=None, revealed=False):
-        """_on_killers を回して、起動したスレッドの target 名を返す"""
+    def _killers(self, monitor, ids, killers_round_type=None, revealed=False,
+                 settle=False):
+        """_on_killers を回して、起動したスレッドの target 名を返す。
+
+        settle: 置き換え待ちに入ったら、合図が来ないまま待ち明けたものとして進める
+        """
+        round_type = killers_round_type or monitor.st.round_type
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
-            monitor._on_killers(list(ids),
-                                killers_round_type or monitor.st.round_type,
-                                revealed=revealed)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+            monitor._on_killers(list(ids), round_type, revealed=revealed)
+            started = [c.kwargs["target"].__func__.__name__
+                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            if settle and "_delayed_decision" in started:
+                monitor._running = True
+                mock_thread.reset_mock()
+                monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
+                started += [c.kwargs["target"].__func__.__name__
+                            for c in mock_thread.call_args_list
+                            if "target" in c.kwargs]
+        return started
 
     def _round(self, monitor, round_type, ids=(99,), **kw):
         monitor.st.round_type = round_type
@@ -9351,8 +9821,8 @@ class TestLogMonitorGroupRules(unittest.TestCase):
                          instance_type=config.INSTANCE_HOSHIIMO):
         """テラーが確定した Classic ラウンド。
 
-        Classicの1体構成は常に Gigabytes 待ちに入るので、判定は待ち明け
-        （`_delayed_group_decision`）で出る。そこを直接動かして確かめる。
+        Classicの1体構成は Gigabytes 待ちに入りうるので、判定は待ち明け
+        （`_delayed_decision`）で出る。そこを直接動かして確かめる。
         """
         monitor = self._monitor(instance_type=instance_type, keep_on=keep_on)
         monitor._running = True
@@ -9516,8 +9986,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertIn("do_skip", started)
 
     def test_foxy_in_fog_still_follows_the_fog_rule(self):
-        """Foxy検出は st.round_type を Fog (Alternate) に書き換えてから
-        _on_killers を呼ぶ。書き換え後も Fog の行から外れないこと"""
+        """Foxy検出はオルタ枠を引数で伝える。st.round_type は Fog のまま"""
         monitor = self._monitor()      # 干し芋 → Fog は全続行
         monitor.st.round_type = "Fog"
 
@@ -9526,7 +9995,9 @@ class TestLogMonitorGroupRules(unittest.TestCase):
              patch.object(ConnectDB, "send_ToNRoundStatistics"):
             monitor._process("foxy the pirate turned evil!")
 
-        self.assertEqual(monitor.st.round_type, "Fog (Alternate)")
+        self.assertEqual(monitor.st.round_type, "Fog",
+                         "書き換えると「Fog」の自爆指定が効かなくなる")
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
         self.assertEqual([c.kwargs["target"].__func__.__name__
                           for c in mock_thread.call_args_list
                           if "target" in c.kwargs], [],
@@ -9582,7 +10053,8 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor = self._monitor(instance_type=config.INSTANCE_PRIVATE,
                                 keep_on={"Classic/クラシック": {99}})
 
-        started = self._round(monitor, "Classic", [99])
+        # Classic の1体構成は Gigabytes が来ると結論が変わるので待つ
+        started = self._round(monitor, "Classic", [99], settle=True)
 
         self.assertTrue(monitor.st.is_continue_round)
         self.assertNotIn("do_skip", started)
@@ -9605,23 +10077,42 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round, "放置モードを通っていないこと")
 
     # ── Variant判定待ち ────────────────────
-    def test_a_single_terror_classic_waits_for_gigabytes(self):
-        """元IDが毎回違うのでIDから予測できない。1体構成は常に待つ"""
+    def test_a_single_terror_classic_waits_when_gigabytes_is_wanted(self):
+        """元IDが毎回違うので、1体構成はどれも Gigabytes の候補"""
+        monitor = self._monitor(keep_on={"Classic/クラシック": {config.GIGABYTES_ID}})
+
+        started = self._round(monitor, "Classic", [99])
+
+        self.assertEqual(started, ["_delayed_decision"])
+
+    def test_a_single_terror_classic_skips_at_once_when_nothing_is_wanted(self):
+        """置き換わってもリストに無ければ、どちらにしても自爆。待たない"""
         monitor = self._monitor()
 
         started = self._round(monitor, "Classic", [99])
 
-        self.assertEqual(started, ["_delayed_group_decision"])
+        self.assertEqual(started, ["do_skip"])
 
-    def test_every_round_waits_for_the_variant(self):
-        """ラウンド種別で待ちを分けない。0.3秒で、確定した時点で打ち切る"""
-        for round_type, ids in (("Bloodbath", [config.CURIOUS_CREATURE_ID, 2, 3]),
-                                ("8 Pages", [config.CURIOUS_CREATURE_ID, 2])):
-            monitor = self._monitor()
+    def test_rounds_whose_rule_ignores_the_terror_do_not_wait(self):
+        """Bloodbath は問答無用スキップ、8 Pages は全続行。置き換わっても同じ"""
+        for round_type, ids, expected in (
+                ("Bloodbath", [config.CURIOUS_CREATURE_ID, 2, 3], ["do_skip"]),
+                ("8 Pages", [config.CURIOUS_CREATURE_ID, 2], [])):
+            monitor = self._monitor(
+                keep_on={"Bloodbath/ブラッドバス": {config.BLOODTHIRSTY_CREATURE_ID}})
 
             started = self._round(monitor, round_type, ids)
 
-            self.assertEqual(started, ["_delayed_group_decision"], round_type)
+            self.assertEqual(started, expected, round_type)
+
+    def test_a_normal_round_waits_when_the_variant_is_wanted(self):
+        monitor = self._monitor(
+            keep_on={self.DT_KEY: {config.BLOODTHIRSTY_CREATURE_ID}})
+
+        started = self._round(monitor, "Double Trouble",
+                              [config.CURIOUS_CREATURE_ID, 5])
+
+        self.assertEqual(started, ["_delayed_decision"])
 
     def test_the_wait_still_reaches_the_same_answer(self):
         """待ち明けの結論は待たない場合と同じ（Bloodbathは問答無用スキップ）"""
@@ -9642,8 +10133,8 @@ class TestLogMonitorGroupRules(unittest.TestCase):
     def _run_delayed(self, monitor, killers_round_type="Classic", wait_sec=0.0):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
-            monitor._delayed_group_decision(killers_round_type, wait_sec,
-                                            monitor.st.round_seq)
+            monitor._delayed_decision(killers_round_type, wait_sec,
+                                      monitor.st.round_seq)
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
@@ -9706,7 +10197,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor.st.round_seq = 5
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
-            monitor._delayed_group_decision("Classic", 0.0, 4)
+            monitor._delayed_decision("Classic", 0.0, 4)
 
         mock_thread.assert_not_called()
 

@@ -13,6 +13,7 @@ import ReadJson
 import LogParser
 import RoundDecision
 import RoundSequence
+import TerrorReplacement
 import GroupRound
 from ActionExecutor import ActionExecutor
 from State import WindowConfig, WindowState
@@ -390,143 +391,75 @@ class LogMonitor:
         if st.randomizer_item_changed and not was_changed:
             self._log("Randomizer: アイテム差し替え警告")
 
-    def _apply_bloodthirsty_creature_variant(self, ids: list[int]) -> list[int]:
-        if not self.st.bloodthirsty_creature_variant:
-            return ids
-        return [
-            config.BLOODTHIRSTY_CREATURE_ID if tid == config.CURIOUS_CREATURE_ID else tid
-            for tid in ids
-        ]
+    def _apply_replacements(self, ids: list[int], round_type: str) -> list[int]:
+        """合図がもう来ている置き換えを Killers 行のIDに当てる"""
+        for row in TerrorReplacement.TABLE:
+            if (row.enabled and getattr(self.st, row.flag)
+                    and row.matches_round(round_type)):
+                ids = row.apply(ids)
+        return ids
 
-    def _apply_hungry_home_invader_variant(self, ids: list[int], round_type: str) -> list[int]:
-        if not self.st.hungry_home_invader_variant or round_type != "Classic":
-            return ids
-        return [
-            config.HUNGRY_HOME_INVADER_ID if tid == config.SLENDER_ID else tid
-            for tid in ids
-        ]
-
-    def _waiting_for_bloodthirsty_creature_variant(self) -> bool:
-        """Curious Creature がいる間は Bloodthirsty 化を待つ。
-
-        Unbound では terror_ids が `[283]` などグループのIDなので、106 を
-        条件にしているここは効かない。Self Inserts の Bloodthirsty は
-        `_waiting_for_self_inserts_bloodthirsty()` が別に待つ。
-        """
-        return (
-            config.CURIOUS_CREATURE_ID in self.st.terror_ids
-            and not self.st.bloodthirsty_creature_variant
-        )
-
-    def _waiting_for_hungry_home_invader_variant(self) -> bool:
-        return (
-            self.st.round_type == "Classic"
-            and config.SLENDER_ID in self.st.terror_ids
-            and not self.st.hungry_home_invader_variant
-        )
-
-    def _apply_atrached_variant(self, ids: list[int], round_type: str) -> list[int]:
-        if not self.st.atrached_variant or round_type != "Classic":
-            return ids
-        return [
-            config.ATRACHED_ID if tid == config.SONIC_ID else tid
-            for tid in ids
-        ]
-
-    def _waiting_for_atrached_variant(self) -> bool:
-        return (
-            self.st.round_type == "Classic"
-            and config.SONIC_ID in self.st.terror_ids
-            and not self.st.atrached_variant
-        )
-
-    def _waiting_for_gigabytes(self) -> bool:
-        """The Gigabytes は元IDが毎回違うのでIDから予測できない。
-        Classicの1体構成は常に候補として出現ログを待つ。"""
-        return (
-            self.st.round_type == "Classic"
-            and len(self.st.terror_ids) == 1
-            and not self.st.gigabytes
-        )
+    def _pending_replacements(self, ids=None) -> list:
+        """起こりうるのに、合図がまだ来ていない置き換え"""
+        st = self.st
+        ids = st.terror_ids if ids is None else ids
+        return [row for row in TerrorReplacement.TABLE
+                if not getattr(st, row.flag)
+                and row.could_apply(ids, st.round_type)]
 
     def _waiting_for_terror_replacement(self) -> bool:
-        """テラーIDがまだ確定していないか。統計登録の待ち合わせにも使う。
+        """テラーIDがまだ確定していないか。統計登録の待ち合わせに使う。
 
-        Gigabytes も含める。元IDが不定なのでClassicの1体構成すべてが候補に
-        なり、統計登録はGigabytesの行かラウンド終了まで遅れる。
-        グループ判定の待ちは `_waiting_for_group_variant()`。
+        IDが変わらない行（Self Inserts）は含めない。統計に送るIDは同じなので
+        待つ意味が無い。Gigabytes は元IDが不定なので、Classicの1体構成は
+        すべて候補になり、統計はGigabytesの行かラウンド終了まで遅れる。
         """
-        return (
-            self._waiting_for_bloodthirsty_creature_variant()
-            or self._waiting_for_hungry_home_invader_variant()
-            or self._waiting_for_atrached_variant()
-            or self._waiting_for_gigabytes()
-        )
+        return any(row.changes_id for row in self._pending_replacements())
 
-    def _waiting_for_group_variant(self) -> bool:
-        """グループの続行/スキップを決める前に待つべきか。
+    def _replacement_changes_decision(self, round_type: str) -> bool:
+        """置き換えが起きると結論が変わるか。変わるときだけ判定を待つ。
 
-        Classic は「Variantなら通常判定、そうでなければ問答無用スキップ」
-        なので、確定を待たずに自爆すると取り逃がす。
+        比べるのは本番と同じ `_plan()`。置き換え後のIDと合図のフラグを
+        当てた構成で引き直し、自爆するか・続行を知らせるかが変わるかを見る。
         """
-        return self._waiting_for_terror_replacement() or self._waiting_for_gigabytes()
-
-    def _mark_bloodthirsty_creature_variant(self):
         st = self.st
-        st.bloodthirsty_creature_variant = True
-        changed = False
-        for i, tid in enumerate(st.terror_ids):
-            if tid == config.CURIOUS_CREATURE_ID:
-                st.terror_ids[i] = config.BLOODTHIRSTY_CREATURE_ID
-                changed = True
+        pending = self._pending_replacements()
+        if not pending:
+            return False
+        bloodthirsty = st.bloodthirsty_creature_variant
+        before = self._outcome(self._plan(round_type, st.terror_ids, bloodthirsty))
+        for row in pending:
+            after_ids = row.apply(list(st.terror_ids))
+            after_bt = bloodthirsty or row.flag == "bloodthirsty_creature_variant"
+            after = self._outcome(self._plan(round_type, after_ids, after_bt))
+            if after != before:
+                return True
+        return False
+
+    def _mark_replacement(self, flag: str):
+        """合図のログが来た。フラグを立て、判明済みのIDを差し替える"""
+        st = self.st
+        rows = [row for row in TerrorReplacement.rows_for_flag(flag)
+                if row.matches_round(st.round_type)]
+        if not rows:
+            return          # 対象外のラウンド（Atrached などは Classic だけ）
+        setattr(st, flag, True)
+        changed = []
+        for row in rows:
+            if not row.changes_id or not st.terror_ids:
+                continue
+            if row.source is None and st.terror_ids == [row.target_id()]:
+                continue
+            replaced = row.apply(st.terror_ids)
+            if replaced != st.terror_ids:
+                st.terror_ids = replaced
+                changed.append(row)
         if changed:
-            self._log("Wild Yet Curious Creature -> Wild Yet Bloodthirsty Creature")
+            for row in changed:
+                self._log(f"{row.name} に差し替え")
             self._send_round_statistics_once()
         else:
-            self._log("Wild Yet Bloodthirsty Creature variant detected")
-
-    def _mark_hungry_home_invader_variant(self):
-        st = self.st
-        if st.round_type != "Classic":
-            return
-        st.hungry_home_invader_variant = True
-        changed = False
-        for i, tid in enumerate(st.terror_ids):
-            if tid == config.SLENDER_ID:
-                st.terror_ids[i] = config.HUNGRY_HOME_INVADER_ID
-                changed = True
-        if changed:
-            self._log("Slender -> Hungry Home Invader")
-            self._send_round_statistics_once()
-        else:
-            self._log("Hungry Home Invader variant detected")
-
-    def _mark_atrached_variant(self):
-        st = self.st
-        if st.round_type != "Classic":
-            return
-        st.atrached_variant = True
-        changed = False
-        for i, tid in enumerate(st.terror_ids):
-            if tid == config.SONIC_ID:
-                st.terror_ids[i] = config.ATRACHED_ID
-                changed = True
-        if changed:
-            self._log("Sonic -> Atrached")
-            self._send_round_statistics_once()
-        else:
-            self._log("Atrached variant detected")
-
-    def _mark_gigabytes(self):
-        """元IDが不定なので「置換」ではなく terror_ids ごと差し替える"""
-        st = self.st
-        st.gigabytes = True
-        if not st.terror_ids or st.terror_ids == [config.GIGABYTES_ID]:
-            # Killers 行より先に来た場合。差し替えは _on_killers 側で行う
-            return
-        st.terror_ids = [config.GIGABYTES_ID]
-        self._log("The Gigabytes -> テラーIDを差し替え")
-        self._send_round_statistics_once()
+            self._log(f"{' / '.join(row.name for row in rows)} の合図")
 
     def _variant_wait_sec(self) -> float:
         return config.TERROR_VARIANT_WAIT_SEC
@@ -549,13 +482,13 @@ class LogMonitor:
         if self.cfg.do_skip:
             self._start_daemon(self._action.do_skip)
 
-    def _group_decision(self, killers_round_type: str) -> str:
+    def _group_decision(self, killers_round_type: str, ids=None) -> str:
         """このラウンドをグループのルールでどう扱うか"""
         st = self.st
         return GroupRound.decide(
             st.instance_type,
             st.round_type,
-            st.terror_ids,
+            st.terror_ids if ids is None else ids,
             killers_round_type=killers_round_type,
             moon_repeat=st.moon_repeat,
             # 自爆リストのうち moon だけがグループでも効く。他の項目
@@ -639,91 +572,32 @@ class LogMonitor:
         st.list_lost_notified = False
         self._log("主催リストが戻りました → 自爆を再開します")
 
-    def _should_skip_by_round(self) -> bool:
+    def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
 
         続行リストより優先する。ただし自爆指定より上に来るものが3つある——
         3クラ解放（Classicを指定していると3クラ稼ぎが黙って壊れる）、
-        Variant免除（設定していれば）、そして Self Inserts の Bloodthirsty
-        （リストで表現できないので、リストにも自爆指定にも頼れない）。
+        Variant（置き換え後のテラーはいつもリストで判定する）、そして
+        Self Inserts の Bloodthirsty（リストで表現できないので、リストにも
+        自爆指定にも頼れない）。
         """
         st = self.st
+        ids = st.terror_ids if ids is None else ids
+        if bloodthirsty is None:
+            bloodthirsty = st.bloodthirsty_creature_variant
         if st.round_type not in self.cfg.skip_rounds:
             return False
         if RoundDecision.is_open_special_round_target(
-                st.terror_ids, st.round_type, st.open_special_round_wins,
+                ids, st.round_type, st.open_special_round_wins,
                 self.cfg.cancel_afk):
             return False        # 3クラ解放が勝つ。通常判定へ落とす
-        if self.cfg.skip_variant_exempt and GroupRound.is_variant(st.terror_ids):
+        if GroupRound.is_variant(ids):
             return False        # Variantは自爆しない。通常判定へ落とす
         if RoundDecision.is_self_inserts_bloodthirsty(
-                st.terror_ids, st.round_type, st.bloodthirsty_creature_variant):
+                ids, st.round_type, bloodthirsty):
             # リストで指定する手段が無いので、自爆指定より優先して続行する
             return False
         return True
-
-    def _waiting_for_round_skip_variant(self) -> bool:
-        """ラウンド指定自爆でVariant確定を待つべきか。
-
-        設定していない窓に待ちを増やさないこと。`_waiting_for_terror_replacement()`
-        は統計登録のゲートも兼ねているので、波及すると統計が遅れる。
-        """
-        return (
-            self.cfg.skip_variant_exempt
-            and self.st.round_type in self.cfg.skip_rounds
-            and self._waiting_for_group_variant()
-        )
-
-    def _waiting_for_self_inserts_bloodthirsty(self) -> bool:
-        """Unbound の Self Inserts で Bloodthirsty 行を待つべきか。
-
-        `_waiting_for_bloodthirsty_creature_variant()` は 106 がいることを
-        条件にしていて、Unbound では terror_ids が `[283]` なので効かない。
-        実測では Variant の出現ログは Killers 行の**後**に出る（手元ログの
-        Gigabytes 12件・Atrached 3件がすべて後）。待たずに判定すると、
-        Self Inserts の強制続行がまさにその場面で発火しない。
-        """
-        st = self.st
-        return (
-            st.round_type == "Unbound"
-            and config.SELF_INSERTS_ID in st.terror_ids
-            and not st.bloodthirsty_creature_variant
-        )
-
-    def _delayed_self_inserts_decision(self, killers_round_type: str,
-                                       wait_sec: float, round_seq: int):
-        """Bloodthirsty 行を待ってから、自爆指定と通常判定へ進む"""
-        deadline = time.time() + wait_sec
-        while time.time() < deadline:
-            if not self._round_still_active(round_seq):
-                return
-            if not self._waiting_for_self_inserts_bloodthirsty():
-                break   # Bloodthirsty 確定 → 残り時間を待たずに判断へ
-            time.sleep(config.TERROR_VARIANT_POLL_SEC)
-        if not self._round_still_active(round_seq):
-            return
-        if (self.st.instance_type == config.INSTANCE_PRIVATE
-                and self.cfg.skip_rounds and self._should_skip_by_round()):
-            self._start_round_skip()
-            return
-        self._decide_with_keep_on_set(killers_round_type)
-
-    def _delayed_round_skip(self, killers_round_type: str, wait_sec: float,
-                            round_seq: int):
-        """Variant確定を待ってからラウンド指定自爆の可否を決める"""
-        deadline = time.time() + wait_sec
-        while time.time() < deadline:
-            if not self._round_still_active(round_seq):
-                return
-            if not self._waiting_for_group_variant():
-                break
-            time.sleep(config.TERROR_VARIANT_POLL_SEC)
-        if not self._round_still_active(round_seq):
-            return
-        if self._should_skip_by_round():
-            self._start_round_skip()
-            return
-        self._decide_with_keep_on_set(killers_round_type)
 
     def _start_round_skip(self):
         st = self.st
@@ -732,23 +606,22 @@ class LogMonitor:
         if self.cfg.do_skip:
             self._start_daemon(self._action.do_skip)
 
-    def _delayed_group_decision(self, killers_round_type: str, wait_sec: float,
-                                round_seq: int):
-        """テラー出現ログ(Variant判定)を待ってからグループの判定を出す。
-        Bloodbath等は枠ごとに出現時刻がずれるためラウンド種別ごとに待ち時間を変える。"""
+    def _delayed_decision(self, killers_round_type: str, wait_sec: float,
+                          round_seq: int):
+        """置き換えの合図を待ってから判定する。
+
+        合図が来るか、もう結論が変わらなくなったら残り時間を待たずに進む。
+        """
         deadline = time.time() + wait_sec
         while time.time() < deadline:
             if not self._round_still_active(round_seq):
                 return
-            if not self._waiting_for_group_variant():
-                break  # Variant確定 → 残り時間を待たずに判断へ
+            if not self._replacement_changes_decision(killers_round_type):
+                break
             time.sleep(config.TERROR_VARIANT_POLL_SEC)
         if not self._round_still_active(round_seq):
             return
-        if self._apply_group_decision(killers_round_type):
-            return
-        # 通常判定へ回すぶんはここで続ける（待っている間に _on_killers は抜けている）
-        self._decide_with_keep_on_set(killers_round_type)
+        self._decide(killers_round_type)
 
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
@@ -758,11 +631,11 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
-            self._mark_bloodthirsty_creature_variant()
+            self._mark_replacement("bloodthirsty_creature_variant")
             return
 
         if event.kind == LogParser.EVENT_HUNGRY_HOME_INVADER:
-            self._mark_hungry_home_invader_variant()
+            self._mark_replacement("hungry_home_invader_variant")
             return
 
         if event.kind == LogParser.EVENT_ENRAGE:
@@ -836,13 +709,13 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_GIGABYTES:
             self._log("👾 The Gigabytes 出現")
-            self._mark_gigabytes()
+            self._mark_replacement("gigabytes")
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
             self._log("🎮 Atrached 出現（SonicのVariant）")
-            self._mark_atrached_variant()
+            self._mark_replacement("atrached_variant")
             return
 
         if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
@@ -914,10 +787,8 @@ class LogMonitor:
                 st.round_type == "Sabotage" and st.pending_sabotage_murder
             )
             st.pending_sabotage_murder     = False
-            st.bloodthirsty_creature_variant = False
-            st.hungry_home_invader_variant = False
-            st.atrached_variant            = False
-            st.gigabytes                   = False
+            for flag in TerrorReplacement.flags():
+                setattr(st, flag, False)
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
             if st.waiting_for_equip:
@@ -1075,11 +946,17 @@ class LogMonitor:
             self._log("🦊 Foxyが出た！")
             if not self._hands_free():
                 PlaySound.play_sound(self.cfg.voice_foxy)
-            if st.round_type == "Fog":
-                # FoxyはAlternate枠テラーなのでFog(Alternate)に更新
-                # → apply_alternate_offset が ID2+134=136→316 に正しく変換される
-                st.round_type = "Fog (Alternate)"
-                self._on_killers([2], "Fog (Alternate)", revealed=True)
+            self._mark_replacement("foxy")
+            if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
+                    and st.enrage_identified is None):
+                # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
+                # st.round_type は書き換えない（「Fog」の自爆指定が効かなくなる）。
+                # オルタ枠であることは引数で伝える（焼き芋の判定が見る）
+                self._on_killers([config.FOXY_ID],
+                                 GroupRound.FOG_ALTERNATE_ROUND_TYPE,
+                                 revealed=True)
+                # 後から revealed が来ても判定し直さない（二重に自爆する）
+                st.enrage_identified = config.FOXY_ID
             return
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
@@ -1096,11 +973,9 @@ class LogMonitor:
             st.players_known = True
             st.instance_seq += 1
             # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
-            if (self.cfg.skip_rounds or self.cfg.continue_rounds
-                    or self.cfg.skip_variant_exempt):
+            if self.cfg.skip_rounds or self.cfg.continue_rounds:
                 self.cfg.skip_rounds = set()
                 self.cfg.continue_rounds = set()
-                self.cfg.skip_variant_exempt = False
                 self._log("インスタンスが変わりました → ラウンド指定を解除しました")
             # GUIのチェックは監視開始後でも変えられるので、設定が空でも呼ぶ。
             # 片方だけ外れていると、表示と動きが食い違う
@@ -1179,11 +1054,7 @@ class LogMonitor:
         st.fog = False
 
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
-        ids = self._apply_bloodthirsty_creature_variant(ids)
-        ids = self._apply_hungry_home_invader_variant(ids, round_type)
-        ids = self._apply_atrached_variant(ids, round_type)
-        if self.st.gigabytes:
-            ids = [config.GIGABYTES_ID]
+        ids = self._apply_replacements(ids, round_type)
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
         for tid in ids:
@@ -1219,80 +1090,117 @@ class LogMonitor:
             return
         self._notify_group_list_back()
 
-        if is_group_skip:
-            # Variantが確定しうるラウンドはどれも待つ。0.3秒で、確定した時点で
-            # 打ち切るので、待ちが結論を変えないラウンドでも実害は出ない
-            if self._waiting_for_group_variant():
-                wait = self._variant_wait_sec()
-                self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
-                self._start_daemon(self._delayed_group_decision, round_type,
-                                   wait, st.round_seq)
-                return
-            if self._apply_group_decision(round_type):
-                return
+        # 置き換えで結論が変わるときだけ待つ（自爆指定の有無に関係なく）。
+        # 放置モードは待たずに即自爆する
+        if (not self._hands_free()
+                and self._replacement_changes_decision(round_type)):
+            wait = self._variant_wait_sec()
+            self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
+            self._start_daemon(self._delayed_decision, round_type,
+                               wait, st.round_seq)
+            return
+        self._decide(round_type)
 
+    # ── 判定 ──────────────────────────────
+    def _plan(self, round_type: str, ids, bloodthirsty: bool) -> tuple:
+        """このテラー構成をどう扱うかを決める。副作用なし。
+
+        `_decide()` がこれをそのまま実行し、置き換え待ちの判断も
+        これで前後を比べる。同じ関数なので、待つ判断と本番の判定が
+        食い違わない。
+        """
+        st = self.st
+        itype = st.instance_type
+        is_private = itype == config.INSTANCE_PRIVATE
+        is_group = itype in GroupRound.GROUP_INSTANCES
+        if is_group:
+            decision = self._group_decision(round_type, ids)
+            if decision != GroupRound.NORMAL:
+                return ("group", decision)
         # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
-        if not can_decide:
+        if not (is_private or is_group):
+            return ("restricted",)
+        # 放置モードの自動操作はprivateのみ（_hands_free が種別を見ている）。
+        if self._hands_free():
+            reason = self._hands_free_skip_reason(ids)
+            if reason:
+                return ("hands_free", reason)
+        # privateのラウンド指定。全続行が先。続行リストは見ない
+        if is_private and st.round_type in self.cfg.continue_rounds:
+            return ("continue_rounds",)
+        # privateのラウンド指定自爆。続行リストより優先する
+        if (is_private and self.cfg.skip_rounds
+                and self._should_skip_by_round(ids, bloodthirsty)):
+            return ("round_skip",)
+        decision = RoundDecision.decide_killers(
+            self.keepOn_set, ids, st.round_type,
+            st.open_special_round_wins, self.cfg.cancel_afk,
+            bloodthirsty_variant=bloodthirsty)
+        return ("list", decision.is_continue_round,
+                decision.is_open_special_round_target)
+
+    @staticmethod
+    def _outcome(plan: tuple) -> str:
+        """手順から、利用者に見える結果だけを取り出す（待つかの比較用）"""
+        kind = plan[0]
+        if kind == "group":
+            return {GroupRound.SKIP: "skip", GroupRound.CONTINUE: "quiet",
+                    GroupRound.WANTED: "continue"}[plan[1]]
+        if kind in ("hands_free", "round_skip"):
+            return "skip"
+        if kind in ("restricted", "continue_rounds"):
+            return "quiet"
+        _kind, is_continue, open_special = plan
+        if not is_continue:
+            return "skip"
+        return "open_special" if open_special else "continue"
+
+    def _hands_free_skip_reason(self, ids) -> str | None:
+        """放置モードで即自爆するならその理由。DTM/Waldo は例外"""
+        st = self.st
+        if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+            return f"放置モード(3クラ済み): 即自爆 {ids} / {st.round_type}"
+        if not st.item_id:
+            has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in ids
+            if not has_dtm:
+                return (f"放置モード(アイテムなし・DTMなし): 即自爆 {ids} / "
+                        f"{st.round_type}")
+        has_cancel_afk = bool(
+            config.OPEN_SPECIAL_ROUND_TERROR_IDS and
+            any(t in config.OPEN_SPECIAL_ROUND_TERROR_IDS for t in ids) and
+            self.cfg.cancel_afk
+        )
+        if not has_cancel_afk:
+            return f"放置モード(DTM/Waldo以外): 即自爆 {ids} / {st.round_type}"
+        return None
+
+    def _decide(self, round_type: str):
+        """`_plan()` が決めた手順を実行する"""
+        st = self.st
+        plan = self._plan(round_type, st.terror_ids,
+                          st.bloodthirsty_creature_variant)
+        kind = plan[0]
+        if kind == "group":
+            self._apply_group_decision(round_type)
+            return
+        if kind == "restricted":
             if st.is_continue_round:
                 st.is_continue_round = False
                 SharedState.continue_round_end()
-            self._log(f"インスタンス制限: 操作スキップ ({itype})")
+            self._log(f"インスタンス制限: 操作スキップ ({st.instance_type})")
             return
-
-        # 放置モードの自動操作はprivateのみ（_hands_free が種別を見ている）。
-        if self._hands_free():
-            if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                self._log(f"放置モード(3クラ済み): 即自爆 {st.terror_ids} / {st.round_type}")
-                if not st.is_continue_round and self.cfg.do_skip:
-                    self._start_daemon(self._action.do_skip)
-                return
-            if not st.item_id:
-                has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in st.terror_ids
-                if not has_dtm:
-                    self._log(f"放置モード(アイテムなし・DTMなし): 即自爆 {st.terror_ids} / {st.round_type}")
-                    if not st.is_continue_round and self.cfg.do_skip:
-                        self._start_daemon(self._action.do_skip)
-                    return
-            has_cancel_afk = bool(
-                config.OPEN_SPECIAL_ROUND_TERROR_IDS and
-                any(t in config.OPEN_SPECIAL_ROUND_TERROR_IDS for t in st.terror_ids) and
-                self.cfg.cancel_afk
-            )
-            if not has_cancel_afk:
-                self._log(f"放置モード(DTM/Waldo以外): 即自爆 {st.terror_ids} / {st.round_type}")
-                if not st.is_continue_round and self.cfg.do_skip:
-                    self._start_daemon(self._action.do_skip)
-                return
-
-        # privateのラウンド指定。全続行が先——ここで抜けるので Variant 待ちにも
-        # 入らない。続行リストは見ない
-        if is_private and st.round_type in self.cfg.continue_rounds:
+        if kind == "hands_free":
+            self._log(plan[1])
+            if not st.is_continue_round and self.cfg.do_skip:
+                self._start_daemon(self._action.do_skip)
+            return
+        if kind == "continue_rounds":
             self._log(f"ラウンド指定で続行: {st.round_type}")
             self._clear_stale_continue_round()
             return
-
-        # Unbound の Self Inserts だけは、Bloodthirsty 行が Killers 行の後に
-        # 来るので待つ。自爆指定より前に置く——待たずに自爆指定を見ると、
-        # フラグが立つ前に自爆が決まってしまう
-        if self._waiting_for_self_inserts_bloodthirsty():
-            wait = self._variant_wait_sec()
-            self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
-            self._start_daemon(self._delayed_self_inserts_decision, round_type,
-                               wait, st.round_seq)
+        if kind == "round_skip":
+            self._start_round_skip()
             return
-
-        # privateのラウンド指定自爆。続行リストより優先する
-        if is_private and self.cfg.skip_rounds:
-            if self._waiting_for_round_skip_variant():
-                wait = self._variant_wait_sec()
-                self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
-                self._start_daemon(self._delayed_round_skip, round_type,
-                                   wait, st.round_seq)
-                return
-            if self._should_skip_by_round():
-                self._start_round_skip()
-                return
-
         self._decide_with_keep_on_set(round_type)
 
     # ── 通常判定（続行リスト照合） ──────────────

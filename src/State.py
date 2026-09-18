@@ -16,7 +16,6 @@ class WindowConfig:
     announce_intermission: bool = False
     # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する
     skip_rounds: set = field(default_factory=set)
-    skip_variant_exempt: bool = False   # Variant/Gigabytesは自爆しない
     # 続行リストを見ずに自爆しない（privateのみ）。skip_rounds より優先する
     continue_rounds: set = field(default_factory=set)
     voice_continue: str = ""
@@ -82,6 +81,9 @@ class WindowState:
     hungry_home_invader_variant: bool = False
     atrached_variant: bool = False
     gigabytes: bool = False
+    # 置き換えの合図（TerrorReplacement.TABLE の flag）
+    foxy: bool = False
+    neo_pilot: bool = False
     # Sabotageで選出されたマーダーの表示名（Sus player / Sus player 2）。
     # Verified Round End でクリアする——ROUND_START と同じ秒に積まれるため
     sus_players: list[str] = field(default_factory=list)

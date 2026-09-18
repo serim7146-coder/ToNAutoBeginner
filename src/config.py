@@ -327,6 +327,11 @@ HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 ENRAGE_IDENTIFY_ENABLED = True
 
 SONIC_ID = 40
+# alternate。Sanic は Foxy に置き換わることがある（foxy the pirate turned evil!）
+SANIC_ID = 136
+FOXY_ID = 316
+# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
+FUSION_PILOT_ID = 163
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
 # 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
