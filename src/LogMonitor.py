@@ -642,6 +642,12 @@ class LogMonitor:
             self._on_enrage(event.player_name)
             return
 
+        if event.kind == LogParser.EVENT_JOY:
+            if self._fog_terror_unknown():
+                self._identify_fog_terror(config.JOY_ID, "Joy",
+                                          "JOY WILL SOON AWAKEN")
+            return
+
         if event.kind == LogParser.EVENT_MASTER_SWITCHED:
             # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
             self.sequence.on_master_switched()
@@ -814,11 +820,14 @@ class LogMonitor:
                 return
 
             if st.round_type == "Fog":
-                if not self._hands_free():
-                    st.is_continue_round = True
-                    SharedState.continue_round_start()
+                # 既定では他窓を止めない。止めたいなら突入フリーズで Fog を選ぶ
+                # （上の一般の経路で張られる）。
+                # is_continue_round と continue_round_start() は必ずセットで外す。
+                # 片方だけ残すと、判明時に continue_round_end() が自分の足して
+                # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
+                if config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_fog)
-                    self._log(f"開始: {st.round_type} 【他窓フリーズ開始】")
+                self._log(f"開始: {st.round_type}")
                 return
 
             self._log(f"開始: {st.round_type}")
@@ -1018,20 +1027,27 @@ class LogMonitor:
         名前が terrors.json に一意に一致したときだけ使う。個体名（Furnace
         など）は表に無いので、そのときは従来どおり revealed を待つ。
         """
-        st = self.st
         if not config.ENRAGE_IDENTIFY_ENABLED:
             return
-        if st.round_type not in GroupRound.FOG_ROUND_TYPES:
-            return              # Fog だけ。8 Pages は対象外
-        if st.terror_ids:
-            return              # もう判明している
-        if st.enrage_identified is not None:
-            return              # このラウンドで前倒し済み
+        if not self._fog_terror_unknown():
+            return
         tid = ReadJson.terror_id_by_name(name, config.TERRORS,
                                          config.TERROR_ALIASES)
         if tid is None:
             self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
+        self._identify_fog_terror(tid, "Enrage", name)
+
+    def _fog_terror_unknown(self) -> bool:
+        """霧でテラーがまだ分からず、このラウンドで前倒しもしていないか"""
+        st = self.st
+        return (st.round_type in GroupRound.FOG_ROUND_TYPES   # 8 Pages は対象外
+                and not st.terror_ids
+                and st.enrage_identified is None)
+
+    def _identify_fog_terror(self, tid: int, how: str, name: str):
+        """霧のテラーを前倒しで判明させ、判定に回す（Enrage / Joy）"""
+        st = self.st
         # `Killers is unknown` の行には「Fog (Alternate)」が出ない。焼き芋は
         # オルタネイト枠のFogだけを続行リスト判定に回すので、枠を伝えないと
         # リストを見ずに自爆する。alternate のテラーが出た時点で枠は確定する
@@ -1043,7 +1059,7 @@ class LogMonitor:
             round_type = GroupRound.FOG_ALTERNATE_ROUND_TYPE
         # st.round_type は書き換えない。ラウンド指定自爆（cfg.skip_rounds）が
         # 「Fog」で持っているので、書き換えるとその指定が黙って効かなくなる
-        self._log(f"🔎 テラー判明(Enrage): {name} → {format_terror_ids([tid])}")
+        self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid])}")
         # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
         # 「前倒し済み」と見なされて素通りしてしまう
         self._on_killers([tid], round_type, revealed=True)

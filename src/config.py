@@ -153,8 +153,10 @@ VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 ROUND_FREEZE_SELECTABLE = [
-    "Alternate", "Unbound", "Ghost", "Midnight", "Punished", "8 Pages",
+    "Alternate", "Unbound", "Ghost", "Midnight", "Punished", "8 Pages", "Fog",
 ]
+# 霧に入ったときの音声。既定では鳴らさない（仕組みと voice_fog の設定は残す）
+ANNOUNCE_FOG_ON_ENTRY = False
 
 # ── ラウンドごとの自動自爆 ──
 # 選んだラウンドは続行リストを見ずに自爆する。効くのは private だけ——
@@ -330,6 +332,8 @@ SONIC_ID = 40
 # alternate。Sanic は Foxy に置き換わることがある（foxy the pirate turned evil!）
 SANIC_ID = 136
 FOXY_ID = 316
+# alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy
+JOY_ID = 164
 # alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
 FUSION_PILOT_ID = 163
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても

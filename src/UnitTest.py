@@ -10725,20 +10725,30 @@ class TestLogMonitorFogRound(unittest.TestCase):
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         return monitor
 
-    def test_fog_reveal_skip_releases_fog_freeze_before_skip(self):
+    def test_fog_entry_does_not_freeze_the_other_windows(self):
         monitor = self._monitor()
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
-        self.assertTrue(monitor.st.is_continue_round)
-        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set())
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    def test_a_fog_skip_leaves_another_windows_freeze_alone(self):
+        """入場で足していないので、判明時に引いてもいけない"""
+        SharedState.continue_round_start()          # 別の窓の本物の続行
+        monitor = self._monitor()
+        with patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
             monitor._process("Killers have been revealed - 44 0 0 // Round type is Fog")
 
         self.assertFalse(monitor.st.is_continue_round)
-        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
-        mock_thread.assert_called_once()
+        self.assertEqual(SharedState.get_continue_round_count(), 1,
+                         "別の窓のフリーズが残っていること")
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set())
+        mock_thread.assert_called_once()        # 自爆
 
     def _release_delay_for(self, monitor) -> float:
         """_release_continue_freeze_after_delay が実際に眠る秒数を取り出す"""
@@ -10772,19 +10782,211 @@ class TestLogMonitorFogRound(unittest.TestCase):
         self.assertEqual(self._release_delay_for(monitor),
                          config.CONTINUE_FREEZE_RELEASE_DELAY_SEC)
 
-    def test_fog_reveal_continue_does_not_double_count_freeze(self):
+    def test_fog_reveal_continue_counts_the_freeze_once(self):
+        """入場では張らず、続行と分かった時点で1回だけ張る"""
         monitor = self._monitor(keep_on={"Fog/霧": {44}})
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
-        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
 
         with patch.object(PlaySound, "play_sound") as mock_play:
             monitor._process("Killers have been revealed - 44 0 0 // Round type is Fog")
 
         self.assertTrue(monitor.st.is_continue_round)
         self.assertEqual(SharedState.get_continue_round_count(), 1)
+        mock_play.assert_called_once_with("continue.mp3")
+
+    def test_the_fog_voice_is_off_by_default(self):
+        monitor = self._monitor()
+        with patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("This round is taking place at Facility (12) and the round type is Fog")
+
+        self.assertFalse(config.ANNOUNCE_FOG_ON_ENTRY)
         mock_play.assert_not_called()
+
+    def test_the_fog_voice_can_be_turned_back_on(self):
+        """仕組みは残してある"""
+        monitor = self._monitor()
+        with patch.object(config, "ANNOUNCE_FOG_ON_ENTRY", True), \
+             patch.object(PlaySound, "play_sound") as mock_play:
+            monitor._process("This round is taking place at Facility (12) and the round type is Fog")
+
+        mock_play.assert_called_once_with("fog.mp3")
+        self.assertEqual(SharedState.get_continue_round_count(), 0,
+                         "音声を戻してもフリーズは戻らない")
+
+    def test_the_fog_voice_setting_is_still_there(self):
+        self.assertTrue(config.VOICE_FOG.endswith("Fog.mp3"))
+        self.assertEqual(WindowConfig().voice_fog, "")
+
+    def test_fog_can_be_chosen_for_the_entry_freeze(self):
+        self.assertIn("Fog", config.ROUND_FREEZE_SELECTABLE)
+
+    def test_choosing_fog_freezes_every_window(self):
+        SharedState.round_freeze_reset()
+        SharedState.set_freeze_rounds({"Fog"})
+        self.addCleanup(SharedState.set_freeze_rounds, set())
+        self.addCleanup(SharedState.round_freeze_reset)
+        monitor = self._monitor()
+
+        with patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) and the round type is Fog")
+
+        self.assertTrue(monitor.st.round_freeze_held)
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertEqual(SharedState.get_continue_round_count(), 0,
+                         "続行フリーズとは別物")
+
+    def test_fog_is_not_frozen_unless_chosen(self):
+        SharedState.round_freeze_reset()
+        SharedState.set_freeze_rounds(set())
+        monitor = self._monitor()
+
+        with patch.object(PlaySound, "play_sound"):
+            monitor._process("This round is taking place at Facility (12) and the round type is Fog")
+
+        self.assertFalse(monitor.st.round_freeze_held)
+
+
+class TestFogJoy(unittest.TestCase):
+    """霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy（alternate 164）"""
+
+    FOG_KEY = "Fog/霧"
+    LINE = "2026.09.13 19:51:40 Debug      -  JOY WILL SOON AWAKEN..."
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, keep_on=None, *, instance_type=config.INSTANCE_PRIVATE,
+                 round_type="Fog"):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _joy(self, monitor):
+        seen = []
+        real = monitor._on_killers
+
+        def spy(ids, round_type, revealed):
+            seen.append(round_type)
+            return real(ids, round_type, revealed)
+
+        with patch.object(monitor, "_on_killers", side_effect=spy), \
+             patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process(self.LINE)
+        self.passed = seen
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_the_line_is_read(self):
+        self.assertEqual(LogParser.parse(self.LINE).kind, LogParser.EVENT_JOY)
+
+    def test_the_id_is_joy(self):
+        self.assertEqual(ReadJson.terror_name(config.JOY_ID, config.TERRORS), "Joy")
+        self.assertTrue(ReadJson.is_alternate_terror(config.JOY_ID, config.TERRORS))
+
+    def test_fog_is_judged_as_joy(self):
+        monitor = self._monitor({self.FOG_KEY: {config.JOY_ID}})
+
+        started = self._joy(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [config.JOY_ID])
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(any("テラー判明(Joy)" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_an_unwanted_joy_is_skipped(self):
+        monitor = self._monitor()
+
+        self.assertIn("do_skip", self._joy(monitor))
+
+    def test_the_alternate_slot_goes_through_the_argument(self):
+        monitor = self._monitor()
+
+        self._joy(monitor)
+
+        self.assertEqual(self.passed, [GroupRound.FOG_ALTERNATE_ROUND_TYPE])
+        self.assertEqual(monitor.st.round_type, "Fog")
+
+    def test_yakiimo_falls_to_the_list(self):
+        monitor = self._monitor({self.FOG_KEY: {config.JOY_ID}},
+                                instance_type=config.INSTANCE_YAKIIMO)
+
+        started = self._joy(monitor)
+
+        self.assertNotIn("do_skip", started, "問答無用スキップにならないこと")
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_other_rounds_do_nothing(self):
+        """実ログ19回のうち18回は霧以外（Alternate/Midnight/Unbound）"""
+        for round_type in ("Alternate", "Midnight", "Unbound", "8 Pages"):
+            monitor = self._monitor(round_type=round_type)
+
+            started = self._joy(monitor)
+
+            self.assertEqual(started, [], round_type)
+            self.assertEqual(self.passed, [], round_type)
+
+    def test_a_known_terror_is_left_alone(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [42]
+
+        self._joy(monitor)
+
+        self.assertEqual(self.passed, [])
+        self.assertEqual(monitor.st.terror_ids, [42])
+
+    def test_only_once_per_round(self):
+        monitor = self._monitor()
+        self._joy(monitor)
+
+        again = self._joy(monitor)
+
+        self.assertEqual(again, [])
+        self.assertEqual(self.passed, [])
+
+    def test_a_later_reveal_does_not_decide_again(self):
+        monitor = self._monitor()
+        first = self._joy(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process("Killers have been revealed - 30 0 0 // "
+                             "Round type is Fog (Alternate)")
+
+        self.assertEqual(first.count("do_skip"), 1)
+        mock_thread.assert_not_called()
+
+    def test_an_enrage_after_joy_does_nothing(self):
+        monitor = self._monitor()
+        self._joy(monitor)
+
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._on_enrage("The Pursuer")
+
+        mock_thread.assert_not_called()
+        self.assertEqual(monitor.st.terror_ids, [config.JOY_ID])
 
 
 class TestLogMonitorPerWindowInstanceType(unittest.TestCase):

@@ -28,6 +28,7 @@ EVENT_ATRACHED = "atrached"
 EVENT_MASTER_SWITCHED = "master_switched"
 EVENT_ENRAGE = "enrage"
 EVENT_PLAYER_JOINED = "player_joined"
+EVENT_JOY = "joy"
 EVENT_PLAYER_LEFT = "player_left"
 
 
@@ -74,6 +75,8 @@ RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
 # 名前と triggered の間に空白が無い。Enrage / Enrage2 / Enrage3 は
 # 段階が違うだけで名前は同じなので、まとめて扱う
 RE_ENRAGE = re.compile(r"^(.*?)triggered an Enrage\d* State!\s*$")
+# Joy が出るときの行。霧ではテラー不明のまま進むので、これで判明させる
+RE_JOY = re.compile(r"^JOY WILL SOON AWAKEN[.][.][.]$")
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,9 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_RESPAWN_GENERIC.match(line):
         return LogEvent(EVENT_RESPAWN)
+
+    if RE_JOY.match(line):
+        return LogEvent(EVENT_JOY)
 
     m = RE_ENRAGE.match(line)
     if m:
