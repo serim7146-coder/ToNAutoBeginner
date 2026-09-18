@@ -9140,16 +9140,26 @@ class TestPlayersRestoredOnStart(unittest.TestCase):
 
 
 class TestReadmeRelease(unittest.TestCase):
-    def test_the_download_url_uses_the_tag(self):
-        """タグは v0.4.0。v を落とすとリンク切れ"""
-        readme = (Path(__file__).resolve().parent.parent / "README.md"
-                  ).read_text(encoding="utf-8")
-        urls = re.findall(r"releases/download/([^/]+)/", readme)
+    def _readme(self):
+        return (Path(__file__).resolve().parent.parent / "README.md"
+                ).read_text(encoding="utf-8")
+
+    def test_the_download_url_follows_the_latest_release(self):
+        """版を書くと、リリース前は404・リリース後は古くなる。latest なら直さなくてよい"""
+        urls = re.findall(r"https://github\.com/\S+/releases/\S+", self._readme())
 
         self.assertTrue(urls, "URL が見つからない")
-        for tag in urls:
-            self.assertTrue(tag.startswith("v"), tag)
-        self.assertIn(config.APP_VERSION, urls)
+        for url in urls:
+            self.assertIn("/releases/latest/download/", url)
+
+    def test_the_url_points_at_the_update_asset(self):
+        urls = re.findall(r"releases/latest/download/(\S+)", self._readme())
+
+        self.assertEqual(urls, [config.UPDATE_ASSET_NAME])
+
+    def test_the_url_points_at_this_repository(self):
+        self.assertIn(f"github.com/{config.GITHUB_REPO}/releases/",
+                      self._readme())
 
 
 class TestSabotageStarAnnounces(unittest.TestCase):
