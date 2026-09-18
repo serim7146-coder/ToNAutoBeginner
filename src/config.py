@@ -122,8 +122,10 @@ LATE_ROUND = {
 # ── 自動Begin ──
 BEGIN_WAIT_SEC        = 1.0   # RoundOver から Begin移動を始めるまでの待機。
                                # 実測: RoundOver→Verified Round End が約13秒。
-                               # 11秒待って約2.2秒移動すると、移動し終えた頃に
-                               # Round End が出てクリックできる状態になる。
+                               # OSC の窓は移動した後に Verified Round End を
+                               # 待ってからクリックするので、早く動き始めても
+                               # 押すのは Round End の後になる。キー操作の窓は
+                               # Round End を待ってから移動するので、この値はほぼ効かない。
 
 # 続行/霧ラウンドのフリーズ解除を死亡から遅らせる。
 # 解除前に猶予を作り、手動での視点調整などを挟めるようにするため。

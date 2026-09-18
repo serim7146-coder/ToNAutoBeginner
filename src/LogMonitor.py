@@ -737,7 +737,7 @@ class LogMonitor:
             if not SharedState.get_speed_detect():
                 return
             st.speed_probe_done = True
-            self._log("ラウンドデータ取得を検知 → 速度でラウンド種別を判定します")
+            self._log("速度検知 開始")
             # 横移動はしない。この時点では Begin が通っておらず、動くと
             # Begin を押せなくなる。横移動は本物の Verified で始める
             self._start_daemon(self._action.do_speed_detect)
@@ -1031,8 +1031,8 @@ class LogMonitor:
             return
         if not self._fog_terror_unknown():
             return
-        tid = ReadJson.terror_id_by_name(name, config.TERRORS,
-                                         config.TERROR_ALIASES)
+        tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS,
+                                             config.TERROR_ALIASES)
         if tid is None:
             self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
@@ -1243,7 +1243,7 @@ class LogMonitor:
 
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
-        self._log(f"判定: {round_type} {tag}")
+        self._log(f"判定: {all_ids} / {round_type} {tag}")
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:

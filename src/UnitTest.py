@@ -1188,6 +1188,145 @@ class TestTerrorIdByName(unittest.TestCase):
         self.assertIsNone(ReadJson.terror_id_by_name("A", second))
 
 
+class TestTerrorsJsonFormat(unittest.TestCase):
+    """terrors.json の新しい形（カテゴリごとの配列）と旧い形（辞書）"""
+
+    NEW = {
+        "classic": [
+            {"id": 0, "name": "Huggy", "terrors": ["Huggy"]},
+            {"id": 1, "name": "Corrupted Toys", "terrors": ["Corrupted Woody"]},
+            {"id": 22, "name": "Starved", "terrors": ["Starved", "Furnace"]},
+            {"id": 24, "name": "The Guidance", "terrors": ["The Guidance"]},
+            {"id": 26, "name": "Nextbots", "terrors": ["Bear5", "Obunga"]},
+            {"id": 49, "name": "Mona", "terrors": ["Mona"]},
+            {"id": 191, "name": "Atrached", "terrors": ["Atrached"]},
+        ],
+        "alternate": [
+            {"id": 149, "name": "Feddys", "terrors": ["Bear5", "Freddy"]},
+            {"id": 151, "name": "The Observation",
+             "terrors": ["The Observation", "The Guidance"]},
+            {"id": 167, "name": "Walpurgisnacht", "terrors": ["Walpurgisnacht"]},
+        ],
+        "unbound": [
+            {"id": 200, "name": "Guidance & The Booboo's",
+             "terrors": ["The Guidance", "BooBooBabies"]},
+            {"id": 281, "name": "Atrached Pack", "terrors": ["Atrached"]},
+        ],
+        "8pages": [
+            {"id": "49 23 0", "name": "SM64.Z64", "terrors": ["SM64.Z64"]},
+        ],
+    }
+
+    def _data(self):
+        return ReadJson.normalize_terrors(
+            {k: [dict(e) for e in v] for k, v in self.NEW.items()})
+
+    def _fog(self, name, aliases=None):
+        return ReadJson.fog_terror_id_by_name(name, self._data(), aliases)
+
+    # ── 読める ─────────────────────────────
+    def test_the_real_file_loads(self):
+        """中身は固定しない——依頼者が随時書き換えるため"""
+        for category in ReadJson.MAIN_CATEGORIES:
+            self.assertIsInstance(config.TERRORS.get(category), dict, category)
+            for id_, name in config.TERRORS[category].items():
+                self.assertTrue(id_.isdigit(), (category, id_))
+                self.assertIsInstance(name, str, (category, id_))
+
+    def test_ids_and_names_resolve_in_the_new_shape(self):
+        data = self._data()
+
+        self.assertEqual(ReadJson.terror_name(1, data), "Corrupted Toys")
+        self.assertEqual(ReadJson.terror_name(167, data), "Walpurgisnacht")
+        self.assertEqual(ReadJson.terror_id("Starved", data), 22)
+        self.assertIsNone(ReadJson.terror_name(9999, data))
+
+    def test_the_old_shape_still_works(self):
+        old = {"classic": {"1": "Corrupted Toys"}, "alternate": {"167": "Walpurgisnacht"},
+               "unbound": {}}
+
+        data = ReadJson.normalize_terrors(old)
+
+        self.assertEqual(ReadJson.terror_name(1, data), "Corrupted Toys")
+        self.assertEqual(ReadJson.terror_id("Walpurgisnacht", data), 167)
+        self.assertEqual(ReadJson.fog_terror_id_by_name("Walpurgisnacht", data), 167)
+
+    def test_statistics_see_the_same_shape(self):
+        """統計画面は {カテゴリ: {"ID": 名前}} を前提にしている"""
+        data = self._data()
+
+        self.assertEqual(Statistics.candidate_ids_for_category("Alternate", data),
+                         {149, 151, 167})
+        self.assertEqual(Statistics.terror_name(24, data), "The Guidance")
+
+    def test_string_ids_stay_out_of_the_id_lookup(self):
+        """8pages の "49 23 0" が classic 49 の引きを壊さない"""
+        data = self._data()
+
+        self.assertEqual(ReadJson.terror_name(49, data), "Mona")
+        self.assertEqual(data["8pages"][0]["id"], "49 23 0", "読めるようにだけしておく")
+
+    def test_broken_entries_are_skipped(self):
+        data = ReadJson.normalize_terrors({"classic": [
+            {"id": 1, "name": "Ok"}, "junk", {"id": True, "name": "Bool"},
+            {"id": "x", "name": "NotANumber"}, {"id": "7", "name": "Digits"},
+            {"id": 8}, {"id": 9, "name": "NoIndividuals", "terrors": None},
+        ]})
+
+        self.assertEqual(data["classic"], {"1": "Ok", "7": "Digits",
+                                           "9": "NoIndividuals"})
+
+    # ── 霧の個体名 ───────────────────────────
+    def test_an_individual_name_resolves(self):
+        self.assertEqual(self._fog("Corrupted Woody"), 1)
+        self.assertEqual(self._fog("Furnace"), 22)
+
+    def test_a_terror_name_still_resolves(self):
+        self.assertEqual(self._fog("Walpurgisnacht"), 167)
+
+    def test_unbound_is_not_consulted(self):
+        """unbound まで引くと Atrached が 191/281 で決まらなくなる"""
+        self.assertEqual(self._fog("Atrached"), 191)
+        self.assertIsNone(self._fog("BooBooBabies"))
+
+    def test_the_terror_name_wins_a_tie(self):
+        """The Observation の The Guidance は65秒後。判明前なら classic 24"""
+        self.assertEqual(self._fog("The Guidance"), 24)
+
+    def test_two_individuals_do_not_resolve(self):
+        """Bear5 はどちらも個体名。決めずに revealed を待つ"""
+        self.assertIsNone(self._fog("Bear5"))
+
+    def test_no_partial_match(self):
+        self.assertIsNone(self._fog("Bear"))
+        self.assertIsNone(self._fog("corrupted woody"))
+
+    def test_the_alias_table_still_wins(self):
+        self.assertEqual(self._fog("Bear5", {"Bear5": 149}), 149)
+        self.assertIsNone(self._fog("Furnace", {"Furnace": None}),
+                          "表で曖昧なら terrors.json に落とさない")
+
+    def test_junk_resolves_to_nothing(self):
+        for name in ("", None, 123):
+            self.assertIsNone(self._fog(name), repr(name))
+
+    def test_the_enrage_uses_the_individual_names(self):
+        cfg = WindowConfig(do_skip=True)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Fog"
+
+        with patch.object(config, "TERRORS", self._data()), \
+             patch.object(config, "TERROR_ALIASES", {}), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._on_enrage("Corrupted Woody")
+
+        self.assertEqual(monitor.st.terror_ids, [1])
+
+
 class TestTerrorAliases(unittest.TestCase):
     """terror_aliases.json。個体名からテラーIDを引けるようにする表。
 
@@ -1227,14 +1366,21 @@ class TestTerrorAliases(unittest.TestCase):
         self.assertEqual(self.logs, [])
 
     def test_the_table_wins_over_terrors_json(self):
-        """[CENSORED] の取り違えを表で直せること"""
-        plain = ReadJson.terror_id_by_name("[CENSORED]", config.TERRORS)
+        """[CENSORED] の取り違えを表で直せること。
+
+        現物の terrors.json は依頼者が書き換える（classic 10 の名前も変わった）
+        ので、取り違えが起きる形を合成して確かめる。
+        """
+        data = {"classic": {str(self.CENSORED): "CENSORED"}, "alternate": {},
+                "unbound": {str(self.CENSORED_ALT): "[CENSORED]"}}
+        plain = ReadJson.terror_id_by_name("[CENSORED]", data)
         self.assertEqual(plain, self.CENSORED_ALT, "表が無ければ unbound 側")
 
-        aliases = self._load({"CENSORED": ["[CENSORED]"]})
+        self._write({"CENSORED": ["[CENSORED]"]})
+        aliases = ReadJson.load_terror_aliases(self.path, data, self.logs.append)
 
         self.assertEqual(
-            ReadJson.terror_id_by_name("[CENSORED]", config.TERRORS, aliases),
+            ReadJson.terror_id_by_name("[CENSORED]", data, aliases),
             self.CENSORED)
 
     def test_a_name_outside_the_table_falls_through(self):
@@ -1318,7 +1464,7 @@ class TestTerrorAliases(unittest.TestCase):
     def test_an_ambiguous_name_does_not_fall_through(self):
         """terrors.json に同じ名前があっても、曖昧なら引かせない"""
         aliases = self._load({"Starved": ["The Pursuer"],
-                              "CENSORED": ["The Pursuer"]})
+                              "Huggy": ["The Pursuer"]})
 
         self.assertIsNone(
             ReadJson.terror_id_by_name("The Pursuer", config.TERRORS, aliases))
