@@ -5484,6 +5484,180 @@ class TestAtrachedDetect(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [config.SONIC_ID])
 
 
+class TestVerifiedStrafe(unittest.TestCase):
+    """横移動は本物の Verified（自分の Begin が通った）で、private のときだけ。
+
+    Verified はインマスでなければ来ないので、これで自動的に「インマスのときだけ」
+    になる。STRING_DOWNLOAD で動くと Begin を押す前に移動してしまう。
+    """
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def _monitor(self, instance_type=config.INSTANCE_PRIVATE):
+        monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9000), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.round_end_seen = True
+        return monitor
+
+    def _started(self, monitor, line="Verified"):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._process(line)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_a_real_verified_strafes_in_private(self):
+        monitor = self._monitor()
+
+        started = self._started(monitor)
+
+        self.assertIn("do_speed_strafe", started)
+        self.assertTrue(monitor.st.speed_strafe_done)
+
+    def test_other_instances_do_not_strafe(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO,
+                      config.INSTANCE_PUBLIC):
+            monitor = self._monitor(itype)
+
+            started = self._started(monitor)
+
+            self.assertNotIn("do_speed_strafe", started, itype)
+            self.assertTrue(monitor.st.begin_done, f"{itype}: Verified 自体は採用")
+
+    def test_a_periodic_verified_does_not_strafe(self):
+        monitor = self._monitor()
+        monitor.st.periodic_last = 1000.0
+        monitor.st.periodic_period = 300.0
+
+        with patch.object(LogMonitor.time, "time", return_value=1302.0):
+            started = self._started(monitor)
+
+        self.assertNotIn("do_speed_strafe", started)
+        self.assertFalse(monitor.st.speed_strafe_done)
+
+    def test_a_verified_before_the_round_end_does_not_strafe(self):
+        monitor = self._monitor()
+        monitor.st.round_end_seen = False
+
+        started = self._started(monitor)
+
+        self.assertNotIn("do_speed_strafe", started)
+
+    def test_it_strafes_once_per_round(self):
+        monitor = self._monitor()
+
+        first = self._started(monitor)
+        second = self._started(monitor)
+
+        self.assertIn("do_speed_strafe", first)
+        self.assertNotIn("do_speed_strafe", second)
+
+    def test_the_next_round_may_strafe_again(self):
+        monitor = self._monitor()
+        self._started(monitor)
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            self._started(monitor, "This round is taking place at Facility (12) "
+                                   "and the round type is Classic")
+
+        self.assertFalse(monitor.st.speed_strafe_done)
+
+    def test_the_toggle_off_does_not_strafe(self):
+        SharedState.set_speed_detect(False)
+        monitor = self._monitor()
+
+        self.assertNotIn("do_speed_strafe", self._started(monitor))
+
+    def test_a_verified_before_the_download_still_strafes(self):
+        """実測2%は Verified が先に来る。順番に頼らないこと"""
+        monitor = self._monitor()
+
+        verified = self._started(monitor)
+        download = self._started(monitor, TestStringDownloadTrigger.DL)
+
+        self.assertIn("do_speed_strafe", verified)
+        self.assertIn("do_speed_detect", download)
+        self.assertNotIn("do_speed_strafe", download)
+
+    def test_joining_advances_the_instance_counter(self):
+        monitor = self._monitor()
+        before = monitor.st.instance_seq
+
+        self._started(monitor, "[Behaviour] Joining wrld_1234:5678~private(usr_me)")
+
+        self.assertEqual(monitor.st.instance_seq, before + 1)
+
+
+class TestSpeedDetectRunsUntilTheRound(unittest.TestCase):
+    """速度検知は時間ではなくラウンド突入で止める"""
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+
+    def tearDown(self):
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+
+    def _run(self, on_tick, advance=1.0):
+        cfg = WindowConfig(hwnd=123, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+        # 値を返さない受信（判定では止まらない）
+        ex._receiver = type("R", (), dict(stable_value=None, stable_for=0.0,
+                                          grounded=True, ever_received=True,
+                                          alive=True))()
+        clock = {"t": 1000.0}
+
+        def sleep(_sec):
+            clock["t"] += advance
+            on_tick(st, clock["t"] - 1000.0)
+
+        with patch.object(ActionExecutor.time, "time",
+                          side_effect=lambda: clock["t"]), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            ex.do_speed_detect()
+        return clock["t"] - 1000.0
+
+    def test_it_stops_when_the_round_starts(self):
+        def tick(st, elapsed):
+            if elapsed >= 12:
+                st.in_round = True
+
+        self.assertEqual(self._run(tick), 12)
+
+    def test_it_keeps_watching_past_twenty_seconds(self):
+        """Begin から開始まで20秒を超えることがある（実測1.5%）"""
+        def tick(st, elapsed):
+            if elapsed >= 45:
+                st.in_round = True
+
+        self.assertEqual(self._run(tick), 45)
+
+    def test_the_safety_limit_stops_it(self):
+        """ラウンドが来ないまま回り続けない"""
+        elapsed = self._run(lambda st, e: None)
+
+        self.assertGreaterEqual(elapsed, config.SPEED_PROBE_MAX_SEC)
+        self.assertLessEqual(elapsed, config.SPEED_PROBE_MAX_SEC + 1)
+
+    def test_the_limit_is_longer_than_the_longest_wait_seen(self):
+        """実ログの最大は 119 秒"""
+        self.assertGreater(config.SPEED_PROBE_MAX_SEC, 119)
+
+    def test_changing_instance_stops_it(self):
+        def tick(st, elapsed):
+            if elapsed >= 5:
+                st.instance_seq += 1
+
+        self.assertEqual(self._run(tick), 5)
+
+    def test_the_old_timeout_is_gone(self):
+        self.assertFalse(hasattr(config, "SPEED_PROBE_TIMEOUT_SEC"))
+
+
 class TestStringDownloadTrigger(unittest.TestCase):
     """速度検知の起点はラウンドデータの取得（誰がBeginを押しても出る）"""
 
@@ -5524,11 +5698,12 @@ class TestStringDownloadTrigger(unittest.TestCase):
 
         self.assertIsNone(event)
 
-    def test_download_starts_both_modules_in_private(self):
+    def test_download_starts_detection_without_strafing_in_private(self):
+        """Begin が通る前に動くと、Begin を押せなくなる"""
         started = self._started(self._monitor(config.INSTANCE_PRIVATE))
 
         self.assertIn("do_speed_detect", started)
-        self.assertIn("do_speed_strafe", started)
+        self.assertNotIn("do_speed_strafe", started)
 
     def test_download_starts_detection_only_outside_private(self):
         started = self._started(self._monitor(config.INSTANCE_HOSHIIMO))
@@ -5578,13 +5753,13 @@ class TestStringDownloadTrigger(unittest.TestCase):
 
         self.assertFalse(monitor.st.speed_probe_done)
 
-    def test_verified_no_longer_starts_the_probe(self):
-        """Verified からは起動しない（起点の移設）"""
+    def test_verified_does_not_start_the_detection(self):
+        """判定の起点はラウンドデータの取得。Verified は横移動だけ"""
         monitor = self._monitor()
 
         started = self._started(monitor, "Verified")
 
-        self.assertEqual(started, [])
+        self.assertNotIn("do_speed_detect", started)
         self.assertFalse(monitor.st.speed_probe_done)
 
     def test_verified_still_marks_begin_done(self):

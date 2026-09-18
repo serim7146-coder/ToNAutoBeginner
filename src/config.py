@@ -188,8 +188,10 @@ SPEED_STICK_TOL        = 0.01   # これを超えて動いたら「変化した�
 SPEED_MATCH_TOL        = 0.01   # 定数との一致許容差
 SPEED_PROBE_LEFT_SEC   = 0.6    # 後に左へ動かす時間
 SPEED_PROBE_RIGHT_SEC  = 0.4    # 先に右へ動かす時間（繰り返しはしない）
-SPEED_PROBE_TIMEOUT_SEC = 20.0  # 判定を諦めるまで
-                                # 起点(ラウンドデータ取得)からROUND_STARTまで9〜16秒
+# 判定はラウンド突入まで見続ける。これは暴走防止の上限だけ
+# （ラウンドが来ないまま回り続けないため）。実測で起点(ラウンドデータ取得)から
+# ROUND_START まで最大119秒。20秒で打ち切ると約1.5%で横移動を取りこぼした
+SPEED_PROBE_MAX_SEC    = 180.0
 SPEED_READY_TIMEOUT_SEC = 2.0   # 速度受信のbind完了を待つ上限（通常はミリ秒で終わる）
 SPEED_RECV_TIMEOUT_SEC = 5.0    # 速度パケットが来ないと判断するまで
                                 # （横移動が始まるまでの猶予を含める）

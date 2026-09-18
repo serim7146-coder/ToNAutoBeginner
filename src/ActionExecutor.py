@@ -434,8 +434,10 @@ class ActionExecutor:
 
     # ── 速度によるラウンド種別の検知 ────────────
     #  判定（do_speed_detect）と横移動（do_speed_strafe）は独立している。
-    #  判定は受信するだけなのでどのインスタンスでも動く。
-    #  横移動はマクロなのでprivate系インスタンスでのみ動かす。
+    #  判定は受信するだけなのでどのインスタンスでも動く。ラウンドデータの
+    #  取得（誰が Begin を押しても出る）で始めて、ラウンド突入まで見続ける。
+    #  横移動はマクロなので private で、自分の Begin が通った（本物の
+    #  Verified）ときだけ動かす。Begin 前に動くと Begin を押せなくなる。
 
     def _speed_voice(self, kind: str) -> str:
         return {"8pages": self._cfg.voice_8pages,
@@ -485,10 +487,15 @@ class ActionExecutor:
         if receiver is None:
             return
         round_seq = st.round_seq
-        deadline = time.time() + config.SPEED_PROBE_TIMEOUT_SEC
+        instance_seq = st.instance_seq
+        # 止めるのはラウンド突入。横移動は後から来る Verified で始まるので、
+        # 時間で打ち切ると取りこぼす。上限は暴走防止だけ
+        deadline = time.time() + config.SPEED_PROBE_MAX_SEC
         try:
             while (self._is_running() and not st.in_round
-                   and st.round_seq == round_seq and time.time() <= deadline):
+                   and st.round_seq == round_seq
+                   and st.instance_seq == instance_seq
+                   and time.time() <= deadline):
                 self._sample_speed(receiver)
                 time.sleep(0.05)
         finally:

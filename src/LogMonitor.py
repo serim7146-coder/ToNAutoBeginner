@@ -819,9 +819,15 @@ class LogMonitor:
             st.pending_verified_time = now
             st.begin_done = True
             self._log("✅ Connecting")
-            # 速度検知の起動はここではなく EVENT_STRING_DOWNLOAD 側で行う。
-            # Verified は自分がBeginを押したときしか出ないため、他人がインマスの
-            # マルチでは1ラウンドも発火しない。
+            # 速度検知そのものは EVENT_STRING_DOWNLOAD 側で始めている（Verified は
+            # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
+            # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
+            # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
+            if (st.instance_type == config.INSTANCE_PRIVATE
+                    and SharedState.get_speed_detect()
+                    and not st.speed_strafe_done):
+                st.speed_strafe_done = True
+                self._start_daemon(self._action.do_speed_strafe)
             # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
             if st.waiting_for_equip and st.item_id:
                 st.waiting_for_equip = False
@@ -853,9 +859,9 @@ class LogMonitor:
                 return
             st.speed_probe_done = True
             self._log("ラウンドデータ取得を検知 → 速度でラウンド種別を判定します")
+            # 横移動はしない。この時点では Begin が通っておらず、動くと
+            # Begin を押せなくなる。横移動は本物の Verified で始める
             self._start_daemon(self._action.do_speed_detect)
-            if st.instance_type == config.INSTANCE_PRIVATE:
-                self._start_daemon(self._action.do_speed_strafe)
             return
 
         if event.kind == LogParser.EVENT_EVERYTHING_RECEIVED:
@@ -883,6 +889,7 @@ class LogMonitor:
             st.begin_done                  = False
             st.speed_round_kind            = ""
             st.speed_probe_done            = False
+            st.speed_strafe_done           = False
             # 速度検知フリーズは種別に関わらずここで必ず解除する。
             # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
             # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
@@ -1087,6 +1094,7 @@ class LogMonitor:
             # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
             st.players = set()
             st.players_known = True
+            st.instance_seq += 1
             # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
             if (self.cfg.skip_rounds or self.cfg.continue_rounds
                     or self.cfg.skip_variant_exempt):
