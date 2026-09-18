@@ -9173,14 +9173,15 @@ class TestReadmeRelease(unittest.TestCase):
 
     def test_the_download_url_follows_the_latest_release(self):
         """版を書くと、リリース前は404・リリース後は古くなる。latest なら直さなくてよい"""
-        urls = re.findall(r"https://github\.com/\S+/releases/\S+", self._readme())
+        # markdown のリンク [文字](URL) の閉じ括弧を URL に含めない
+        urls = re.findall(r"https://github\.com/[^\s)]+/releases/[^\s)]+", self._readme())
 
         self.assertTrue(urls, "URL が見つからない")
         for url in urls:
             self.assertIn("/releases/latest/download/", url)
 
     def test_the_url_points_at_the_update_asset(self):
-        urls = re.findall(r"releases/latest/download/(\S+)", self._readme())
+        urls = re.findall(r"releases/latest/download/([^\s)]+)", self._readme())
 
         self.assertEqual(urls, [config.UPDATE_ASSET_NAME])
 
