@@ -11,7 +11,7 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 
 # ── アプリ情報・自動アップデート ──
 # APP_VERSION はリリースごとに上げ、GitHubのリリースタグと一致させること
-APP_VERSION       = "v0.4.1"
+APP_VERSION       = "v0.4.2"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 
@@ -116,7 +116,7 @@ LATE_ROUND = {
 }
 
 # ── 自動Begin ──
-BEGIN_WAIT_SEC        = 1.0   # RoundOver から Begin移動を始めるまでの待機。
+BEGIN_WAIT_SEC        = 9.0   # RoundOver から Begin移動を始めるまでの待機。
                                # 実測: RoundOver→Verified Round End が約13秒。
                                # OSC の窓は移動した後に Verified Round End を
                                # 待ってからクリックするので、早く動き始めても

@@ -1244,7 +1244,7 @@ class LogMonitor:
 
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
-        self._log(f"判定: {all_ids} / {round_type} {tag}")
+        self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}")
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
