@@ -18,6 +18,7 @@ import MatchTNL
 import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
+import WindowOperator
 import ToolLauncher
 import HotKey
 import ToNEntry
@@ -1118,6 +1119,20 @@ class App(tk.Tk):
         except tk.TclError:
             pass        # ウィンドウ破棄後に after が発火した
 
+    def _release_suicide_keys(self, hwnds):
+        """押されたままかもしれない自爆キーを離す。押していなくても無害。
+
+        失敗しても止めない（止めると停止・終了そのものができなくなる）。
+        """
+        key = SharedState.get_suicide_key()
+        for hwnd in hwnds:
+            if not hwnd:
+                continue
+            try:
+                WindowOperator.release_key_background(hwnd, key)
+            except Exception as e:
+                self._log(f"自爆キーを離せませんでした（{e}）")
+
     def _auto_detect_windows(self):
         """起動時: VRChatウィンドウ数を検出して窓数へ反映し、
         起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
@@ -1125,6 +1140,9 @@ class App(tk.Tk):
         if not windows:
             self._log("[起動時検出] VRChatウィンドウ未検出（窓数は手動で設定してください）")
             return
+        # 前回このツールが自爆の長押し中に落ちていたら、キーが押されたまま
+        # 残っている。見つかった窓すべてで離しておく
+        self._release_suicide_keys(h for h, _t in windows)
         n = len(windows)
         self.v_win_count.set(n)
         if len(self.tabs) != n:
@@ -1258,6 +1276,9 @@ class App(tk.Tk):
         SharedState.round_freeze_reset()         # ラウンド突入フリーズも解除
         for m in self.monitors:
             m.stop()
+        # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
+        # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
+        self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)
         self.monitors.clear()
         self._running = False
         self.btn_start.config(state="normal")

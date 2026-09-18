@@ -94,6 +94,37 @@ except Exception:
     pass
 
 
+def _background_key(hwnd: int, key: str):
+    """背面送信に要る値 (対象スレッド, VK, 押下の lParam, 離上の lParam)。
+
+    送れない窓・キーなら None。例外は投げない。
+    """
+    if not hwnd or len(key) != 1:
+        return None
+    try:
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        if not target_tid:
+            return None
+        hkl = user32.GetKeyboardLayout(target_tid)
+        scan_state = user32.VkKeyScanExW(ctypes.c_wchar(key), hkl)
+        if scan_state in (-1, 0xFFFF):
+            return None
+        vk = scan_state & 0xFF
+        if (scan_state >> 8) & 0xFF:
+            return None     # Shift併用キーは対象外。黙って別のキーを送らない
+
+        scan = user32.MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, hkl)
+        if not scan:
+            return None
+        ext = 1 if (scan >> 8) & 0xFF in (0xE0, 0xE1) else 0
+        scan &= 0xFF
+        lparam_down = 1 | (scan << 16) | (ext << 24)
+        lparam_up = lparam_down | (1 << 30) | (1 << 31)
+    except Exception:
+        return None
+    return target_tid, vk, lparam_down, lparam_up
+
+
 def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
     """フォーカスを奪わずにキーを押しっぱなしにする。送り切れたら True。
 
@@ -102,34 +133,20 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
     SetKeyboardState で対象スレッドのキー状態にも押下を書き込む。
 
     戻り値は「背面送信を最後まで実行できたか」。ゲーム側が反応したかは見ない
-    （それはログ側の既存の仕組みで判定する）。False のときは呼び出し側が
-    従来のフォーカス方式へ落とすこと。
+    （それはログ側の既存の仕組みで判定する）。前面の窓は切り替えないので、
+    複数の窓から同時に呼んでよい。各呼び出しは自分のスレッドを自分の対象の
+    スレッドにだけアタッチし、必ずデタッチして抜ける。
     """
-    if not hwnd or sec <= 0.0 or len(key) != 1:
+    if sec <= 0.0:
         return False
+    params = _background_key(hwnd, key)
+    if params is None:
+        return False
+    target_tid, vk, lparam_down, lparam_up = params
     try:
-        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
-        if not target_tid:
-            return False
         if user32.IsIconic(hwnd):
             # 最小化中は送れない。ここで復元すると窓が出てきて背面化の意味が消える
             return False
-
-        hkl = user32.GetKeyboardLayout(target_tid)
-        scan_state = user32.VkKeyScanExW(ctypes.c_wchar(key), hkl)
-        if scan_state in (-1, 0xFFFF):
-            return False
-        vk = scan_state & 0xFF
-        if (scan_state >> 8) & 0xFF:
-            return False    # Shift併用キーは対象外。黙って別のキーを送らない
-
-        scan = user32.MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, hkl)
-        if not scan:
-            return False
-        ext = 1 if (scan >> 8) & 0xFF in (0xE0, 0xE1) else 0
-        scan &= 0xFF
-        lparam_down = 1 | (scan << 16) | (ext << 24)
-        lparam_up = lparam_down | (1 << 30) | (1 << 31)
     except Exception:
         return False
 
@@ -166,6 +183,39 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
         # アタッチしたまま抜けると、ユーザーの操作が対象窓へ流れ込む
         if attached:
             user32.AttachThreadInput(self_tid, target_tid, False)
+
+
+def release_key_background(hwnd: int, key: str) -> bool:
+    """押されたままかもしれないキーを、フォーカスを奪わずに離す。
+
+    自爆スレッドは daemon なので、長押しの最中にこのツールが終わると
+    WM_KEYUP もキー状態の戻しも走らず、VRChat 側では押されたままになる。
+    押していなくても無害（押下が残っていなければキー状態は触らない）。
+    最小化中でも送る（離すだけなら窓を出す必要は無い）。例外は投げない。
+    """
+    params = _background_key(hwnd, key)
+    if params is None:
+        return False
+    target_tid, vk, _lparam_down, lparam_up = params
+    self_tid = 0
+    attached = False
+    try:
+        self_tid = kernel32.GetCurrentThreadId()
+        attached = bool(user32.AttachThreadInput(self_tid, target_tid, True))
+        state = (ctypes.c_ubyte * 256)()
+        if user32.GetKeyboardState(ctypes.byref(state)) and state[vk] & 0x80:
+            state[vk] = 0
+            user32.SetKeyboardState(ctypes.byref(state))
+        user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
+        return True
+    except Exception:
+        return False
+    finally:
+        if attached:
+            try:
+                user32.AttachThreadInput(self_tid, target_tid, False)
+            except Exception:
+                pass
 
 
 def hold_key(key: str, sec: float):

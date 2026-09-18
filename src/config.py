@@ -120,7 +120,7 @@ LATE_ROUND = {
 }
 
 # ── 自動Begin ──
-BEGIN_WAIT_SEC        = 11.0   # RoundOver から Begin移動を始めるまでの待機。
+BEGIN_WAIT_SEC        = 1.0   # RoundOver から Begin移動を始めるまでの待機。
                                # 実測: RoundOver→Verified Round End が約13秒。
                                # 11秒待って約2.2秒移動すると、移動し終えた頃に
                                # Round End が出てクリックできる状態になる。
@@ -206,9 +206,7 @@ FOCUS_RETRY_WAIT_SEC = 0.12  # 前面化要求後に反映を待つ時間
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 # 自爆キーをフォーカス無しで送る（Trueで背面送信、Falseで従来のフォーカス方式）
 # 背面送信が使えない状況では自動的にフォーカス方式へ落ちる
-SUICIDE_BACKGROUND = True
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
-SUICIDE_FOCUS_SETTLE_SEC = 0.25  # 自爆前にVRChatへフォーカスが移るのを待つ時間
 
 # ── 3クラ続行設定 ──────────────────────────────
 OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {

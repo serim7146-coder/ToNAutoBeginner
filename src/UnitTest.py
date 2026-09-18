@@ -134,17 +134,21 @@ class TestActionExecutorFocusFailure(unittest.TestCase):
         SharedState.equip_freeze_reset()
         SharedState.CONTINUE_ROUND_EVENT.set()
 
-    def test_do_skip_aborts_when_focus_fails(self):
+    def test_do_skip_never_takes_focus(self):
+        """自爆は背面送信だけ。送れなくても前面の窓へは押さない"""
         cfg = WindowConfig(hwnd=123)
         st = WindowState(in_round=True)
         logs = []
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
-        with patch.object(WindowOperator, "focus_window", return_value=False), \
+        with patch.object(WindowOperator, "hold_key_background",
+                          return_value=False), \
+             patch.object(WindowOperator, "focus_window") as mock_focus, \
              patch.object(WindowOperator, "hold_key") as mock_hold, \
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_skip()
+        mock_focus.assert_not_called()
         mock_hold.assert_not_called()
-        self.assertTrue(any("フォーカス取得失敗" in m for m in logs))
+        self.assertTrue(any("自爆できませんでした" in m for m in logs), logs)
 
     def test_do_after_round_aborts_when_focus_fails(self):
         cfg = WindowConfig(hwnd=123)
@@ -4610,7 +4614,7 @@ class TestHoldKeyBackground(unittest.TestCase):
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
-    """do_skip の送信経路（背面 → 失敗ならフォーカス方式）"""
+    """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
     def setUp(self):
         SharedState.equip_freeze_reset()
@@ -4630,8 +4634,7 @@ class TestSuicideBackgroundRouting(unittest.TestCase):
     def test_background_success_does_not_take_focus(self):
         ex, st, _logs = self._executor()
 
-        with patch.object(config, "SUICIDE_BACKGROUND", True), \
-             patch.object(WindowOperator, "hold_key_background",
+        with patch.object(WindowOperator, "hold_key_background",
                           return_value=True) as mock_bg, \
              patch.object(WindowOperator, "focus_window") as mock_focus, \
              patch.object(WindowOperator, "hold_key") as mock_hold, \
@@ -4643,34 +4646,419 @@ class TestSuicideBackgroundRouting(unittest.TestCase):
         mock_hold.assert_not_called()
         self.assertGreater(st._skip_time, 0, "死亡判定用の時刻は残すこと")
 
-    def test_background_failure_falls_back_to_focus(self):
-        ex, _st, logs = self._executor()
+    def test_background_failure_does_not_fall_back(self):
+        """落とすとロック無しでプレイ中の窓に自爆キーが押されうる"""
+        ex, st, logs = self._executor()
 
-        with patch.object(config, "SUICIDE_BACKGROUND", True), \
-             patch.object(WindowOperator, "hold_key_background",
+        with patch.object(WindowOperator, "hold_key_background",
                           return_value=False), \
-             patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus, \
+             patch.object(WindowOperator, "focus_window") as mock_focus, \
              patch.object(WindowOperator, "hold_key") as mock_hold, \
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_skip()
 
-        mock_focus.assert_called_once_with(123)
-        mock_hold.assert_called_once_with("^", config.SUICIDE_HOLD_SEC)
-        self.assertTrue(any("フォーカス方式へ" in m for m in logs), logs)
+        mock_focus.assert_not_called()
+        mock_hold.assert_not_called()
+        self.assertTrue(any("自爆できませんでした" in m for m in logs), logs)
+        self.assertEqual(st._skip_time, 0.0, "自爆成功と誤判定しないこと")
 
-    def test_disabled_uses_the_old_path_only(self):
-        ex, _st, _logs = self._executor()
+    def test_the_old_switches_are_gone(self):
+        self.assertFalse(hasattr(config, "SUICIDE_BACKGROUND"))
+        self.assertFalse(hasattr(config, "SUICIDE_FOCUS_SETTLE_SEC"))
 
-        with patch.object(config, "SUICIDE_BACKGROUND", False), \
-             patch.object(WindowOperator, "hold_key_background") as mock_bg, \
-             patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus, \
-             patch.object(WindowOperator, "hold_key") as mock_hold, \
-             patch.object(ActionExecutor.time, "sleep"):
+
+class TestSuicideIsolation(unittest.TestCase):
+    """自爆はロックもフリーズも見ない。前面の窓を切り替えないので要らない"""
+
+    def setUp(self):
+        self._reset()
+        SharedState.set_suicide_key("^")
+
+    def tearDown(self):
+        self._reset()
+
+    @staticmethod
+    def _reset():
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.speed_freeze_reset()
+        SharedState.round_freeze_reset()
+
+    def _executor(self, hwnd=123, **state):
+        cfg = WindowConfig(hwnd=hwnd, do_skip=True)
+        st = WindowState(in_round=True, **state)
+        logs = []
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append), st
+
+    def _skip(self, ex, timeout=2.0):
+        """別スレッドで回す。止まってしまったら False"""
+        sent = []
+        with patch.object(WindowOperator, "hold_key_background",
+                          side_effect=lambda h, k, sec: sent.append(h) or True):
+            t = threading.Thread(target=ex.do_skip, daemon=True)
+            t.start()
+            t.join(timeout)
+        return (not t.is_alive()), sent
+
+    # ── ロック ──────────────────────────────
+    def test_it_does_not_wait_for_the_lock(self):
+        """Begin やクリックがロックを握っている間でも自爆する"""
+        ex, _st = self._executor()
+        with SharedState._GLOBAL_ACTION_LOCK:
+            finished, sent = self._skip(ex)
+
+        self.assertTrue(finished, "ロックを待って止まった")
+        self.assertEqual(sent, [123])
+
+    def test_it_never_holds_the_lock(self):
+        ex, _st = self._executor()
+        held = []
+        with patch.object(WindowOperator, "hold_key_background",
+                          side_effect=lambda *a: held.append(
+                              SharedState._GLOBAL_ACTION_LOCK.locked()) or True):
             ex.do_skip()
 
-        mock_bg.assert_not_called()
-        mock_focus.assert_called_once_with(123)
-        mock_hold.assert_called_once_with("^", config.SUICIDE_HOLD_SEC)
+        self.assertEqual(held, [False])
+
+    # ── フリーズ ─────────────────────────────
+    def test_another_windows_continue_freeze_does_not_stop_it(self):
+        SharedState.continue_round_start()
+        ex, _st = self._executor()
+
+        finished, sent = self._skip(ex)
+
+        self.assertTrue(finished)
+        self.assertEqual(sent, [123])
+
+    def test_another_windows_item_wait_does_not_stop_it(self):
+        SharedState.EQUIP_WAIT_EVENT.clear()
+        ex, _st = self._executor()
+
+        finished, sent = self._skip(ex)
+
+        self.assertTrue(finished)
+        self.assertEqual(sent, [123])
+
+    def test_speed_and_entry_freezes_do_not_stop_it(self):
+        SharedState.SPEED_FREEZE_EVENT.clear()
+        SharedState.ROUND_FREEZE_EVENT.clear()
+        ex, _st = self._executor()
+
+        finished, sent = self._skip(ex)
+
+        self.assertTrue(finished)
+        self.assertEqual(sent, [123])
+
+    # ── 自窓の状態では止まる ─────────────────────
+    def test_its_own_continue_round_stops_it(self):
+        ex, _st = self._executor(is_continue_round=True)
+
+        _finished, sent = self._skip(ex)
+
+        self.assertEqual(sent, [])
+
+    def test_its_own_item_wait_stops_it(self):
+        ex, _st = self._executor(waiting_for_equip=True)
+
+        _finished, sent = self._skip(ex)
+
+        self.assertEqual(sent, [])
+
+    def test_outside_a_round_it_does_nothing(self):
+        ex, st = self._executor()
+        st.in_round = False
+
+        _finished, sent = self._skip(ex)
+
+        self.assertEqual(sent, [])
+
+    def test_a_stopped_monitor_does_nothing(self):
+        cfg = WindowConfig(hwnd=123, do_skip=True)
+        ex = ActionExecutor.ActionExecutor(cfg, WindowState(in_round=True),
+                                           lambda: False, lambda _m: None)
+
+        _finished, sent = self._skip(ex)
+
+        self.assertEqual(sent, [])
+
+    # ── 同時に ──────────────────────────────
+    def test_two_windows_skip_at_the_same_time(self):
+        a, _ = self._executor(hwnd=0xA)
+        b, _ = self._executor(hwnd=0xB)
+        inside = []
+        peak = []
+        gate = threading.Barrier(2, timeout=2.0)
+        lock = threading.Lock()
+
+        def hold(hwnd, key, sec):
+            with lock:
+                inside.append(hwnd)
+                peak.append(len(inside))
+            gate.wait()                 # 2つとも中に入るまで待つ
+            with lock:
+                inside.remove(hwnd)
+            return True
+
+        with patch.object(WindowOperator, "hold_key_background", side_effect=hold):
+            threads = [threading.Thread(target=ex.do_skip, daemon=True)
+                       for ex in (a, b)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(3.0)
+
+        self.assertFalse(any(t.is_alive() for t in threads), "片方が待たされた")
+        self.assertEqual(max(peak), 2, "2窓が同時に送っていること")
+
+
+class TestHoldKeyBackgroundInParallel(unittest.TestCase):
+    """並行に呼んでも、各呼び出しは自分の対象にだけアタッチし、必ず外す"""
+
+    def test_each_call_attaches_only_to_its_own_window(self):
+        targets = {0xA: 1001, 0xB: 1002}
+        calls = []
+        record = threading.Lock()
+        gate = threading.Barrier(2, timeout=2.0)
+
+        u = MagicMock()
+        u.GetWindowThreadProcessId.side_effect = lambda h, _p: targets[h]
+        u.IsIconic.return_value = 0
+        u.GetKeyboardLayout.return_value = 0x04110411
+        u.VkKeyScanExW.return_value = 0xDE
+        u.MapVirtualKeyExW.return_value = 0x0D
+        u.GetKeyboardState.return_value = 1
+
+        def attach(me, target, on):
+            with record:
+                calls.append((me, target, on))
+            return 1
+
+        u.AttachThreadInput.side_effect = attach
+        k = MagicMock()
+        k.GetCurrentThreadId.side_effect = threading.get_ident
+
+        results = {}
+
+        def run(hwnd):
+            results[hwnd] = WindowOperator.hold_key_background(hwnd, "^", 3.0)
+
+        with patch.object(WindowOperator, "user32", u), \
+             patch.object(WindowOperator, "kernel32", k), \
+             patch.object(WindowOperator.time, "sleep",
+                          side_effect=lambda _s: gate.wait()):
+            threads = [threading.Thread(target=run, args=(h,)) for h in targets]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(3.0)
+
+        self.assertEqual(results, {0xA: True, 0xB: True})
+        attached = [(me, t) for me, t, on in calls if on]
+        detached = [(me, t) for me, t, on in calls if not on]
+        self.assertEqual(sorted(attached), sorted(detached), "必ず外すこと")
+        self.assertEqual(sorted(t for _me, t in attached), [1001, 1002])
+        self.assertEqual(len({me for me, _t in attached}), 2,
+                         "呼び出したスレッドごとに別々にアタッチしていること")
+
+
+class TestReleaseKeyBackground(unittest.TestCase):
+    """押されたままかもしれない自爆キーを離す"""
+
+    VK = 0xDE
+    SCAN = 0x0D
+
+    def _user32(self, pressed=True, **over):
+        u = MagicMock()
+        u.GetWindowThreadProcessId.return_value = 4321
+        u.GetKeyboardLayout.return_value = 0x04110411
+        u.VkKeyScanExW.return_value = self.VK
+        u.MapVirtualKeyExW.return_value = self.SCAN
+        u.AttachThreadInput.return_value = 1
+
+        def get_state(ref):
+            if pressed:
+                ref._obj[self.VK] = 0x80
+            return 1
+
+        u.GetKeyboardState.side_effect = get_state
+        for name, value in over.items():
+            getattr(u, name).return_value = value
+        return u
+
+    def _release(self, u, key="^", hwnd=0x1234):
+        k = MagicMock()
+        k.GetCurrentThreadId.return_value = 99
+        with patch.object(WindowOperator, "user32", u), \
+             patch.object(WindowOperator, "kernel32", k):
+            return WindowOperator.release_key_background(hwnd, key)
+
+    def test_the_key_up_is_posted(self):
+        u = self._user32()
+
+        self.assertTrue(self._release(u))
+
+        msg = u.PostMessageW.call_args.args
+        self.assertEqual(msg[:3], (0x1234, WindowOperator.WM_KEYUP, self.VK))
+        self.assertTrue(msg[3] & (1 << 31), "離上の lParam")
+
+    def test_a_held_key_state_is_cleared(self):
+        u = self._user32(pressed=True)
+        written = []
+        u.SetKeyboardState.side_effect = lambda ref: written.append(
+            ref._obj[self.VK]) or 1
+
+        self._release(u)
+
+        self.assertEqual(written, [0])
+
+    def test_an_unpressed_key_leaves_the_state_alone(self):
+        """押していなくても無害"""
+        u = self._user32(pressed=False)
+
+        self.assertTrue(self._release(u))
+
+        u.SetKeyboardState.assert_not_called()
+
+    def test_it_detaches(self):
+        u = self._user32()
+
+        self._release(u)
+
+        self.assertEqual([c.args[2] for c in u.AttachThreadInput.call_args_list],
+                         [True, False])
+
+    def test_a_minimized_window_still_gets_it(self):
+        """離すだけなら窓を出す必要は無い"""
+        u = self._user32(IsIconic=1)
+
+        self.assertTrue(self._release(u))
+        u.PostMessageW.assert_called_once()
+
+    def test_an_unsendable_key_does_nothing(self):
+        for over in (dict(VkKeyScanExW=-1), dict(VkKeyScanExW=(1 << 8) | self.VK),
+                     dict(GetWindowThreadProcessId=0)):
+            u = self._user32(**over)
+
+            self.assertFalse(self._release(u), over)
+            u.PostMessageW.assert_not_called()
+
+    def test_a_failure_does_not_raise(self):
+        u = self._user32()
+        u.PostMessageW.side_effect = OSError("gone")
+
+        self.assertFalse(self._release(u))
+        self.assertEqual(u.AttachThreadInput.call_args.args[2], False,
+                         "失敗してもデタッチすること")
+
+    def test_the_real_dll_has_what_it_uses(self):
+        """名前を間違えると AttributeError で黙って止まる（以前の実例あり）"""
+        import ctypes as real_ctypes
+        u32 = real_ctypes.WinDLL("user32")
+        k32 = real_ctypes.WinDLL("kernel32")
+        for name in ("GetWindowThreadProcessId", "GetKeyboardLayout",
+                     "VkKeyScanExW", "MapVirtualKeyExW", "AttachThreadInput",
+                     "GetKeyboardState", "SetKeyboardState", "PostMessageW"):
+            self.assertTrue(hasattr(u32, name), name)
+        self.assertTrue(hasattr(k32, "GetCurrentThreadId"))
+
+
+class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
+    """停止・終了・起動のときに自爆キーを離す"""
+
+    def setUp(self):
+        SharedState.set_suicide_key("^")
+
+    def _app(self, hwnds=(0xA, 0xB)):
+        app = type("FakeApp", (), {})()
+        app.order = []
+        app.monitors = []
+        for h in hwnds:
+            m = MagicMock()
+            m.cfg.hwnd = h
+            m.stop.side_effect = lambda h=h: app.order.append(("stop", h))
+            app.monitors.append(m)
+        app._entry_stop = threading.Event()
+        app.btn_start = MagicMock()
+        app.btn_stop = MagicMock()
+        app.lbl_win_warn = MagicMock()
+        app.logs = []
+        app._log = app.logs.append
+        app._release_suicide_keys = \
+            lambda hs: mainGUI.App._release_suicide_keys(app, hs)
+        return app
+
+    def _released(self, app):
+        return patch.object(
+            mainGUI.WindowOperator, "release_key_background",
+            side_effect=lambda h, k: app.order.append(("release", h, k)) or True)
+
+    def test_stopping_releases_every_watched_window(self):
+        app = self._app()
+
+        with self._released(app):
+            mainGUI.App._stop(app)
+
+        self.assertIn(("release", 0xA, "^"), app.order)
+        self.assertIn(("release", 0xB, "^"), app.order)
+
+    def test_it_releases_after_the_monitors_stop(self):
+        """止める前に離すと、止まるまでの間にまた押されうる"""
+        app = self._app()
+
+        with self._released(app):
+            mainGUI.App._stop(app)
+
+        kinds = [e[0] for e in app.order]
+        self.assertLess(max(i for i, k in enumerate(kinds) if k == "stop"),
+                        min(i for i, k in enumerate(kinds) if k == "release"))
+
+    def test_closing_releases_before_destroying(self):
+        app = self._app()
+        app._save_settings_now = lambda: None
+        app._stop = lambda: mainGUI.App._stop(app)
+        app.destroy = lambda: app.order.append(("destroy",))
+
+        with self._released(app):
+            mainGUI.App._on_close(app)
+
+        kinds = [e[0] for e in app.order]
+        self.assertIn("release", kinds)
+        self.assertLess(kinds.index("release"), kinds.index("destroy"))
+
+    def test_startup_releases_every_vrchat_window(self):
+        """前回このツールが長押しの最中に落ちていた場合の回収"""
+        app = self._app(hwnds=())
+        app.v_win_count = MagicMock()
+        app.tabs = [object(), object()]
+        app._rebuild_tabs = MagicMock()
+        app._assign_windows_and_logs = MagicMock()
+
+        with self._released(app), \
+             patch.object(mainGUI.VRChatDiscovery,
+                          "get_vrchat_windows_by_start_time",
+                          return_value=[(0x11, 1.0), (0x22, 2.0)]):
+            mainGUI.App._auto_detect_windows(app)
+
+        self.assertEqual([e[1] for e in app.order if e[0] == "release"],
+                         [0x11, 0x22])
+
+    def test_a_failure_does_not_stop_the_stop(self):
+        app = self._app()
+
+        with patch.object(mainGUI.WindowOperator, "release_key_background",
+                          side_effect=OSError("gone")):
+            mainGUI.App._stop(app)          # 落ちないこと
+
+        self.assertFalse(app._running)
+        self.assertTrue(any("離せませんでした" in m for m in app.logs), app.logs)
+
+    def test_an_unset_window_is_skipped(self):
+        app = self._app(hwnds=(0, 0xA))
+
+        with self._released(app):
+            mainGUI.App._stop(app)
+
+        self.assertEqual([e[1] for e in app.order if e[0] == "release"], [0xA])
 
 
 class TestHoldKey(unittest.TestCase):
@@ -4724,30 +5112,21 @@ class TestActionExecutorSkip(unittest.TestCase):
         mock_hold.assert_not_called()
         self.assertTrue(any("HWND" in msg for msg in logs))
 
-    def test_do_skip_waits_after_focus_before_holding_key(self):
+    def test_do_skip_sends_the_current_key_in_the_background(self):
         cfg = WindowConfig(hwnd=123)
         st = WindowState(in_round=True)
-        calls = []
         SharedState.set_suicide_key("x")
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _msg: None)
 
-        def _focus(hwnd):
-            calls.append(("focus", hwnd))
-            return True
-
-        with patch.object(WindowOperator, "focus_window", side_effect=_focus), \
-             patch.object(ActionExecutor.time, "sleep", side_effect=lambda sec: calls.append(("sleep", sec))), \
-             patch.object(WindowOperator, "hold_key", side_effect=lambda key, sec: calls.append(("hold", key, sec))):
+        with patch.object(WindowOperator, "hold_key_background",
+                          return_value=True) as mock_bg, \
+             patch.object(WindowOperator, "focus_window") as mock_focus, \
+             patch.object(ActionExecutor.time, "sleep") as mock_sleep:
             executor.do_skip()
 
-        self.assertEqual(
-            calls,
-            [
-                ("focus", 123),
-                ("sleep", config.SUICIDE_FOCUS_SETTLE_SEC),
-                ("hold", "x", config.SUICIDE_HOLD_SEC),
-            ],
-        )
+        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC)
+        mock_focus.assert_not_called()
+        mock_sleep.assert_not_called()
 
     def test_do_after_round_uses_window_instance_not_global_instance(self):
         SharedState.set_instance_type(config.INSTANCE_HOSHIIMO)
@@ -5613,10 +5992,8 @@ class TestRoundFreeze(unittest.TestCase):
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
         held = []
 
-        with patch.object(WindowOperator, "focus_window", return_value=True), \
-             patch.object(ActionExecutor.time, "sleep"), \
-             patch.object(WindowOperator, "hold_key",
-                          side_effect=lambda k, sec: held.append(k)):
+        with patch.object(WindowOperator, "hold_key_background",
+                          side_effect=lambda h, k, sec: held.append(k) or True):
             ex.do_skip()
 
         self.assertTrue(held, "自窓は待たずに自爆すること")

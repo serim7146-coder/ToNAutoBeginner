@@ -148,48 +148,34 @@ class ActionExecutor:
     # ── 自爆 ──────────────────────────────────
 
     def do_skip(self):
-        """キー長押しで自爆する"""
+        """自爆キーを背面で長押しする。
+
+        前面の窓を切り替えないので、ロックもフリーズも要らない。ロックは
+        「前面を切り替えてよいのは1窓だけ」、フリーズは「続行中の窓から
+        フォーカスを奪わない」ためのもの。だから他窓の続行中・Begin 中・
+        アイテム取得中でも、複数の窓が同時にでも自爆できる。
+
+        フォーカス方式への落とし先は廃止した。ロックを取らずにそれが走ると、
+        プレイ中の窓で自爆キーが押されうる。背面で送れなければ（最小化中・
+        Shift併用キーなど）自爆せずに知らせる。
+        """
         st = self._st
         if self._cfg.hwnd == 0:
             self._log("自爆キャンセル（HWND未選択）")
             return
+        if not self._is_running() or st.is_continue_round or not st.in_round:
+            return
         if st.waiting_for_equip:
+            # 自窓のアイテムロスト待ち。他窓の待ちでは止まらない
             self._log("自爆キャンセル（アイテムロスト待ち中）")
             return
-        # 他窓が装備待ち・続行ラウンド・速度検知フリーズ中は止まる
-        # （自分が続行ラウンド中／自分がフリーズの発生源のときは除く）
-        if not st.is_continue_round:
-            while self._is_running() and st.in_round:
-                eq_ok  = SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
-                con_ok = SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
-                spd_ok = (st.speed_freeze_held
-                          or SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0))
-                # 自窓が張ったラウンド突入フリーズでは自爆を止めない
-                rnd_ok = (st.round_freeze_held
-                          or SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0))
-                if eq_ok and con_ok and spd_ok and rnd_ok:
-                    break
-        with SharedState._GLOBAL_ACTION_LOCK:
-            if not self._is_running() or st.is_continue_round or not st.in_round:
-                return
-            if st.waiting_for_equip:
-                self._log("自爆キャンセル（ロック取得後にアイテムロスト待ち検出）")
-                return
-            key = SharedState.get_suicide_key()
-            if config.SUICIDE_BACKGROUND:
-                # フォーカスを奪わずに送る。送り切れなければ従来方式へ落とす
-                st._skip_time = time.time()
-                self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
-                if WindowOperator.hold_key_background(
-                        self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
-                    return
-                self._log("背面送信できず → フォーカス方式へ")
-            if not self.focus():
-                return
-            st._skip_time = time.time()
-            self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒)…")
-            time.sleep(config.SUICIDE_FOCUS_SETTLE_SEC)
-            WindowOperator.hold_key(key, config.SUICIDE_HOLD_SEC)
+        key = SharedState.get_suicide_key()
+        st._skip_time = time.time()
+        self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
+        if not WindowOperator.hold_key_background(
+                self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
+            st._skip_time = 0.0
+            self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
 
     def _begin_precheck(self, check_freeze: bool = True) -> bool:
         """Begin実行前の中止条件を確認する。続行してよければTrue。
@@ -347,7 +333,6 @@ class ActionExecutor:
             elapsed = (time.time() - st.round_over_time) if st.round_over_time else 0.0
             remain = config.BEGIN_WAIT_SEC - elapsed
             if remain > 0:
-                self._log(f"ラウンド終了から{config.BEGIN_WAIT_SEC}秒待機（残り{remain:.1f}秒）")
                 time.sleep(remain)
         # Beginはフレ/フレ+/招待/招待+のみ
         if st.instance_type != config.INSTANCE_PRIVATE:
