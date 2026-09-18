@@ -1,28 +1,28 @@
 # 最新リリース
-https://github.com/serim7146-coder/ToNAutoBeginner/releases/download/0.2.0/ToNAutoBeginner.7z
+https://github.com/serim7146-coder/ToNAutoBeginner/releases/download/v0.4.0/ToNAutoBeginner.exe
 
 # ToNAutoBeginner
 **VRChatワールド「Terrors of Nowhere」向けの支援ツール**
 
 # 主な機能
-* 複数窓制御
+* 複数窓を制御し、自動自爆や自動Beginを行う
 * ラウンド収集+統計データ
 * 音声アナウンス
-  * アイテムロストラウンド後
+  * アイテムロストラウンド後(Punished, 8 Pages, Run)
   * 続行ラウンド
   * 霧ラウンド
   * intermission突入(Beginが押せるようになった時)
   * Foxy出現
-* 自動周回ツール(インスタンス制限あり)
+  * 速度検知でのラウンド
 
 # 使用方法
-1. 「①続行リスト(.tnl)」にて、「参照」から.tnlファイルを選択。.tnlファイルは以下の手順で出力できます
+1. 「①続行リスト(.tnl)」にて、「参照」から.tnlファイルを選択。.tnlファイルは以下の手順で出力できます。
     1. ToN ListTool(https://booth.pm/ja/items/7722619 )を起動
     2. 「欲しいリスト作成・編集」を選択
     3. 続行を選ぶ
     4. 「エクスポート(.tnl)」を選択して出力
 3. 「②窓数・ログ設定」内の「窓数」を選択
-4. 使用する窓を順に選択
+4. 使用する窓を直接、順に選択
 5. 「最新ログを自動割り当て」を選択
 6. 使用したい機能を選択
 7. 「マクロ開始」を押す

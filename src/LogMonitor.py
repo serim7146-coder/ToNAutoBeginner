@@ -227,6 +227,8 @@ class LogMonitor:
         try:
             found_user     = False
             found_instance = False
+            # 最後の Joining より後の入退室。逆向きに読むので新しい順に溜まる
+            player_events = []
             lines = self._iter_log_lines_reversed(
                 self.cfg.log_path,
                 config.LOG_START_SCAN_CHUNK_BYTES,
@@ -236,9 +238,15 @@ class LogMonitor:
                 if not event:
                     continue
 
+                if not found_instance and event.kind in (
+                        LogParser.EVENT_PLAYER_JOINED,
+                        LogParser.EVENT_PLAYER_LEFT):
+                    player_events.append(event)
+
                 if not found_user and event.kind == LogParser.EVENT_USER_AUTH:
                     self._log(f"UserID検出: {event.user_id}")
                     self.st.local_player_name = event.player_name
+                    self.st.local_user_id = event.user_id
                     self.st.transformed_uid = ConnectDB.send_Users(event.user_id)
                     self._log(f"transformed_uid: {self.st.transformed_uid}")
                     found_user = True
@@ -247,11 +255,42 @@ class LogMonitor:
                     found_instance = True
                     self.st.instance_type = self._parse_instance_type(event.suffix)
                     self._log(f"インスタンスタイプ検出: {self.st.instance_type}")
+                    # マクロを途中で始めても人数が分かるように。積み上げないと
+                    # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
+                    self._restore_players(reversed(player_events))
 
                 if found_user and found_instance:
-                    return
+                    break
         except Exception as e:
             self._log(f"検出エラー: {e}")
+        if self.st.players_known:
+            self._log(f"インスタンス内の人数を復元: 自分以外 "
+                      f"{len(self._other_players())}人")
+        else:
+            self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
+
+    def _restore_players(self, events):
+        """Joining 以降の入退室を古い順に積み上げる"""
+        st = self.st
+        st.players = set()
+        for event in events:
+            self._apply_player_event(event)
+        st.players_known = True
+
+    def _apply_player_event(self, event):
+        if event.kind == LogParser.EVENT_PLAYER_JOINED:
+            self.st.players.add(event.user_id)
+        elif event.kind == LogParser.EVENT_PLAYER_LEFT:
+            self.st.players.discard(event.user_id)
+
+    def _other_players(self) -> set:
+        return {uid for uid in self.st.players if uid != self.st.local_user_id}
+
+    def _others_present(self) -> bool:
+        """このインスタンスに自分以外がいるか。分からなければ「いる」"""
+        if not self.st.players_known:
+            return True
+        return bool(self._other_players())
 
     # ── メインループ ──────────────────────────
     def _run(self):
@@ -410,18 +449,18 @@ class LogMonitor:
             and not self.st.gigabytes
         )
 
-    def _waiting_for_terror_variant(self) -> bool:
+    def _waiting_for_terror_replacement(self) -> bool:
         """テラーIDがまだ確定していないか。統計登録の待ち合わせにも使う。
 
-        ここに入れてよいのは「元IDから変異しうると分かる」ものだけ。
-        Gigabytes は元IDが不定でClassicの1体構成すべてが候補になり、
-        入れると統計登録がほぼ全Classicで遅れる（privateの挙動が変わる）ので
-        含めない。グループ判定の待ちは `_waiting_for_group_variant()`。
+        Gigabytes も含める。元IDが不定なのでClassicの1体構成すべてが候補に
+        なり、統計登録はGigabytesの行かラウンド終了まで遅れる。
+        グループ判定の待ちは `_waiting_for_group_variant()`。
         """
         return (
             self._waiting_for_bloodthirsty_creature_variant()
             or self._waiting_for_hungry_home_invader_variant()
             or self._waiting_for_atrached_variant()
+            or self._waiting_for_gigabytes()
         )
 
     def _waiting_for_group_variant(self) -> bool:
@@ -430,7 +469,7 @@ class LogMonitor:
         Classic は「Variantなら通常判定、そうでなければ問答無用スキップ」
         なので、確定を待たずに自爆すると取り逃がす。
         """
-        return self._waiting_for_terror_variant() or self._waiting_for_gigabytes()
+        return self._waiting_for_terror_replacement() or self._waiting_for_gigabytes()
 
     def _mark_bloodthirsty_creature_variant(self):
         st = self.st
@@ -557,28 +596,28 @@ class LogMonitor:
             return True
         return False
 
-    def _group_list_unavailable(self) -> bool:
-        """グループの窓なのに主催リストが使えない状態か。
+    def _needs_host_list(self) -> bool:
+        """主催リストが無いと判定してはいけない状態か。
 
-        周回では「誰かが欲しがっているか」で続行が決まるので、自分の tnl で
-        判断するのは意味が違う。取れないなら手を止める。
+        ソロなら自分の tnl で判定してよい。他の人がいるのに自分の tnl で
+        裁くと、他人の周回を自分のリストで自爆させる。自動自爆OFFなら
+        自爆しないので要らない。操作しないインスタンス（public など）は
+        判定そのものをしないので、ここでも求めない。
         """
-        if self.st.instance_type not in GroupRound.GROUP_INSTANCES:
+        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+                                         *GroupRound.GROUP_INSTANCES):
             return False
-        return SharedState.get_list_source() != "host"
+        return self.cfg.do_skip and self._others_present()
+
+    def _host_list_missing(self) -> bool:
+        return (self._needs_host_list()
+                and SharedState.get_list_source() != "host")
 
     def _check_group_list_state(self):
-        """主催リストの喪失/復帰を、ラウンドと無関係に拾う。
-
-        `_on_killers()` まで待つと、落ちてから次のラウンドでテラーが確定する
-        まで気づけない（インターミッション中なら数分後、周回後の放置中なら
-        永久に出ない）。鳴った頃にはもうそのラウンドが始まっていて、
-        ToN ListTool を立て直す余地がない。
-
-        通知は `list_lost_notified` で状態が変わったときだけ出るので、
-        0.3秒ごとに呼んでも鳴り続けない。
         """
-        if self._group_list_unavailable():
+        主催リストの喪失/復帰を拾う。`_on_killers()` と同じ条件で見る。
+        """
+        if self._host_list_missing():
             self._notify_group_list_lost()
         else:
             self._notify_group_list_back()
@@ -626,7 +665,7 @@ class LogMonitor:
     def _waiting_for_round_skip_variant(self) -> bool:
         """ラウンド指定自爆でVariant確定を待つべきか。
 
-        設定していない窓に待ちを増やさないこと。`_waiting_for_terror_variant()`
+        設定していない窓に待ちを増やさないこと。`_waiting_for_terror_replacement()`
         は統計登録のゲートも兼ねているので、波及すると統計が遅れる。
         """
         return (
@@ -737,6 +776,12 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_USER_AUTH:
             st.local_player_name = event.player_name
+            st.local_user_id = event.user_id
+            return
+
+        if event.kind in (LogParser.EVENT_PLAYER_JOINED,
+                          LogParser.EVENT_PLAYER_LEFT):
+            self._apply_player_event(event)
             return
 
         if event.kind == LogParser.EVENT_SUS_PLAYER:
@@ -939,7 +984,7 @@ class LogMonitor:
             # Begin待ちの起点。実処理は Verified Round End 側で走るが、
             # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
             st.round_over_time = time.time()
-            if self._waiting_for_terror_variant():
+            if self._waiting_for_terror_replacement():
                 self._send_round_statistics_once()
             announce_on_round_over = (
                 not self.cfg.auto_begin
@@ -966,7 +1011,7 @@ class LogMonitor:
             # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
             # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
             st.sus_players = []
-            if self._waiting_for_terror_variant():
+            if self._waiting_for_terror_replacement():
                 self._send_round_statistics_once()
             if st.is_continue_round:
                 # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
@@ -1039,6 +1084,9 @@ class LogMonitor:
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
             self.sequence.reset()
             st.enrage_identified = None
+            # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
+            st.players = set()
+            st.players_known = True
             # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
             if (self.cfg.skip_rounds or self.cfg.continue_rounds
                     or self.cfg.skip_variant_exempt):
@@ -1137,9 +1185,9 @@ class LogMonitor:
         # 名前は判定より先に出す。この下には設定・インスタンス種別による
         # early return が5つあり、そこを通ると何が出たのか分からなくなるため。
         verb = "revealed" if revealed else "set"
-        self._log(f"テラー{verb}: {format_terror_ids(st.terror_ids)} / {round_type}")
+        self._log(f"Terror {verb}: {format_terror_ids(st.terror_ids)} / {round_type}")
 
-        if not self._waiting_for_terror_variant():
+        if not self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
 
         if revealed and st.enrage_identified is not None:
@@ -1157,15 +1205,12 @@ class LogMonitor:
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
-        # 主催リストが取れないグループの窓はここで手を止める。自爆も通常判定も
-        # 走らせない（tnlの内容で判定すると他人の周回を自分のリストで裁くことになる）
-        if self._group_list_unavailable():
+        # 他の人がいるのに主催リストが取れない窓はここで止める。
+        if self._host_list_missing():
             self._notify_group_list_lost()
             return
         self._notify_group_list_back()
 
-        # 干し芋/焼き芋のラウンド判定。Variant確定を待たずに決めると
-        # ClassicのVariantを取り逃がすので、待ちは分岐の外で見る
         if is_group_skip:
             # Variantが確定しうるラウンドはどれも待つ。0.3秒で、確定した時点で
             # 打ち切るので、待ちが結論を変えないラウンドでも実害は出ない

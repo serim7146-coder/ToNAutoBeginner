@@ -27,6 +27,8 @@ EVENT_GIGABYTES = "gigabytes"
 EVENT_ATRACHED = "atrached"
 EVENT_MASTER_SWITCHED = "master_switched"
 EVENT_ENRAGE = "enrage"
+EVENT_PLAYER_JOINED = "player_joined"
+EVENT_PLAYER_LEFT = "player_left"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -54,6 +56,14 @@ RE_STRING_DOWNLOAD = re.compile(
     r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
+# 入退室。`[PlayerLog] OnPlayerJoined: 名前 (VR=False)` という別形式も出るが
+# usr_ID が無いので [Behaviour] の方だけを使う（両方拾うと二重に数える）。
+# 名前に括弧が入りうるので、末尾の (usr_...) で区切る。
+# OnPlayerJoinComplete / OnPlayerLeftRoom は直後の空白が無いので当たらない
+RE_PLAYER_JOINED = re.compile(
+    r"^\[Behaviour\] OnPlayerJoined (.+) \((usr_[0-9a-f-]+)\)$")
+RE_PLAYER_LEFT = re.compile(
+    r"^\[Behaviour\] OnPlayerLeft (.+) \((usr_[0-9a-f-]+)\)$")
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_CREATURE_BLOODTHIRSTY = re.compile(r"^The creature is bloodthirsty today[.][.][.]$")
 RE_HUNGRY_HOME_INVADER = re.compile(r"^I hear strange sounds coming from the kitchen[.]$")
@@ -187,6 +197,16 @@ def parse(line: str) -> LogEvent | None:
         name = m.group(1).strip()
         # 名前が空の行が実データに46回ある。取れないものはイベントにしない
         return LogEvent(EVENT_ENRAGE, player_name=name) if name else None
+
+    m = RE_PLAYER_JOINED.match(line)
+    if m:
+        return LogEvent(EVENT_PLAYER_JOINED, user_id=m.group(2),
+                        player_name=m.group(1).strip())
+
+    m = RE_PLAYER_LEFT.match(line)
+    if m:
+        return LogEvent(EVENT_PLAYER_LEFT, user_id=m.group(2),
+                        player_name=m.group(1).strip())
 
     m = RE_USER_AUTH.search(line)
     if m:

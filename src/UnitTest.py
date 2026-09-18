@@ -8,6 +8,8 @@ import tempfile
 import gzip
 import ctypes
 import io
+import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -5255,7 +5257,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
     def test_logged_when_auto_skip_is_off(self):
         logs = self._on_killers(self._monitor(do_skip=False))
 
-        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+        self.assertTrue(any("Terror set:" in m for m in logs), logs)
 
     def test_logged_under_instance_restriction(self):
         """publicなど操作しないインスタンスでも名前は残す"""
@@ -5263,7 +5265,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
 
         logs = self._on_killers(monitor)
 
-        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+        self.assertTrue(any("Terror set:" in m for m in logs), logs)
         self.assertTrue(any("インスタンス制限" in m for m in logs), logs)
 
     def test_logged_when_hoshiimo_skip_decides(self):
@@ -5271,7 +5273,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
 
         logs = self._on_killers(monitor)
 
-        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+        self.assertTrue(any("Terror set:" in m for m in logs), logs)
 
     def test_logged_in_hands_free(self):
         SharedState.set_hands_free(True)
@@ -5279,7 +5281,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
 
         logs = self._on_killers(monitor)
 
-        self.assertTrue(any("テラーset:" in m for m in logs), logs)
+        self.assertTrue(any("Terror set:" in m for m in logs), logs)
 
     def test_unknown_id_shows_the_raw_id(self):
         """terrors.json に無いIDは ID:xxxxx の形で出る"""
@@ -5299,11 +5301,11 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
     def test_revealed_uses_the_other_verb(self):
         logs = self._on_killers(self._monitor(), revealed=True)
 
-        self.assertTrue(any("テラーrevealed:" in m for m in logs), logs)
+        self.assertTrue(any("Terror revealed:" in m for m in logs), logs)
 
     def test_name_comes_before_the_decision(self):
         logs = self._on_killers(self._monitor())
-        names = [i for i, m in enumerate(logs) if "テラーset:" in m]
+        names = [i for i, m in enumerate(logs) if "Terror set:" in m]
         decisions = [i for i, m in enumerate(logs) if "判定:" in m]
 
         self.assertTrue(names and decisions)
@@ -7682,9 +7684,12 @@ class TestGroupListStatePolled(unittest.TestCase):
         self.assertEqual(len(self._lost(monitor)), 2, monitor.logs)
         self.played.assert_called_once_with("lost.mp3")
 
-    def test_a_private_window_is_untouched(self):
+    def test_a_solo_private_window_is_untouched(self):
         SharedState.set_list_source("tnl")
         monitor = self._monitor(config.INSTANCE_PRIVATE)
+        monitor.st.local_user_id = "usr_me"
+        monitor.st.players = {"usr_me"}
+        monitor.st.players_known = True
 
         for _ in range(3):
             self._tick(monitor)
@@ -7795,6 +7800,343 @@ class TestGroupListStatePolled(unittest.TestCase):
                 monitor._run()
 
         self.assertEqual(calls["n"], 3)
+
+
+class TestPlayerLines(unittest.TestCase):
+    """入退室の行。[Behaviour] の方だけを拾う"""
+
+    PREFIX = "2026.09.18 16:56:57 Debug      -  "
+    ME = "usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3"
+
+    def _parse(self, body):
+        return LogParser.parse(self.PREFIX + body)
+
+    def test_a_join_is_read(self):
+        event = self._parse(f"[Behaviour] OnPlayerJoined serim01 ({self.ME})")
+
+        self.assertEqual(event.kind, LogParser.EVENT_PLAYER_JOINED)
+        self.assertEqual(event.user_id, self.ME)
+        self.assertEqual(event.player_name, "serim01")
+
+    def test_a_leave_is_read(self):
+        event = self._parse(f"[Behaviour] OnPlayerLeft serim01 ({self.ME})")
+
+        self.assertEqual(event.kind, LogParser.EVENT_PLAYER_LEFT)
+        self.assertEqual(event.user_id, self.ME)
+
+    def test_a_japanese_name_is_read(self):
+        event = self._parse("[Behaviour] OnPlayerJoined しゅんかしゅうとう "
+                            "(usr_f651fb3b-9ea3-4136-aa53-2d3e11aebff4)")
+
+        self.assertEqual(event.player_name, "しゅんかしゅうとう")
+
+    def test_a_name_with_brackets_is_read(self):
+        event = self._parse("[Behaviour] OnPlayerJoined a (b) c "
+                            "(usr_f651fb3b-9ea3-4136-aa53-2d3e11aebff4)")
+
+        self.assertEqual(event.player_name, "a (b) c")
+        self.assertEqual(event.user_id, "usr_f651fb3b-9ea3-4136-aa53-2d3e11aebff4")
+
+    def test_the_playerlog_form_is_not_counted(self):
+        """同じ入室が2行出る。両方拾うと二重に数える"""
+        self.assertIsNone(self._parse("[PlayerLog] OnPlayerJoined: serim01 (VR=False)"))
+
+    def test_similar_lines_are_not_counted(self):
+        for body in ("[Behaviour] OnPlayerLeftRoom",
+                     f"[Behaviour] OnPlayerJoinComplete serim01",
+                     "[Behaviour] OnPlayerLeft VRCPlayer[Remote] 63939541 21 ()"):
+            event = self._parse(body)
+            self.assertFalse(
+                event is not None and event.kind in (
+                    LogParser.EVENT_PLAYER_JOINED, LogParser.EVENT_PLAYER_LEFT),
+                body)
+
+
+class TestHostListNeedsOthers(unittest.TestCase):
+    """主催リストが必要なのは「他の人がいて、自動自爆ON」のときだけ"""
+
+    ME = "usr_0e01408a"
+    PREFIX = "2026.09.18 16:56:57 Debug      -  "
+    JOIN = (PREFIX + "[Behaviour] Joining wrld_1234:5678~private(usr_me)")
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("tnl")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    def _monitor(self, *, others=(), do_skip=True, known=True,
+                 instance_type=config.INSTANCE_PRIVATE, keep_on=None):
+        cfg = WindowConfig(do_skip=do_skip, voice_continue="continue.mp3",
+                           voice_list_lost="lost.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Bloodbath"
+        monitor.st.local_user_id = self.ME
+        monitor.st.players = {self.ME, *others}
+        monitor.st.players_known = known
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _killers(self, monitor, ids=(1, 2, 3)):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _stopped(self, monitor):
+        return any("主催リストが取れません" in m for m in monitor.logs)
+
+    def _line(self, monitor, body):
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.PREFIX + body)
+
+    # ── 依頼者の表 ──────────────────────────
+    def test_solo_with_the_tnl_decides(self):
+        monitor = self._monitor()
+
+        started = self._killers(monitor)
+
+        self.assertFalse(self._stopped(monitor), monitor.logs)
+        self.assertIn("do_skip", started)
+
+    def test_others_with_skip_on_and_the_tnl_stops(self):
+        monitor = self._monitor(others={"usr_f00d"})
+
+        started = self._killers(monitor)
+
+        self.assertTrue(self._stopped(monitor), monitor.logs)
+        self.assertEqual(started, [])
+
+    def test_others_with_skip_on_and_the_host_list_decides(self):
+        SharedState.set_list_source("host")
+        monitor = self._monitor(others={"usr_f00d"})
+
+        started = self._killers(monitor)
+
+        self.assertFalse(self._stopped(monitor), monitor.logs)
+        self.assertIn("do_skip", started)
+
+    def test_others_with_skip_off_and_the_tnl_does_not_stop(self):
+        monitor = self._monitor(others={"usr_f00d"}, do_skip=False,
+                                keep_on={"Bloodbath/ブラッドバス": {1}})
+
+        self._killers(monitor, [1])
+
+        self.assertFalse(self._stopped(monitor), monitor.logs)
+        self.assertTrue(monitor.st.is_continue_round, "tnl で判定している")
+
+    def test_it_applies_to_group_windows_the_same_way(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            solo = self._monitor(instance_type=itype)
+            crowd = self._monitor(instance_type=itype, others={"usr_f00d"})
+
+            self.assertFalse(solo._host_list_missing(), itype)
+            self.assertTrue(crowd._host_list_missing(), itype)
+
+    def test_a_public_window_never_asks_for_it(self):
+        """public は判定そのものをしない。鳴らしても意味が無い"""
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC,
+                                others={"usr_a", "usr_b"})
+
+        self.assertFalse(monitor._host_list_missing())
+
+    # ── 人数の数え方 ─────────────────────────
+    def test_i_am_not_one_of_the_others(self):
+        monitor = self._monitor()
+
+        self._line(monitor, f"[Behaviour] OnPlayerJoined serim01 ({self.ME})")
+
+        self.assertFalse(monitor._others_present())
+
+    def test_a_join_and_a_leave_move_the_count(self):
+        monitor = self._monitor()
+
+        self._line(monitor, "[Behaviour] OnPlayerJoined friend (usr_f00d)")
+        self.assertTrue(monitor._others_present())
+
+        self._line(monitor, "[Behaviour] OnPlayerLeft friend (usr_f00d)")
+        self.assertFalse(monitor._others_present())
+
+    def test_the_playerlog_line_does_not_double_count(self):
+        monitor = self._monitor()
+        self._line(monitor, "[Behaviour] OnPlayerJoined friend (usr_f00d)")
+        self._line(monitor, "[PlayerLog] OnPlayerJoined: friend (VR=False)")
+
+        self._line(monitor, "[Behaviour] OnPlayerLeft friend (usr_f00d)")
+
+        self.assertFalse(monitor._others_present(), "1回の退室で0人に戻る")
+
+    def test_joining_an_instance_clears_the_count(self):
+        monitor = self._monitor(others={"usr_f00d"})
+
+        self._line(monitor, "[Behaviour] Joining wrld_1234:5678~private(usr_me)")
+
+        self.assertEqual(monitor.st.players, set())
+        self.assertTrue(monitor.st.players_known,
+                        "入室の瞬間から見ているので信用してよい")
+
+    def test_an_unknown_count_means_others_are_present(self):
+        """復元できないときは安全側"""
+        monitor = self._monitor(known=False)
+
+        self.assertTrue(monitor._others_present())
+        self.assertTrue(monitor._host_list_missing())
+
+    def test_a_fresh_window_starts_unknown(self):
+        self.assertFalse(WindowState().players_known)
+
+    def test_my_own_id_comes_from_the_auth_line(self):
+        monitor = self._monitor()
+        monitor.st.local_user_id = ""
+
+        self._line(monitor, "User Authenticated: serim01 (usr_0e01408a-ac26)")
+
+        self.assertEqual(monitor.st.local_user_id, "usr_0e01408a-ac26")
+
+    # ── 周期チェックと一致していること ──────────────
+    def test_the_periodic_check_uses_the_same_condition(self):
+        cases = [
+            dict(),                                         # ソロ
+            dict(others={"usr_f00d"}),                     # 他の人・自爆ON
+            dict(others={"usr_f00d"}, do_skip=False),      # 他の人・自爆OFF
+            dict(known=False),                               # 不明
+            dict(instance_type=config.INSTANCE_PUBLIC, others={"usr_a"}),
+        ]
+        for case in cases:
+            for src in ("tnl", "host", None):
+                SharedState.set_list_source(src)
+                polled = self._monitor(**case)
+                decided = self._monitor(**case)
+
+                with patch.object(PlaySound, "play_sound"):
+                    polled._check_group_list_state()
+                self._killers(decided)
+
+                self.assertEqual(self._stopped(polled), self._stopped(decided),
+                                 f"{case} / {src}")
+
+
+class TestPlayersRestoredOnStart(unittest.TestCase):
+    """マクロを途中で始めても、いまのインスタンスの人数が分かること"""
+
+    ME = "usr_0e01408a"
+
+    def _log_file(self, lines):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                          encoding="utf-8")
+        prefix = "2026.09.18 16:56:57 Debug      -  "
+        tmp.write("\n".join(prefix + line for line in lines) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return Path(tmp.name)
+
+    def _restore(self, lines):
+        cfg = WindowConfig(log_path=self._log_file(lines))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        with patch.object(ConnectDB, "send_Users", return_value=1):
+            monitor._detect_instance_from_log()
+        return monitor
+
+    def test_the_players_since_the_last_join_are_restored(self):
+        monitor = self._restore([
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_old:1~private(usr_me)",
+            "[Behaviour] OnPlayerJoined ghost (usr_9057)",   # 前のインスタンス
+            f"[Behaviour] OnPlayerLeft serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_now:2~group(grp_x)~groupAccessType(plus)",
+            "[Behaviour] OnPlayerJoined a (usr_a)",
+            "[Behaviour] OnPlayerJoined b (usr_b)",
+            f"[Behaviour] OnPlayerJoined serim01 ({self.ME})",
+            "[Behaviour] OnPlayerLeft b (usr_b)",
+        ])
+
+        self.assertTrue(monitor.st.players_known)
+        self.assertEqual(monitor.st.players, {"usr_a", self.ME})
+        self.assertEqual(monitor._other_players(), {"usr_a"})
+        self.assertTrue(any("自分以外 1人" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_a_solo_instance_is_restored_as_solo(self):
+        monitor = self._restore([
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_now:2~private(usr_me)",
+            f"[Behaviour] OnPlayerJoined serim01 ({self.ME})",
+            "[PlayerLog] OnPlayerJoined: serim01 (VR=False)",
+        ])
+
+        self.assertTrue(monitor.st.players_known)
+        self.assertFalse(monitor._others_present())
+
+    def test_everyone_left_is_solo(self):
+        monitor = self._restore([
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_now:2~private(usr_me)",
+            f"[Behaviour] OnPlayerJoined serim01 ({self.ME})",
+            "[Behaviour] OnPlayerJoined a (usr_a)",
+            "[Behaviour] OnPlayerLeft a (usr_a)",
+        ])
+
+        self.assertFalse(monitor._others_present())
+
+    def test_no_join_line_means_others_are_present(self):
+        """復元できない。安全側に倒す"""
+        monitor = self._restore([
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] OnPlayerJoined a (usr_a)",
+        ])
+
+        self.assertFalse(monitor.st.players_known)
+        self.assertTrue(monitor._others_present())
+        self.assertTrue(any("復元できません" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_a_read_error_means_others_are_present(self):
+        cfg = WindowConfig(log_path=self._log_file(["x"]))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.logger = lambda _m: None
+
+        with patch.object(LogMonitor.LogMonitor, "_iter_log_lines_reversed",
+                          side_effect=OSError("locked")):
+            monitor._detect_instance_from_log()
+
+        self.assertFalse(monitor.st.players_known)
+        self.assertTrue(monitor._others_present())
+
+    def test_my_id_is_restored_too(self):
+        monitor = self._restore([
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_now:2~private(usr_me)",
+        ])
+
+        self.assertEqual(monitor.st.local_user_id, self.ME)
+
+
+class TestReadmeRelease(unittest.TestCase):
+    def test_the_download_url_uses_the_tag(self):
+        """タグは v0.4.0。v を落とすとリンク切れ"""
+        readme = (Path(__file__).resolve().parent.parent / "README.md"
+                  ).read_text(encoding="utf-8")
+        urls = re.findall(r"releases/download/([^/]+)/", readme)
+
+        self.assertTrue(urls, "URL が見つからない")
+        for tag in urls:
+            self.assertTrue(tag.startswith("v"), tag)
+        self.assertIn(config.APP_VERSION, urls)
 
 
 class TestSabotageStarAnnounces(unittest.TestCase):
@@ -7983,7 +8325,11 @@ class TestSabotageStarAnnounces(unittest.TestCase):
 
 
 class TestGroupNeedsHostList(unittest.TestCase):
-    """干し芋/焼き芋は主催リストが無いと手を止める"""
+    """他の人がいて自動自爆ONなら、主催リストが無いと手を止める。
+
+    ここの窓は人数を復元していない（players_known=False）ので「他の人が
+    いる」扱いになる。ソロの扱いは TestHostListNeedsOthers で見る。
+    """
 
     CLASSIC_KEY = "Classic/クラシック"
 
@@ -8053,22 +8399,26 @@ class TestGroupNeedsHostList(unittest.TestCase):
 
             self.assertIn("do_skip", started, itype)   # Bloodbathは問答無用スキップ
 
-    def test_private_is_untouched(self):
+    def test_a_solo_private_window_uses_the_tnl(self):
         for src in ("tnl", None):
             SharedState.set_list_source(src)
             monitor = self._monitor(config.INSTANCE_PRIVATE,
                                     keep_on={"Bloodbath/ブラッドバス": {1}})
+            monitor.st.local_user_id = "usr_me"
+            monitor.st.players = {"usr_me"}
+            monitor.st.players_known = True
 
             started = self._killers(monitor, [1])
 
             self.assertTrue(monitor.st.is_continue_round, src)
             self.assertNotIn("do_skip", started, src)
 
-    def test_the_helper_is_false_for_private(self):
+    def test_a_private_window_with_others_stops_too(self):
+        """private でも他の人がいれば他人の周回。自分の tnl では裁かない"""
         SharedState.set_list_source("tnl")
         monitor = self._monitor(config.INSTANCE_PRIVATE)
 
-        self.assertFalse(monitor._group_list_unavailable())
+        self.assertTrue(monitor._host_list_missing())
 
     # ── 通知 ────────────────────────────────
     def test_it_logs_and_plays_once(self):
@@ -8099,7 +8449,7 @@ class TestGroupNeedsHostList(unittest.TestCase):
 
         self._killers(monitor)
 
-        self.assertTrue(any("テラーset:" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(any("Terror set:" in m for m in monitor.logs), monitor.logs)
 
     def test_recovery_logs_once(self):
         SharedState.set_list_source("tnl")
@@ -9811,23 +10161,55 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         return monitor
 
     def test_statistics_are_sent_when_killers_are_known(self):
+        """Gigabytes の候補にならない構成（Bloodbath の3体）はすぐ送る"""
+        monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
+
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99)
+        self.assertTrue(monitor.st.statistics_sent)
+
+    def test_a_single_classic_waits_for_gigabytes(self):
+        """元IDが不定なので、Classic の1体構成はどれも Gigabytes の候補"""
         monitor = self._monitor()
 
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
             monitor._on_killers([1], "Classic", revealed=False)
 
+        mock_send.assert_not_called()
+        self.assertFalse(monitor.st.statistics_sent)
+
+    def test_a_single_classic_is_sent_at_the_round_end(self):
+        monitor = self._monitor()
+        monitor.cfg.auto_begin = False
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([1], "Classic", revealed=False)
+            monitor._process("Verified Round End")
+
         mock_send.assert_called_once_with("Classic", [1], 12, 99)
-        self.assertTrue(monitor.st.statistics_sent)
+
+    def test_gigabytes_sends_the_replaced_id(self):
+        monitor = self._monitor()
+
+        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+            monitor._on_killers([1], "Classic", revealed=False)
+            monitor._process("The Gigabytes have come.")
+
+        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99)
 
     def test_statistics_are_sent_only_once_per_round(self):
         monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
 
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
-            monitor._on_killers([1], "Classic", revealed=False)
-            monitor._on_killers([2], "Classic", revealed=True)
+            monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
+            monitor._on_killers([4], "Bloodbath", revealed=True)
 
-        mock_send.assert_called_once_with("Classic", [1], 12, 99)
-        self.assertEqual(monitor.st.terror_ids, [1, 2])
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99)
+        self.assertEqual(monitor.st.terror_ids, [1, 2, 3, 4])
 
     def test_round_start_resets_statistics_sent_flag(self):
         monitor = self._monitor()
@@ -9843,10 +10225,14 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
 
     def test_bloodthirsty_log_before_killers_converts_curious_creature(self):
         monitor = self._monitor()
+        monitor.cfg.auto_begin = False
         monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
+            # Classic の1体なので Gigabytes を待つ。送るのは終了時
+            mock_send.assert_not_called()
+            monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
         mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
@@ -9888,10 +10274,13 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
 
     def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
         monitor = self._monitor()
+        monitor.cfg.auto_begin = False
         monitor._process(config.HUNGRY_HOME_INVADER_LOG)
 
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
+            mock_send.assert_not_called()       # Gigabytes 待ち
+            monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
         mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99)
@@ -9922,8 +10311,10 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99)
 
     def test_verified_end_does_not_send_statistics(self):
+        """待つものが無い構成なら、終了時に改めて送らない"""
         monitor = self._monitor()
-        monitor.st.terror_ids = [1]
+        monitor.st.round_type = "Bloodbath"
+        monitor.st.terror_ids = [1, 2, 3]
 
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
             monitor._process("Verified Round End")

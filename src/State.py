@@ -46,6 +46,12 @@ class WindowState:
     statistics_sent: bool = False
     transformed_uid: int | None = None
     local_player_name: str = ""
+    local_user_id: str = ""
+    # インスタンス内のプレイヤー（usr_ID。表示名は変わりうる）。自分も入る
+    players: set = field(default_factory=set)
+    # players を信用できるか。起動時に復元できなければ False のまま——
+    # 「他の人がいる」側に倒す（他人の周回を自分の tnl で裁かないため）
+    players_known: bool = False
     fog: bool = False
     is_continue_round: bool = False
     _skip_time: float = 0.0
