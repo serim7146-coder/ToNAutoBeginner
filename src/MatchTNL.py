@@ -142,9 +142,10 @@ def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None
             continue
         # 畳んだ一覧に足すのは last_active だけ。他のアカウントは希望だけ
         target = keepOn_set if name == active else {}
+        # 全部 OFF でも {} で残す。「リストがあって続行したいものが無い」
+        # （＝全部自爆）と「リストが無い」（＝分からないので止める）を分けるため。
+        # 周回の参加者も同じ扱い（load_host_save）
         _fold_wishes(data, target, wishes.setdefault(name, {}))
-        if not wishes[name]:
-            wishes.pop(name, None)
         loaded.add(name)
     return active if active in loaded else None
 

@@ -327,8 +327,9 @@ class LogMonitor:
         if not self.st.players_known:
             return None
         present = self._present_names()
+        # 中身が空でもリストを持っている人は残す（全部 OFF＝全部自爆）
         return {name: wish for name, wish in self.host_wishes.items()
-                if name in present and wish}
+                if name in present}
 
     def _keep_on(self) -> dict:
         """この窓の続行リスト"""
@@ -349,7 +350,7 @@ class LogMonitor:
         others = {st.player_names[uid] for uid in self._other_players()
                   if uid in st.player_names}
         missing = sorted(name for name in others - st.unmatched_logged
-                         if not self.host_wishes.get(name))
+                         if name not in self.host_wishes)
         if missing:
             st.unmatched_logged.update(missing)
             self._log(f"[主催リスト] 希望が見つからない入室者: {', '.join(missing)}")
@@ -617,7 +618,12 @@ class LogMonitor:
                 and SharedState.get_list_source() != "host")
 
     def _wishes_missing(self) -> bool:
-        """主催リストはあるが、この窓にいる誰の希望も無いか（自分のリストも無い）"""
+        """主催リストはあるが、この窓にいる誰もリストを持っていないか。
+
+        リストが空（全部 OFF）の人がいれば「続行したいものが無い」と分かって
+        いるので止めない（全部自爆する）。誰もリストを持っていないときは、
+        続行が無いのか分からないので止める。
+        """
         if self.st.instance_type not in (config.INSTANCE_PRIVATE,
                                          *GroupRound.GROUP_INSTANCES):
             return False
@@ -656,7 +662,7 @@ class LogMonitor:
         st.list_lost_notified = True
         st.list_lost_reason = reason
         if reason == "wishes":
-            self._log("⚠ この窓にいる人の続行希望がありません → この窓の自爆を停止します")
+            self._log("⚠ この窓にいる人の続行リストがありません → この窓の自爆を停止します")
         else:
             self._log("⚠ 主催リストが取れません → この窓の自爆を停止します")
         if not self._hands_free():
@@ -668,7 +674,7 @@ class LogMonitor:
             return
         st.list_lost_notified = False
         if st.list_lost_reason == "wishes":
-            self._log("続行希望が見つかりました → 自爆を再開します")
+            self._log("続行リストが見つかりました → 自爆を再開します")
         else:
             self._log("主催リストが戻りました → 自爆を再開します")
         st.list_lost_reason = ""

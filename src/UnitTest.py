@@ -3733,6 +3733,7 @@ class TestWishesPerWindow(unittest.TestCase):
     WISHES = {
         "serim01": {DT: {1}},
         "さぶりむ": {DT: {2}},
+        "offall": {},                  # リストはあるが全部 OFF
         "roundmate": {DT: {5}},        # 焼き芋の周回の参加者
         "elsewhere": {DT: {9}},        # 周回の参加者だが、この窓にはいない
     }
@@ -3810,14 +3811,34 @@ class TestWishesPerWindow(unittest.TestCase):
 
         self.assertEqual(monitor._keep_on(), {self.DT: {1}})
 
-    def test_no_wishes_at_all_stops(self):
+    def test_no_list_at_all_stops(self):
+        """誰もリストを持っていない。続行が無いのか分からないので止める"""
         monitor = self._monitor(me="nobody", others=("stranger",))
 
         started = self._killers(monitor, [5, 3])
 
         self.assertEqual(started, [])
-        self.assertTrue(any("続行希望がありません" in m for m in monitor.logs),
+        self.assertTrue(any("続行リストがありません" in m for m in monitor.logs),
                         monitor.logs)
+
+    def test_a_solo_list_with_everything_off_skips_everything(self):
+        """依頼者: 続行なかったら全部死ぬだけ"""
+        monitor = self._monitor(me="offall")
+
+        self.assertEqual(monitor._keep_on(), {})
+        started = self._killers(monitor, [1, 5])
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(any("続行リストがありません" in m for m in monitor.logs),
+                         "止めずに判定すること")
+
+    def test_an_everything_off_player_is_not_unmatched(self):
+        monitor = self._monitor(others=("offall",), itype=config.INSTANCE_YAKIIMO)
+
+        self._killers(monitor, [1, 3])
+
+        self.assertFalse(any("希望が見つからない入室者" in m for m in monitor.logs),
+                         monitor.logs)
 
     def test_the_periodic_check_agrees(self):
         monitor = self._monitor(me="nobody")
@@ -3837,7 +3858,7 @@ class TestWishesPerWindow(unittest.TestCase):
         monitor._check_group_list_state()
 
         self.assertFalse(monitor.st.list_lost_notified)
-        self.assertTrue(any("続行希望が見つかりました" in m for m in monitor.logs),
+        self.assertTrue(any("続行リストが見つかりました" in m for m in monitor.logs),
                         monitor.logs)
 
     # ── 従来どおりのところ ─────────────────────
@@ -3958,11 +3979,24 @@ class TestHostSaveAllAccounts(unittest.TestCase):
         self.assertEqual(wishes["ruri9752 fff9"], {self.PAGES: {20}})
         self.assertEqual(wishes["roundmate"], {self.PAGES: {70}})
 
-    def test_an_account_with_nothing_on_has_no_wishes(self):
+    def test_an_account_with_everything_off_is_kept_empty(self):
+        """さぶりむ（全部 OFF）はリストを持っている。壊れたものは持っていない"""
         _keep, _meta, wishes = self._load()
 
-        self.assertNotIn("さぶりむ", wishes)
+        self.assertEqual(wishes["さぶりむ"], {})
         self.assertNotIn("壊れ", wishes)
+
+    def test_a_participant_with_everything_off_is_kept_empty(self):
+        """周回の参加者も同じ扱い"""
+        with gzip.open(self.host, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
+                {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 0}}}]}]}
+            ).encode("utf-8"))
+
+        _keep, meta, wishes = self._load()
+
+        self.assertEqual(wishes["roundmate"], {})
+        self.assertEqual(meta["participants"], 1)
 
     def test_the_shared_list_still_adds_only_the_active_account(self):
         """GUI の件数表示は従来どおり"""
@@ -4124,14 +4158,15 @@ class TestHostOwnList(unittest.TestCase):
         self.assertNotIn(self.FOG_ALT, keep_on)
         self.assertEqual(wishes["serim01"], {self.PAGES: {70}})
 
-    def test_a_host_with_no_wishes_is_not_listed(self):
+    def test_a_host_with_everything_off_is_kept_empty(self):
+        """全部 OFF は「続行したいものが無い」。リストが無いのとは違う"""
         self._write_host(1)
         self._write_user(self._account({self.PAGES: {"70": 0}}))
 
         _keep_on, meta, wishes = self._load()
 
         self.assertEqual(meta["host_self"], "serim01", "読めてはいる")
-        self.assertNotIn("serim01", wishes, "空の希望を置かないこと")
+        self.assertEqual(wishes["serim01"], {}, "空でも {} で残すこと")
 
     def test_a_duplicate_name_is_merged(self):
         """participants に同名がいても OR されるだけ"""
