@@ -844,7 +844,9 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_YOU_DIED:
-            if st._skip_time > 0 and (time.time() - st._skip_time) <= 3.0:
+            # 長押しの終わり際の死亡も拾う（_skip_time は長押しの開始時）
+            if st._skip_time > 0 and (time.time() - st._skip_time) <= (
+                    config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
                 self._log("✅ 自爆成功")
                 st._skip_time = 0.0
             st.died_this_round = True

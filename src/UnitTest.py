@@ -4538,10 +4538,283 @@ class TestHoldKeyBackground(unittest.TestCase):
         self.assertEqual(last._obj[self.VK], 0)
 
 
+def _single_attempt(test):
+    """1回目の自爆・Beginクリックだけを見るテスト用。やり直しは止める。
+
+    やり直しは死亡や受理を待つので、ここを止めないと本物の時間を待ち、
+    呼び出し回数も変わる。やり直し自体は TestSuicideRetry / TestBeginRetry で見る。
+    """
+    for name, value in (("SUICIDE_RETRY_MAX", 1), ("SUICIDE_CONFIRM_SEC", 0.0),
+                        ("BEGIN_RETRY_MAX", 1), ("BEGIN_RETRY_WAIT_SEC", 0.0)):
+        patcher = patch.object(config, name, value)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+
+class TestSuicideRetry(unittest.TestCase):
+    """死ななければ自爆をやり直す（背面送信のまま。最大 SUICIDE_RETRY_MAX 回）"""
+
+    def setUp(self):
+        SharedState.set_suicide_key("^")
+        for name, value in (("SUICIDE_CONFIRM_SEC", 0.05), ("SUICIDE_RETRY_MAX", 3)):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _executor(self, **state):
+        cfg = WindowConfig(hwnd=123, do_skip=True)
+        st = WindowState(in_round=True, round_seq=7, **state)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        return ex, st, logs
+
+    def _skip(self, ex, st, die_on=None, before=None):
+        """die_on 回目の長押しで死ぬ。before(n) は n 回目の長押しの直前に呼ぶ"""
+        sent = []
+
+        def hold(hwnd, key, sec):
+            sent.append(hwnd)
+            if before:
+                before(len(sent))
+            if die_on is not None and len(sent) >= die_on:
+                st.died_this_round = True
+            return True
+
+        with patch.object(WindowOperator, "hold_key_background", side_effect=hold), \
+             patch.object(WindowOperator, "focus_window") as focus, \
+             patch.object(WindowOperator, "hold_key") as foreground:
+            ex.do_skip()
+        focus.assert_not_called()
+        foreground.assert_not_called()
+        return len(sent)
+
+    def test_it_tries_again_when_still_alive(self):
+        ex, st, logs = self._executor()
+
+        self.assertEqual(self._skip(ex, st, die_on=2), 2)
+        self.assertTrue(any("やり直し（2/3回目）" in m for m in logs), logs)
+
+    def test_a_death_stops_it(self):
+        ex, st, _logs = self._executor()
+
+        self.assertEqual(self._skip(ex, st, die_on=1), 1)
+
+    def test_it_gives_up_after_three(self):
+        ex, st, logs = self._executor()
+
+        self.assertEqual(self._skip(ex, st), 3)
+        self.assertTrue(any("⚠ 自爆を3回試しましたが死にませんでした" in m
+                            for m in logs), logs)
+
+    def test_a_continue_round_stops_the_retry(self):
+        ex, st, logs = self._executor()
+
+        def turn_into_continue(n):
+            if n == 1:
+                st.is_continue_round = True     # 1回目の最中に続行と分かった
+
+        self.assertEqual(self._skip(ex, st, before=turn_into_continue), 1)
+        self.assertFalse(any("試しましたが" in m for m in logs), "警告は出さない")
+
+    def test_a_new_round_stops_the_old_retry(self):
+        ex, st, logs = self._executor()
+
+        def next_round(n):
+            if n == 1:
+                st.round_seq += 1
+
+        self.assertEqual(self._skip(ex, st, before=next_round), 1)
+        self.assertFalse(any("試しましたが" in m for m in logs))
+
+    def test_the_round_ending_stops_it(self):
+        ex, st, _logs = self._executor()
+
+        def round_over(n):
+            if n == 1:
+                st.in_round = False
+
+        self.assertEqual(self._skip(ex, st, before=round_over), 1)
+
+    def test_its_own_item_wait_stops_it(self):
+        ex, st, _logs = self._executor()
+
+        def lost(n):
+            if n == 1:
+                st.waiting_for_equip = True
+
+        self.assertEqual(self._skip(ex, st, before=lost), 1)
+
+    def test_a_death_just_after_the_hold_counts(self):
+        """長押しが終わった直後の死亡も成功として拾う（やり直さない）"""
+        ex, st, _logs = self._executor()
+        sent = []
+        naps = []
+
+        def nap(_sec):
+            naps.append(_sec)
+            st.died_this_round = True     # 確認の待ちの間に死亡が届いた
+
+        with patch.object(config, "SUICIDE_CONFIRM_SEC", 5.0), \
+             patch.object(WindowOperator, "hold_key_background",
+                          side_effect=lambda *a: sent.append(1) or True), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=nap):
+            ex.do_skip()
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(len(naps), 1, "死亡を見たらすぐ抜けること")
+
+    def test_an_unsendable_key_is_not_retried(self):
+        """最小化などで送れないものは、やり直しても送れない"""
+        ex, st, logs = self._executor()
+
+        with patch.object(WindowOperator, "hold_key_background",
+                          return_value=False) as bg:
+            ex.do_skip()
+
+        bg.assert_called_once()
+        self.assertTrue(any("自爆できませんでした" in m for m in logs), logs)
+
+    def test_one_flow_per_round(self):
+        """同じラウンドで2本目が来ても、やり直しの流れは1本"""
+        ex, st, _logs = self._executor()
+        sent = []
+
+        def hold(hwnd, key, sec):
+            sent.append(1)
+            if len(sent) == 1:
+                ex.do_skip()             # 1本目の最中に2本目が来た
+            st.died_this_round = True
+            return True
+
+        with patch.object(WindowOperator, "hold_key_background", side_effect=hold):
+            ex.do_skip()
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(st.suicide_seq, -1, "終わったら次を受け付ける")
+
+    def test_the_success_log_covers_the_end_of_the_hold(self):
+        """_skip_time は長押しの開始時。3.0秒ちょうどで切ると終わり際を落とす"""
+        for elapsed, expected in ((2.0, True), (4.0, True), (5.0, False)):
+            cfg = WindowConfig(do_skip=True)
+            monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+            logs = []
+            monitor.logger = logs.append
+            monitor.st._skip_time = 1000.0
+
+            # この組の setUp は確認の待ちを縮めている。ここは本来の値で見る
+            with patch.object(config, "SUICIDE_CONFIRM_SEC", 1.5),                  patch.object(LogMonitor.time, "time", return_value=1000.0 + elapsed):
+                monitor._process("You died.")
+
+            self.assertEqual(any("自爆成功" in m for m in logs), expected, elapsed)
+
+
+class TestBeginRetry(unittest.TestCase):
+    """押した Begin が受理（本物の Verified）されなければ、クリックだけ押し直す"""
+
+    def setUp(self):
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        for name, value in (("BEGIN_RETRY_WAIT_SEC", 0.05), ("BEGIN_RETRY_MAX", 3),
+                            ("BEGIN_WAIT_SEC", 0)):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+
+    def _run(self, osc_port=9000, accept_on=None, after_click=None):
+        """accept_on 回目のクリックで受理される。after_click(n) はクリックの後に呼ぶ"""
+        cfg = WindowConfig(hwnd=123, osc_port=osc_port)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE,
+                         round_end_seen=True, item_id=5, round_seq=4)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        clicks = []
+        moves = []
+
+        def click():
+            clicks.append(1)
+            if accept_on is not None and len(clicks) >= accept_on:
+                st.begin_done = True
+            if after_click:
+                after_click(len(clicks), st)
+
+        with patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ActionExecutor.PlaySound, "play_sound"), \
+             patch.object(ex, "move", side_effect=lambda *a: moves.append(1)), \
+             patch.object(ex, "move_forward_left",
+                          side_effect=lambda *a: moves.append(1)), \
+             patch.object(WindowOperator, "focus_window", return_value=True), \
+             patch.object(WindowOperator, "click", side_effect=click):
+            ex.do_after_round()
+        self.logs = logs
+        return len(clicks), len(moves)
+
+    def test_it_clicks_again_without_moving(self):
+        for osc_port in (9000, 0):
+            clicks, moves = self._run(osc_port, accept_on=2)
+
+            self.assertEqual(clicks, 2, osc_port)
+            self.assertEqual(moves, 1, f"{osc_port}: 移動は最初の1回だけ")
+            self.assertTrue(any("押し直し（2/3回目）" in m for m in self.logs),
+                            self.logs)
+
+    def test_an_accepted_begin_is_not_clicked_again(self):
+        for osc_port in (9000, 0):
+            clicks, _moves = self._run(osc_port, accept_on=1)
+
+            self.assertEqual(clicks, 1, osc_port)
+
+    def test_it_gives_up_after_three(self):
+        clicks, _moves = self._run()
+
+        self.assertEqual(clicks, 3)
+        self.assertTrue(any("⚠ Begin を3回押しましたが受理されませんでした" in m
+                            for m in self.logs), self.logs)
+
+    def test_a_started_round_stops_the_retry(self):
+        def round_started(n, st):
+            if n == 1:
+                st.in_round = True
+
+        clicks, _moves = self._run(after_click=round_started)
+
+        self.assertEqual(clicks, 1)
+        self.assertFalse(any("受理されませんでした" in m for m in self.logs))
+
+    def test_a_new_round_stops_the_old_retry(self):
+        def next_round(n, st):
+            if n == 1:
+                st.round_seq += 1
+
+        clicks, _moves = self._run(after_click=next_round)
+
+        self.assertEqual(clicks, 1)
+
+    def test_it_only_retries_what_it_clicked(self):
+        """クリックしていなければ（フォーカス失敗など）押し直しの流れに入らない"""
+        cfg = WindowConfig(hwnd=123, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_end_seen=True,
+                         item_id=5)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+        with patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ex, "move_forward_left"), \
+             patch.object(ex, "_confirm_begin") as confirm, \
+             patch.object(WindowOperator, "focus_window", return_value=False), \
+             patch.object(WindowOperator, "click"):
+            ex.do_after_round()
+
+        confirm.assert_not_called()
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
     def setUp(self):
+        _single_attempt(self)
         SharedState.equip_freeze_reset()
         SharedState.continue_round_reset()
         SharedState.speed_freeze_reset()
@@ -4596,6 +4869,7 @@ class TestSuicideIsolation(unittest.TestCase):
     """自爆はロックもフリーズも見ない。前面の窓を切り替えないので要らない"""
 
     def setUp(self):
+        _single_attempt(self)
         self._reset()
         SharedState.set_suicide_key("^")
 
@@ -5013,6 +5287,7 @@ class TestClickAt(unittest.TestCase):
 
 class TestActionExecutorSkip(unittest.TestCase):
     def setUp(self):
+        _single_attempt(self)
         SharedState.equip_freeze_reset()
         SharedState.CONTINUE_ROUND_EVENT.set()
         SharedState.set_suicide_key(config.SELF_SUICIDE_KEY)
@@ -5271,6 +5546,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
     """アイテムロストの通知はBeginクリックの直前に鳴らす"""
 
     def setUp(self):
+        _single_attempt(self)
         SharedState.equip_freeze_reset()
         SharedState.continue_round_reset()
         SharedState.set_item_begin_mode(False)
@@ -5370,6 +5646,7 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
     """
 
     def setUp(self):
+        _single_attempt(self)
         SharedState.equip_freeze_reset()
         SharedState.continue_round_reset()
 
@@ -5911,6 +6188,7 @@ class TestRoundFreeze(unittest.TestCase):
 
     def test_the_window_that_froze_can_still_suicide(self):
         """★自窓の自爆は止めない。止めるのは他窓だけ"""
+        _single_attempt(self)
         cfg = WindowConfig(hwnd=123, do_skip=True)
         st = WindowState(in_round=True, round_freeze_held=True)
         SharedState.ROUND_FREEZE_EVENT.clear()

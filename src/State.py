@@ -58,6 +58,8 @@ class WindowState:
     speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）
     speed_probe_done: bool = False  # このラウンドで速度検知を起動したか
     speed_strafe_done: bool = False  # このラウンドで速度検知の横移動をしたか
+    # 自爆（リトライ込み）が走っているラウンドの round_seq。流れを1本にするため
+    suicide_seq: int = -1
     # 入室のたびに進める。インスタンスをまたいで動き続けるものを止めるため
     instance_seq: int = 0
     speed_freeze_held: bool = False  # この窓が速度検知フリーズを張っているか

@@ -163,19 +163,119 @@ class ActionExecutor:
         if self._cfg.hwnd == 0:
             self._log("自爆キャンセル（HWND未選択）")
             return
-        if not self._is_running() or st.is_continue_round or not st.in_round:
-            return
+        round_seq = st.round_seq
+        if st.suicide_seq == round_seq:
+            return          # このラウンドの自爆はもう走っている。流れは1本
+        st.suicide_seq = round_seq
+        try:
+            self._skip_until_dead(round_seq)
+        finally:
+            if st.suicide_seq == round_seq:
+                st.suicide_seq = -1
+
+    def _skip_until_dead(self, round_seq: int):
+        """死ぬまで自爆する（最大 SUICIDE_RETRY_MAX 回）。
+
+        長押しが終わってから少し待ち、死亡が来ていなければやり直す。
+        やり直すたびに「まだやるべきか」を見直す。
+        """
+        st = self._st
+        limit = config.SUICIDE_RETRY_MAX
+        for attempt in range(1, limit + 1):
+            if not self._should_skip(round_seq):
+                return
+            if attempt > 1:
+                self._log(f"自爆が効いていません → やり直し（{attempt}/{limit}回目）")
+            key = SharedState.get_suicide_key()
+            st._skip_time = time.time()
+            self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
+            if not WindowOperator.hold_key_background(
+                    self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
+                # 送れないもの（最小化・Shift併用キー）はやり直しても送れない
+                st._skip_time = 0.0
+                self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
+                return
+            if self._died_after_skip(round_seq):
+                return
+        if self._should_skip(round_seq):
+            self._log(f"⚠ 自爆を{limit}回試しましたが死にませんでした")
+
+    def _should_skip(self, round_seq: int) -> bool:
+        """いま自爆してよいか。やり直すたびに見直す"""
+        st = self._st
+        if not self._is_running() or not st.in_round:
+            return False
+        if st.round_seq != round_seq:
+            return False            # 次のラウンドになった
+        if st.is_continue_round or st.died_this_round:
+            return False
         if st.waiting_for_equip:
             # 自窓のアイテムロスト待ち。他窓の待ちでは止まらない
             self._log("自爆キャンセル（アイテムロスト待ち中）")
-            return
-        key = SharedState.get_suicide_key()
-        st._skip_time = time.time()
-        self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
-        if not WindowOperator.hold_key_background(
-                self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
-            st._skip_time = 0.0
-            self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
+            return False
+        return True
+
+    def _died_after_skip(self, round_seq: int) -> bool:
+        """長押しが終わってから、死亡を少し待つ。死ねば True"""
+        st = self._st
+        deadline = time.time() + config.SUICIDE_CONFIRM_SEC
+        while True:
+            if st.died_this_round:
+                return True
+            if (time.time() >= deadline or not self._is_running()
+                    or st.round_seq != round_seq or not st.in_round):
+                return False
+            time.sleep(0.1)
+
+    def _confirm_begin(self, round_seq: int):
+        """押した Begin が受理されなければ押し直す（最大 BEGIN_RETRY_MAX 回）。
+
+        押し直すのはクリックだけ。Begin 前の移動はやり直さない（もう位置に
+        ついている）。受理は本物の Verified（st.begin_done）で見る。
+        """
+        limit = config.BEGIN_RETRY_MAX
+        for attempt in range(2, limit + 1):
+            if self._begin_accepted(round_seq):
+                return
+            if not self._should_retry_begin(round_seq):
+                return
+            self._log(f"Begin が受理されていません → 押し直し（{attempt}/{limit}回目）")
+            if not self._click_begin_again(round_seq):
+                return
+        if not self._begin_accepted(round_seq) and self._should_retry_begin(round_seq):
+            self._log(f"⚠ Begin を{limit}回押しましたが受理されませんでした")
+
+    def _begin_accepted(self, round_seq: int) -> bool:
+        """受理を待つ。受理されたか、もう待つ意味が無くなったら返る"""
+        st = self._st
+        deadline = time.time() + config.BEGIN_RETRY_WAIT_SEC
+        while not st.begin_done:
+            if time.time() >= deadline or not self._should_retry_begin(round_seq):
+                break
+            time.sleep(0.1)
+        return st.begin_done
+
+    def _should_retry_begin(self, round_seq: int) -> bool:
+        st = self._st
+        return (self._is_running() and not st.in_round and not st.begin_done
+                and st.round_seq == round_seq
+                and st.instance_type == config.INSTANCE_PRIVATE)
+
+    def _click_begin_again(self, round_seq: int) -> bool:
+        """クリックだけ押し直す。フォーカスが要るので、他窓の解除とロックを待つ"""
+        st = self._st
+        if not self._wait_other_windows():
+            return False
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._should_retry_begin(round_seq):
+                return False
+            if not self._begin_precheck():
+                return False
+            if not self.focus():
+                return False
+            self._log("Beginクリック（押し直し）")
+            WindowOperator.click()
+        return True
 
     def _begin_precheck(self, check_freeze: bool = True) -> bool:
         """Begin実行前の中止条件を確認する。続行してよければTrue。
@@ -327,6 +427,8 @@ class ActionExecutor:
           - 非OSC窓: 移動もキー入力なので全体をロック内で行う
         """
         st = self._st
+        round_seq = st.round_seq
+        clicked = False
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
         # Verified Round End が出てクリックできる状態になる想定。
         if config.BEGIN_WAIT_SEC > 0:
@@ -382,6 +484,7 @@ class ActionExecutor:
                         self.announce_item_lost_if_needed()
                         self._log("Beginクリック")
                         WindowOperator.click()
+                        clicked = True
         else:
             # キー入力での移動はフォーカスが要るのでロック内で行う。
             # ロスト処理はロックを取る前に済ませる（フリーズ待ちで
@@ -402,6 +505,10 @@ class ActionExecutor:
                         self.announce_item_lost_if_needed()
                         self._log("Beginクリック")
                         WindowOperator.click()
+                        clicked = True
+
+        if clicked:
+            self._confirm_begin(round_seq)
 
         # ── フェーズ2: アイテムロスト装備待ち（ロック外）──
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない

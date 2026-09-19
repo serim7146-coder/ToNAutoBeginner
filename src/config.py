@@ -205,6 +205,13 @@ SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 # 自爆キーをフォーカス無しで送る（Trueで背面送信、Falseで従来のフォーカス方式）
 # 背面送信が使えない状況では自動的にフォーカス方式へ落ちる
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+# 自爆が効かなかったらやり直す。背面送信で長押ししている間に他の窓が
+# 前面を奪うと、VRChat はキーを離したことにする（実例: 窓4が80秒後に死亡）
+SUICIDE_RETRY_MAX     = 3     # 1回目を含めた回数
+SUICIDE_CONFIRM_SEC   = 1.5   # 長押しが終わってから死亡を待つ時間
+# 押した Begin が受理（本物の Verified）されなければ押し直す
+BEGIN_RETRY_MAX       = 3     # 1回目を含めた回数
+BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
 
 # ── 3クラ続行設定 ──────────────────────────────
 OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
