@@ -36,7 +36,7 @@
     {"id": 33, "name": "Luigi and Luigi Dolls", "terrors": ["Luigi", "Luigi Doll"]},
     {"id": 34, "name": "V2", "terrors": ["V2"]},
     {"id": 35, "name": "Withered Bonnie", "terrors": ["Withered Bonnie"]},
-    {"id": 36, "name": "The Boys", "terrors": ["The Boys"]},
+    {"id": 36, "name": "The Boys", "terrors": ["Gourd"]},
     {"id": 37, "name": "Something Wicked", "terrors": ["Something Wicked"]},
     {"id": 38, "name": "Seek", "terrors": ["Seek"]},
     {"id": 39, "name": "Rush", "terrors": ["Rush"]},
@@ -283,6 +283,7 @@
     {"id": "51 16 0", "name": "Tragedy", "terrors": ["Tragedy", "Deal"]},
     {"id": "0 8 0", "name": "Slendy", "terrors": ["Slendy"]},
     {"id": "6 2 0", "name": "TBH", "terrors": ["TBH"]},
-    {"id": "33 1 0", "name": "Something Wicked", "terrors": ["Something Wicked"]}
+    {"id": "33 1 0", "name": "Something Wicked", "terrors": ["Something Wicked"]},
+    {"id": "50 2 0", "name": "Whiteface", "terrors": ["Whiteface"]}
   ]
 }
