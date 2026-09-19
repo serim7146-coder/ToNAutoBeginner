@@ -110,32 +110,43 @@ def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
 
 
 def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None:
-    """主催者自身の続行リストを足す。足せた名前を返す（足せなければ None）。
+    """このPCのアカウントの続行リストを足す。last_active の名前を返す。
 
     ToN ListTool の GUI に「主催者のリストを表示に含める」があるが、保存
     ファイルの participants には主催者が入らない。設定の在り処が分からない
     ので見ない——周回に参加しているなら常に足すのが正しい。
 
-    ここは「足せたら足す」だけ。ファイルが無い・壊れている・last_active が
-    accounts に無い、のいずれでも例外を投げずに諦める。
+    希望（wishes）には**全アカウント**を名前ごとに入れる。窓ごとにアカウントが
+    違う（サブ垢でソロを回す窓がある）ので、窓は自分のアカウント名で引く。
+    畳んだ keepOn_set には従来どおり last_active の分だけを足す（GUI の件数表示用）。
+
+    ここは「足せたら足す」だけ。ファイルが無い・壊れている、のいずれでも
+    例外を投げずに諦める。
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
             raw = json.load(f)
-        name = raw.get("last_active")
-        account = (raw.get("accounts") or {}).get(name)
-        if not isinstance(name, str) or not name or not isinstance(account, dict):
-            return None
-        data = account.get("data")
-        if not isinstance(data, dict):
+        accounts = raw.get("accounts") or {}
+        active = raw.get("last_active")
+        if not isinstance(accounts, dict):
             return None
     except Exception:
         return None
 
-    _fold_wishes(data, keepOn_set, wishes.setdefault(name, {}))
-    if not wishes[name]:
-        wishes.pop(name, None)
-    return name
+    loaded = set()
+    for name, account in accounts.items():
+        if not isinstance(name, str) or not name or not isinstance(account, dict):
+            continue
+        data = account.get("data")
+        if not isinstance(data, dict):
+            continue
+        # 畳んだ一覧に足すのは last_active だけ。他のアカウントは希望だけ
+        target = keepOn_set if name == active else {}
+        _fold_wishes(data, target, wishes.setdefault(name, {}))
+        if not wishes[name]:
+            wishes.pop(name, None)
+        loaded.add(name)
+    return active if active in loaded else None
 
 
 def load_host_save(path: str,

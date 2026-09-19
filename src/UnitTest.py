@@ -3705,6 +3705,274 @@ class TestProcessCheck(unittest.TestCase):
         k.CloseHandle.assert_called_once_with(1234)
 
 
+class TestWishesPerWindow(unittest.TestCase):
+    """窓ごとに「そのインスタンスにいる人」の希望だけで判定する。
+
+    主催リストは全窓で共有しているので、そのままだと焼き芋の窓の参加者の
+    希望でソロの窓まで判定してしまう（依頼者: 焼き芋1＋ソロ3で、ソロなのに続行）。
+    """
+
+    DT = "Double Trouble/ダブルトラブル"
+    ME = "usr_0e01408a"
+    PREFIX = "2026.09.19 10:00:00 Debug      -  "
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+
+    def tearDown(self):
+        self._stats.stop()
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_list_source(None)
+
+    WISHES = {
+        "serim01": {DT: {1}},
+        "さぶりむ": {DT: {2}},
+        "roundmate": {DT: {5}},        # 焼き芋の周回の参加者
+        "elsewhere": {DT: {9}},        # 周回の参加者だが、この窓にはいない
+    }
+
+    def _monitor(self, me="serim01", others=(), itype=config.INSTANCE_PRIVATE,
+                 wishes=None, known=True):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           voice_list_lost="lost.mp3")
+        union = {self.DT: {1, 5, 9}}
+        monitor = LogMonitor.LogMonitor(
+            cfg, union, lambda _m: None, window_idx=1,
+            host_wishes=dict(self.WISHES if wishes is None else wishes))
+        st = monitor.st
+        st.instance_type = itype
+        st.in_round = True
+        st.round_type = "Double Trouble"
+        st.local_player_name = me
+        st.local_user_id = self.ME
+        st.players = {self.ME}
+        st.player_names = {self.ME: me}
+        for n, name in enumerate(others):
+            uid = f"usr_{n:04x}a"
+            st.players.add(uid)
+            st.player_names[uid] = name
+        st.players_known = known
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _killers(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), "Double Trouble", revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _line(self, monitor, body):
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.PREFIX + body)
+
+    # ── 誰の希望を使うか ──────────────────────
+    def test_a_group_window_uses_those_present(self):
+        monitor = self._monitor(others=("roundmate",), itype=config.INSTANCE_YAKIIMO)
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {1, 5}})
+
+    def test_a_solo_window_is_not_pulled_by_the_lap(self):
+        """依頼者の報告そのもの"""
+        monitor = self._monitor()
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+        started = self._killers(monitor, [5, 3])
+        self.assertIn("do_skip", started, "焼き芋の参加者の希望で続行しない")
+
+    def test_a_sub_account_uses_its_own_list(self):
+        monitor = self._monitor(me="さぶりむ")
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {2}})
+        self.assertNotIn("do_skip", self._killers(monitor, [2, 3]))
+
+    def test_my_own_list_counts_without_my_join_line(self):
+        """自分の入室行を取りこぼしても、アカウント名（User Authenticated）で引く"""
+        monitor = self._monitor()
+        monitor.st.player_names.pop(self.ME)
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+
+    def test_a_lap_member_who_is_elsewhere_does_not_count(self):
+        monitor = self._monitor(others=("roundmate",), itype=config.INSTANCE_YAKIIMO)
+
+        self.assertNotIn(9, monitor._keep_on()[self.DT])
+
+    def test_nobody_else_with_wishes_falls_to_my_own_list(self):
+        monitor = self._monitor(others=("stranger",))
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+
+    def test_no_wishes_at_all_stops(self):
+        monitor = self._monitor(me="nobody", others=("stranger",))
+
+        started = self._killers(monitor, [5, 3])
+
+        self.assertEqual(started, [])
+        self.assertTrue(any("続行希望がありません" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_the_periodic_check_agrees(self):
+        monitor = self._monitor(me="nobody")
+
+        with patch.object(PlaySound, "play_sound") as played:
+            monitor._check_group_list_state()
+
+        self.assertTrue(monitor.st.list_lost_notified)
+        played.assert_called_once_with("lost.mp3")
+
+    def test_finding_wishes_again_resumes(self):
+        monitor = self._monitor(me="nobody")
+        with patch.object(PlaySound, "play_sound"):
+            monitor._check_group_list_state()
+
+        self._line(monitor, "[Behaviour] OnPlayerJoined roundmate (usr_bbbb)")
+        monitor._check_group_list_state()
+
+        self.assertFalse(monitor.st.list_lost_notified)
+        self.assertTrue(any("続行希望が見つかりました" in m for m in monitor.logs),
+                        monitor.logs)
+
+    # ── 従来どおりのところ ─────────────────────
+    def test_the_tnl_is_used_as_before(self):
+        SharedState.set_list_source("tnl")
+        monitor = self._monitor()
+
+        self.assertIs(monitor._keep_on(), monitor.keepOn_set)
+
+    def test_unknown_presence_keeps_the_shared_list(self):
+        """誰がいるか分からないときは絞り込まない（A の安全側と同じ）"""
+        monitor = self._monitor(known=False)
+
+        self.assertIs(monitor._keep_on(), monitor.keepOn_set)
+
+    def test_no_per_person_wishes_keeps_the_shared_list(self):
+        monitor = self._monitor(wishes={})
+
+        self.assertIs(monitor._keep_on(), monitor.keepOn_set)
+
+    # ── Sabotage ───────────────────────────
+    def test_sabotage_only_sees_those_present(self):
+        monitor = self._monitor(others=("roundmate",), itype=config.INSTANCE_YAKIIMO)
+
+        self.assertEqual(set(monitor._group_wishes()), {"serim01", "roundmate"})
+
+    def test_sabotage_ignores_someone_who_is_elsewhere(self):
+        star = GroupRound.SABOTAGE_STAR_KEY
+        wishes = {"serim01": {}, "elsewhere": {star: {7}}}
+        monitor = self._monitor(itype=config.INSTANCE_YAKIIMO, wishes=wishes)
+        monitor.st.round_type = "Sabotage"
+        monitor.st.terror_ids = [7]
+
+        self.assertNotEqual(monitor._group_decision("Sabotage"), GroupRound.WANTED,
+                            "その場にいない人の希望で続行しない")
+
+    # ── 入退室 ────────────────────────────
+    def test_joining_and_leaving_move_the_list(self):
+        monitor = self._monitor()
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+
+        self._line(monitor, "[Behaviour] OnPlayerJoined roundmate (usr_bbbb)")
+        self.assertEqual(monitor._keep_on(), {self.DT: {1, 5}})
+
+        self._line(monitor, "[Behaviour] OnPlayerLeft roundmate (usr_bbbb)")
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+
+    def test_a_new_instance_forgets_the_names(self):
+        monitor = self._monitor(others=("roundmate",))
+
+        self._line(monitor, "[Behaviour] Joining wrld_1:2~private(usr_x)")
+
+        self.assertEqual(monitor.st.player_names, {})
+
+    def test_an_unmatched_player_is_logged_once(self):
+        monitor = self._monitor(others=("stranger",), itype=config.INSTANCE_YAKIIMO)
+
+        self._killers(monitor, [1, 3])
+        self._killers(monitor, [1, 3])
+
+        hits = [m for m in monitor.logs if "希望が見つからない入室者" in m]
+        self.assertEqual(len(hits), 1, monitor.logs)
+        self.assertIn("stranger", hits[0])
+
+    def test_restoring_brings_the_names_back(self):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                          encoding="utf-8")
+        tmp.write("\n".join(self.PREFIX + line for line in (
+            f"User Authenticated: serim01 ({self.ME})",
+            "[Behaviour] Joining wrld_now:2~private(usr_x)",
+            f"[Behaviour] OnPlayerJoined serim01 ({self.ME})",
+            "[Behaviour] OnPlayerJoined roundmate (usr_bbbb)",
+        )) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        cfg = WindowConfig(log_path=Path(tmp.name))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1,
+                                        host_wishes=dict(self.WISHES))
+        monitor.logger = lambda _m: None
+
+        with patch.object(ConnectDB, "send_Users", return_value=1):
+            monitor._detect_instance_from_log()
+
+        self.assertEqual(monitor._present_names(), {"serim01", "roundmate"})
+        self.assertEqual(monitor._keep_on(), {self.DT: {1, 5}})
+
+
+class TestHostSaveAllAccounts(unittest.TestCase):
+    """user_save.json の全アカウントを、名前ごとの希望として読む"""
+
+    PAGES = "8 Pages/8ページ"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+        self.user = str(Path(self._dir.name) / "user_save.json")
+        with gzip.open(self.host, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
+                {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 1}}}]}]}
+            ).encode("utf-8"))
+        Path(self.user).write_text(json.dumps({
+            "last_active": "serim01",
+            "accounts": {
+                "serim01": {"data": {self.PAGES: {"10": 1}}},
+                "ruri9752 fff9": {"data": {self.PAGES: {"20": 1}}},
+                "さぶりむ": {"data": {self.PAGES: {"30": 0}}},   # 何もONでない
+                "壊れ": {"data": "辞書ではない"},
+            }}, ensure_ascii=False), encoding="utf-8")
+
+    def _load(self):
+        return MatchTNL.load_host_save(self.host, self.user)
+
+    def test_every_account_is_in_the_wishes(self):
+        _keep, _meta, wishes = self._load()
+
+        self.assertEqual(wishes["serim01"], {self.PAGES: {10}})
+        self.assertEqual(wishes["ruri9752 fff9"], {self.PAGES: {20}})
+        self.assertEqual(wishes["roundmate"], {self.PAGES: {70}})
+
+    def test_an_account_with_nothing_on_has_no_wishes(self):
+        _keep, _meta, wishes = self._load()
+
+        self.assertNotIn("さぶりむ", wishes)
+        self.assertNotIn("壊れ", wishes)
+
+    def test_the_shared_list_still_adds_only_the_active_account(self):
+        """GUI の件数表示は従来どおり"""
+        keep, meta, _wishes = self._load()
+
+        self.assertEqual(keep, {self.PAGES: {10, 70}})
+        self.assertEqual(meta["host_self"], "serim01")
+        self.assertEqual(meta["participants"], 1)
+
+
 class TestHostOwnList(unittest.TestCase):
     """主催者自身の続行リスト（host_save の participants には入らない）"""
 

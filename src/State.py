@@ -51,6 +51,10 @@ class WindowState:
     # players を信用できるか。起動時に復元できなければ False のまま——
     # 「他の人がいる」側に倒す（他人の周回を自分の tnl で裁かないため）
     players_known: bool = False
+    # 入室者の表示名（usr_ID → 名前）。主催リストの希望は表示名で持っている
+    player_names: dict = field(default_factory=dict)
+    # 希望が見つからなかった入室者（ログを1回だけ出すため）
+    unmatched_logged: set = field(default_factory=set)
     fog: bool = False
     is_continue_round: bool = False
     _skip_time: float = 0.0
@@ -94,3 +98,4 @@ class WindowState:
     enrage_identified: int | None = None
     # 主催リスト喪失を知らせたか。ラウンドごとに鳴らさないための抑制
     list_lost_notified: bool = False
+    list_lost_reason: str = ""      # "host"（主催リスト無し）/ "wishes"（希望無し）

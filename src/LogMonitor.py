@@ -289,15 +289,70 @@ class LogMonitor:
         """Joining 以降の入退室を古い順に積み上げる"""
         st = self.st
         st.players = set()
+        st.player_names = {}
         for event in events:
             self._apply_player_event(event)
         st.players_known = True
 
     def _apply_player_event(self, event):
+        st = self.st
         if event.kind == LogParser.EVENT_PLAYER_JOINED:
-            self.st.players.add(event.user_id)
+            st.players.add(event.user_id)
+            if event.player_name:
+                st.player_names[event.user_id] = event.player_name
         elif event.kind == LogParser.EVENT_PLAYER_LEFT:
-            self.st.players.discard(event.user_id)
+            st.players.discard(event.user_id)
+            st.player_names.pop(event.user_id, None)
+
+    def _present_names(self) -> set:
+        """このインスタンスにいる人の表示名（自分を含む）"""
+        st = self.st
+        names = {st.player_names[uid] for uid in st.players if uid in st.player_names}
+        if st.local_player_name:
+            names.add(st.local_player_name)
+        return names
+
+    def _effective_wishes(self) -> dict | None:
+        """この窓の判定に使う、参加者別の希望。絞り込めなければ None。
+
+        周回の参加者の希望は全窓で共有しているので、そのまま使うと焼き芋の窓の
+        参加者の希望でソロの窓まで判定してしまう。この窓のインスタンスにいる人
+        （自分のアカウントを含む）の希望だけにする。
+
+        None（＝従来どおり共有の続行リスト）になるのは、tnl のとき・参加者別の
+        希望が無いとき・誰がいるか分からないとき（起動時に復元できなかった）。
+        """
+        if SharedState.get_list_source() != "host" or not self.host_wishes:
+            return None
+        if not self.st.players_known:
+            return None
+        present = self._present_names()
+        return {name: wish for name, wish in self.host_wishes.items()
+                if name in present and wish}
+
+    def _keep_on(self) -> dict:
+        """この窓の続行リスト"""
+        wishes = self._effective_wishes()
+        if wishes is None:
+            return self.keepOn_set
+        merged: dict = {}
+        for wish in wishes.values():
+            for round_key, ids in wish.items():
+                merged.setdefault(round_key, set()).update(ids)
+        return merged
+
+    def _report_unmatched_players(self):
+        """希望が見つからない入室者を1回だけ知らせる（表示名の食い違いに気づけるように）"""
+        st = self.st
+        if self._effective_wishes() is None:
+            return
+        others = {st.player_names[uid] for uid in self._other_players()
+                  if uid in st.player_names}
+        missing = sorted(name for name in others - st.unmatched_logged
+                         if not self.host_wishes.get(name))
+        if missing:
+            st.unmatched_logged.update(missing)
+            self._log(f"[主催リスト] 希望が見つからない入室者: {', '.join(missing)}")
 
     def _other_players(self) -> set:
         return {uid for uid in self.st.players if uid != self.st.local_user_id}
@@ -511,8 +566,8 @@ class LogMonitor:
             skip_moons={name for name in self.cfg.skip_rounds
                         if name in GroupRound.MOONS},
             sus_players=st.sus_players,
-            host_wishes=self.host_wishes,
-            follow_host=bool(self.host_wishes),
+            host_wishes=self._group_wishes(),
+            follow_host=bool(self._group_wishes()),
         )
 
     def _apply_group_decision(self, killers_round_type: str) -> bool:
@@ -561,22 +616,49 @@ class LogMonitor:
         return (self._needs_host_list()
                 and SharedState.get_list_source() != "host")
 
+    def _wishes_missing(self) -> bool:
+        """主催リストはあるが、この窓にいる誰の希望も無いか（自分のリストも無い）"""
+        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+                                         *GroupRound.GROUP_INSTANCES):
+            return False
+        if not self.cfg.do_skip:
+            return False
+        wishes = self._effective_wishes()
+        return wishes is not None and not wishes
+
+    def _group_wishes(self) -> dict:
+        wishes = self._effective_wishes()
+        return self.host_wishes if wishes is None else wishes
+
+    def _list_block_reason(self) -> str:
+        """判定してはいけない理由（"host" / "wishes"）。無ければ空文字"""
+        if self._host_list_missing():
+            return "host"
+        if self._wishes_missing():
+            return "wishes"
+        return ""
+
     def _check_group_list_state(self):
         """
         主催リストの喪失/復帰を拾う。`_on_killers()` と同じ条件で見る。
         """
-        if self._host_list_missing():
-            self._notify_group_list_lost()
+        reason = self._list_block_reason()
+        if reason:
+            self._notify_group_list_lost(reason)
         else:
             self._notify_group_list_back()
 
-    def _notify_group_list_lost(self):
+    def _notify_group_list_lost(self, reason: str = "host"):
         """状態が変わったときだけ1回。ラウンドごとに鳴らさない"""
         st = self.st
         if st.list_lost_notified:
             return
         st.list_lost_notified = True
-        self._log("⚠ 主催リストが取れません → この窓の自爆を停止します")
+        st.list_lost_reason = reason
+        if reason == "wishes":
+            self._log("⚠ この窓にいる人の続行希望がありません → この窓の自爆を停止します")
+        else:
+            self._log("⚠ 主催リストが取れません → この窓の自爆を停止します")
         if not self._hands_free():
             PlaySound.play_sound(self.cfg.voice_list_lost)
 
@@ -585,7 +667,11 @@ class LogMonitor:
         if not st.list_lost_notified:
             return
         st.list_lost_notified = False
-        self._log("主催リストが戻りました → 自爆を再開します")
+        if st.list_lost_reason == "wishes":
+            self._log("続行希望が見つかりました → 自爆を再開します")
+        else:
+            self._log("主催リストが戻りました → 自爆を再開します")
+        st.list_lost_reason = ""
 
     def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
@@ -983,6 +1069,8 @@ class LogMonitor:
             st.enrage_identified = None
             # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
             st.players = set()
+            st.player_names = {}
+            st.unmatched_logged = set()
             st.players_known = True
             st.instance_seq += 1
             # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
@@ -1103,11 +1191,14 @@ class LogMonitor:
         is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
         can_decide   = is_private or is_group_skip
 
-        # 他の人がいるのに主催リストが取れない窓はここで止める。
-        if self._host_list_missing():
-            self._notify_group_list_lost()
+        # 他の人がいるのに主催リストが取れない窓、この窓にいる誰の希望も
+        # 無い窓はここで止める。
+        reason = self._list_block_reason()
+        if reason:
+            self._notify_group_list_lost(reason)
             return
         self._notify_group_list_back()
+        self._report_unmatched_players()
 
         # 置き換えで結論が変わるときだけ待つ（自爆指定の有無に関係なく）。
         # 放置モードは待たずに即自爆する
@@ -1152,7 +1243,7 @@ class LogMonitor:
                 and self._should_skip_by_round(ids, bloodthirsty)):
             return ("round_skip",)
         decision = RoundDecision.decide_killers(
-            self.keepOn_set, ids, st.round_type,
+            self._keep_on(), ids, st.round_type,
             st.open_special_round_wins, self.cfg.cancel_afk,
             bloodthirsty_variant=bloodthirsty)
         return ("list", decision.is_continue_round,
@@ -1231,7 +1322,7 @@ class LogMonitor:
         all_ids = st.terror_ids
         was_continue_round = st.is_continue_round
         decision = RoundDecision.decide_killers(
-            self.keepOn_set,
+            self._keep_on(),
             all_ids,
             st.round_type,
             st.open_special_round_wins,
