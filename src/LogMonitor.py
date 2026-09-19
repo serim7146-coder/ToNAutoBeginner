@@ -39,11 +39,15 @@ def format_terror_ids(ids: list[int]) -> str:
 class LogMonitor:
     def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0,
                  host_wishes: dict | None = None,
+                 host_participants: set | None = None,
                  on_round_settings_cleared=None):
         self.cfg = cfg
         self.keepOn_set = keepOn_set
         # 参加者別の続行希望。追従OFFのときは空（＝Sabotageは通常判定へ落ちる）
         self.host_wishes = host_wishes if host_wishes is not None else {}
+        # host_wishes のうち参加者（＋主催者本人）の名前。待機と区別するため。
+        # None なら区別しない（host_wishes が参加者だけのとき）
+        self.host_participants = host_participants
         self.logger = logger
         self.window_idx = window_idx
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
@@ -633,14 +637,42 @@ class LogMonitor:
         return wishes is not None and not wishes
 
     def _group_wishes(self) -> dict:
+        """Sabotage の参加者別判定に使う希望。
+
+        誰がいるか分からないときは、参加者（＋自分）の希望だけにする（従来どおり）。
+        host_wishes には待機（その場にいない人）も入っているので、そのまま使うと
+        いない人の希望で続行になる。
+        """
         wishes = self._effective_wishes()
-        return self.host_wishes if wishes is None else wishes
+        if wishes is not None:
+            return wishes
+        if self.host_participants is None:
+            return self.host_wishes
+        return {name: wish for name, wish in self.host_wishes.items()
+                if name in self.host_participants}
+
+    def _shared_list_empty(self) -> bool:
+        """誰がいるか分からず、共有リストも空か。
+
+        ToN ListTool が全員を待機へ移した瞬間は共有リスト（参加者だけ）が空に
+        なる。人数を復元できなかった窓がそれで判定すると、全ラウンド自爆する。
+        tnl のときは従来どおり（空の tnl で判定するのは利用者の選択）。
+        """
+        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+                                         *GroupRound.GROUP_INSTANCES):
+            return False
+        if not self.cfg.do_skip or SharedState.get_list_source() != "host":
+            return False
+        # 人ごとの希望はあるのに共有リストだけが空＝全員が待機へ移された。
+        # 人ごとの希望も無いなら従来どおり（周回が無ければ GUI 側で tnl へ倒れる）
+        return (self._effective_wishes() is None and bool(self.host_wishes)
+                and not self.keepOn_set)
 
     def _list_block_reason(self) -> str:
         """判定してはいけない理由（"host" / "wishes"）。無ければ空文字"""
         if self._host_list_missing():
             return "host"
-        if self._wishes_missing():
+        if self._wishes_missing() or self._shared_list_empty():
             return "wishes"
         return ""
 

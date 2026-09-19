@@ -3452,14 +3452,19 @@ class TestHostSaveWishes(unittest.TestCase):
         self.assertEqual(keep_on, {self.CLASSIC: {1}, self.MURDER: {5}},
                          "畳んだ方はこれまでどおり")
 
-    def test_waiting_players_are_not_listed(self):
+    def test_waiting_players_are_in_the_wishes(self):
+        """待機も名前ごとの希望に入れる。誰がいるかは窓ごとにこちらで見る
+        （ToN ListTool は複窓だと全員を待機へ移すことがある）"""
         path = self._write({"version": 5, "tabs": [{
             "participants": [self._member("ソノア7", {self.CLASSIC: {"1": 1}})],
             "waiting": [self._member("まちびと", {self.CLASSIC: {"9": 1}})]}]})
 
-        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+        keep_on, meta, wishes = MatchTNL.load_host_save(path)
 
-        self.assertEqual(list(wishes), ["ソノア7"])
+        self.assertEqual(set(wishes), {"ソノア7", "まちびと"})
+        self.assertEqual(wishes["まちびと"], {self.CLASSIC: {9}})
+        self.assertEqual(keep_on, {self.CLASSIC: {1}}, "共有リストは参加者だけ")
+        self.assertEqual((meta["participants"], meta["listed"]), (1, 2))
 
     def test_the_same_name_in_two_tabs_is_merged(self):
         path = self._write({"version": 5, "tabs": [
@@ -3525,7 +3530,7 @@ class TestLoadHostSave(unittest.TestCase):
         self.assertEqual(meta["participants"], 2)
 
     def test_waiting_is_not_included(self):
-        """待機列はその場にいない。続行判定に混ぜない"""
+        """待機は共有リストに混ぜない（名前ごとの希望には入る。TestWaitingList）"""
         path = self._write({"version": 5, "tabs": [{
             "participants": [self._member({self.CLASSIC: {"1": 1}})],
             "waiting": [self._member({self.CLASSIC: {"99": 1}})]}]})
@@ -3944,6 +3949,158 @@ class TestWishesPerWindow(unittest.TestCase):
 
         self.assertEqual(monitor._present_names(), {"serim01", "roundmate"})
         self.assertEqual(monitor._keep_on(), {self.DT: {1, 5}})
+
+
+class TestWaitingList(unittest.TestCase):
+    """ToN ListTool の「参加者」判定に頼らない。
+
+    ListTool は VRChat のログを読んで、その場にいる人を参加者・いない人を待機に
+    振り分ける。複窓だとソロの窓のログを読んで、干し芋の全員を待機へ移す
+    （実測: 参加者18・待機251 → 参加者0・待機269）。待機の人も続行リストを
+    持ったまま残っているので、誰がいるかは窓ごとにこちらで見る。
+    """
+
+    DT = "Double Trouble/ダブルトラブル"
+    ME = "usr_0e01408a"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+
+    def _write(self, participants=(), waiting=()):
+        def member(name, wanted):
+            return {"vrc_name": name, "data": {self.DT: {str(t): 1 for t in wanted}}}
+        with gzip.open(self.host, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [{
+                "participants": [member(n, w) for n, w in participants],
+                "waiting": [member(n, w) for n, w in waiting]}]},
+                ensure_ascii=False).encode("utf-8"))
+
+    def _everyone_moved_to_waiting(self):
+        """干し芋の2人と、別の周回の人。ListTool が全員を待機へ移した後"""
+        self._write(participants=(), waiting=(("hoshi_a", {5}), ("hoshi_b", {6}),
+                                              ("someone_else", {9})))
+        return MatchTNL.load_host_save(self.host)
+
+    def _monitor(self, keep, wishes, *, present=("hoshi_a", "hoshi_b"),
+                 me="serim01", itype=config.INSTANCE_HOSHIIMO, known=True,
+                 participants=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           voice_list_lost="lost.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep, lambda _m: None, window_idx=1,
+                                        host_wishes=wishes,
+                                        host_participants=participants)
+        st = monitor.st
+        st.instance_type = itype
+        st.in_round = True
+        st.round_type = "Double Trouble"
+        st.local_player_name = me
+        st.local_user_id = self.ME
+        st.players = {self.ME}
+        st.player_names = {self.ME: me}
+        for n, name in enumerate(present):
+            uid = f"usr_{n:04x}c"
+            st.players.add(uid)
+            st.player_names[uid] = name
+        st.players_known = known
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _killers(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), "Double Trouble", revealed=False)
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    # ── 読み込み ─────────────────────────────
+    def test_the_waiting_list_is_read_into_the_wishes(self):
+        keep, meta, wishes = self._everyone_moved_to_waiting()
+
+        self.assertEqual(wishes["hoshi_a"], {self.DT: {5}})
+        self.assertEqual(meta["participants"], 0)
+        self.assertEqual(meta["listed"], 3)
+        self.assertEqual(keep, {}, "共有リストは参加者だけ（ここでは空）")
+
+    # ── 窓の判定 ─────────────────────────────
+    def test_a_group_window_keeps_judging_from_the_waiting_list(self):
+        keep, _meta, wishes = self._everyone_moved_to_waiting()
+        monitor = self._monitor(keep, wishes)
+
+        self.assertEqual(monitor._list_block_reason(), "")
+        self.assertEqual(monitor._keep_on(), {self.DT: {5, 6}})
+        started = self._killers(monitor, [5, 1])
+        self.assertNotIn("do_skip", started, "hoshi_a の希望で続行")
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_someone_waiting_elsewhere_is_not_used(self):
+        keep, _meta, wishes = self._everyone_moved_to_waiting()
+        monitor = self._monitor(keep, wishes)
+
+        self.assertNotIn(9, monitor._keep_on()[self.DT])
+
+    def test_a_solo_window_still_uses_its_own_list(self):
+        keep, _meta, wishes = self._everyone_moved_to_waiting()
+        wishes["serim01"] = {self.DT: {1}}
+        monitor = self._monitor(keep, wishes, present=(),
+                                itype=config.INSTANCE_PRIVATE)
+
+        self.assertEqual(monitor._keep_on(), {self.DT: {1}})
+
+    # ── 誰がいるか分からない窓 ────────────────────
+    def test_an_unknown_window_with_an_empty_shared_list_stops(self):
+        """共有リストが空のまま判定すると全ラウンド自爆する"""
+        keep, _meta, wishes = self._everyone_moved_to_waiting()
+        monitor = self._monitor(keep, wishes, known=False)
+
+        started = self._killers(monitor, [5, 1])
+
+        self.assertEqual(started, [])
+        self.assertTrue(any("続行リストがありません" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_an_unknown_window_with_a_shared_list_still_judges(self):
+        keep = {self.DT: {5}}
+        monitor = self._monitor(keep, {"hoshi_a": {self.DT: {5}}}, known=False)
+
+        self.assertEqual(monitor._list_block_reason(), "")
+
+    def test_the_periodic_check_agrees(self):
+        keep, _meta, wishes = self._everyone_moved_to_waiting()
+        monitor = self._monitor(keep, wishes, known=False)
+
+        with patch.object(PlaySound, "play_sound"):
+            monitor._check_group_list_state()
+
+        self.assertTrue(monitor.st.list_lost_notified)
+
+    def test_sabotage_in_an_unknown_window_ignores_the_waiting_list(self):
+        """誰がいるか分からないときは、参加者（＋自分）の希望だけ"""
+        wishes = {"hoshi_a": {"x": {1}}, "waiting_person": {"x": {2}}}
+        monitor = self._monitor({}, wishes, known=False,
+                                participants={"hoshi_a"})
+
+        self.assertEqual(set(monitor._group_wishes()), {"hoshi_a"})
+
+    def test_the_participant_names_include_the_host(self):
+        user = str(Path(self._dir.name) / "user_save.json")
+        Path(user).write_text(json.dumps({"last_active": "serim01", "accounts": {
+            "serim01": {"data": {self.DT: {"1": 1}}}}}), encoding="utf-8")
+        self._write(participants=(("hoshi_a", {5}),), waiting=(("w", {9}),))
+
+        _keep, meta, _wishes = MatchTNL.load_host_save(self.host, user)
+
+        self.assertEqual(meta["participant_names"], {"hoshi_a", "serim01"})
 
 
 class TestHostSaveAllAccounts(unittest.TestCase):
@@ -4425,6 +4582,38 @@ class TestHostListSource(unittest.TestCase):
     def _switch_logs(self, app):
         return [m for m in app.logs if "[続行リスト]" in m]
 
+    # ── 待機（ToN ListTool が全員を待機へ移したとき） ─────────
+    def _write_lists(self, participants, waiting):
+        members = lambda n: [{"vrc_name": f"ひと{i}", "data": {self.CLASSIC: {"5": 1}}}
+                             for i in range(n)]
+        with gzip.open(self.path, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [{
+                "participants": members(participants),
+                "waiting": members(waiting)}]}).encode("utf-8"))
+
+    def test_only_waiting_keeps_the_host_list(self):
+        app = self._app()
+        self._write_lists(2, 0)
+        self._refresh(app)
+        self.assertEqual(SharedState.get_list_source(), "host", "前提")
+
+        self._write_lists(0, 3)            # ListTool が全員を待機へ移した
+        self._refresh(app)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+
+    def test_nobody_anywhere_falls_back(self):
+        app = self._app()
+        self._write_lists(2, 0)
+        self._refresh(app)
+
+        self._write_lists(0, 0)
+        self._refresh(app)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertTrue(any("続行リストを持つ人がいません" in m for m in app.logs),
+                        app.logs)
+
     # ── 供給元の選択 ──────────────────────────
     def test_a_closed_list_tool_uses_the_tnl(self):
         self._write(3)
@@ -4515,7 +4704,7 @@ class TestHostListSource(unittest.TestCase):
         self._refresh(app, running=False)
 
         joined = "\n".join(self._switch_logs(app))
-        self.assertIn("周回の参加者がいません", joined)
+        self.assertIn("続行リストを持つ人がいません", joined)
         self.assertIn("主催リストへ切替（参加者3人）", joined)
         self.assertIn("ToN ListTool が起動していません", joined)
 
@@ -4565,7 +4754,7 @@ class TestHostListSource(unittest.TestCase):
             json.dumps({"last_active": "serim01",
                         "accounts": {"serim01": {"data": {}}}}), encoding="utf-8")
         with patch.object(MatchTNL, "load_host_save",
-                          return_value=({"x": {1}}, {"participants": 1, "tabs": 1,
+                          return_value=({"x": {1}}, {"participants": 1, "listed": 1, "tabs": 1,
                                                      "host_self": None},
                                         {})) as mock_load:
             self._refresh(app)
@@ -4578,7 +4767,7 @@ class TestHostListSource(unittest.TestCase):
 
         with patch.object(MatchTNL, "load_host_save",
                           return_value=({"x": {1}},
-                                        {"participants": 3, "tabs": 1,
+                                        {"participants": 3, "listed": 3, "tabs": 1,
                                          "host_self": "serim01"}, {})):
             self._refresh(app)
 
@@ -4626,7 +4815,7 @@ class TestHostListSource(unittest.TestCase):
         # サイズは同じで mtime だけ違う（同じ秒内の書き換え相当）
         app._host_save_stamp = (mtime - 1, size, user)
         with patch.object(MatchTNL, "load_host_save",
-                          return_value=({"x": {1}}, {"participants": 1, "tabs": 1},
+                          return_value=({"x": {1}}, {"participants": 1, "listed": 1, "tabs": 1},
                                         {})) as mock_load:
             self._refresh(app)
         mock_load.assert_called_once()
@@ -4634,7 +4823,7 @@ class TestHostListSource(unittest.TestCase):
         # mtime は同じでサイズだけ違う
         app._host_save_stamp = (app._host_save_stamp[0], size - 1, user)
         with patch.object(MatchTNL, "load_host_save",
-                          return_value=({"y": {2}}, {"participants": 1, "tabs": 1},
+                          return_value=({"y": {2}}, {"participants": 1, "listed": 1, "tabs": 1},
                                         {})) as mock_load:
             self._refresh(app)
         mock_load.assert_called_once()

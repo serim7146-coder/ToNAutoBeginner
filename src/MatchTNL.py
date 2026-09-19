@@ -180,28 +180,50 @@ def load_host_save(path: str,
     tabs = raw.get("tabs") if isinstance(raw, dict) else None
     tabs = tabs if isinstance(tabs, list) else []
     participants = 0
+    listed = 0              # 続行リストを持っている人（参加者＋待機）
+    participant_names: set = set()
     for tab in tabs:
         if not isinstance(tab, dict):
             continue
-        members = tab.get("participants")
-        if not isinstance(members, list):
-            continue
-        for member in members:
-            if not isinstance(member, dict):
+        # 待機も名前ごとの希望には畳む。ToN ListTool は VRChat のログを読んで
+        # その場にいる人を参加者・いない人を待機に振り分けるが、複窓だと
+        # ソロの窓のログを読んで干し芋の全員を待機へ移すことがある（実測:
+        # 参加者18・待機251 → 参加者0・待機269）。誰がいるかは窓ごとに
+        # こちらで分かるので、ListTool の振り分けには頼らない。
+        # 共有リスト（keepOn_set）には従来どおり参加者だけを足す
+        for key in ("participants", "waiting"):
+            members = tab.get(key)
+            if not isinstance(members, list):
                 continue
-            participants += 1
-            data = member.get("data")
-            if not isinstance(data, dict):
-                continue
-            name = member.get("vrc_name")
-            mine = wishes.setdefault(name, {}) if isinstance(name, str) and name else None
-            _fold_wishes(data, keepOn_set, mine)
+            for member in members:
+                if not isinstance(member, dict):
+                    continue
+                if key == "participants":
+                    participants += 1
+                    name = member.get("vrc_name")
+                    if isinstance(name, str) and name:
+                        participant_names.add(name)
+                data = member.get("data")
+                if not isinstance(data, dict):
+                    continue
+                listed += 1
+                name = member.get("vrc_name")
+                mine = (wishes.setdefault(name, {})
+                        if isinstance(name, str) and name else None)
+                target = keepOn_set if key == "participants" else {}
+                _fold_wishes(data, target, mine)
 
     host_self = None
     if user_save_path:
         host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
 
+    if host_self:
+        participant_names.add(host_self)
     meta = {"participants": participants,   # 自分は数えない
+            "listed": listed,               # 参加者＋待機のうちリストを持つ人
+            # 参加者（＋自分）の名前。誰がいるか分からない窓は、待機を除いた
+            # この人たちの希望で Sabotage を判定する（従来どおり）
+            "participant_names": participant_names,
             "tabs": len(tabs),
             "host_self": host_self}
     return keepOn_set, meta, wishes

@@ -436,6 +436,8 @@ class App(tk.Tk):
         # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
         # Sabotage のマーダー判定に使う。これも in-place で入れ替える
         self.host_wishes: dict = {}
+        # 参加者（＋自分）の名前。host_wishes には待機も入るので区別する。これも in-place
+        self.host_participants: set = set()
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
@@ -926,10 +928,14 @@ class App(tk.Tk):
         self.keepOn_set.clear()
         self.keepOn_set.update(new_set)
 
-    def _apply_host_wishes(self, new_wishes: dict):
+    def _apply_host_wishes(self, new_wishes: dict, participants=()):
         """参加者別の希望も LogMonitor が同じ dict を掴む。in-place で更新する"""
         self.host_wishes.clear()
         self.host_wishes.update(new_wishes)
+        names = getattr(self, "host_participants", None)
+        if names is not None:
+            names.clear()
+            names.update(participants)
 
     def _start_host_save_polling(self):
         self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
@@ -1021,9 +1027,11 @@ class App(tk.Tk):
             self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
             return
 
-        if not meta["participants"]:
-            # 周回が動いていない。空のリストを適用すると全ラウンドが自爆対象になる
-            self._host_list_lost("周回の参加者がいません")
+        if not meta["listed"]:
+            # 参加者にも待機にも続行リストを持つ人がいない＝周回そのものが無い。
+            # 「参加者0人」だけでは切り替えない——ToN ListTool は複窓だと全員を
+            # 待機へ移すことがあり、それでも希望は待機に残っている
+            self._host_list_lost("続行リストを持つ人がいません（参加者・待機とも）")
             return
 
         self._host_loss_since = None
@@ -1033,7 +1041,7 @@ class App(tk.Tk):
         SharedState.set_list_source("host")
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
-        self._apply_host_wishes(wishes)
+        self._apply_host_wishes(wishes, meta.get("participant_names", ()))
         if switched:
             self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")
         if changed or switched:
@@ -1275,6 +1283,7 @@ class App(tk.Tk):
                 cfg, self.keepOn_set, self._log,
                 window_idx=tab.idx + 1,
                 host_wishes=self.host_wishes,
+                host_participants=self.host_participants,
                 on_round_settings_cleared=self._clear_tab_round_settings)
             self.monitors.append(mon)
             mon.start()
