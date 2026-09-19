@@ -3890,6 +3890,164 @@ class TestHostOwnList(unittest.TestCase):
         self.assertIsInstance(raw["accounts"][name].get("data"), dict)
 
 
+class TestHostListGrace(unittest.TestCase):
+    """主催リストが一瞬取れなくても、すぐには tnl へ切り替えない。
+
+    プロセスが見えない・host_save を stat できない・参加者0人は、どれも一瞬
+    だけ起きうる。1回で切り替えると他の人がいる窓でだけ警告が鳴り、
+    「複窓で頻繁に落ちる」ように見えていた。
+    """
+
+    CLASSIC = "Classic/クラシック"
+    GRACE = 10.0
+
+    def setUp(self):
+        grace = patch.object(config, "HOST_LIST_LOSS_GRACE_SEC", self.GRACE)
+        grace.start()
+        self.addCleanup(grace.stop)
+        SharedState.set_list_source(None)
+        self.addCleanup(SharedState.set_list_source, None)
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = str(Path(self._dir.name) / "host_save.json.gz")
+        self.user_save = str(Path(self._dir.name) / "user_save.json")
+        self.tnl = Path(self._dir.name) / "list.tnl"
+        self.tnl.write_text(json.dumps(
+            {"list_name": "L", "creator": "", "created_at": "",
+             "data": {self.CLASSIC: {"1": 1}}}), encoding="utf-8")
+        self.now = 1000.0
+        self.app = self._app()
+
+    def _app(self):
+        app = type("FakeApp", (), {})()
+        app.keepOn_set = {}
+        app.host_wishes = {}
+        app._host_save_stamp = None
+        app._host_save_warned = False
+        app._host_loss_since = None
+        app.logs = []
+        app._log = app.logs.append
+        app.lbl_tnl = MagicMock()
+        app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
+        for name in ("_apply_keep_on", "_apply_host_wishes", "_host_list_lost",
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
+            method = getattr(mainGUI.App, name)
+            setattr(app, name, (lambda m: lambda *a, **kw: m(app, *a, **kw))(method))
+        return app
+
+    def _write(self, participants, wanted=7):
+        members = [{"vrc_name": f"ひと{n}", "data": {self.CLASSIC: {str(wanted): 1}}}
+                   for n in range(participants)]
+        with gzip.open(self.path, "wb") as f:
+            f.write(json.dumps({"version": 5,
+                                "tabs": [{"participants": members}]}).encode("utf-8"))
+
+    def _tick(self, after=0.0, running=True, stat_fails=False):
+        """3秒ごとの確認を1回回す。after 秒たってから"""
+        self.now += after
+        stat = patch.object(mainGUI.os, "stat", side_effect=OSError("swapping")) \
+            if stat_fails else patch.object(mainGUI.os, "stat", wraps=os.stat)
+        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(config, "USER_SAVE_PATH", self.user_save), \
+             patch.object(ProcessCheck, "is_process_running", return_value=running), \
+             patch.object(mainGUI.time, "monotonic", side_effect=lambda: self.now), \
+             patch.object(mainGUI, "save_settings"), \
+             patch.object(mainGUI, "load_settings", return_value={}), \
+             stat:
+            mainGUI.App._refresh_host_source(self.app)
+
+    def _on_host_list(self):
+        self._write(2)
+        self._tick()
+        self.assertEqual(SharedState.get_list_source(), "host", "前提")
+        self.host_list = dict(self.app.keepOn_set)
+
+    def _grace_logs(self):
+        return [m for m in self.app.logs if "猶予中" in m]
+
+    # ── 一瞬では切り替えない ─────────────────────
+    def test_a_moment_without_the_file_keeps_the_host_list(self):
+        self._on_host_list()
+
+        self._tick(3, stat_fails=True)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(self.app.keepOn_set, self.host_list, "前の主催リストのまま")
+
+    def test_a_moment_without_participants_keeps_the_host_list(self):
+        self._on_host_list()
+        self._write(0)
+
+        self._tick(3)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(self.app.keepOn_set, self.host_list)
+
+    def test_a_moment_without_the_process_keeps_the_host_list(self):
+        self._on_host_list()
+
+        self._tick(3, running=False)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(self.app.keepOn_set, self.host_list)
+
+    # ── 続いたら切り替える ───────────────────────
+    def test_a_lasting_loss_switches_to_the_tnl(self):
+        self._on_host_list()
+
+        self._tick(3, running=False)
+        self._tick(3, running=False)
+        self.assertEqual(SharedState.get_list_source(), "host", "まだ6秒")
+        self._tick(self.GRACE, running=False)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertEqual(self.app.keepOn_set, {self.CLASSIC: {1}})
+
+    def test_a_good_read_resets_the_grace(self):
+        self._on_host_list()
+        self._tick(3, running=False)
+        self._tick(self.GRACE - 4, running=True)      # 途中で読めた
+
+        self._tick(3, running=False)                  # また一瞬
+        self._tick(self.GRACE - 4, running=False)
+
+        self.assertEqual(SharedState.get_list_source(), "host",
+                         "読めた時点で数え直していること")
+
+    def test_the_grace_is_logged_once(self):
+        self._on_host_list()
+
+        for _ in range(3):
+            self._tick(2, running=False)
+
+        self.assertEqual(len(self._grace_logs()), 1, self.app.logs)
+
+    def test_a_new_loss_logs_again(self):
+        self._on_host_list()
+        self._tick(3, running=False)
+        self._tick(3)                                 # 戻った
+        self._tick(3, stat_fails=True)                # また取れない
+
+        self.assertEqual(len(self._grace_logs()), 2, self.app.logs)
+
+    # ── 戻るのはすぐ／守るものが無ければすぐ ─────────────
+    def test_returning_from_the_tnl_is_immediate(self):
+        self._tick(running=False)
+        self.assertEqual(SharedState.get_list_source(), "tnl", "前提")
+        self._write(2)
+
+        self._tick(0.1)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+
+    def test_no_host_list_yet_goes_to_the_tnl_at_once(self):
+        """まだ主催リストを使っていなければ、守るものが無い"""
+        self._tick(running=False)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertEqual(self._grace_logs(), [])
+
+
 class TestHostListSource(unittest.TestCase):
     """続行リストの供給元を状況から決める（チェックボックスは無い）
 
@@ -3900,6 +4058,10 @@ class TestHostListSource(unittest.TestCase):
     CLASSIC = "Classic/クラシック"
 
     def setUp(self):
+        # この組は「どの条件で切り替わるか」を見る。猶予は TestHostListGrace で見る
+        grace = patch.object(config, "HOST_LIST_LOSS_GRACE_SEC", 0.0)
+        grace.start()
+        self.addCleanup(grace.stop)
         SharedState.set_list_source(None)
         self._dir = tempfile.TemporaryDirectory()
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
@@ -3926,11 +4088,12 @@ class TestHostListSource(unittest.TestCase):
         app.host_wishes = {}
         app._host_save_stamp = None
         app._host_save_warned = False
+        app._host_loss_since = None
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
-        for name in ("_apply_keep_on", "_apply_host_wishes",
+        for name in ("_apply_keep_on", "_apply_host_wishes", "_host_list_lost",
                      "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
             setattr(app, name, self._bind(app, name))
         return app

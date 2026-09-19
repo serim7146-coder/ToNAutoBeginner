@@ -438,6 +438,7 @@ class App(tk.Tk):
         self.host_wishes: dict = {}
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
+        self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._running = False
         self._overlay: LogOverlay | None = None
@@ -965,6 +966,27 @@ class App(tk.Tk):
         self._apply_keep_on({})
         self._load_tnl(show_error=False)
 
+    def _host_list_lost(self, reason: str):
+        """主催リストが取れない。続いたときだけ tnl へ切り替える。
+
+        取れない理由（プロセスが見えない・host_save を stat できない・参加者0人）は
+        どれも一瞬だけ起きうる。1回で切り替えると、他の人がいる窓でだけ
+        「主催リストが取れません」が鳴る。猶予の間は前の主催リストを使い続ける。
+        まだ主催リストを使っていなければ、守るものが無いのですぐ切り替える。
+        """
+        if SharedState.get_list_source() != "host":
+            self._fall_back_to_tnl(reason)
+            return
+        now = time.monotonic()
+        if getattr(self, "_host_loss_since", None) is None:
+            self._host_loss_since = now
+            if config.HOST_LIST_LOSS_GRACE_SEC > 0:
+                self._log(f"[主催リスト] 一時的に取れません（猶予中）: {reason}")
+        if now - self._host_loss_since < config.HOST_LIST_LOSS_GRACE_SEC:
+            return
+        self._host_loss_since = None
+        self._fall_back_to_tnl(reason)
+
     def _refresh_host_source(self):
         """続行リストの供給元を状況から決める。
 
@@ -973,20 +995,21 @@ class App(tk.Tk):
         mtime ではなくプロセスの生死で見る（古いファイルを掴まないため）。
         """
         if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
-            self._fall_back_to_tnl("ToN ListTool が起動していません")
+            self._host_list_lost("ToN ListTool が起動していません")
             return
 
         path = config.HOST_SAVE_PATH
         try:
             stat = os.stat(path)
         except OSError as e:
-            self._fall_back_to_tnl(f"host_save が読めません: {e}")
+            self._host_list_lost(f"host_save が読めません: {e}")
             return
 
         # 自分のリストだけ更新されたときも読み直す
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
                  _file_stamp(config.USER_SAVE_PATH))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
+            self._host_loss_since = None        # 取れている
             return
 
         try:
@@ -1000,9 +1023,10 @@ class App(tk.Tk):
 
         if not meta["participants"]:
             # 周回が動いていない。空のリストを適用すると全ラウンドが自爆対象になる
-            self._fall_back_to_tnl("周回の参加者がいません")
+            self._host_list_lost("周回の参加者がいません")
             return
 
+        self._host_loss_since = None
         self._host_save_stamp = stamp
         self._host_save_warned = False
         switched = SharedState.get_list_source() != "host"

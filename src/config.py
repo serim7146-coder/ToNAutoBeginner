@@ -212,6 +212,9 @@ SUICIDE_CONFIRM_SEC   = 1.5   # 長押しが終わってから死亡を待つ時
 # 押した Begin が受理（本物の Verified）されなければ押し直す
 BEGIN_RETRY_MAX       = 3     # 1回目を含めた回数
 BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
+# 主催リストが取れない状態がこれだけ続いたら tnl へ切り替える。プロセスの
+# 見え方・host_save の差し替え・参加者の入れ替えは一瞬だけ起きうる
+HOST_LIST_LOSS_GRACE_SEC = 10.0
 
 # ── 3クラ続行設定 ──────────────────────────────
 OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
