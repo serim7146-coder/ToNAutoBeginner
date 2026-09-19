@@ -140,6 +140,14 @@ class LogMonitor:
         self._log("速度検知 開始")
         self._start_daemon(self._action.do_speed_detect)
 
+    def _round_entry_voice(self, round_type: str) -> str:
+        """突入で全窓停止を選んだラウンドに入ったときの音声。対象外なら空文字"""
+        return {"Fog": self.cfg.voice_fog,
+                "Unbound": self.cfg.voice_unbound,
+                "Midnight": self.cfg.voice_midnight,
+                "Alternate": self.cfg.voice_alternate,
+                "Ghost": self.cfg.voice_ghost}.get(round_type, "")
+
     def _learn_periodic(self, t: float):
         """定期シグナルと判定した時刻から周期を学習する。
 
@@ -938,6 +946,10 @@ class LogMonitor:
                 SharedState.round_freeze_start(st)
                 self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
                           f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
+                # 対象は依頼の5つだけ。Punished / 8 Pages の音声は速度検知用
+                voice = self._round_entry_voice(st.round_type)
+                if voice:
+                    PlaySound.play_sound(voice)
 
             if st.round_type == "Run":
                 st.is_continue_round = False
@@ -950,7 +962,9 @@ class LogMonitor:
                 # is_continue_round と continue_round_start() は必ずセットで外す。
                 # 片方だけ残すと、判明時に continue_round_end() が自分の足して
                 # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
-                if config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free():
+                # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
+                if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
+                        and "Fog" not in SharedState.get_freeze_rounds()):
                     PlaySound.play_sound(self.cfg.voice_fog)
                 self._log(f"開始: {st.round_type}")
                 return

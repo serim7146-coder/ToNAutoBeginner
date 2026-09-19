@@ -25,6 +25,10 @@ class WindowConfig:
     voice_8pages: str = ""
     voice_punish: str = ""
     voice_list_lost: str = ""
+    voice_unbound: str = ""
+    voice_midnight: str = ""
+    voice_alternate: str = ""
+    voice_ghost: str = ""
 
 
 @dataclass

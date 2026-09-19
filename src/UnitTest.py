@@ -6781,6 +6781,115 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertTrue(ex._wait_other_windows(), "自分が張ったフリーズで詰まらない")
 
 
+class TestRoundFreezeVoice(unittest.TestCase):
+    """突入で全窓停止を選んだラウンドに入ったら、そのラウンドの音声を鳴らす"""
+
+    ROUND_LINE = ("This round is taking place at Facility (12) "
+                  "and the round type is %s")
+    VOICES = {"Fog": "fog.mp3", "Unbound": "unbound.mp3", "Midnight": "midnight.mp3",
+              "Alternate": "alternate.mp3", "Ghost": "ghost.mp3"}
+
+    def setUp(self):
+        self._reset()
+        self.addCleanup(self._reset)
+
+    @staticmethod
+    def _reset():
+        SharedState.round_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_freeze_rounds(())
+
+    def _monitor(self, rounds, **voices):
+        SharedState.set_freeze_rounds(rounds)
+        cfg = WindowConfig(voice_fog="fog.mp3", voice_unbound="unbound.mp3",
+                           voice_midnight="midnight.mp3",
+                           voice_alternate="alternate.mp3", voice_ghost="ghost.mp3",
+                           voice_punish="punish.mp3", voice_8pages="8pages.mp3")
+        for name, value in voices.items():
+            setattr(cfg, name, value)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
+
+    def _enter(self, monitor, round_type):
+        with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as played:
+            monitor._process(self.ROUND_LINE % round_type)
+        return [c.args[0] for c in played.call_args_list]
+
+    def test_each_chosen_round_plays_its_own_voice(self):
+        for round_type, voice in self.VOICES.items():
+            self._reset()
+            monitor = self._monitor([round_type])
+
+            self.assertEqual(self._enter(monitor, round_type), [voice], round_type)
+
+    def test_an_unchosen_round_is_silent(self):
+        monitor = self._monitor(["Unbound"])
+
+        self.assertEqual(self._enter(monitor, "Ghost"), [])
+
+    def test_punished_and_eight_pages_are_not_announced(self):
+        """依頼の5つに入っていない（その音声は速度検知用）"""
+        for round_type in ("Punished", "8 Pages"):
+            self._reset()
+            monitor = self._monitor([round_type])
+
+            self.assertEqual(self._enter(monitor, round_type), [], round_type)
+            self.assertTrue(monitor.st.round_freeze_held, "フリーズ自体は張る")
+
+    def test_hands_free_is_silent(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(["Unbound"])
+
+        self.assertEqual(self._enter(monitor, "Unbound"), [])
+
+    def test_an_empty_path_is_silent(self):
+        monitor = self._monitor(["Midnight"], voice_midnight="")
+
+        self.assertEqual(self._enter(monitor, "Midnight"), [])
+
+    # ── 霧は二重に鳴らさない ───────────────────
+    def test_fog_plays_once_even_with_the_entry_announcement_on(self):
+        monitor = self._monitor(["Fog"])
+
+        with patch.object(config, "ANNOUNCE_FOG_ON_ENTRY", True):
+            played = self._enter(monitor, "Fog")
+
+        self.assertEqual(played, ["fog.mp3"])
+
+    def test_fog_unchosen_stays_silent_by_default(self):
+        monitor = self._monitor([])
+
+        self.assertEqual(self._enter(monitor, "Fog"), [])
+
+    def test_fog_unchosen_still_uses_the_entry_announcement(self):
+        monitor = self._monitor([])
+
+        with patch.object(config, "ANNOUNCE_FOG_ON_ENTRY", True):
+            self.assertEqual(self._enter(monitor, "Fog"), ["fog.mp3"])
+
+    # ── 設定 ─────────────────────────────
+    def test_the_voice_files_are_bundled(self):
+        for path in (config.VOICE_UNBOUND, config.VOICE_MIDNIGHT,
+                     config.VOICE_ALTERNATE, config.VOICE_GHOST, config.VOICE_FOG):
+            self.assertTrue(Path(path).exists(), path)
+
+    def test_the_gui_has_a_row_and_hands_it_to_the_monitor(self):
+        gui = Path("mainGUI.py").read_text(encoding="utf-8")
+        for name in ("unbound", "midnight", "alternate", "ghost"):
+            self.assertIn(f"self.v_voice_{name}", gui, name)
+            self.assertIn(f"cfg.voice_{name}", gui, name)
+            self.assertIn(f"config.VOICE_{name.upper()}", gui, name)
+
+    def test_the_window_config_defaults_to_silence(self):
+        cfg = WindowConfig()
+        for name in ("unbound", "midnight", "alternate", "ghost"):
+            self.assertEqual(getattr(cfg, f"voice_{name}"), "", name)
+
+
 class TestRoundFreeze(unittest.TestCase):
     """指定ラウンドに突入したら全窓を止める（張った窓自身は自爆できる）"""
 

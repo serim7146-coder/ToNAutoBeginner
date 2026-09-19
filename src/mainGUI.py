@@ -695,6 +695,10 @@ class App(tk.Tk):
         self.v_voice_8pages       = tk.StringVar(value=config.VOICE_8PAGES)
         self.v_voice_punish       = tk.StringVar(value=config.VOICE_PUNISH)
         self.v_voice_list_lost    = tk.StringVar(value=config.VOICE_LIST_LOST)
+        self.v_voice_unbound      = tk.StringVar(value=config.VOICE_UNBOUND)
+        self.v_voice_midnight     = tk.StringVar(value=config.VOICE_MIDNIGHT)
+        self.v_voice_alternate    = tk.StringVar(value=config.VOICE_ALTERNATE)
+        self.v_voice_ghost        = tk.StringVar(value=config.VOICE_GHOST)
         voice_row(fv, "続行ラウンド:", self.v_voice_continue)
         voice_row(fv, "霧ラウンド:", self.v_voice_fog)
         voice_row(fv, "アイテムロスト:", self.v_voice_item_lost)
@@ -703,6 +707,10 @@ class App(tk.Tk):
         voice_row(fv, "8 Pages(速度検知):", self.v_voice_8pages)
         voice_row(fv, "Punish(速度検知):", self.v_voice_punish)
         voice_row(fv, "主催リスト喪失:", self.v_voice_list_lost)
+        voice_row(fv, "Unbound(突入):", self.v_voice_unbound)
+        voice_row(fv, "Midnight(突入):", self.v_voice_midnight)
+        voice_row(fv, "Alternate(突入):", self.v_voice_alternate)
+        voice_row(fv, "Ghost(突入):", self.v_voice_ghost)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -1278,6 +1286,10 @@ class App(tk.Tk):
             cfg.voice_8pages        = self.v_voice_8pages.get().strip()
             cfg.voice_punish        = self.v_voice_punish.get().strip()
             cfg.voice_list_lost     = self.v_voice_list_lost.get().strip()
+            cfg.voice_unbound       = self.v_voice_unbound.get().strip()
+            cfg.voice_midnight      = self.v_voice_midnight.get().strip()
+            cfg.voice_alternate     = self.v_voice_alternate.get().strip()
+            cfg.voice_ghost         = self.v_voice_ghost.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
             mon = LogMonitor.LogMonitor(
                 cfg, self.keepOn_set, self._log,
