@@ -1,8 +1,9 @@
 import datetime
 import glob
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import win32gui
 import win32api
@@ -161,6 +162,136 @@ def match_windows_to_logs(
         leftover = leftover[-len(unmatched):]  # 新しい方から必要数だけ取り、古い順のまま使う
         for wi, path in zip(unmatched, leftover):
             result[wi] = path
+    return result
+
+
+
+# ═══════════════════════════════════════════════
+#  OSCポートによるウィンドウ↔ログ対応付け
+#  起動時刻は「近い順」でしかなく、同時刻に立てた窓では取り違えうる。
+#  VRChatは --osc= で渡された受信ポートを掴むので、ログ先頭の起動引数と
+#  プロセスが掴んでいるUDPポートを突き合わせれば一意に決まる。
+# ═══════════════════════════════════════════════
+OSC_ARG_RE = re.compile(r"--osc=(\d+):[\d.]+:(\d+)")
+LOG_HEAD_BYTES = 8192           # 起動引数はログの先頭付近に出る（ログ本体は数MB）
+# --osc を付けずに起動した窓。VRChatはこのポートを既定で掴む
+VRCHAT_DEFAULT_OSC_PORTS = (9000, 9001)
+
+
+def read_log_osc_ports(path) -> Optional[tuple[int, int]]:
+    """ログ先頭の `Arg: --osc=<in>:<ip>:<out>` から (受信, 送信) を返す。
+
+    --osc が無いログは手動起動。VRChatは既定で9000を掴むので
+    VRCHAT_DEFAULT_OSC_PORTS を返す。ファイルが読めなければ None。
+    「--oscが無い」と「読めない」は区別する（読めないログを既定ポートの窓へ
+    結びつけると、他人のラウンドを見て自爆する）。
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(LOG_HEAD_BYTES)
+    except Exception:
+        return None
+    m = OSC_ARG_RE.search(head.decode("utf-8", "replace"))
+    if not m:
+        return VRCHAT_DEFAULT_OSC_PORTS
+    return int(m.group(1)), int(m.group(2))
+
+
+def window_udp_ports(hwnd: int, ports_by_pid: dict) -> set:
+    """その窓のプロセスが待ち受けているUDPポート。取れなければ空集合"""
+    try:
+        _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+    except Exception:
+        return set()
+    if not pid:
+        return set()
+    return ports_by_pid.get(pid) or set()
+
+
+def match_windows_to_logs_by_osc(
+    windows: list[tuple[int, Optional[float]]],
+    candidate_logs: list,
+    ports_by_pid: Optional[dict],
+) -> dict[int, tuple[Path, int, int]]:
+    """{hwnd: (ログ, 受信ポート, 送信ポート)}。確定しなかった窓は入れない。
+
+    照合は必ず「ログの --osc に書かれた受信ポート」の側から行う。プロセスが
+    掴んでいるポートには 5353(mDNS) や一時ポートが混ざるので、掴んでいる
+    ポートの若い順に並べる、といった取り方をしてはいけない。
+    """
+    if not ports_by_pid:        # netstat失敗（None）→ 全部フォールバックへ
+        return {}
+
+    logs = []                   # (path, 受信, 送信, ログ名の時刻)
+    for p in candidate_logs:
+        ports = read_log_osc_ports(p)
+        if ports is None:
+            continue            # 読めないログは使わない
+        logs.append((Path(p), ports[0], ports[1], parse_log_start_time(p)))
+
+    # (優先順位, 値, 窓, ログ)。同じ受信ポートを名乗るログが複数あるとき
+    # （手動起動を繰り返すと9000が並ぶ）は起動時刻の差が小さい方を採り、
+    # 起動時刻が取れない窓なら新しいログを採る
+    pairs: list[tuple[int, float, int, int]] = []
+    for wi, (hwnd, wtime) in enumerate(windows):
+        held = window_udp_ports(hwnd, ports_by_pid)
+        if not held:
+            continue
+        for li, (_p, in_port, _out, ltime) in enumerate(logs):
+            if in_port not in held:
+                continue
+            if wtime is not None and ltime is not None:
+                pairs.append((0, abs(ltime - wtime), wi, li))
+            else:
+                pairs.append((1, -(ltime or 0.0), wi, li))
+    pairs.sort()
+
+    result: dict[int, tuple[Path, int, int]] = {}
+    used_windows: set[int] = set()
+    used_logs: set[int] = set()
+    for _rank, _value, wi, li in pairs:
+        if wi in used_windows or li in used_logs:
+            continue            # 1つのログを2つの窓に、1つの窓に2つのログを割り当てない
+        used_windows.add(wi)
+        used_logs.add(li)
+        path, in_port, out_port, _ltime = logs[li]
+        result[windows[wi][0]] = (path, in_port, out_port)
+    return result
+
+
+class WindowAssignment(NamedTuple):
+    """窓1つぶんの割り当て。osc_in が0ならOSCで確定しなかった窓"""
+    hwnd: int
+    start_time: Optional[float]
+    log: Optional[Path]
+    osc_in: int = 0
+    osc_out: int = 0
+
+
+def assign_windows(
+    windows: list[tuple[int, Optional[float]]],
+    candidate_logs: list,
+    ports_by_pid: Optional[dict],
+    tolerance_sec: float,
+) -> list[WindowAssignment]:
+    """窓を 窓1・窓2… の順に並べて返す。
+
+    OSCポートで確定した窓を受信ポートの昇順で先に置き、確定しなかった窓は
+    従来どおり起動時刻の古い順のまま後ろへ詰める（起動時刻マッチは残す）。
+    """
+    by_osc = match_windows_to_logs_by_osc(windows, candidate_logs, ports_by_pid)
+
+    decided = sorted(((by_osc[h][1], h, t) for h, t in windows if h in by_osc),
+                     key=lambda r: r[0])          # 受信ポート昇順
+    result = [WindowAssignment(h, t, *by_osc[h]) for _port, h, t in decided]
+
+    rest = [(h, t) for h, t in windows if h not in by_osc]
+    if rest:
+        taken = {str(by_osc[h][0]) for h in by_osc}
+        leftover = [Path(p) for p in candidate_logs if str(p) not in taken]
+        matched = match_windows_to_logs(rest, leftover, tolerance_sec)
+        result += [WindowAssignment(h, t, log)
+                   for (h, t), log in zip(rest, matched)]
     return result
 
 

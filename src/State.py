@@ -12,6 +12,9 @@ class WindowConfig:
     do_skip: bool = True
     cancel_afk: bool = True
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
+    # VRChatが値を送ってくるポート。0なら従来どおり osc_port+1 を使う
+    # （--osc= の送信ポートは受信+1とは限らない）
+    osc_out_port: int = 0
     voice_intermission: str = ""
     announce_intermission: bool = False
     # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する

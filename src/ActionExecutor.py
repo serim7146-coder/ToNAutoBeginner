@@ -547,7 +547,10 @@ class ActionExecutor:
         if self._receiver is not None:
             self._speed_ready.set()
             return True
-        receiver = OSCReceiver.VelocityReceiver(self._cfg.osc_port + 1, self._log)
+        # 送信ポートは受信+1とは限らない（ログの --osc= から取れていれば
+        # それを使う）。ToNUtilsが立てた窓は 9003/9004 だった
+        out_port = self._cfg.osc_out_port or self._cfg.osc_port + 1
+        receiver = OSCReceiver.VelocityReceiver(out_port, self._log)
         if not receiver.start():
             self._log("速度受信を開始できないため種別検知を無効化します")
             self._speed_ready.set()

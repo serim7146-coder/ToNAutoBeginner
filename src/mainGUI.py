@@ -142,6 +142,9 @@ class WindowTab(ttk.Frame):
         super().__init__(parent)
         self.idx = idx
         self._hwnd_map: dict[str, int] = {}
+        # 窓↔ログの確定で分かったOSCポート（0ならOSC不可）。GUIには出さない
+        self.osc_in = 0
+        self.osc_out = 0
         self._on_log_selected = on_log_selected
         self._build()
 
@@ -1188,27 +1191,66 @@ class App(tk.Tk):
         self._log(f"[起動時検出] VRChatウィンドウを{n}窓検出 → 窓数を{n}に設定")
         self._assign_windows_and_logs(windows)
 
-    def _assign_windows_and_logs(self, windows: list):
-        """VRChatの起動時刻とログファイル名の時刻を突き合わせて
-        HWNDとログを窓タブへ1対1で割り当てる（Zオーダーに依存しない）"""
-        hwnds = [h for h, _t in windows]
+    def _resolve_windows(self, windows: list) -> list:
+        """窓↔ログ↔OSCポートを確定する。netstatは1回だけ撃つ"""
         candidates = VRChatDiscovery.find_latest_logs(
             config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
-        matched = VRChatDiscovery.match_windows_to_logs(
-            windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
+        ports_by_pid = OSCClient.udp_ports_by_pid()
+        if ports_by_pid is None:
+            self._log("[割り当て] UDPポート一覧を取得できません（netstat失敗）"
+                      "→ 起動時刻だけで割り当てます")
+        return VRChatDiscovery.assign_windows(
+            windows, candidates, ports_by_pid, config.LOG_MATCH_TOLERANCE_SEC)
+
+    @staticmethod
+    def _assign_source(a) -> str:
+        """割り当ての根拠（ログに出す）"""
+        if a.osc_in:
+            return f"OSC {a.osc_in}"
+        return "起動時刻一致" if a.start_time is not None else "起動時刻不明のため順番で割当"
+
+    def _assign_windows_and_logs(self, windows: list):
+        """HWNDとログを窓タブへ1対1で割り当てる（Zオーダーに依存しない）。
+
+        OSCの受信ポートで確定した窓をポートの昇順に窓1・窓2…へ入れ、
+        確定しなかった窓は従来どおり起動時刻で残りのタブへ入れる。
+        """
+        assigned = self._resolve_windows(windows)
+        hwnds = [a.hwnd for a in assigned]
 
         active_tabs = list(self.tabs)
         for i, tab in enumerate(active_tabs):
-            if i >= len(windows):
+            if i >= len(assigned):
                 break
-            tab.set_hwnd_choices(hwnds, selected_hwnd=hwnds[i])
-            log_path = matched[i]
-            if log_path is None:
-                self._log(f"[窓{tab.idx+1}] HWND={hwnds[i]:#010x} → 対応するログが見つかりません")
+            a = assigned[i]
+            tab.set_hwnd_choices(hwnds, selected_hwnd=a.hwnd)
+            tab.osc_in, tab.osc_out = a.osc_in, a.osc_out
+            if a.log is None:
+                self._log(f"[窓{tab.idx+1}] HWND={a.hwnd:#010x} → 対応するログが見つかりません")
                 continue
-            tab.v_log.set(str(log_path))
-            source = "起動時刻一致" if windows[i][1] is not None else "起動時刻不明のため順番で割当"
-            self._log(f"[窓{tab.idx+1}] HWND={hwnds[i]:#010x} → {log_path.name}（{source}）")
+            tab.v_log.set(str(a.log))
+            self._log(f"[窓{tab.idx+1}] HWND={a.hwnd:#010x} → {a.log.name}"
+                      f"（{self._assign_source(a)}）")
+            self._on_tab_log_selected(tab)
+
+    def _resolve_tab_ports(self):
+        """開始時の割り当て。_assign_windows_and_logs と同じ確定処理を通す。
+
+        こちらは窓の並びを変えない（利用者がタブでHWNDを選び直していることが
+        ある）。HWNDごとにログとポートを引き当て、ログが空のタブだけ埋める。
+        """
+        active_tabs = list(self.tabs)
+        windows = VRChatDiscovery.get_vrchat_windows_by_start_time(len(active_tabs))
+        assigned = {a.hwnd: a for a in self._resolve_windows(windows)}
+        for tab in active_tabs:
+            a = assigned.get(tab._get_selected_hwnd())
+            tab.osc_in = a.osc_in if a else 0
+            tab.osc_out = a.osc_out if a else 0
+            if tab.v_log.get().strip() or a is None or a.log is None:
+                continue        # 手で選んだログは上書きしない
+            tab.v_log.set(str(a.log))
+            self._log(f"[窓{tab.idx+1}] ログを自動割り当て: {a.log.name}"
+                      f"（{self._assign_source(a)}）")
             self._on_tab_log_selected(tab)
 
     def _on_tab_log_selected(self, tab: WindowTab):
@@ -1241,35 +1283,28 @@ class App(tk.Tk):
             # （霧ラウンドや3クラ解放など、tnl以外を根拠にした続行はそのまま効く）
             self._log("[起動] tnl未読み込み → tnlからの続行は0件として動作します")
 
-        # ログが空なら自動割り当て
-        active_tabs = list(self.tabs)
-        logs = VRChatDiscovery.find_latest_logs(config.VRCHAT_LOG_DIR, len(active_tabs))
-        log_idx = 0
-        for tab in active_tabs:
-            if not tab.v_log.get().strip() and log_idx < len(logs):
-                tab.v_log.set(str(logs[log_idx]))
-                self._log(f"[窓{tab.idx+1}] ログを自動割り当て: {logs[log_idx].name}")
-                self._on_tab_log_selected(tab)
-            log_idx += 1
+        # ログが空なら自動割り当て（ついでにOSCポートも確定する）
+        self._resolve_tab_ports()
 
         self.monitors.clear()
-        # UDPの待ち受け表は窓ごとに撃たず1回だけ取る（netstatは1回で0.1秒前後）。
-        # 失敗時は None が返り、osc_available_for が窓ごとの個別取得へ落とす
-        # （一時的な失敗で全窓を巻き添えにしないため）。
-        ports_by_pid = OSCClient.udp_ports_by_pid()
         for tab in self.tabs:
             cfg, err = tab.get_config()
             if cfg is not None and cfg.hwnd:
-                # OSC可否は起動時に1回だけ確定させる。このツールが --osc= を
-                # 付けて起動した窓だけが該当ポートを掴んでいる。手動起動の
-                # 2窓目以降はポート競合でOSCが無効なので従来方式になる。
-                port, _out = OSCClient.ports_for_window(tab.idx)
-                if OSCClient.osc_available_for(cfg.hwnd, tab.idx, ports_by_pid):
-                    cfg.osc_port = port
-                    self._log(f"[窓{tab.idx+1}] OSC利用可（ポート{port}）→ 移動はOSC、排他はクリックと自爆のみ")
+                # OSC可否は起動時に1回だけ確定させる。ポートは決め打ちせず、
+                # その窓が実際に掴んでいて、かつログの --osc= と一致したものを
+                # 使う（ToNUtilsが立てた窓は9003で、刻み10に乗っていなかった）
+                if tab.osc_in:
+                    cfg.osc_port = tab.osc_in
+                    cfg.osc_out_port = tab.osc_out
+                    self._log(f"[窓{tab.idx+1}] OSC利用可"
+                              f"（受信{tab.osc_in}／送信{tab.osc_out}）"
+                              "→ 移動はOSC、排他はクリックと自爆のみ")
                 else:
                     cfg.osc_port = 0
-                    self._log(f"[窓{tab.idx+1}] OSC利用不可 → 従来どおりキー操作（全体を排他）")
+                    cfg.osc_out_port = 0
+                    self._log(f"[窓{tab.idx+1}] OSC利用不可"
+                              "（この窓が掴んでいるUDPポートとログの--oscが"
+                              "一致しません）→ 従来どおりキー操作（全体を排他）")
             if cfg is None:
                 if err:
                     self._log(f"[窓{tab.idx+1}] スキップ: {err}")

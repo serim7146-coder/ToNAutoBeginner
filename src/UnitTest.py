@@ -873,6 +873,349 @@ class TestWindowLogMatching(unittest.TestCase):
             self.assertIsNone(VRChatDiscovery.get_process_start_time(0x1234))
 
 
+class TestOSCLogBinding(unittest.TestCase):
+    """窓↔ログをOSCポートで確定する。
+
+    起動時刻は「近い順」でしかなく、同時刻に立てた窓では取り違えうる。
+    誤ったログを掴んだ窓は他人のラウンドを見て自爆するので、VRChatが実際に
+    掴んでいるUDPポートと、ログ先頭の --osc= を突き合わせて一意に決める。
+    """
+
+    HEAD = ("2026.08.05 12:00:01 Debug      -  Launching with args: 5\n"
+            "2026.08.05 12:00:01 Debug      -  Arg: C:\\VRChat\\VRChat.exe\n"
+            "%s"
+            "2026.08.05 12:00:01 Debug      -  Arg: --enable-debug-gui\n")
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.pids: dict[int, int] = {}
+
+    # ── 道具 ────────────────────────────────
+    def _log(self, stamp: str, osc_in: int = None, filler: int = 0) -> Path:
+        """ログを1本作る。osc_in=None は手動起動（--osc が入らない）"""
+        arg = ("2026.08.05 12:00:01 Debug      -  "
+               f"Arg: --osc={osc_in}:127.0.0.1:{osc_in + 1}\n") if osc_in else ""
+        path = Path(self._dir.name) / f"output_log_{stamp}.txt"
+        path.write_text(self.HEAD % arg + "x" * filler, encoding="utf-8")
+        return path
+
+    def _window(self, hwnd: int, stamp: str = None, pid: int = None):
+        self.pids[hwnd] = pid if pid is not None else hwnd
+        return hwnd, (self._epoch(stamp) if stamp else None)
+
+    @staticmethod
+    def _epoch(stamp: str) -> float:
+        return datetime.strptime(stamp, "%Y-%m-%d_%H-%M-%S").timestamp()
+
+    def _assign(self, windows, logs, ports_by_pid, tolerance=120.0):
+        with patch.object(VRChatDiscovery.win32process, "GetWindowThreadProcessId",
+                          side_effect=lambda h: (0, self.pids.get(h, 0))):
+            return VRChatDiscovery.assign_windows(
+                windows, logs, ports_by_pid, tolerance)
+
+    @staticmethod
+    def _names(assigned):
+        return [(a.log.name if a.log else None, a.osc_in) for a in assigned]
+
+    # ── ① 並び順はポートで決まる ─────────────────
+    def test_the_windows_are_ordered_by_their_osc_in_port(self):
+        """Zオーダーも起動順もバラバラでも、9000/9010/9020/9030 の順に入る"""
+        logs = [self._log("2026-08-05_12-00-0%d" % i, 9000 + i * 10)
+                for i in range(4)]
+        windows = [self._window(0xD, pid=40), self._window(0xB, pid=20),
+                   self._window(0xA, pid=10), self._window(0xC, pid=30)]
+        ports = {10: {9000}, 20: {9010}, 30: {9020}, 40: {9030}}
+
+        assigned = self._assign(windows, logs, ports)
+
+        self.assertEqual([a.hwnd for a in assigned], [0xA, 0xB, 0xC, 0xD])
+        self.assertEqual([a.osc_in for a in assigned], [9000, 9010, 9020, 9030])
+        self.assertEqual([a.log.name for a in assigned],
+                         [p.name for p in logs])
+
+    # ── ② 刻み10を前提にしない ──────────────────
+    def test_a_window_on_9003_sits_between_9000_and_9010(self):
+        """ToNUtils が立てた窓は 9003 だった（9000 + idx*10 に乗らない）"""
+        logs = [self._log("2026-08-05_12-00-00", 9000),
+                self._log("2026-08-05_12-00-10", 9010),
+                self._log("2026-08-05_12-00-20", 9003)]
+        windows = [self._window(0xA, pid=10), self._window(0xB, pid=20),
+                   self._window(0xE, pid=30)]
+
+        assigned = self._assign(windows, logs,
+                                {10: {9000}, 20: {9010}, 30: {9003}})
+
+        self.assertEqual([a.osc_in for a in assigned], [9000, 9003, 9010])
+        self.assertEqual([a.hwnd for a in assigned], [0xA, 0xE, 0xB])
+
+    # ── ③ 手動起動（--osc 無し） ─────────────────
+    def test_a_log_without_the_osc_arg_counts_as_the_default_port(self):
+        """手動起動のログに --osc は入らないが、VRChatは既定で9000を掴む"""
+        manual = self._log("2026-08-05_12-00-00")
+        ours = self._log("2026-08-05_12-00-10", 9010)
+        windows = [self._window(0xB, pid=20), self._window(0xA, pid=10)]
+
+        assigned = self._assign(windows, [manual, ours],
+                                {10: {9000}, 20: {9010}})
+
+        self.assertEqual(self._names(assigned),
+                         [(manual.name, 9000), (ours.name, 9010)])
+
+    # ── ④ netstat が失敗したとき ────────────────
+    def test_a_netstat_failure_falls_back_to_the_launch_times(self):
+        logs = [self._log("2026-08-05_09-00-00", 9010),
+                self._log("2026-08-05_12-00-00", 9000)]
+        windows = [self._window(0xA, "2026-08-05_12-00-02", pid=10),
+                   self._window(0xB, "2026-08-05_09-00-01", pid=20)]
+
+        assigned = self._assign(windows, logs, None)
+
+        self.assertEqual([a.hwnd for a in assigned], [0xA, 0xB], "並びは変えない")
+        self.assertEqual(self._names(assigned),
+                         [(logs[1].name, 0), (logs[0].name, 0)])
+        # 従来の割り当てと同じ結果になること
+        self.assertEqual(
+            [a.log for a in assigned],
+            VRChatDiscovery.match_windows_to_logs(windows, logs, 120.0))
+
+    # ── ⑤⑥ 9000 を名乗るログが並ぶとき ────────────
+    def test_the_nearest_launch_time_wins_among_logs_on_the_same_port(self):
+        """手動起動を繰り返すと9000のログが並ぶ。ここを外すといちばん危ない"""
+        old = self._log("2026-08-05_09-00-00")
+        new = self._log("2026-08-05_12-00-00")
+        windows = [self._window(0xA, "2026-08-05_09-00-03", pid=10)]
+
+        assigned = self._assign(windows, [old, new], {10: {9000}})
+
+        self.assertEqual(self._names(assigned), [(old.name, 9000)])
+
+    def test_the_newest_log_wins_when_the_launch_time_is_unknown(self):
+        """管理者権限のVRChatなどで起動時刻が取れない窓"""
+        old = self._log("2026-08-05_09-00-00")
+        new = self._log("2026-08-05_12-00-00")
+        windows = [self._window(0xA, pid=10)]
+
+        assigned = self._assign(windows, [old, new], {10: {9000}})
+
+        self.assertEqual(self._names(assigned), [(new.name, 9000)])
+
+    # ── ⑦ 掴んでいるポートには雑多なものが混ざる ──────
+    def test_only_the_port_written_in_the_log_is_matched(self):
+        """pidは 5353(mDNS) や一時ポートも掴んでいる。若い順に取ってはいけない"""
+        ours = self._log("2026-08-05_12-00-10", 9010)
+        windows = [self._window(0xA, pid=10)]
+        held = {10: {5353, 9010, 51852, 61324}}
+
+        assigned = self._assign(windows, [ours], held)
+
+        self.assertEqual(self._names(assigned), [(ours.name, 9010)])
+
+    def test_a_process_without_the_logged_port_is_not_decided_by_osc(self):
+        manual = self._log("2026-08-05_12-00-00")
+        windows = [self._window(0xA, "2026-08-05_12-00-01", pid=10)]
+
+        assigned = self._assign(windows, [manual], {10: {5353, 51852}})
+
+        self.assertEqual(assigned[0].osc_in, 0, "OSCでは決まらない")
+        self.assertEqual(assigned[0].log.name, manual.name, "起動時刻で決まる")
+
+    # ── ⑧ 混在しても1つのログを2つの窓へ渡さない ──────
+    def test_a_log_is_never_shared_between_an_osc_window_and_another(self):
+        ours = self._log("2026-08-05_12-00-00", 9010)
+        manual = self._log("2026-08-05_12-00-01")
+        windows = [self._window(0xA, "2026-08-05_12-00-02", pid=10),
+                   self._window(0xB, "2026-08-05_12-00-01", pid=20)]
+
+        assigned = self._assign(windows, [ours, manual], {10: {9010}})
+
+        self.assertEqual(self._names(assigned),
+                         [(ours.name, 9010), (manual.name, 0)])
+        self.assertEqual([a.hwnd for a in assigned], [0xA, 0xB])
+
+    def test_two_windows_of_one_process_never_share_a_log(self):
+        """掴んでいるポートはpid単位。同じpidの窓が2つ見つかると同じログに見える"""
+        near = self._log("2026-08-05_12-00-00")
+        far = self._log("2026-08-05_09-00-00")
+        windows = [self._window(0xA, "2026-08-05_12-00-01", pid=10),
+                   self._window(0xB, "2026-08-05_12-00-02", pid=10)]
+
+        assigned = self._assign(windows, [near, far], {10: {9000}})
+
+        self.assertEqual({a.log.name for a in assigned}, {near.name, far.name})
+
+    def test_one_window_never_gets_two_logs(self):
+        first = self._log("2026-08-05_12-00-00", 9000)
+        second = self._log("2026-08-05_12-00-30", 9000)
+        windows = [self._window(0xA, "2026-08-05_12-00-01", pid=10)]
+
+        assigned = self._assign(windows, [first, second], {10: {9000}})
+
+        self.assertEqual(len(assigned), 1)
+        self.assertEqual(assigned[0].log.name, first.name)
+
+    # ── ⑨ ログの読み取り ───────────────────────
+    def test_read_log_osc_ports(self):
+        self.assertEqual(
+            VRChatDiscovery.read_log_osc_ports(self._log("2026-08-05_12-00-00", 9003)),
+            (9003, 9004))
+        self.assertEqual(
+            VRChatDiscovery.read_log_osc_ports(self._log("2026-08-05_12-00-01")),
+            VRChatDiscovery.VRCHAT_DEFAULT_OSC_PORTS, "--osc無し＝手動起動")
+        self.assertIsNone(
+            VRChatDiscovery.read_log_osc_ports(Path(self._dir.name) / "nope.txt"),
+            "読めないログは既定ポート扱いにしない")
+
+    def test_only_the_head_of_the_log_is_read(self):
+        """ログは数MBある。全部読むと窓数ぶん遅くなる"""
+        path = Path(self._dir.name) / "output_log_2026-08-05_12-00-00.txt"
+        path.write_text("x" * (VRChatDiscovery.LOG_HEAD_BYTES + 100)
+                        + " Arg: --osc=9020:127.0.0.1:9021\n", encoding="utf-8")
+
+        self.assertEqual(VRChatDiscovery.read_log_osc_ports(path),
+                         VRChatDiscovery.VRCHAT_DEFAULT_OSC_PORTS)
+
+    def test_an_unreadable_log_is_not_bound_to_a_window(self):
+        """読めないログを既定ポートの窓へ結びつけない"""
+        windows = [self._window(0xA, "2026-08-05_12-00-01", pid=10)]
+        missing = Path(self._dir.name) / "output_log_2026-08-05_12-00-00.txt"
+
+        with patch.object(VRChatDiscovery, "read_log_osc_ports", return_value=None):
+            assigned = self._assign(windows, [missing], {10: {9000}})
+
+        self.assertEqual(assigned[0].osc_in, 0)
+
+
+class TestOSCPortsFromAssignment(unittest.TestCase):
+    """GUI: 割り当てで得たポートを使う（9000 + idx*10 の決め打ちをやめる）"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class FakeTab:
+        def __init__(self, idx, hwnd=0x1000, log=""):
+            self.idx = idx
+            self.hwnd = hwnd
+            self.osc_in = 0
+            self.osc_out = 0
+            self.v_log = TestOSCPortsFromAssignment.FakeVar(log)
+            self.choices = None
+
+        def set_hwnd_choices(self, hwnds, selected_hwnd=None):
+            self.choices = list(hwnds)
+            self.hwnd = selected_hwnd
+
+        def _get_selected_hwnd(self):
+            return self.hwnd
+
+    def _app(self, tabs, assigned):
+        app = type("FakeApp", (), {})()
+        app.tabs = tabs
+        app.logs = []
+        app._log = app.logs.append
+        app._on_tab_log_selected = lambda tab: None
+        app._resolve_windows = lambda windows: assigned
+        app._assign_source = mainGUI.App._assign_source
+        return app
+
+    @staticmethod
+    def _assignment(hwnd, name, osc_in=0, osc_out=0, start_time=1.0):
+        return VRChatDiscovery.WindowAssignment(
+            hwnd, start_time, Path(f"C:/logs/{name}"), osc_in, osc_out)
+
+    # ── 一括割り当て ───────────────────────────
+    def test_the_tabs_take_the_ports_and_the_reason_is_logged(self):
+        tabs = [self.FakeTab(0), self.FakeTab(1)]
+        assigned = [self._assignment(0xA, "a.txt", 9003, 9004),
+                    self._assignment(0xB, "b.txt", start_time=None)]
+        app = self._app(tabs, assigned)
+
+        mainGUI.App._assign_windows_and_logs(app, [(0xA, 1.0), (0xB, None)])
+
+        self.assertEqual([(t.hwnd, t.osc_in, t.osc_out) for t in tabs],
+                         [(0xA, 9003, 9004), (0xB, 0, 0)])
+        self.assertEqual([t.v_log.get() for t in tabs],
+                         [str(Path("C:/logs/a.txt")), str(Path("C:/logs/b.txt"))])
+        self.assertTrue(any("OSC 9003" in m for m in app.logs), app.logs)
+        self.assertTrue(any("起動時刻不明" in m for m in app.logs), app.logs)
+
+    def test_the_hwnd_list_follows_the_new_order(self):
+        """タブの[1][2]表示と中身がずれないこと"""
+        tabs = [self.FakeTab(0), self.FakeTab(1)]
+        assigned = [self._assignment(0xB, "b.txt", 9000, 9001),
+                    self._assignment(0xA, "a.txt", 9010, 9011)]
+        app = self._app(tabs, assigned)
+
+        mainGUI.App._assign_windows_and_logs(app, [(0xA, 1.0), (0xB, 2.0)])
+
+        self.assertEqual(tabs[0].choices, [0xB, 0xA])
+
+    # ── 開始ボタンの経路 ─────────────────────────
+    def _start_paths(self, tabs, assigned):
+        app = self._app(tabs, assigned)
+        with patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time",
+                          return_value=[]):
+            mainGUI.App._resolve_tab_ports(app)
+        return app
+
+    def test_start_fills_only_the_empty_tabs(self):
+        """手で選んだログは上書きしない"""
+        tabs = [self.FakeTab(0, hwnd=0xA, log=r"C:\mine\chosen.txt"),
+                self.FakeTab(1, hwnd=0xB)]
+        app = self._start_paths(tabs, [self._assignment(0xA, "a.txt", 9000, 9001),
+                                       self._assignment(0xB, "b.txt", 9010, 9011)])
+
+        self.assertEqual(tabs[0].v_log.get(), r"C:\mine\chosen.txt")
+        self.assertEqual(tabs[1].v_log.get(), str(Path("C:/logs/b.txt")))
+        self.assertTrue(any("b.txt" in m for m in app.logs), app.logs)
+
+    def test_start_keeps_the_ports_of_the_hwnd_the_user_picked(self):
+        """開始時は窓の並びを変えない。HWNDで引き当てる"""
+        tabs = [self.FakeTab(0, hwnd=0xB), self.FakeTab(1, hwnd=0xA)]
+        self._start_paths(tabs, [self._assignment(0xA, "a.txt", 9000, 9001),
+                                 self._assignment(0xB, "b.txt", 9010, 9011)])
+
+        self.assertEqual([(t.osc_in, t.osc_out) for t in tabs],
+                         [(9010, 9011), (9000, 9001)])
+
+    def test_a_window_that_is_not_in_the_assignment_has_no_osc(self):
+        tabs = [self.FakeTab(0, hwnd=0xC)]
+        tabs[0].osc_in, tabs[0].osc_out = 9000, 9001      # 前回の値が残っていても
+        self._start_paths(tabs, [self._assignment(0xA, "a.txt", 9000, 9001)])
+
+        self.assertEqual((tabs[0].osc_in, tabs[0].osc_out), (0, 0))
+        self.assertEqual(tabs[0].v_log.get(), "")
+
+    def test_a_netstat_failure_is_logged(self):
+        app = self._app([], [])
+        with patch.object(mainGUI.OSCClient, "udp_ports_by_pid", return_value=None), \
+             patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]):
+            mainGUI.App._resolve_windows(app, [])
+
+        self.assertTrue(any("netstat失敗" in m for m in app.logs), app.logs)
+
+    # ── 速度受信のポート ─────────────────────────
+    def test_the_receiver_uses_the_out_port_from_the_log(self):
+        """送信ポートは受信+1とは限らない"""
+        for out_port, expected in ((9004, 9004), (0, 9001)):
+            cfg = WindowConfig(hwnd=123, osc_port=9000, osc_out_port=out_port)
+            ex = ActionExecutor.ActionExecutor(cfg, WindowState(),
+                                               lambda: True, lambda _m: None)
+
+            with patch.object(ActionExecutor.OSCReceiver, "VelocityReceiver") as mock_recv:
+                mock_recv.return_value.start.return_value = True
+                ex.start_velocity_receiver()
+
+            self.assertEqual(mock_recv.call_args.args[0], expected, out_port)
+
+
 class TestWindowTabHwndChoices(unittest.TestCase):
     def test_set_hwnd_choices_selects_requested_hwnd_without_discovery(self):
         class FakeVar:
@@ -6515,6 +6858,9 @@ class TestStartWithoutTnl(unittest.TestCase):
         for name in ("v_voice_continue", "v_voice_fog", "v_voice_item_lost",
                      "v_voice_intermission", "v_voice_foxy"):
             setattr(app, name, self.FakeVar(""))
+        for name in ("_resolve_tab_ports", "_resolve_windows"):
+            setattr(app, name, getattr(mainGUI.App, name).__get__(app))
+        app._assign_source = mainGUI.App._assign_source
         return app
 
     def test_start_is_not_blocked_without_tnl(self):
@@ -6523,7 +6869,10 @@ class TestStartWithoutTnl(unittest.TestCase):
 
         with patch.object(mainGUI.messagebox, "showwarning") as mock_warn, \
              patch.object(mainGUI.messagebox, "showerror") as mock_error, \
-             patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]):
+             patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]), \
+             patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time",
+                          return_value=[]), \
+             patch.object(mainGUI.OSCClient, "udp_ports_by_pid", return_value=None):
             mainGUI.App._start(app)
 
         mock_warn.assert_not_called()
