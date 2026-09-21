@@ -1903,14 +1903,47 @@ class TestRecordingHooks(unittest.TestCase):
         self.over.assert_called_once_with(3)
 
     # ── 20 放置モード ────────────────────────────
-    def test_hands_free_still_records(self):
+    def test_hands_free_does_not_record(self):
+        """放置モード中は録らない（依頼者の判断。続行とフリーズはそのまま）"""
         SharedState.set_hands_free(True)
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
 
         self._judge(monitor, [42])
 
-        self.started.assert_called_once_with(3)
+        self.assertTrue(monitor.st.is_continue_round, "続行はする")
+        self.started.assert_not_called()
         PlaySound.play_sound.assert_not_called()
+
+    def test_hands_free_follows_the_announcement_per_window(self):
+        """放置モードが効くのはprivateの窓だけ（_hands_free）。干し芋の窓では
+        トグルがONでもアナウンスが鳴るので、録画もアナウンスと揃える"""
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(round_type="Sabotage",
+                                instance_type=config.INSTANCE_HOSHIIMO)
+        with patch.object(monitor, "_group_decision", return_value=GroupRound.WANTED):
+            monitor._apply_group_decision("Sabotage")
+
+        PlaySound.play_sound.assert_called_once_with("continue.mp3")
+        self.started.assert_called_once_with(3)
+
+    def test_hands_free_sabotage_star_in_private_does_not_record(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(round_type="Sabotage")
+        with patch.object(monitor, "_group_decision", return_value=GroupRound.WANTED):
+            monitor._apply_group_decision("Sabotage")
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.started.assert_not_called()
+
+    def test_entering_hands_free_mid_recording_still_passes_round_over(self):
+        """録画の途中で放置に入っても、RoundOver+3秒で普通に止まるように"""
+        monitor = self._monitor()
+        monitor.cfg.auto_begin = False
+        SharedState.set_hands_free(True)
+
+        monitor._process("2026.09.20 12:00:00 Debug      -  RoundOver")
+
+        self.over.assert_called_once_with(3)
 
 
 class TestOBSSettingsInTheGui(unittest.TestCase):

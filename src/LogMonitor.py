@@ -602,7 +602,8 @@ class LogMonitor:
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
                 SharedState.continue_round_start()
-                Recorder.on_continue_start(self.window_idx)
+                if not self._hands_free():          # 放置中は録らない
+                    Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             return True
         if decision == GroupRound.CONTINUE:
@@ -1402,8 +1403,9 @@ class LogMonitor:
                     self._log("🎙 続行アナウンス再生")
                 SharedState.continue_round_start()
                 # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
-                # ここへ流れ込むので、判明の経路ごとには足さない
-                Recorder.on_continue_start(self.window_idx)
+                # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
+                if not self._hands_free():
+                    Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 st.is_open_special_round_round = True
