@@ -1,4 +1,8 @@
 import unittest
+import hashlib
+import base64
+import struct
+import socket
 from unittest.mock import patch, MagicMock
 import threading
 import time
@@ -41,6 +45,8 @@ import VRChatDiscovery
 import VRChatLauncher
 import OSCClient
 import OSCReceiver
+import OBSClient
+import Recorder
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -1214,6 +1220,773 @@ class TestOSCPortsFromAssignment(unittest.TestCase):
                 ex.start_velocity_receiver()
 
             self.assertEqual(mock_recv.call_args.args[0], expected, out_port)
+
+
+class FakeOBSServer:
+    """obs-websocket v5 の偽サーバー（127.0.0.1 の空きポートで1接続だけ受ける）。
+
+    クライアントが送ってきたフレームのマスクビットと中身を記録する。
+    """
+
+    def __init__(self, password=None, respond=True, record_active=False,
+                 ping_first=False):
+        self.password = password
+        self.respond = respond
+        self.record_active = record_active
+        self.ping_first = ping_first
+        self.masked = []            # 受けたフレームごとのマスクビット
+        self.received = []          # 受けたJSON
+        self.pong = None
+        self.requests = []
+        self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._srv.bind(("127.0.0.1", 0))
+        self._srv.listen(1)
+        self._srv.settimeout(5)
+        self.port = self._srv.getsockname()[1]
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    SALT = "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI="
+    CHALLENGE = "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="
+
+    def close(self):
+        try:
+            self._srv.close()
+        except OSError:
+            pass
+        self._thread.join(5)
+
+    # ── 送受信 ───────────────────────────────
+    @staticmethod
+    def frame(payload: bytes, opcode=0x1) -> bytes:
+        n = len(payload)
+        if n <= 125:
+            head = bytes([0x80 | opcode, n])
+        elif n <= 0xFFFF:
+            head = bytes([0x80 | opcode, 126]) + struct.pack("!H", n)
+        else:
+            head = bytes([0x80 | opcode, 127]) + struct.pack("!Q", n)
+        return head + payload
+
+    def _recv_exact(self, n):
+        out = b""
+        while len(out) < n:
+            chunk = self._conn.recv(n - len(out))
+            if not chunk:
+                raise ConnectionError("closed")
+            out += chunk
+        return out
+
+    def _read(self):
+        head = self._recv_exact(2)
+        self.masked.append(bool(head[1] & 0x80))
+        pending = [head]
+
+        def reader(n):
+            # 先頭2バイトはマスクビットを見るために先に読んである
+            return pending.pop() if pending else self._recv_exact(n)
+
+        _fin, opcode, payload = OBSClient.read_frame(reader)
+        return opcode, payload
+
+    def _send_json(self, obj):
+        self._conn.sendall(self.frame(json.dumps(obj).encode("utf-8")))
+
+    def _read_json(self):
+        while True:
+            opcode, payload = self._read()
+            if opcode == 0xA:
+                self.pong = payload
+                continue
+            if opcode == 0x8:
+                raise ConnectionError("client closed")
+            msg = json.loads(payload.decode("utf-8"))
+            self.received.append(msg)
+            return msg
+
+    def _serve(self):
+        try:
+            self._conn, _addr = self._srv.accept()
+        except OSError:
+            return
+        self._conn.settimeout(5)
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += self._conn.recv(4096)
+            key = re.search(rb"Sec-WebSocket-Key: (\S+)", data).group(1).decode()
+            if not self.respond:
+                while self._conn.recv(4096):
+                    pass
+                return
+            accept = base64.b64encode(hashlib.sha1(
+                (key + OBSClient.WS_GUID).encode()).digest()).decode()
+            self._conn.sendall(("HTTP/1.1 101 Switching Protocols\r\n"
+                                "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                                f"Sec-WebSocket-Accept: {accept}\r\n"
+                                "Sec-WebSocket-Protocol: obswebsocket.json\r\n\r\n"
+                                ).encode())
+            hello = {"obsStudioVersion": "30.2.2", "obsWebSocketVersion": "5.5.2",
+                     "rpcVersion": 1}
+            if self.password is not None:
+                hello["authentication"] = {"challenge": self.CHALLENGE,
+                                           "salt": self.SALT}
+            self._send_json({"op": 0, "d": hello})
+            identify = self._read_json()
+            if self.password is not None:
+                expected = OBSClient.auth_string(self.password, self.SALT,
+                                                 self.CHALLENGE)
+                if identify["d"].get("authentication") != expected:
+                    self._conn.sendall(self.frame(
+                        struct.pack("!H", 4009) + b"Authentication failed.", 0x8))
+                    return
+            self._send_json({"op": 2, "d": {"negotiatedRpcVersion": 1}})
+            while True:
+                msg = self._read_json()
+                self.requests.append(msg["d"]["requestType"])
+                if self.ping_first:
+                    self._conn.sendall(self.frame(b"are you there", 0x9))
+                # 関係ないイベントを先に挟む（読み飛ばせること）
+                self._send_json({"op": 5, "d": {"eventType": "Whatever"}})
+                self._send_json({"op": 7, "d": {
+                    "requestType": msg["d"]["requestType"],
+                    "requestId": msg["d"]["requestId"],
+                    "requestStatus": {"result": True, "code": 100},
+                    "responseData": {"outputActive": self.record_active}}})
+        except (ConnectionError, OSError, ValueError):
+            pass
+        finally:
+            try:
+                self._conn.close()
+            except OSError:
+                pass
+
+
+class TestOBSClient(unittest.TestCase):
+    """obs-websocket v5 の最小クライアント（自前の WebSocket）"""
+
+    def _server(self, **kw):
+        server = FakeOBSServer(**kw)
+        self.addCleanup(server.close)
+        return server
+
+    # ── 1 認証文字列 ────────────────────────────
+    def test_the_authentication_string_follows_the_protocol_document(self):
+        """入力は obs-websocket 公式 docs/generated/protocol.md の
+        「Creating an authentication string」の例の値をそのまま写した。
+
+        同じ文書の Identify の例に出てくる "Dj6cLS+jrNA0HpCArRg0Z/Fc+YHdt2FQfAvgD1mip6Y="
+        は、この入力から文書の手順どおりに計算した値と一致しない（Identify の
+        例は別の値を載せているだけ）ので、期待値には使っていない。期待値は
+        文書の4手順を Node.js の crypto で別に計算した値で、obs-websocket-js の
+        実装（sha256(msg + salt) → sha256(hash + challenge)）とも同じ手順。
+        """
+        self.assertEqual(
+            OBSClient.auth_string("supersecretpassword",
+                                  "lM1GncleQOaCu9lT1yeUZhFYnqhsLLP1G5lAGo3ixaI=",
+                                  "+IxH4CnCiqpX1rM9scsNynZzbOe4KhDeYcTNS3PDaeY="),
+            "1Ct943GAT+6YQUUX47Ia/ncufilbe6+oD6lY+5kaCu4=")
+
+    # ── 2 マスク ───────────────────────────────
+    def test_a_client_frame_is_masked(self):
+        payload = json.dumps({"op": 6, "d": {"requestType": "StartRecord"}}).encode()
+        frame = OBSClient.encode_frame(payload, mask_key=b"\x01\x02\x03\x04")
+
+        self.assertTrue(frame[1] & 0x80, "マスクビット")
+        self.assertEqual(frame[2:6], b"\x01\x02\x03\x04")
+        self.assertNotEqual(frame[6:], payload, "平文のまま送っていない")
+        unmasked = bytes(b ^ frame[2 + i % 4] for i, b in enumerate(frame[6:]))
+        self.assertEqual(unmasked, payload)
+
+    def test_every_frame_on_the_wire_is_masked(self):
+        server = self._server()
+        client = OBSClient.OBSClient("127.0.0.1", server.port, timeout=3)
+
+        self.assertEqual(client.connect(), (True, ""))
+        client.request("GetRecordStatus")
+        client.close()
+        server.close()
+
+        self.assertTrue(server.masked)
+        self.assertTrue(all(server.masked), server.masked)
+
+    # ── 3 長さ ────────────────────────────────
+    def test_every_length_class_round_trips(self):
+        for n in (0, 125, 126, 65535, 65536, 70000):
+            payload = bytes(i % 251 for i in range(n))
+            frame = OBSClient.encode_frame(payload)
+            buf = io.BytesIO(frame)
+
+            fin, opcode, got = OBSClient.read_frame(buf.read)
+
+            self.assertEqual((fin, opcode, got), (True, 0x1, payload), n)
+            self.assertEqual(buf.read(), b"", f"{n}: 読み残しが無い")
+            expected_len_code = 126 if 126 <= n <= 0xFFFF else (127 if n > 0xFFFF else n)
+            self.assertEqual(frame[1] & 0x7F, expected_len_code, n)
+
+    def test_an_unmasked_server_frame_is_read(self):
+        for n in (5, 300, 70000):
+            payload = b"x" * n
+            buf = io.BytesIO(FakeOBSServer.frame(payload))
+
+            self.assertEqual(OBSClient.read_frame(buf.read), (True, 0x1, payload), n)
+
+    # ── 4 認証あり・なし ─────────────────────────
+    def test_identify_without_authentication(self):
+        server = self._server()
+        client = OBSClient.OBSClient("127.0.0.1", server.port, timeout=3)
+
+        ok, reason = client.connect()
+        got = client.request("GetRecordStatus")
+        client.close()
+        server.close()
+
+        self.assertEqual((ok, reason), (True, ""))
+        self.assertEqual(got, (True, {"outputActive": False}, ""))
+        identify = server.received[0]
+        self.assertEqual(identify["op"], 1)
+        self.assertEqual(identify["d"]["rpcVersion"], 1)
+        self.assertNotIn("authentication", identify["d"])
+
+    def test_identify_with_authentication(self):
+        server = self._server(password="hunter2", record_active=True)
+        client = OBSClient.OBSClient("127.0.0.1", server.port, "hunter2", timeout=3)
+
+        self.assertEqual(client.connect(), (True, ""))
+        self.assertEqual(client.request("GetRecordStatus"),
+                         (True, {"outputActive": True}, ""))
+        client.close()
+
+    def test_a_wrong_password_is_reported_without_the_password(self):
+        server = self._server(password="hunter2")
+        client = OBSClient.OBSClient("127.0.0.1", server.port, "wrong-pass", timeout=3)
+
+        ok, reason = client.connect()
+
+        self.assertFalse(ok)
+        self.assertIn("認証に失敗", reason)
+        self.assertNotIn("wrong-pass", reason)
+        self.assertNotIn("wrong-pass", repr(client))
+
+    def test_a_ping_is_answered_with_a_pong(self):
+        server = self._server(ping_first=True)
+        client = OBSClient.OBSClient("127.0.0.1", server.port, timeout=3)
+        client.connect()
+
+        self.assertTrue(client.request("StartRecord")[0])
+        client.request("GetRecordStatus")     # pong を受けたのを記録させる
+        client.close()
+        server.close()
+
+        self.assertEqual(server.pong, b"are you there")
+
+    # ── 5 タイムアウト ─────────────────────────
+    def test_a_silent_server_times_out_without_raising(self):
+        server = self._server(respond=False)
+        client = OBSClient.OBSClient("127.0.0.1", server.port, timeout=0.3)
+
+        t0 = time.monotonic()
+        ok, reason = client.connect()
+        elapsed = time.monotonic() - t0
+
+        self.assertFalse(ok)
+        self.assertIn("タイムアウト", reason)
+        self.assertLess(elapsed, 2.0)
+
+    def test_nobody_listening_is_a_plain_failure(self):
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()                           # 誰も待ち受けていないポート
+
+        ok, reason = OBSClient.OBSClient("127.0.0.1", port, timeout=1).connect()
+
+        self.assertFalse(ok)
+        self.assertTrue(reason)
+
+    def test_a_request_before_connecting_fails_quietly(self):
+        self.assertEqual(OBSClient.OBSClient().request("StartRecord"),
+                         (False, {}, "未接続です"))
+
+
+class FakeOBS:
+    """Recorder 用の偽クライアント。呼ばれたリクエストを記録する"""
+
+    def __init__(self, recording=False, fail=""):
+        self.recording = recording
+        self.fail = fail
+        self.calls = []
+
+    def factory(self):
+        obs = self
+
+        class Client:
+            def connect(self):
+                return (False, obs.fail) if obs.fail else (True, "")
+
+            def request(self, request_type, data=None):
+                obs.calls.append(request_type)
+                if request_type == "GetRecordStatus":
+                    return True, {"outputActive": obs.recording}, ""
+                if request_type == "StartRecord":
+                    obs.recording = True
+                if request_type == "StopRecord":
+                    obs.recording = False
+                return True, {}, ""
+
+            def close(self):
+                pass
+
+        return Client()
+
+    def count(self, request_type):
+        return self.calls.count(request_type)
+
+
+class TestRecordPlan(unittest.TestCase):
+    """1本の録画を複数の窓で共有する（偽の OBS と偽の時計で）"""
+
+    def setUp(self):
+        self.now = 1000.0
+        self.logs = []
+
+    def _plan(self, obs, **kw):
+        return Recorder.RecordPlan(obs.factory, self.logs.append,
+                                   clock=lambda: self.now, tail_sec=3.0, **kw)
+
+    def _advance(self, plan, sec):
+        self.now += sec
+        plan.tick()
+
+    # ── 6 / 7 ─────────────────────────────────
+    def test_one_window_starts_then_stops_three_seconds_after_round_over(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        self.assertEqual(obs.count("StartRecord"), 1)
+        self._advance(plan, 60)
+        plan.round_over(1)
+        self._advance(plan, 3.0)
+
+        self.assertEqual(obs.count("StopRecord"), 1)
+        self.assertFalse(plan.we_started)
+
+    def test_it_does_not_stop_before_the_tail(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.round_over(1)
+
+        self._advance(plan, 2.9)
+
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self.assertEqual(plan.next_deadline(), 1003.0)
+
+    def test_dying_early_keeps_recording_until_round_over(self):
+        """死亡では止めない。止めるのは RoundOver+3秒だけ"""
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+
+        self._advance(plan, 120)
+
+        self.assertEqual(obs.count("StopRecord"), 0)
+
+    # ── 8 / 9 複窓 ──────────────────────────────
+    def test_two_windows_share_one_recording_until_the_last_round_over(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        self._advance(plan, 5)
+        plan.continue_start(2)
+
+        self.assertEqual(obs.count("StartRecord"), 1)
+        plan.round_over(1)
+        self._advance(plan, 10)
+        self.assertEqual(obs.count("StopRecord"), 0, "窓2がまだ続行中")
+        plan.round_over(2)
+        self._advance(plan, 2.9)
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self._advance(plan, 0.1)
+        self.assertEqual(obs.count("StopRecord"), 1)
+
+    def test_a_new_continue_during_the_tail_keeps_recording(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.round_over(1)
+        self._advance(plan, 1.0)
+
+        plan.continue_start(2)
+        self._advance(plan, 10)
+
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self.assertEqual(obs.count("StartRecord"), 1, "録り直さない")
+        plan.round_over(2)
+        self._advance(plan, 3)
+        self.assertEqual(obs.count("StopRecord"), 1)
+
+    def test_the_same_window_continuing_again_cancels_its_own_stop(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.round_over(1)
+
+        plan.continue_start(1)
+        self._advance(plan, 10)
+
+        self.assertEqual(obs.count("StopRecord"), 0)
+
+    def test_a_round_over_without_a_continue_does_nothing(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+
+        plan.round_over(1)
+        self._advance(plan, 10)
+
+        self.assertEqual(obs.calls, [])
+
+    # ── 10 手動の録画 ────────────────────────────
+    def test_a_recording_started_by_hand_is_left_alone(self):
+        obs = FakeOBS(recording=True)
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.round_over(1)
+        self._advance(plan, 5)
+        plan.stop_all()
+
+        self.assertEqual(obs.count("StartRecord"), 0)
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self.assertTrue(obs.recording)
+
+    # ── 11 繋がらない ──────────────────────────
+    def test_a_missing_obs_warns_once_and_tries_again_next_time(self):
+        obs = FakeOBS(fail="OBSに接続できません")
+        plan = self._plan(obs)
+
+        for _ in range(3):
+            plan.continue_start(1)
+            plan.round_over(1)
+            self._advance(plan, 5)
+
+        warnings = [m for m in self.logs if "OBSに接続できません" in m]
+        self.assertEqual(len(warnings), 1, self.logs)
+        obs.fail = ""
+        plan.continue_start(1)
+        self.assertEqual(obs.count("StartRecord"), 1, "次の続行でまた試す")
+
+    def test_a_failing_client_never_raises(self):
+        def broken():
+            raise OSError("boom")
+        plan = Recorder.RecordPlan(broken, self.logs.append, clock=lambda: self.now)
+
+        plan.continue_start(1)          # 例外が出ないこと
+        plan.round_over(1)
+        plan.tick()
+        plan.stop_all()
+
+        self.assertFalse(plan.we_started)
+
+    # ── 12 停止 ─────────────────────────────────
+    def test_stop_all_stops_only_what_we_started(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+
+        plan.stop_all()
+        plan.stop_all()
+
+        self.assertEqual(obs.count("StopRecord"), 1)
+        self.assertEqual(plan.next_deadline(), None, "予約は捨てる")
+
+    # ── 13 上限 ─────────────────────────────────
+    def test_the_recording_stops_at_the_limit(self):
+        obs = FakeOBS()
+        plan = self._plan(obs, max_sec=900)
+        plan.continue_start(1)
+
+        self._advance(plan, 899)
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self._advance(plan, 1)
+
+        self.assertEqual(obs.count("StopRecord"), 1)
+        self.assertTrue(any("上限" in m for m in self.logs), self.logs)
+
+    def test_the_default_limit_is_configured(self):
+        self.assertEqual(config.OBS_RECORD_MAX_SEC, 900)
+        self.assertEqual(config.OBS_RECORD_TAIL_SEC, 3.0)
+
+
+class TestRecorderThread(unittest.TestCase):
+    """窓のスレッドからは投げるだけ。OBS がどうなっていても待たない"""
+
+    def test_a_disabled_recorder_does_nothing(self):
+        obs = FakeOBS()
+        rec = Recorder.Recorder(client_factory=obs.factory)
+
+        rec.on_continue_start(1)
+        rec.on_round_over(1)
+        rec.stop_all()
+
+        self.assertIsNone(rec._thread, "スレッドも立てない")
+        self.assertEqual(obs.calls, [])
+
+    def test_the_default_is_disabled(self):
+        self.assertFalse(Recorder.Recorder().enabled)
+
+    def test_a_hanging_obs_does_not_block_the_caller(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        class Hanging:
+            def connect(self):
+                release.wait(5)             # 応答しない OBS
+                return False, "タイムアウト"
+
+            def request(self, *_a):
+                return False, {}, ""
+
+            def close(self):
+                pass
+
+        rec = Recorder.Recorder(client_factory=Hanging)
+        rec.configure(True, log=lambda _m: None)
+
+        t0 = time.monotonic()
+        for _ in range(5):
+            rec.on_continue_start(1)
+            rec.on_round_over(1)
+        elapsed = time.monotonic() - t0
+
+        self.assertLess(elapsed, 0.1)
+
+    def test_the_worker_records_and_stops(self):
+        obs = FakeOBS()
+        logs = []
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=logs.append)
+        rec._plan.tail_sec = 0.05
+
+        rec.on_continue_start(1)
+        rec.on_round_over(1)
+        deadline = time.monotonic() + 3
+        while obs.count("StopRecord") == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(obs.calls, ["GetRecordStatus", "StartRecord", "StopRecord"])
+
+    def test_stop_all_can_wait_for_the_stop_to_be_sent(self):
+        obs = FakeOBS()
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=lambda _m: None)
+        rec.on_continue_start(1)
+
+        rec.stop_all(wait_sec=3)
+
+        self.assertEqual(obs.count("StopRecord"), 1)
+
+    def test_the_password_is_not_logged(self):
+        logs = []
+        rec = Recorder.Recorder()
+        rec.configure(True, "127.0.0.1", 1, "hunter2", log=logs.append)
+
+        rec._plan.continue_start(1)       # 繋がらないポート。警告を出させる
+
+        self.assertTrue(logs)
+        self.assertFalse(any("hunter2" in m for m in logs), logs)
+
+
+class TestRecordingHooks(unittest.TestCase):
+    """LogMonitor: 続行と決まった瞬間に録画を始め、RoundOver で止める予約をする"""
+
+    FOG_KEY = "Fog/霧"
+    CLASSIC_KEY = "Classic/クラシック"
+    PURSUER = 99
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        for p in (patch.object(ConnectDB, "send_ToNRoundStatistics"),
+                  patch.object(LogMonitor.threading, "Thread"),
+                  patch.object(PlaySound, "play_sound")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.started = patch.object(Recorder, "on_continue_start").start()
+        self.over = patch.object(Recorder, "on_round_over").start()
+        self.addCleanup(patch.stopall)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.set_list_source, None)
+
+    def _monitor(self, keep_on=None, round_type="Classic", fog=False,
+                 instance_type=config.INSTANCE_PRIVATE):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=3)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor.st.fog = fog
+        return monitor
+
+    @staticmethod
+    def _judge(monitor, ids, round_type="Classic"):
+        """通常判定。Classic は _on_killers だと亜種待ち（別スレッド）を挟むので、
+        待ちの後に走る判定そのものを呼ぶ"""
+        monitor.st.terror_ids = list(ids)
+        monitor._decide_with_keep_on_set(round_type)
+
+    # ── 15 通常判定 ─────────────────────────────
+    def test_a_continue_starts_the_recording_once(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+
+        self._judge(monitor, [42])
+        self._judge(monitor, [42])          # 同じラウンドで判定し直しても
+
+        self.started.assert_called_once_with(3)
+
+    def test_a_skip_does_not_record(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+
+        self._judge(monitor, [7])
+
+        self.started.assert_not_called()
+
+    def test_an_open_special_round_target_does_not_record(self):
+        """DTM/Waldo の3クラ解放狙いはアナウンスが鳴らない"""
+        monitor = self._monitor()
+
+        self._judge(monitor, [LogMonitor.DTM_TERROR_ID])
+
+        self.assertTrue(monitor.st.is_continue_round, "前提: 続行はする")
+        self.started.assert_not_called()
+
+    # ── 16 / 17 グループ ─────────────────────────
+    def test_a_sabotage_star_wish_records(self):
+        monitor = self._monitor(round_type="Sabotage",
+                                instance_type=config.INSTANCE_HOSHIIMO)
+        with patch.object(monitor, "_group_decision", return_value=GroupRound.WANTED):
+            self.assertTrue(monitor._apply_group_decision("Sabotage"))
+
+        self.started.assert_called_once_with(3)
+
+    def test_an_everyone_continues_round_does_not_record(self):
+        monitor = self._monitor(round_type="8 Pages",
+                                instance_type=config.INSTANCE_HOSHIIMO)
+        with patch.object(monitor, "_group_decision", return_value=GroupRound.CONTINUE):
+            self.assertTrue(monitor._apply_group_decision("8 Pages"))
+
+        self.started.assert_not_called()
+
+    # ── 18 霧の前倒し判明 ─────────────────────────
+    def test_a_fog_enrage_records_at_that_moment(self):
+        monitor = self._monitor({self.FOG_KEY: {self.PURSUER}}, round_type="Fog",
+                                fog=True)
+
+        monitor._on_enrage("The Pursuer")
+
+        self.started.assert_called_once_with(3)
+        monitor._on_killers([self.PURSUER], "Fog", revealed=True)
+        self.started.assert_called_once_with(3)
+
+    # ── 19 RoundOver ─────────────────────────────
+    def test_round_over_is_passed_on(self):
+        monitor = self._monitor()
+        monitor.cfg.auto_begin = False
+
+        monitor._process("2026.09.20 12:00:00 Debug      -  RoundOver")
+
+        self.over.assert_called_once_with(3)
+
+    # ── 20 放置モード ────────────────────────────
+    def test_hands_free_still_records(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+
+        self._judge(monitor, [42])
+
+        self.started.assert_called_once_with(3)
+        PlaySound.play_sound.assert_not_called()
+
+
+class TestOBSSettingsInTheGui(unittest.TestCase):
+    """GUI: 設定の受け渡しと接続テスト"""
+
+    class FakeVar:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def _app(self, enabled=True, host="127.0.0.1", port="4455", password="hunter2"):
+        app = type("FakeApp", (), {})()
+        app.v_obs_enabled = self.FakeVar(enabled)
+        app.v_obs_host = self.FakeVar(host)
+        app.v_obs_port = self.FakeVar(port)
+        app.v_obs_password = self.FakeVar(password)
+        app.logs = []
+        app._log = app.logs.append
+        app._obs_endpoint = lambda: mainGUI.App._obs_endpoint(app)
+        app._save_settings_now = lambda: None
+        return app
+
+    def test_the_settings_reach_the_recorder(self):
+        app = self._app()
+        with patch.object(Recorder, "configure") as mock_configure:
+            mainGUI.App._apply_obs_settings(app)
+
+        args = mock_configure.call_args
+        self.assertEqual(args.args[:4], (True, "127.0.0.1", 4455, "hunter2"))
+
+    def test_a_bad_port_falls_back_to_the_default(self):
+        app = self._app(port="abc", host="")
+
+        self.assertEqual(mainGUI.App._obs_endpoint(app),
+                         (config.OBS_DEFAULT_HOST, config.OBS_DEFAULT_PORT))
+
+    def test_the_connection_test_does_not_record_or_log_the_password(self):
+        app = self._app()
+        server = FakeOBSServer(password="hunter2", record_active=False)
+        self.addCleanup(server.close)
+        app.v_obs_port.set(str(server.port))
+
+        mainGUI.App._test_obs_connection(app)
+        deadline = time.monotonic() + 5
+        while not any("✅" in m or "❌" in m for m in app.logs) \
+                and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertTrue(any("✅" in m for m in app.logs), app.logs)
+        self.assertEqual(server.requests, ["GetRecordStatus"], "録画はしない")
+        self.assertFalse(any("hunter2" in m for m in app.logs), app.logs)
+
+    def test_stopping_the_macro_stops_our_recording(self):
+        source = Path("mainGUI.py").read_text(encoding="utf-8")
+        stop = source[source.index("    def _stop(self):"):
+                      source.index("    def _log(self, msg: str):")]
+        self.assertIn("Recorder.stop_all(", stop)
+
+    def test_the_password_entry_hides_the_text(self):
+        source = Path("mainGUI.py").read_text(encoding="utf-8")
+        self.assertRegex(source, r"textvariable=self\.v_obs_password[^)]*show=\"\*\"")
+
+    def test_no_new_dependency(self):
+        """標準ライブラリだけで書いている"""
+        for name in ("OBSClient.py", "Recorder.py"):
+            source = Path(name).read_text(encoding="utf-8")
+            imports = set(re.findall(r"^(?:import|from) (\w+)", source, re.M))
+            self.assertLessEqual(imports, {"base64", "hashlib", "json", "os",
+                                           "socket", "struct", "time", "queue",
+                                           "threading", "typing", "config",
+                                           "OBSClient"}, name)
 
 
 class TestWindowTabHwndChoices(unittest.TestCase):
@@ -6860,6 +7633,7 @@ class TestStartWithoutTnl(unittest.TestCase):
             setattr(app, name, self.FakeVar(""))
         for name in ("_resolve_tab_ports", "_resolve_windows"):
             setattr(app, name, getattr(mainGUI.App, name).__get__(app))
+        app._apply_obs_settings = lambda: None
         app._assign_source = mainGUI.App._assign_source
         return app
 
@@ -9500,6 +10274,8 @@ class TestEmergencyKeySettings(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -9796,6 +10572,8 @@ class TestSettingsArePersisted(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -9806,7 +10584,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
             "join_world", "instance_link", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
-            "tool_launchers",
+            "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password",
         }, "ラウンド指定3種は保存しない")
 
     def test_other_keys_in_the_file_survive(self):
@@ -9818,6 +10596,8 @@ class TestSettingsArePersisted(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -9960,6 +10740,8 @@ class TestToolLauncherSettings(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
         return app
 
@@ -11186,6 +11968,8 @@ class TestSkipRoundsSettings(unittest.TestCase):
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
+        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.tool_rows = []
         app.v_emergency_key = TestSkipRoundsSettings.FakeVar("p")
         saved = {}
@@ -11302,8 +12086,10 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl"):
+                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
             setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))
+        app._apply_obs_settings = lambda: None
         app.v_freeze_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
                                for n in config.SKIP_ROUND_SELECTABLE}
         app.added_tools = []

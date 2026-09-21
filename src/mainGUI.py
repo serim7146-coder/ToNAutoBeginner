@@ -23,6 +23,8 @@ import ToolLauncher
 import HotKey
 import ToNEntry
 import OSCClient
+import OBSClient
+import Recorder
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -737,6 +739,33 @@ class App(tk.Tk):
         ttk.Button(f4_wrap.content, text="＋ 追加",
                    command=self._add_tool_row).pack(anchor="w", pady=(4, 0))
 
+        # ⑤ OBS自動録画（続行アナウンスが鳴る種類の続行ラウンドを録る）
+        f5_wrap = CollapsibleFrame(self, text="⑤ OBS自動録画", collapsed=True)
+        f5_wrap.pack(fill="x", padx=12, pady=4)
+        f5 = f5_wrap.content
+        of1 = ttk.Frame(f5)
+        of1.pack(fill="x", pady=2)
+        self.v_obs_enabled = tk.BooleanVar(value=False)
+        ttk.Checkbutton(of1, text="続行ラウンドを録画する", variable=self.v_obs_enabled,
+                        command=self._apply_obs_settings).pack(side="left")
+        ttk.Label(of1, text="※ OBSの「ツール → WebSocketサーバー設定」で有効にしてください。"
+                            "シーンは切り替えません",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        of2 = ttk.Frame(f5)
+        of2.pack(fill="x", pady=2)
+        ttk.Label(of2, text="ホスト:").pack(side="left")
+        self.v_obs_host = tk.StringVar(value=config.OBS_DEFAULT_HOST)
+        ttk.Entry(of2, textvariable=self.v_obs_host, width=16).pack(side="left", padx=(4, 10))
+        ttk.Label(of2, text="ポート:").pack(side="left")
+        self.v_obs_port = tk.StringVar(value=str(config.OBS_DEFAULT_PORT))
+        ttk.Entry(of2, textvariable=self.v_obs_port, width=7).pack(side="left", padx=(4, 10))
+        ttk.Label(of2, text="パスワード:").pack(side="left")
+        self.v_obs_password = tk.StringVar()
+        ttk.Entry(of2, textvariable=self.v_obs_password, width=20,
+                  show="*").pack(side="left", padx=(4, 10))
+        ttk.Button(of2, text="接続テスト",
+                   command=self._test_obs_connection).pack(side="left")
+
         # AFK解除設定（DTM / Waldo）
         # コントロール
         fc = ttk.Frame(self)
@@ -1115,6 +1144,11 @@ class App(tk.Tk):
         for name, var in self.v_freeze_rounds.items():
             var.set(name in _as_round_names(data.get("freeze_rounds")))
         self._apply_freeze_settings()
+        self.v_obs_enabled.set(_as_flag(data.get("obs_record")))
+        self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
+        self.v_obs_port.set(str(data.get("obs_port") or config.OBS_DEFAULT_PORT))
+        self.v_obs_password.set(str(data.get("obs_password") or ""))
+        self._apply_obs_settings()
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -1285,6 +1319,7 @@ class App(tk.Tk):
 
         # ログが空なら自動割り当て（ついでにOSCポートも確定する）
         self._resolve_tab_ports()
+        self._apply_obs_settings()
 
         self.monitors.clear()
         for tab in self.tabs:
@@ -1357,6 +1392,9 @@ class App(tk.Tk):
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
         self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)
+        # このツールが始めた録画だけ止める（手動の録画には触らない）。
+        # 終了時はワーカーごと消えるので、送り終えるまで少しだけ待つ
+        Recorder.stop_all(wait_sec=config.OBS_TIMEOUT_SEC * 2)
         self.monitors.clear()
         self._running = False
         self.btn_start.config(state="normal")
@@ -1823,6 +1861,10 @@ class App(tk.Tk):
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
                                     if var.get()),
+            "obs_record":    self.v_obs_enabled.get(),
+            "obs_host":      self.v_obs_host.get().strip(),
+            "obs_port":      self.v_obs_port.get().strip(),
+            "obs_password":  self.v_obs_password.get(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す
@@ -1831,6 +1873,47 @@ class App(tk.Tk):
         for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
             data.pop(key, None)
         save_settings(data)
+
+    # ── OBS自動録画 ───────────────────────────
+    def _obs_endpoint(self) -> tuple[str, int]:
+        host = self.v_obs_host.get().strip() or config.OBS_DEFAULT_HOST
+        try:
+            port = int(self.v_obs_port.get().strip())
+        except ValueError:
+            port = config.OBS_DEFAULT_PORT
+        return host, port
+
+    def _apply_obs_settings(self):
+        """GUIの設定を録画係へ渡す。パスワードはログに出さない"""
+        host, port = self._obs_endpoint()
+        Recorder.configure(self.v_obs_enabled.get(), host, port,
+                           self.v_obs_password.get(), log=self._log)
+
+    def _test_obs_connection(self):
+        """Identify まで通るかと、録画状態が取れるかを見る。録画はしない"""
+        host, port = self._obs_endpoint()
+        password = self.v_obs_password.get()
+        self._log(f"[OBS] 接続テスト: {host}:{port}"
+                  + ("（パスワードあり）" if password else "（パスワードなし）"))
+
+        def worker():
+            client = OBSClient.OBSClient(host, port, password)
+            try:
+                ok, reason = client.connect()
+                if not ok:
+                    self._log(f"[OBS] ❌ {reason}")
+                    return
+                ok, data, reason = client.request("GetRecordStatus")
+                if not ok:
+                    self._log(f"[OBS] ❌ 接続はできましたが録画状態が取れません: {reason}")
+                    return
+                state = "録画中" if data.get("outputActive") else "録画していません"
+                self._log(f"[OBS] ✅ 接続できました（いまは{state}）")
+            finally:
+                client.close()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._save_settings_now()
 
     def _open_statistics(self):
         StatisticsWindow(self)

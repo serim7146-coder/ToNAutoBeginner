@@ -9,6 +9,7 @@ import SharedState
 import WindowOperator
 import PlaySound
 import ConnectDB
+import Recorder
 import ReadJson
 import LogParser
 import RoundDecision
@@ -601,6 +602,7 @@ class LogMonitor:
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
                 SharedState.continue_round_start()
+                Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             return True
         if decision == GroupRound.CONTINUE:
@@ -1009,6 +1011,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
+            Recorder.on_round_over(self.window_idx)
             # Begin待ちの起点。実処理は Verified Round End 側で走るが、
             # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
             st.round_over_time = time.time()
@@ -1397,6 +1401,9 @@ class LogMonitor:
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
                 SharedState.continue_round_start()
+                # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
+                # ここへ流れ込むので、判明の経路ごとには足さない
+                Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
             if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 st.is_open_special_round_round = True

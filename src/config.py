@@ -305,6 +305,14 @@ OSC_BASE_IN_PORT = 9000   # 窓1の受信ポート（送信は+1）
 OSC_PORT_STRIDE  = 10     # 窓ごとのポート間隔
 OSC_ENABLED      = True   # 起動時に --osc= を付けるか
 
+# ── OBS 自動録画（obs-websocket v5） ──
+# 続行アナウンスが鳴る種類の続行ラウンドを録る。シーンは切り替えない
+OBS_DEFAULT_HOST    = "127.0.0.1"
+OBS_DEFAULT_PORT    = 4455     # OBS 28 以降の既定
+OBS_RECORD_TAIL_SEC = 3.0      # RoundOver から録画を止めるまで
+OBS_RECORD_MAX_SEC  = 900      # 1本の上限。RoundOver が来ないときの録りっぱなし防止
+OBS_TIMEOUT_SEC     = 2.0      # 接続・送受信のタイムアウト
+
 # ── VRChat起動 ──
 MAX_WINDOWS             = 8      # 同時に扱える窓数の上限
 LAUNCH_STAGGER_SEC      = 6.0    # 窓が現れてから次を起動するまでの間隔
