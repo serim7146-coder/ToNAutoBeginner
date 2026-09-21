@@ -1886,8 +1886,13 @@ class App(tk.Tk):
     def _apply_obs_settings(self):
         """GUIの設定を録画係へ渡す。パスワードはログに出さない"""
         host, port = self._obs_endpoint()
-        Recorder.configure(self.v_obs_enabled.get(), host, port,
+        enabled = self.v_obs_enabled.get()
+        Recorder.configure(enabled, host, port,
                            self.v_obs_password.get(), log=self._log)
+        if not enabled:
+            # 録画中にOFFにしたら、このツールが始めた録画をその場で止める
+            # （手動の録画には触らない）。GUI操作なので待たない
+            Recorder.stop_all()
 
     def _test_obs_connection(self):
         """Identify まで通るかと、録画状態が取れるかを見る。録画はしない"""

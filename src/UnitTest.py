@@ -1979,6 +1979,73 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
         args = mock_configure.call_args
         self.assertEqual(args.args[:4], (True, "127.0.0.1", 4455, "hunter2"))
 
+    # ── 録画中にOFF ───────────────────────────
+    def test_turning_it_off_stops_without_waiting(self):
+        app = self._app(enabled=False)
+        with patch.object(Recorder, "configure"),              patch.object(Recorder, "stop_all") as mock_stop:
+            mainGUI.App._apply_obs_settings(app)
+
+        mock_stop.assert_called_once_with()          # wait_sec を渡さない＝待たない
+
+    def test_turning_it_on_does_not_stop(self):
+        app = self._app(enabled=True)
+        with patch.object(Recorder, "configure"),              patch.object(Recorder, "stop_all") as mock_stop:
+            mainGUI.App._apply_obs_settings(app)
+
+        mock_stop.assert_not_called()
+
+    def _recorder_after_turning_off(self, obs):
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=lambda _m: None)
+        rec.on_continue_start(1)
+        rec.configure(False)
+        rec.stop_all()                                # GUIのOFF操作（待たない）
+        rec.stop_all(wait_sec=3)                      # 先の分を処理し終えるまで待つ（キューは順番どおり）
+        return rec
+
+    def test_turning_it_off_stops_our_recording_once(self):
+        obs = FakeOBS()
+
+        self._recorder_after_turning_off(obs)
+
+        self.assertEqual(obs.count("StartRecord"), 1)
+        self.assertEqual(obs.count("StopRecord"), 1)
+
+    def test_turning_it_off_leaves_a_hand_started_recording_alone(self):
+        obs = FakeOBS(recording=True)
+
+        self._recorder_after_turning_off(obs)
+
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self.assertTrue(obs.recording)
+
+    def test_turning_it_off_does_not_block_on_a_hanging_obs(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        entered = threading.Event()
+
+        class Hanging:
+            def connect(self):
+                entered.set()
+                release.wait(5)
+                return True, ""
+
+            def request(self, *_a):
+                return True, {"outputActive": False}, ""
+
+            def close(self):
+                pass
+
+        rec = Recorder.Recorder(client_factory=Hanging)
+        rec.configure(True, log=lambda _m: None)
+        rec.on_continue_start(1)
+        entered.wait(3)                               # ワーカーが OBS 待ちで固まっている
+
+        rec.configure(False)
+        t0 = time.monotonic()
+        rec.stop_all()
+        self.assertLess(time.monotonic() - t0, 0.1)
+
     def test_a_bad_port_falls_back_to_the_default(self):
         app = self._app(port="abc", host="")
 
