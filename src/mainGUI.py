@@ -25,6 +25,7 @@ import ToNEntry
 import OSCClient
 import OBSClient
 import Recorder
+import SecretStore
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -102,6 +103,35 @@ def save_settings(data: dict):
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+
+
+OBS_PASSWORD_KEY = "obs_password_dpapi"     # DPAPI で暗号化した値（base64）
+OBS_PASSWORD_PLAIN_KEY = "obs_password"     # 旧形式（平文）。読んだら暗号化して消す
+
+
+def load_obs_password(data: dict) -> tuple[str, str]:
+    """settings から OBS のパスワードを取り出す。(パスワード, 状態)。
+
+    状態は "" / "migrate"（平文が残っていた。暗号化して保存し直す）/
+    "undecryptable"（別のPC・別のユーザーの値など。空として扱う）。
+    """
+    stored = data.get(OBS_PASSWORD_KEY)
+    if stored:
+        password = SecretStore.unprotect(str(stored))
+        if password is None:
+            return "", "undecryptable"
+        return password, ""
+    if OBS_PASSWORD_PLAIN_KEY in data:
+        return str(data.get(OBS_PASSWORD_PLAIN_KEY) or ""), "migrate"
+    return "", ""
+
+
+def with_obs_password(data: dict, password: str) -> dict:
+    """保存する dict に OBS のパスワードを暗号化して入れる。平文は書かない"""
+    out = {k: v for k, v in data.items() if k != OBS_PASSWORD_PLAIN_KEY}
+    # 暗号化できなければ保存しない（平文へ落とさない）。次回は入れ直しになる
+    out[OBS_PASSWORD_KEY] = (SecretStore.protect(password) or "") if password else ""
+    return out
 
 
 def launch_window_count(win_count: int, already_open: int) -> int:
@@ -1147,7 +1177,14 @@ class App(tk.Tk):
         self.v_obs_enabled.set(_as_flag(data.get("obs_record")))
         self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
         self.v_obs_port.set(str(data.get("obs_port") or config.OBS_DEFAULT_PORT))
-        self.v_obs_password.set(str(data.get("obs_password") or ""))
+        password, state = load_obs_password(data)
+        self.v_obs_password.set(password)
+        if state == "undecryptable":
+            self._log("[OBS] 保存されたパスワードを復号できません（別のPCや別のユーザーの"
+                      "設定など）→ OBS のパスワードを入れ直してください")
+        elif state == "migrate":
+            # 旧形式の平文をその場で暗号化して書き直す（タブの有無に関係なく）
+            save_settings(with_obs_password(load_settings(), password))
         self._apply_obs_settings()
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
@@ -1864,7 +1901,6 @@ class App(tk.Tk):
             "obs_record":    self.v_obs_enabled.get(),
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
-            "obs_password":  self.v_obs_password.get(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す
@@ -1872,7 +1908,7 @@ class App(tk.Tk):
         # 残っていても読まないが、ついでに消しておく
         for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
             data.pop(key, None)
-        save_settings(data)
+        save_settings(with_obs_password(data, self.v_obs_password.get()))
 
     # ── OBS自動録画 ───────────────────────────
     def _obs_endpoint(self) -> tuple[str, int]:

@@ -47,6 +47,7 @@ import OSCClient
 import OSCReceiver
 import OBSClient
 import Recorder
+import SecretStore
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -2087,6 +2088,135 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
                                            "socket", "struct", "time", "queue",
                                            "threading", "typing", "config",
                                            "OBSClient"}, name)
+
+
+class TestOBSPasswordStorage(unittest.TestCase):
+    """OBS のパスワードは DPAPI で暗号化して保存する。平文は書かない"""
+
+    PASSWORD = "hunter2-ｐａｓｓ"
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    # ── 暗号化そのもの（本物の DPAPI） ─────────────────
+    def test_it_round_trips(self):
+        stored = SecretStore.protect(self.PASSWORD)
+
+        self.assertIsNotNone(stored)
+        self.assertNotIn(self.PASSWORD, stored)
+        self.assertNotIn(self.PASSWORD,
+                         base64.b64decode(stored).decode("utf-8", "replace"))
+        self.assertEqual(SecretStore.unprotect(stored), self.PASSWORD)
+
+    def test_a_foreign_or_broken_value_is_none(self):
+        """別のPC・別のユーザーの値は復号できない。壊れた値と同じく None"""
+        for value in ("", "not base64!!", base64.b64encode(b"x" * 200).decode()):
+            self.assertIsNone(SecretStore.unprotect(value), value)
+
+    # ── 保存 ─────────────────────────────────
+    def _save(self, password, stored=None):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key",
+                     "v_obs_enabled", "v_obs_host", "v_obs_port"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_obs_password = self.FakeVar(password)
+        app.v_freeze_rounds = {}
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
+            mainGUI.App._save_launch_settings(app)
+        return saved
+
+    def test_the_saved_file_has_no_plaintext(self):
+        saved = self._save(self.PASSWORD)
+
+        self.assertNotIn(self.PASSWORD, json.dumps(saved, ensure_ascii=False))
+        self.assertNotIn("obs_password", saved)
+        self.assertEqual(SecretStore.unprotect(saved["obs_password_dpapi"]),
+                         self.PASSWORD)
+
+    def test_an_old_plaintext_key_is_dropped_on_save(self):
+        saved = self._save(self.PASSWORD, stored={"obs_password": "old-plain"})
+
+        self.assertNotIn("obs_password", saved)
+        self.assertNotIn("old-plain", json.dumps(saved, ensure_ascii=False))
+
+    def test_an_empty_password_is_stored_empty(self):
+        self.assertEqual(self._save("")["obs_password_dpapi"], "")
+
+    def test_a_failed_encryption_never_falls_back_to_plaintext(self):
+        with patch.object(SecretStore, "protect", return_value=None):
+            saved = self._save(self.PASSWORD)
+
+        self.assertEqual(saved["obs_password_dpapi"], "")
+        self.assertNotIn(self.PASSWORD, json.dumps(saved, ensure_ascii=False))
+
+    # ── 読み込み ─────────────────────────────────
+    def _load(self, data):
+        """_load_saved_settings を回す（他の項目は既存テストと同じ偽物）"""
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
+                     "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_instance_link", "v_emergency_key", "v_freeze_8pages",
+                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        app._add_tool_row = lambda p, save=True: None
+        app._refresh_emergency_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._apply_obs_settings = lambda: None
+        app._apply_saved_window_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app.logs = []
+        app._log = app.logs.append
+        written = []
+        with patch.object(mainGUI, "load_settings", return_value=dict(data)),              patch.object(mainGUI, "save_settings", written.append):
+            mainGUI.App._load_saved_settings(app)
+        return app, written
+
+    def test_it_is_restored(self):
+        app, written = self._load({"obs_password_dpapi": SecretStore.protect(self.PASSWORD)})
+
+        self.assertEqual(app.v_obs_password.get(), self.PASSWORD)
+        self.assertEqual(written, [], "書き直さない")
+        self.assertEqual(app.logs, [])
+
+    def test_an_old_plaintext_password_is_migrated(self):
+        app, written = self._load({"obs_password": self.PASSWORD, "tnl_path": ""})
+
+        self.assertEqual(app.v_obs_password.get(), self.PASSWORD)
+        self.assertEqual(len(written), 1, "その場で書き直す")
+        self.assertNotIn("obs_password", written[0])
+        self.assertNotIn(self.PASSWORD, json.dumps(written[0], ensure_ascii=False))
+        self.assertEqual(SecretStore.unprotect(written[0]["obs_password_dpapi"]),
+                         self.PASSWORD)
+
+    def test_an_undecryptable_password_is_empty_and_asked_for_once(self):
+        foreign = base64.b64encode(b"from another PC" * 10).decode()
+
+        app, written = self._load({"obs_password_dpapi": foreign})
+
+        self.assertEqual(app.v_obs_password.get(), "")
+        messages = [m for m in app.logs if "入れ直してください" in m]
+        self.assertEqual(len(messages), 1, app.logs)
+        self.assertEqual(written, [])
+
+    def test_the_exe_build_includes_the_module(self):
+        """Nuitka のビルド行は win32 系を明示している。漏れると exe でだけ落ちる"""
+        self.assertIn("--include-module=win32crypt",
+                      Path("main.py").read_text(encoding="utf-8"))
 
 
 class TestWindowTabHwndChoices(unittest.TestCase):
@@ -10684,7 +10814,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
             "join_world", "instance_link", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
-            "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password",
+            "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
 
     def test_other_keys_in_the_file_survive(self):
