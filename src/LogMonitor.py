@@ -546,8 +546,9 @@ class LogMonitor:
                 st.terror_ids = replaced
                 changed.append(row)
         if self._hide_fog_info():
-            # 看破 NG の霧で公開前。フラグ（公開後の差し替えに要る）だけ立てて、
-            # 何が出たかは出さない。テラーはまだ分からないので差し替えも無い
+            # 看破 NG の霧で公開前。フラグ（公開後の差し替えに要る）は立てて、
+            # 何が出たかは公開まで保留する。テラーはまだ分からないので差し替えも無い
+            self._fog_notice(f"{' / '.join(row.name for row in rows)} の合図")
             return
         if changed:
             for row in changed:
@@ -883,15 +884,13 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_GIGABYTES:
-            if not self._hide_fog_info():
-                self._log("👾 The Gigabytes 出現")
+            self._fog_notice("👾 The Gigabytes 出現")
             self._mark_replacement("gigabytes")
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
-            if not self._hide_fog_info():
-                self._log("🎮 Atrached 出現（SonicのVariant）")
+            self._fog_notice("🎮 Atrached 出現（SonicのVariant）")
             self._mark_replacement("atrached_variant")
             return
 
@@ -922,6 +921,7 @@ class LogMonitor:
             st.map_id                      = event.map_id
             st.statistics_sent             = False
             st.statistics_quiet            = False
+            st.held_fog_notices            = []
             st.fog_reading                 = False
             st.early_read_hits             = {}
             st.early_read_tid              = None
@@ -1037,6 +1037,8 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
+            # 公開前に終わった霧。保留していた合図はここで出す
+            self._release_fog_notices()
             st.in_round = False
             st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
             st.early_read_hits = {}
@@ -1130,13 +1132,10 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_FOXY:
-            # 看破 NG の霧で公開前なら、出たことも音も出さず判定もしない。
+            # 看破 NG の霧で公開前なら、出たことと音は公開まで保留し、判定もしない。
             # 差し替えの記録と DB への黙った送信だけ（公開で今までどおり判定）
             hide = self._hide_fog_info()
-            if not hide:
-                self._log("🦊 Foxyが出た！")
-                if not self._hands_free():
-                    PlaySound.play_sound(self.cfg.voice_foxy)
+            self._fog_notice("🦊 Foxyが出た！", self.cfg.voice_foxy)
             self._mark_replacement("foxy")
             if hide:
                 self._send_early_statistics(config.FOXY_ID)
@@ -1155,6 +1154,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
             st.fog_reading = False
+            # 保留していた合図を、判定より先に起きた順で出す
+            self._release_fog_notices()
             self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
             # 答え合わせは公開の後（食い違いの警告はもう出してよい）
             self._check_early_read(event.terror_ids or [], event.round_type)
@@ -1518,6 +1519,24 @@ class LogMonitor:
         return (st.round_type in GroupRound.FOG_ROUND_TYPES
                 and not st.terror_ids
                 and not self._may_show_fog_info())
+
+    def _fog_notice(self, text: str, voice: Optional[str] = None):
+        """Variant の合図の通知。看破 NG の霧で公開前なら公開まで保留する"""
+        if self._hide_fog_info():
+            self.st.held_fog_notices.append((text, voice))
+            return
+        self._show_fog_notice(text, voice)
+
+    def _show_fog_notice(self, text: str, voice: Optional[str]):
+        self._log(text)
+        if voice is not None and not self._hands_free():
+            PlaySound.play_sound(voice)
+
+    def _release_fog_notices(self):
+        """保留していた合図の通知を、来た順に出す"""
+        held, self.st.held_fog_notices = self.st.held_fog_notices, []
+        for text, voice in held:
+            self._show_fog_notice(text, voice)
 
     def _send_early_statistics(self, tid: int):
         """DB にだけ送る。判定には使わない。送信について何も出さない"""

@@ -2916,6 +2916,63 @@ class TestFogVariantsHidden(unittest.TestCase):
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
         self.play.assert_called_with("foxy.mp3")
 
+    # ── NG の霧・保留した通知は公開か RoundOver で出す ─────────
+    REVEAL = "Killers have been revealed - 101 0 0 // Round type is Fog"
+
+    def test_ng_fog_notices_come_out_at_the_reveal_in_order(self):
+        monitor = self._monitor("public")
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+        monitor._process(self.PREFIX + self.SIGNALS["Bloodthirsty"])
+        before = list(monitor.logs)
+        self.play.assert_not_called()
+
+        monitor._process(self.PREFIX + self.REVEAL)
+
+        new = monitor.logs[len(before):]
+        # 判定より先に、来た順で出す
+        self.assertGreaterEqual(len(new), 3, new)
+        for line, mark in zip(new, ("🦊 Foxyが出た！", "Foxy の合図", "Bloodthirsty Creature の合図")):
+            self.assertIn(mark, line, new)
+        self.play.assert_any_call("foxy.mp3")
+        self.assertEqual(monitor.st.held_fog_notices, [])
+
+    def test_ng_fog_notices_come_out_at_round_over_without_a_reveal(self):
+        monitor = self._monitor("public")
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+        before = list(monitor.logs)
+
+        monitor._process(self.PREFIX + "RoundOver")
+
+        new = monitor.logs[len(before):]
+        self.assertIn("🦊 Foxyが出た！", new[0])
+        self.assertIn("の合図", new[1])
+        self.play.assert_any_call("foxy.mp3")
+        self.assertEqual(monitor.st.held_fog_notices, [])
+
+        monitor._process(self.PREFIX + self.REVEAL)       # 2回は出さない
+        self.assertEqual(sum("🦊" in m for m in monitor.logs), 1)
+
+    def test_ng_fog_notice_has_no_voice_in_hands_free_at_the_release(self):
+        monitor = self._monitor("public")
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+
+        monitor._process(self.PREFIX + self.REVEAL)
+
+        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
+        self.assertNotIn(unittest.mock.call("foxy.mp3"), self.play.call_args_list)
+
+    def test_held_notices_do_not_leak_into_the_next_round(self):
+        monitor = self._monitor("public")
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        monitor._process(self.PREFIX + "This round is taking place at Facility (12) "
+                         "and the round type is Classic")
+        monitor._process(self.PREFIX + "RoundOver")
+
+        self.assertFalse(any("🦊" in m for m in monitor.logs), monitor.logs)
+
     # ── OK の霧は今までどおり ─────────────────────
     def test_ok_fog_foxy_is_as_before(self):
         monitor = self._monitor("invite")
