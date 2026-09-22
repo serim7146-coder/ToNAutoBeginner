@@ -56,6 +56,55 @@ import AutoUpdate
 import config
 from State import WindowConfig, WindowState
 
+
+# ── テストで本物の設定を書き換えない ─────────────────────
+# %APPDATA%\ToNAutoBeginner の settings.json / fog_object_names.json は
+# 依頼者の本物の設定。テスト全体を一時フォルダに向ける
+REAL_SETTINGS_DIR = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner"
+_sandbox = None
+_real_paths = {}
+
+
+def setUpModule():
+    global _sandbox
+    _sandbox = tempfile.TemporaryDirectory()
+    root = Path(_sandbox.name) / "ToNAutoBeginner"
+    _real_paths.update(settings=config.SETTINGS_PATH,
+                       names=config.FOG_OBJECT_NAMES_PATH,
+                       trust=FogEarlyRead.trust)
+    config.SETTINGS_PATH = root / "settings.json"
+    config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
+    # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
+    FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
+
+
+def tearDownModule():
+    config.SETTINGS_PATH = _real_paths["settings"]
+    config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
+    FogEarlyRead.trust = _real_paths["trust"]
+    _sandbox.cleanup()
+
+
+class TestNoRealSettings(unittest.TestCase):
+    """テスト中の設定の置き場所が、本物の %APPDATA%\\ToNAutoBeginner の下ではないこと"""
+
+    def _assert_not_real(self, path):
+        real = REAL_SETTINGS_DIR.resolve()
+        self.assertNotEqual(Path(path).resolve().parent, real, path)
+        self.assertNotIn(real, Path(path).resolve().parents, path)
+
+    def test_the_settings_path_is_not_the_real_one(self):
+        self._assert_not_real(config.SETTINGS_PATH)
+
+    def test_the_fog_object_names_path_is_not_the_real_one(self):
+        self._assert_not_real(config.FOG_OBJECT_NAMES_PATH)
+        self._assert_not_real(FogEarlyRead.trust.path)
+
+    def test_saving_settings_does_not_touch_the_real_one(self):
+        mainGUI.save_settings({"probe": True})
+        self.assertTrue(config.SETTINGS_PATH.exists())
+        self._assert_not_real(config.SETTINGS_PATH)
+
 ConnectDB.SUPABASE_URL = "https://example.supabase.co"
 ConnectDB.SUPABASE_KEY = "test-key"
 
