@@ -2945,6 +2945,99 @@ class TestFogVariantsHidden(unittest.TestCase):
         self.play.assert_called_once_with("foxy.mp3")
 
 
+class TestFogStunned(unittest.TestCase):
+    """スタンによる霧のテラー判明。Enrage 系として使い分けに乗る"""
+
+    FOG_KEY = "Fog/霧"
+    WITCH = 167            # Walpurgisnacht（個体名 Unknown Witch）
+    UNKNOWN = ("2026.09.21 17:31:15 Debug      -  Killers is unknown - ??? // "
+               "Will be revealed after 50 seconds // Round type is Fog")
+    STUN = "2026.09.21 17:31:40 Debug      -  Unknown Witch was stunned."
+
+    def setUp(self):
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        for p in (patch.object(config, "TERRORS", fog_early_read_terrors()),
+                  patch.object(Recorder, "on_continue_start")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, access, keep=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep or {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = access
+        monitor.st.in_round = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._process(self.UNKNOWN)
+        return monitor
+
+    def _skipped(self):
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
+
+    def test_ok_instance_decides_by_the_stun(self):
+        monitor = self._monitor("invite", keep={self.FOG_KEY: {self.WITCH}})
+
+        monitor._process(self.STUN)
+
+        self.assertEqual(monitor.st.enrage_identified, self.WITCH)
+        self.assertTrue(monitor.st.is_continue_round)
+        self.play.assert_called_once_with("continue.mp3")
+        self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(self.send.call_args.kwargs["quiet"])
+
+    def test_ng_instance_only_sends_to_the_db(self):
+        monitor = self._monitor("public", keep={self.FOG_KEY: {self.WITCH}})
+        before = list(monitor.logs)
+
+        monitor._process(self.STUN)
+
+        self.assertEqual(monitor.logs, before, "公開前は何も出さない")
+        self.assertFalse(monitor.st.is_continue_round)
+        self.play.assert_not_called()
+        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=True)
+
+    def test_an_unknown_name_is_logged_only_where_allowed(self):
+        for access, shown in (("invite", True), ("public", False)):
+            monitor = self._monitor(access)
+
+            monitor._process("2026.09.21 17:31:40 Debug      -  存在しない名前XYZ was stunned.")
+
+            self.assertEqual(any("Stunned: 存在しない名前XYZ" in m for m in monitor.logs),
+                             shown, access)
+
+    def test_only_while_the_fog_terror_is_unknown(self):
+        monitor = self._monitor("invite")
+        monitor._process("2026.09.21 17:32:05 Debug      -  Killers have been revealed - "
+                         "33 0 0 // Round type is Fog (Alternate)")
+        self.thread.reset_mock()
+
+        monitor._process(self.STUN)
+
+        self.assertEqual(self._skipped(), 0, "公開の後のスタンで判定し直さない")
+
+    def test_the_switch(self):
+        with patch.object(config, "STUNNED_IDENTIFY_ENABLED", False):
+            monitor = self._monitor("invite")
+            monitor._process(self.STUN)
+
+        self.assertIsNone(monitor.st.enrage_identified)
+        self.send.assert_not_called()
+
+
 class TestQuietStatistics(unittest.TestCase):
     """看破・Enrage 系の DB 送信は print も出さない"""
 
@@ -3696,8 +3789,18 @@ class TestEnrageLine(unittest.TestCase):
         """実データに46回ある"""
         self.assertIsNone(self._parse("triggered an Enrage State!"))
 
-    def test_a_stun_line_is_not_an_event(self):
-        self.assertIsNone(self._parse("Teuthida was stunned."))
+    def test_a_stun_line_is_an_event(self):
+        """スタンされた名前でも霧のテラーを判明させる（実ログの形そのまま）"""
+        for body, name in (("Teuthida was stunned.", "Teuthida"),
+                           ("Unknown Witch was stunned.", "Unknown Witch"),
+                           ("Mountain Of Smiling Bodies was stunned.",
+                            "Mountain Of Smiling Bodies")):
+            event = self._parse(body)
+            self.assertEqual(event.kind, LogParser.EVENT_STUNNED, body)
+            self.assertEqual(event.player_name, name, body)
+
+    def test_a_stun_line_without_a_name_is_not_an_event(self):
+        self.assertIsNone(self._parse("was stunned."))
 
     def test_a_name_with_spaces_survives(self):
         event = self._parse("GlaggleLand Disruptortriggered an Enrage State!")

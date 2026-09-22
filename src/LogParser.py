@@ -27,6 +27,7 @@ EVENT_GIGABYTES = "gigabytes"
 EVENT_ATRACHED = "atrached"
 EVENT_MASTER_SWITCHED = "master_switched"
 EVENT_ENRAGE = "enrage"
+EVENT_STUNNED = "stunned"
 EVENT_PLAYER_JOINED = "player_joined"
 EVENT_JOY = "joy"
 EVENT_PLAYER_LEFT = "player_left"
@@ -75,6 +76,7 @@ RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
 # 名前と triggered の間に空白が無い。Enrage / Enrage2 / Enrage3 は
 # 段階が違うだけで名前は同じなので、まとめて扱う
 RE_ENRAGE = re.compile(r"^(.*?)triggered an Enrage\d* State!\s*$")
+RE_STUNNED = re.compile(r"^(.*?)was stunned[.]$")
 # Joy が出るときの行。霧ではテラー不明のまま進むので、これで判明させる
 RE_JOY = re.compile(r"^JOY WILL SOON AWAKEN[.][.][.]$")
 
@@ -271,6 +273,12 @@ def parse(line: str) -> LogEvent | None:
         name = m.group(1).strip()
         # 名前が空の行が実データに46回ある。取れないものはイベントにしない
         return LogEvent(EVENT_ENRAGE, player_name=name) if name else None
+    
+    m = RE_STUNNED.match(line)
+    if m:
+        name = m.group(1).strip()
+        # 名前が空の行が実データに46回ある。取れないものはイベントにしない
+        return LogEvent(EVENT_STUNNED, player_name=name) if name else None
 
     m = RE_PLAYER_JOINED.match(line)
     if m:

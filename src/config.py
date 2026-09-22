@@ -349,6 +349,7 @@ HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする
 ENRAGE_IDENTIFY_ENABLED = True
+STUNNED_IDENTIFY_ENABLED = True
 
 SONIC_ID = 40
 # alternate。Sanic は Foxy に置き換わることがある（foxy the pirate turned evil!）

@@ -806,6 +806,10 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_ENRAGE:
             self._on_enrage(event.player_name)
             return
+        
+        if event.kind == LogParser.EVENT_STUNNED:
+            self._on_stunned(event.player_name)
+            return
 
         if event.kind == LogParser.EVENT_JOY:
             if self._fog_terror_unknown():
@@ -1224,6 +1228,22 @@ class LogMonitor:
                 self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Enrage", name)
+        
+    def _on_stunned(self, name: str):
+        """
+        Fog のテラー不明中に、スタンされた名前からテラーを判明させる。
+        名前が terrors.json に一意に一致したときだけ使う。表に無いものは、そのときは従来どおり revealed を待つ。
+        """
+        if not config.STUNNED_IDENTIFY_ENABLED:
+            return
+        if not self._fog_terror_unknown():
+            return
+        tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
+        if tid is None:
+            if self._may_show_fog_info():
+                self._log(f"Stunned: {name}（テラー表に無し→revealed待ち）")
+            return
+        self._identify_fog_terror(tid, "Stunned", name)
 
     def _fog_terror_unknown(self) -> bool:
         """霧でテラーがまだ分からず、このラウンドで前倒しもしていないか"""
