@@ -48,6 +48,7 @@ import OSCReceiver
 import OBSClient
 import Recorder
 import SecretStore
+import FogEarlyRead
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -1829,6 +1830,7 @@ class TestRecordingHooks(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=3)
         monitor.st.instance_type = instance_type
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = round_type
         monitor.st.fog = fog
@@ -2217,6 +2219,620 @@ class TestOBSPasswordStorage(unittest.TestCase):
         """Nuitka のビルド行は win32 系を明示している。漏れると exe でだけ落ちる"""
         self.assertIn("--include-module=win32crypt",
                       Path("main.py").read_text(encoding="utf-8"))
+
+
+# ── 霧の看破: 実ログ（--enable-sdk-log-levels 付き）から抜き出した固定データ ──
+# 依頼者の実ログのパスには依存しない。公開の ID は「オフセット済み」
+FOG_EARLY_READ_ROUNDS = [
+    # (ログ・時刻, [NetworkProcessing] の行, 公開の行, 公開ID, 別名なしで決まるID, 別名ありで決まるID)
+    ("16-30-13 16:38",
+     ["2026.09.21 16:38:23 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [7] THE SUN because y_ui already owner"],
+     "2026.09.21 16:39:14 Debug      -  Killers have been revealed - 6 0 0 // Round type is Fog",
+     6, 6, 6),
+    ("16-30-13 17:20",
+     ["2026.09.21 17:20:30 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [32] Paradise Bird (1) because tsuki__2 already owner"],
+     "2026.09.21 17:21:20 Debug      -  Killers have been revealed - 12 0 0 // Round type is Fog (Alternate)",
+     146, 146, 146),
+    ("16-30-13 17:31",
+     ["2026.09.21 17:31:15 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [86] WALPURGISNACHT because tsuki__2 already owner",
+      "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling (15) because tsuki__2 already owner",
+      "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling because tsuki__2 already owner"],
+     "2026.09.21 17:32:05 Debug      -  Killers have been revealed - 33 0 0 // Round type is Fog (Alternate)",
+     167, 167, 167),
+    ("18-59-24 22:04",
+     ["2026.09.21 22:04:41 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [20] Immortal Snail because meteor? already owner"],
+     "2026.09.21 22:05:31 Debug      -  Killers have been revealed - 101 0 0 // Round type is Fog",
+     101, 101, 101),
+    ("08-39-27 08:43",
+     ["2026.09.21 08:43:40 Debug      -  [NetworkProcessing] serim01 would like to transfer [10] Kuro GuidingStar to すぅみ_suumi"],
+     "2026.09.21 08:44:30 Debug      -  Killers have been revealed - 6 0 0 // Round type is Fog (Alternate)",
+     140, None, 140),
+    ("18-59-24 20:45",
+     ["2026.09.21 20:45:59 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [29b] SmileyWalker because meteor? already owner",
+      "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] Transferred ownership of [29b] SmileyWalker to 5",
+      "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] serim01 would like to transfer [29b] SmileyWalker to meteor?",
+      "2026.09.21 20:46:01 Error      -  [NetworkProcessing] Non-owner attempted to request ownership of [29b] SmileyWalker for someone else."],
+     "2026.09.21 20:46:49 Debug      -  Killers have been revealed - 8 0 0 // Round type is Fog (Alternate)",
+     142, None, 142),
+]
+
+
+def fog_early_read_terrors(with_aliases=False):
+    """terrors.json の該当部分だけ（コミット済みの値を写した）。依頼者の作業中の
+    terrors.json には依存しない"""
+    def entry(tid, name, members, aliases=None):
+        e = {"id": tid, "name": name, "terrors": members}
+        if with_aliases and aliases:
+            e["fog_names"] = aliases
+        return e
+    return ReadJson.normalize_terrors({
+        "classic": [
+            entry(6, "Black Sun", ["The Sun"]),
+            entry(12, "An Arbiter", ["An Arbiter"]),
+            entry(101, "Immortal Snail", ["Immortal Snail"]),
+        ],
+        "alternate": [
+            entry(140, "The Knight of Toren", ["The Knight of Toren"],
+                  ["Kuro GuidingStar"]),
+            entry(142, "Smile Walker", ["Smile Walker"], ["SmileyWalker"]),
+            entry(146, "Paradise Bird", ["Paradise Bird"]),
+            entry(167, "Walpurgisnacht", ["Walpurgisnacht", "Unknown Witch"]),
+        ],
+    })
+
+
+class TestInstanceAccess(unittest.TestCase):
+    """看破してよいインスタンスか（Joining 行の公開範囲）"""
+
+    def _access(self, tail):
+        event = LogParser.parse("2026.09.21 16:30:39 Debug      -  [Behaviour] Joining "
+                                "wrld_a5e9ec13-36b1-4e63-ae0c-dab9023401f9:94781"
+                                + tail + "~region(jp)")
+        return LogParser.instance_access(event.suffix)
+
+    def test_the_nine_kinds(self):
+        cases = {
+            "~private(usr_0e01408a)": ("invite", True),
+            "~private(usr_0e01408a)~canRequestInvite": ("invite_plus", True),
+            "~friends(usr_0e01408a)": ("friends", True),
+            "~group(grp_8f8ace13)~groupAccessType(members)": ("group_members", True),
+            "~hidden(usr_0e01408a)": ("friends_plus", False),
+            "~group(grp_8f8ace13)~groupAccessType(plus)": ("group_plus", False),
+            "~group(grp_8f8ace13)~groupAccessType(public)": ("group_public", False),
+            "": ("public", False),
+        }
+        for tail, (kind, allowed) in cases.items():
+            access = self._access(tail)
+            self.assertEqual(access, kind, tail)
+            self.assertEqual(FogEarlyRead.early_read_allowed(access), allowed, tail)
+
+    def test_what_cannot_be_read_is_ng(self):
+        self.assertEqual(LogParser.instance_access(None), "unknown")
+        self.assertFalse(FogEarlyRead.early_read_allowed("unknown"))
+        self.assertFalse(FogEarlyRead.early_read_allowed(""), "Joining 行を見ていない")
+        self.assertEqual(self._access("~group(grp_8f8ace13)"), "unknown")
+        self.assertEqual(WindowState().instance_access, "", "既定は判定できない＝NG")
+
+    def test_a_joining_line_sets_it_on_the_window(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None)
+        monitor._process("2026.09.21 17:04:52 Debug      -  [Behaviour] Joining "
+                         "wrld_a61cdabe-1218-4287-9ffc-2a4d1414e5bd:54453~group("
+                         "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8)~groupAccessType"
+                         "(members)~region(jp)")
+
+        self.assertEqual(monitor.st.instance_access, "group_members")
+
+
+class TestEarlyReadLaunchFlag(unittest.TestCase):
+    """起動方法（窓のログの先頭 8KB に --enable-sdk-log-levels があるか）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+
+    def _log(self, text):
+        path = Path(self._dir.name) / "output_log.txt"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_the_flag_at_the_head(self):
+        path = self._log("2026.09.21 16:30:15 Debug      -  Arg: --enable-sdk-log-levels\n")
+        self.assertTrue(FogEarlyRead.launched_for_early_read(path))
+
+    def test_no_flag(self):
+        path = self._log("2026.09.21 16:30:15 Debug      -  Arg: --enable-debug-gui\n")
+        self.assertFalse(FogEarlyRead.launched_for_early_read(path))
+
+    def test_the_flag_after_8kb_does_not_count(self):
+        path = self._log("x" * (FogEarlyRead.LOG_HEAD_BYTES + 10)
+                         + " Arg: --enable-sdk-log-levels\n")
+        self.assertFalse(FogEarlyRead.launched_for_early_read(path))
+
+    def test_an_unreadable_log_cannot(self):
+        self.assertFalse(FogEarlyRead.launched_for_early_read(
+            Path(self._dir.name) / "nope.txt"))
+
+    def test_start_reads_it_once(self):
+        path = self._log("Arg: --enable-sdk-log-levels\n")
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path), {}, lambda _m: None)
+        with patch.object(monitor, "_start_daemon"), \
+             patch.object(monitor._action, "start_velocity_receiver"):
+            monitor.start()
+        monitor.stop()
+
+        self.assertTrue(monitor.early_read_capable)
+
+
+class TestEarlyReadNames(unittest.TestCase):
+    """看破の名前の取り出しと照合"""
+
+    def _names(self, lines):
+        return [LogParser.parse(line).player_name for line in lines]
+
+    def test_the_real_log_table(self):
+        """別名なし: 4件が決まり、2件は決まらない。別名あり: 6件すべて決まる。
+        決まったものはどれも公開と一致する（食い違い0件）"""
+        for with_aliases, col in ((False, 4), (True, 5)):
+            data = fog_early_read_terrors(with_aliases)
+            for row in FOG_EARLY_READ_ROUNDS:
+                where, lines, _reveal, public = row[0], row[1], row[2], row[3]
+                decided = {ReadJson.fog_terror_id_by_object_name(n, data)
+                           for n in self._names(lines)} - {None}
+                expected = row[col]
+                self.assertEqual(decided, {expected} if expected else set(),
+                                 f"{where} 別名={with_aliases}")
+                if expected is not None:
+                    self.assertEqual(expected, public, f"{where}: 公開と一致")
+
+    def test_the_bracket_is_not_the_id(self):
+        """[7] THE SUN は Black Sun（6）。[29b] のように数字でないこともある"""
+        names = self._names([FOG_EARLY_READ_ROUNDS[0][1][0],
+                             FOG_EARLY_READ_ROUNDS[5][1][0]])
+        self.assertEqual(names, ["THE SUN", "SmileyWalker"])
+
+    def test_every_line_shape_gives_the_name(self):
+        for line in FOG_EARLY_READ_ROUNDS[5][1]:
+            self.assertEqual(LogParser.parse(line).player_name, "SmileyWalker", line)
+        self.assertEqual(LogParser.network_object_name(
+            "[NetworkProcessing] Setting [12] witchling (15) to request ownership"),
+            "witchling (15)")
+        self.assertEqual(LogParser.network_object_name(
+            "[NetworkProcessing] Transferred ownership of [3] Express Train to Hell to 20"),
+            "Express Train to Hell", "名前の中の to で切らない")
+
+    def test_lines_without_an_object_are_not_events(self):
+        for body in ("[NetworkProcessing] Received ownership transfer of 12 from 3 to 4",
+                     "[NetworkProcessing] Transferred ownership of monsterDetectionBox to 9"):
+            self.assertIsNone(LogParser.parse("2026.09.21 16:38:23 Debug      -  " + body))
+
+    def test_normalization(self):
+        data = fog_early_read_terrors()
+        for name in ("Paradise Bird", "PARADISE BIRD", "paradisebird",
+                     "Paradise  Bird (12)", " Paradise Bird (1) "):
+            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, data), 146, name)
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Paradise Bird (x)", data))
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("1", data))
+
+    def test_a_name_for_two_ids_is_none(self):
+        data = ReadJson.normalize_terrors({
+            "classic": [{"id": 1, "name": "A", "terrors": ["Twin"]}],
+            "alternate": [{"id": 140, "name": "B", "terrors": ["twin"]}]})
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Twin", data))
+
+    def test_fog_names_are_for_early_read_only(self):
+        data = fog_early_read_terrors(with_aliases=True)
+        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Kuro GuidingStar", data), 140)
+        self.assertIsNone(ReadJson.fog_terror_id_by_name("Kuro GuidingStar", data), "Enrage には使わない")
+        self.assertIsNone(ReadJson.terror_id_by_name("Kuro GuidingStar", data))
+
+    def test_broken_fog_names_are_ignored(self):
+        data = ReadJson.normalize_terrors({"alternate": [
+            {"id": 140, "name": "K", "terrors": [], "fog_names": "Kuro"},
+            {"id": 141, "name": "T", "terrors": [], "fog_names": [3, None, " ", "Deal2"]}]})
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Kuro", data))
+        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Deal2", data), 141)
+
+
+class TestFogEarlyReadUse(unittest.TestCase):
+    """看破・Enrage 系の使い分け（インスタンス × 起動方法）"""
+
+    FOG_KEY = "Fog/霧"
+    SNAIL = 101
+    SNAIL_LINE = FOG_EARLY_READ_ROUNDS[3][1][0]
+    SNAIL_REVEAL = FOG_EARLY_READ_ROUNDS[3][2]
+    KURO_LINE = FOG_EARLY_READ_ROUNDS[4][1][0]
+    UNKNOWN = ("2026.09.21 22:04:41 Debug      -  Killers is unknown - ??? // "
+               "Will be revealed after 50 seconds // Round type is Fog")
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.trust = FogEarlyRead.NameTrust(Path(self._dir.name) / "names.json")
+        for p in (patch.object(config, "TERRORS", fog_early_read_terrors()),
+                  patch.object(FogEarlyRead, "trust", self.trust),
+                  patch.object(config, "FOG_EARLY_READ_ENABLED", True)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+        self.record = self._start(patch.object(Recorder, "on_continue_start"))
+        self.printed = self._start(patch("builtins.print"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, access="invite", capable=True, keep=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep if keep is not None else {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = access
+        monitor.early_read_capable = capable
+        monitor.st.in_round = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._process(self.UNKNOWN)
+        return monitor
+
+    def _skipped(self):
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
+
+    def _judged(self, monitor):
+        """判定に使われたか（自爆・続行アナウンス・フリーズ・録画のどれか）"""
+        return bool(self._skipped() or self.play.called or self.record.called
+                    or monitor.st.is_continue_round
+                    or SharedState.get_continue_round_count())
+
+    # ── OK・看破できる ─────────────────────────
+    def test_ok_capable_judges_by_early_read_and_skips(self):
+        monitor = self._monitor()
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertEqual(self._skipped(), 1)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.assertTrue(any("🔎 テラー判明(看破)" in m for m in monitor.logs), monitor.logs)
+
+    def test_ok_capable_judges_by_early_read_and_continues(self):
+        monitor = self._monitor(keep={self.FOG_KEY: {self.SNAIL}})
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.play.assert_called_once_with("continue.mp3")
+        self.assertEqual(self._skipped(), 0)
+
+    def test_ok_capable_falls_back_to_enrage(self):
+        monitor = self._monitor()
+
+        monitor._process(self.KURO_LINE)            # 別名が無いので決まらない
+        self.assertFalse(self._judged(monitor))
+        monitor._on_enrage("Immortal Snail")
+
+        self.assertEqual(self._skipped(), 1)
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_an_enrage_after_the_early_read_is_not_used_again(self):
+        monitor = self._monitor()
+        monitor._process(self.SNAIL_LINE)
+
+        monitor._on_enrage("Black Sun")                 # Enrage 系が後から来ても
+        monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
+        monitor._process(self.SNAIL_REVEAL)
+
+        self.assertEqual(self._skipped(), 1, "二重に自爆しない")
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_an_early_read_after_the_enrage_is_not_used_again(self):
+        """Enrage 系が先に決めたら、後から見えた看破は判定にも表示にも使わない"""
+        monitor = self._monitor()
+        monitor._on_enrage("Immortal Snail")
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertEqual(self._skipped(), 1)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertIsNone(monitor.st.early_read_tid)
+        self.assertEqual(sum("🔎" in m for m in monitor.logs), 1, monitor.logs)
+
+    # ── OK・看破できない ────────────────────────
+    def test_ok_not_capable_ignores_the_lines_but_uses_the_enrage_family(self):
+        for how in ("Enrage", "Joy", "Stunned"):
+            self.thread.reset_mock()
+            self.send.reset_mock()
+            monitor = self._monitor(capable=False)
+
+            monitor._process(self.SNAIL_LINE)
+            self.assertEqual(self._skipped(), 0, f"{how}: 看破の行は読まない")
+            self.send.assert_not_called()
+            if how == "Enrage":
+                monitor._on_enrage("Immortal Snail")
+            elif how == "Joy":
+                monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
+            else:
+                # 依頼者が作業中の _on_stunned() はこれを呼ぶ
+                monitor._identify_fog_terror(self.SNAIL, "Stunned", "Immortal Snail")
+
+            self.assertEqual(self._skipped(), 1, how)
+            self.assertEqual(self.send.call_count, 1, how)
+            self.assertTrue(self.send.call_args.kwargs["quiet"], how)
+
+    # ── NG・看破できる ──────────────────────────
+    def test_ng_capable_sends_to_the_db_only(self):
+        monitor = self._monitor(access="friends_plus",
+                                keep={self.FOG_KEY: {self.SNAIL}})
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertFalse(self._judged(monitor), "自爆・アナウンス・フリーズ・録画のどれもしない")
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+
+    # ── NG・看破できない ────────────────────────
+    def test_ng_not_capable_sends_the_enrage_family_to_the_db_only(self):
+        for how in ("Enrage", "Joy", "Stunned"):
+            self.send.reset_mock()
+            monitor = self._monitor(access="public", capable=False)
+
+            if how == "Enrage":
+                monitor._on_enrage("Immortal Snail")
+            elif how == "Joy":
+                monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
+            else:
+                monitor._identify_fog_terror(self.SNAIL, "Stunned", "Immortal Snail")
+
+            self.assertFalse(self._judged(monitor), how)
+            self.assertEqual(self.send.call_count, 1, how)
+            self.assertTrue(self.send.call_args.kwargs["quiet"], how)
+
+    def test_ng_sends_only_once_per_round(self):
+        monitor = self._monitor(access="group_plus")
+
+        monitor._process(self.SNAIL_LINE)
+        monitor._on_enrage("Immortal Snail")
+        monitor._process(self.SNAIL_REVEAL)
+
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_ng_still_judges_at_the_reveal(self):
+        monitor = self._monitor(access="unknown")
+        monitor._process(self.SNAIL_LINE)
+        monitor._on_enrage("Immortal Snail")
+        self.assertEqual(self._skipped(), 0)
+
+        monitor._process(self.SNAIL_REVEAL)
+
+        self.assertEqual(self._skipped(), 1, "公開で今までどおり自爆する")
+        self.assertTrue(any("Terror revealed" in m for m in monitor.logs), "公開の後はログが出る")
+
+    # ── ログを流さない ───────────────────────────
+    def test_nothing_about_the_fog_is_shown_before_the_reveal_in_ng(self):
+        monitor = self._monitor(access="public",
+                                keep={self.FOG_KEY: {self.SNAIL}})
+        before = list(monitor.logs)
+
+        monitor._process(self.SNAIL_LINE)
+        monitor._on_enrage("Immortal Snail")
+        monitor._on_enrage("存在しないテラー名XYZ")     # 表に無い名前も出さない
+        monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
+
+        self.assertEqual(monitor.logs, before, "画面のログ・オーバーレイに何も足されない")
+        self.printed.assert_not_called()
+        self.play.assert_not_called()
+
+    def test_the_early_read_db_send_is_quiet_even_in_ok(self):
+        monitor = self._monitor()
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertTrue(self.send.call_args.kwargs["quiet"])
+        self.assertFalse(any("Supabase" in m or "送信" in m for m in monitor.logs))
+
+    def test_a_normal_round_is_still_sent_loudly(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Bloodbath"
+        monitor.st.fog = False
+
+        monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
+
+        self.assertFalse(self.send.call_args.kwargs["quiet"])
+
+    # ── 同じラウンドで2種類 ─────────────────────────
+    def test_two_different_ids_void_the_round(self):
+        """先に来た名前で決めた後に別のIDが見えたら、以後このラウンドの看破は使わない"""
+        monitor = self._monitor(access="public")         # DB だけの窓で見る
+        monitor._process(FOG_EARLY_READ_ROUNDS[0][1][0])  # THE SUN → 6
+
+        monitor._process(self.SNAIL_LINE)                 # 101
+
+        self.assertTrue(monitor.st.early_read_void)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_args.args[1], [6])
+
+    def test_two_different_ids_before_use_are_not_used(self):
+        monitor = self._monitor()
+        monitor.st.early_read_hits = {"thesun": (6, "THE SUN"), "x": (101, "x")}
+        monitor.st.early_read_void = True
+
+        monitor._process(FOG_EARLY_READ_ROUNDS[3][1][0])
+
+        self.assertFalse(self._judged(monitor))
+        self.send.assert_not_called()
+
+    # ── スイッチ ──────────────────────────────
+    def test_the_switch_turns_the_lines_off_but_not_the_enrage_rules(self):
+        with patch.object(config, "FOG_EARLY_READ_ENABLED", False):
+            ok = self._monitor()
+            ok._process(self.SNAIL_LINE)
+            self.assertEqual(self._skipped(), 0, "看破の行は読まない")
+            ok._on_enrage("Immortal Snail")
+            self.assertEqual(self._skipped(), 1, "OK なら Enrage で判定")
+
+            self.send.reset_mock()
+            ng = self._monitor(access="public")
+            ng._on_enrage("Immortal Snail")
+            self.assertEqual(self._skipped(), 1, "NG では判定しない")
+            self.assertEqual(self.send.call_count, 1)
+
+
+class TestFogEarlyReadAnswerCheck(unittest.TestCase):
+    """答え合わせ（一度でも公開と食い違った名前は以後使わない）"""
+
+    UNKNOWN = TestFogEarlyReadUse.UNKNOWN
+
+    def setUp(self):
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = Path(self._dir.name) / "fog_object_names.json"
+        self.trust = FogEarlyRead.NameTrust(self.path)
+        for p in (patch.object(config, "TERRORS", fog_early_read_terrors(True)),
+                  patch.object(FogEarlyRead, "trust", self.trust),
+                  patch.object(ConnectDB, "send_ToNRoundStatistics"),
+                  patch.object(LogMonitor.threading, "Thread"),
+                  patch.object(PlaySound, "play_sound"),
+                  patch.object(Recorder, "on_continue_start")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.send = ConnectDB.send_ToNRoundStatistics
+
+    def _monitor(self, access="invite"):
+        monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=True), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = access
+        monitor.early_read_capable = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _round(self, monitor, lines, reveal):
+        monitor._process("2026.09.21 22:04:00 Debug      -  This round is taking place "
+                         "at Facility (12) and the round type is Fog")
+        monitor._process(self.UNKNOWN)
+        for line in lines:
+            monitor._process(line)
+        logs_before_reveal = list(monitor.logs)
+        if reveal:
+            monitor._process(reveal)
+        return logs_before_reveal
+
+    def test_the_real_rounds_all_match(self):
+        """実ログの6件を流す。食い違いは0件（別名ありの固定データ）"""
+        monitor = self._monitor()
+        for _where, lines, reveal, *_rest in FOG_EARLY_READ_ROUNDS:
+            self._round(monitor, lines, reveal)
+
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual({k: v.get("mismatch", 0) for k, v in data.items()},
+                         {k: 0 for k in data})
+        self.assertEqual(sum(v["match"] for v in data.values()), 6)
+
+    def test_an_alternate_reveal_is_offset_before_comparing(self):
+        """33 は Fog (Alternate) なら 167 Walpurgisnacht。オフセット前で比べると Luigi 扱いになる"""
+        monitor = self._monitor()
+        row = FOG_EARLY_READ_ROUNDS[2]
+
+        self._round(monitor, row[1], row[2])
+
+        self.assertEqual(self.trust.counts("walpurgisnacht"), (1, 0))
+
+    def test_a_match_is_counted(self):
+        monitor = self._monitor()
+        row = FOG_EARLY_READ_ROUNDS[3]
+
+        self._round(monitor, row[1], row[2])
+        self._round(monitor, row[1], row[2])
+
+        self.assertEqual(self.trust.counts("immortalsnail"), (2, 0))
+
+    def test_a_mismatch_retires_the_name_and_warns_after_the_reveal_only(self):
+        monitor = self._monitor(access="public")
+        snail = FOG_EARLY_READ_ROUNDS[3][1]
+        wrong = ("2026.09.21 22:05:31 Debug      -  Killers have been revealed - "
+                 "12 0 0 // Round type is Fog")
+
+        before = self._round(monitor, snail, wrong)
+
+        self.assertFalse(any("食い違い" in m for m in before), "公開の前には出さない")
+        warnings = [m for m in monitor.logs if "看破の名前「Immortal Snail」" in m]
+        self.assertEqual(len(warnings), 1, monitor.logs)
+        self.assertFalse(self.trust.usable("immortalsnail"))
+
+        self.send.reset_mock()
+        ok = self._monitor()
+        self._round(ok, snail, None)
+        self.send.assert_not_called()                  # DB にも使わない
+        self.assertIsNone(ok.st.early_read_tid, "判定にも使わない")
+
+    def test_it_survives_on_disk(self):
+        self.trust.record("immortalsnail", False)
+
+        again = FogEarlyRead.NameTrust(self.path)
+
+        self.assertFalse(again.usable("immortalsnail"))
+        self.assertTrue(again.usable("thesun"))
+
+    def test_a_broken_file_is_empty(self):
+        for text in ("{not json", "[1, 2]", '{"x": 3, "y": {"mismatch": "a"}}'):
+            self.path.write_text(text, encoding="utf-8")
+            trust = FogEarlyRead.NameTrust(self.path)
+
+            self.assertTrue(trust.usable("thesun"), text)
+            trust.record("thesun", True)                 # 落ちない
+            self.assertEqual(trust.counts("thesun")[0], 1, text)
+
+    def test_a_round_that_ends_before_the_reveal_is_not_checked(self):
+        monitor = self._monitor()
+        self._round(monitor, FOG_EARLY_READ_ROUNDS[3][1], None)
+
+        monitor._process("2026.09.21 22:05:00 Debug      -  RoundOver")
+
+        self.assertEqual(self.trust.counts("immortalsnail"), (0, 0))
+        self.assertFalse(monitor.st.fog_reading)
+
+
+class TestQuietStatistics(unittest.TestCase):
+    """看破・Enrage 系の DB 送信は print も出さない"""
+
+    class RunNow:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def _send(self, quiet, configured=True, fail=True):
+        with patch.object(ConnectDB, "_configured", return_value=configured), \
+             patch.object(ConnectDB, "_url", return_value="https://example.invalid/x"), \
+             patch.object(ConnectDB, "_headers", return_value={}), \
+             patch.object(ConnectDB.threading, "Thread", self.RunNow), \
+             patch.object(ConnectDB.urllib.request, "urlopen",
+                          side_effect=OSError("offline") if fail else None), \
+             patch("builtins.print") as printed:
+            ConnectDB.send_ToNRoundStatistics("Fog", [101], 12, 99, quiet=quiet)
+        return printed
+
+    def test_quiet_prints_nothing(self):
+        self._send(True).assert_not_called()
+        self._send(True, configured=False).assert_not_called()
+
+    def test_loud_still_prints(self):
+        self.assertTrue(self._send(False).called)
+        self.assertTrue(self._send(False, configured=False).called)
 
 
 class TestWindowTabHwndChoices(unittest.TestCase):
@@ -2667,6 +3283,7 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         cfg = WindowConfig(do_skip=True)
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = "Fog"
 
@@ -2753,6 +3370,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = "Fog"
         monitor.st.fog = True
@@ -2974,6 +3592,7 @@ class TestEnrageIdentify(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = round_type
         monitor.st.fog = True
@@ -13700,6 +14319,7 @@ class TestFogJoy(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = round_type
         monitor._running = True
@@ -13861,7 +14481,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False)
         self.assertTrue(monitor.st.statistics_sent)
 
     def test_a_single_classic_waits_for_gigabytes(self):
@@ -13882,7 +14502,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("Verified Round End")
 
-        mock_send.assert_called_once_with("Classic", [1], 12, 99)
+        mock_send.assert_called_once_with("Classic", [1], 12, 99, quiet=False)
 
     def test_gigabytes_sends_the_replaced_id(self):
         monitor = self._monitor()
@@ -13891,7 +14511,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("The Gigabytes have come.")
 
-        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99, quiet=False)
 
     def test_statistics_are_sent_only_once_per_round(self):
         monitor = self._monitor()
@@ -13901,7 +14521,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
             monitor._on_killers([4], "Bloodbath", revealed=True)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False)
         self.assertEqual(monitor.st.terror_ids, [1, 2, 3, 4])
 
     def test_round_start_resets_statistics_sent_flag(self):
@@ -13928,7 +14548,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
 
     def test_bloodthirsty_log_after_killers_updates_delayed_statistics(self):
         monitor = self._monitor()
@@ -13940,7 +14560,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
 
     def test_bloodthirsty_variant_is_not_limited_to_classic(self):
         monitor = self._monitor()
@@ -13952,7 +14572,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99)
+        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
 
     def test_hungry_home_invader_log_after_classic_slender_converts_id(self):
         monitor = self._monitor()
@@ -13963,7 +14583,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(config.HUNGRY_HOME_INVADER_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False)
 
     def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
         monitor = self._monitor()
@@ -13976,7 +14596,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False)
 
     def test_hungry_home_invader_is_ignored_outside_classic(self):
         monitor = self._monitor()
@@ -13988,7 +14608,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
 
         self.assertEqual(monitor.st.terror_ids, [config.SLENDER_ID])
         self.assertFalse(monitor.st.hungry_home_invader_variant)
-        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99)
+        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99, quiet=False)
 
     def test_curious_creature_statistics_send_on_round_end_if_not_bloodthirsty(self):
         monitor = self._monitor()
@@ -14001,7 +14621,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99)
+        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99, quiet=False)
 
     def test_verified_end_does_not_send_statistics(self):
         """待つものが無い構成なら、終了時に改めて送らない"""

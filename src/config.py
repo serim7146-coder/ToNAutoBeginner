@@ -313,6 +313,14 @@ OBS_RECORD_TAIL_SEC = 3.0      # RoundOver から録画を止めるまで
 OBS_RECORD_MAX_SEC  = 900      # 1本の上限。RoundOver が来ないときの録りっぱなし防止
 OBS_TIMEOUT_SEC     = 2.0      # 接続・送受信のタイムアウト
 
+# ── 霧の看破（--enable-sdk-log-levels 付きのログの [NetworkProcessing]） ──
+# 公開前にオブジェクト名からテラーを特定する。使ってよいのは Invite / Invite+ /
+# Friends / Group Only のインスタンスだけ（それ以外は DB にだけ送る）
+FOG_EARLY_READ_ENABLED     = True
+FOG_EARLY_READ_LAUNCH_FLAG = "--enable-sdk-log-levels"
+# 名前ごとの答え合わせ（一致 / 食い違い）の記録
+FOG_OBJECT_NAMES_PATH = SETTINGS_PATH.parent / "fog_object_names.json"
+
 # ── VRChat起動 ──
 MAX_WINDOWS             = 8      # 同時に扱える窓数の上限
 LAUNCH_STAGGER_SEC      = 6.0    # 窓が現れてから次を起動するまでの間隔

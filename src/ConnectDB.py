@@ -148,9 +148,12 @@ def get_transformed_uid(VRChat_uid: str) -> int | None:
         print(f"transformed_uid取得エラー: {e}")
         return None
 
-def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int, transformed_uid: int | None):
+def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
+                            transformed_uid: int | None, quiet: bool = False):
+    """ラウンドの統計を送る。quiet なら送信について何も出さない（霧の看破・Enrage 系）"""
+    say = (lambda _m: None) if quiet else print
     if not _configured():
-        print("Supabase設定がないためラウンド統計送信をスキップします。")
+        say("Supabase設定がないためラウンド統計送信をスキップします。")
         return
     def _send_ToNRoundStatistics():
         try:
@@ -170,11 +173,11 @@ def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
                 method="POST"
             )
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-                print(f"Supabase登録: {res.status}")
+                say(f"Supabase登録: {res.status}")
         except urllib.error.HTTPError as e:
-            print(f"HTTPエラー: {e.code} {e.read()}")
+            say(f"HTTPエラー: {e.code} {e.read()}")
         except Exception as e:
-            print(f"送信エラー: {e}")
+            say(f"送信エラー: {e}")
             
     threading.Thread(target=_send_ToNRoundStatistics, daemon=True).start()
 

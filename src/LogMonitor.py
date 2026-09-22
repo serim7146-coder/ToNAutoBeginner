@@ -10,6 +10,7 @@ import WindowOperator
 import PlaySound
 import ConnectDB
 import Recorder
+import FogEarlyRead
 import ReadJson
 import LogParser
 import RoundDecision
@@ -54,6 +55,8 @@ class LogMonitor:
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
         # 渡さなければ何もしない（監視だけで使うときはこれで足りる）
         self._on_round_settings_cleared = on_round_settings_cleared
+        # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
+        self.early_read_capable = False
         self.st = WindowState()
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
@@ -69,6 +72,9 @@ class LogMonitor:
     def start(self):
         self._running = True
         self._stop_event.clear()
+        self.early_read_capable = bool(
+            self.cfg.log_path
+            and FogEarlyRead.launched_for_early_read(self.cfg.log_path))
         # 速度受信は監視中ずっと生かす（プローブごとに開き直すと取りこぼす）
         self._action.start_velocity_receiver()
         self._thread = self._start_daemon(self._run)
@@ -283,6 +289,7 @@ class LogMonitor:
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
                     found_instance = True
                     self.st.instance_type = self._parse_instance_type(event.suffix)
+                    self.st.instance_access = LogParser.instance_access(event.suffix)
                     self._log(f"インスタンスタイプ検出: {self.st.instance_type}")
                     # マクロを途中で始めても人数が分かるように。積み上げないと
                     # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
@@ -780,6 +787,10 @@ class LogMonitor:
         if not event:
             return
 
+        if event.kind == LogParser.EVENT_NETWORK_OBJECT:
+            self._on_network_object(event.player_name)
+            return
+
         if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
             self._mark_replacement("bloodthirsty_creature_variant")
             return
@@ -900,6 +911,11 @@ class LogMonitor:
             st.enrage_identified           = None
             st.map_id                      = event.map_id
             st.statistics_sent             = False
+            st.statistics_quiet            = False
+            st.fog_reading                 = False
+            st.early_read_hits             = {}
+            st.early_read_tid              = None
+            st.early_read_void             = False
             st.fog                         = False
             st.begin_done                  = False
             st.speed_round_kind            = ""
@@ -1012,6 +1028,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
+            st.early_read_hits = {}
             # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
             Recorder.on_round_over(self.window_idx)
             # Begin待ちの起点。実処理は Verified Round End 側で走るが、
@@ -1092,6 +1110,9 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
             st.fog = True
             st.round_type = event.round_type or "Fog"
+            # 看破の行を読むのはここから公開/RoundOver まで
+            st.fog_reading = (config.FOG_EARLY_READ_ENABLED
+                              and self.early_read_capable)
             self._log("テラー不明 → revealed待ち")
             if self._hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
@@ -1116,11 +1137,15 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
+            st.fog_reading = False
             self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
+            # 答え合わせは公開の後（食い違いの警告はもう出してよい）
+            self._check_early_read(event.terror_ids or [], event.round_type)
             return
 
         if event.kind == LogParser.EVENT_JOINING:
             st.instance_type = self._parse_instance_type(event.suffix)
+            st.instance_access = LogParser.instance_access(event.suffix)
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
             self.sequence.reset()
             st.enrage_identified = None
@@ -1182,7 +1207,8 @@ class LogMonitor:
             return
         tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
-            self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
+            if self._may_show_fog_info():
+                self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Enrage", name)
 
@@ -1194,8 +1220,18 @@ class LogMonitor:
                 and st.enrage_identified is None)
 
     def _identify_fog_terror(self, tid: int, how: str, name: str):
-        """霧のテラーを前倒しで判明させ、判定に回す（Enrage / Joy）"""
+        """霧のテラーを前倒しで判明させ、判定に回す（看破 / Enrage / Joy / スタン）。
+
+        使い分けはここの入口だけで決める。看破してよいインスタンス（Invite /
+        Invite+ / Friends / Group Only）でなければ、判定には一切使わず DB に
+        黙って送るだけ（公開まで何も出さない）。
+        """
         st = self.st
+        if not self._may_show_fog_info():
+            self._send_early_statistics(tid)
+            return
+        # 判定＋DB。DB への送信は黙って行う（公開前の情報なので）
+        st.statistics_quiet = True
         # `Killers is unknown` の行には「Fog (Alternate)」が出ない。焼き芋は
         # オルタネイト枠のFogだけを続行リスト判定に回すので、枠を伝えないと
         # リストを見ずに自爆する。alternate のテラーが出た時点で枠は確定する
@@ -1430,4 +1466,62 @@ class LogMonitor:
             list(st.terror_ids),
             st.map_id,
             st.transformed_uid,
+            quiet=st.statistics_quiet,
         )
+
+    # ── 霧の看破 ─────────────────────────────
+    def _may_show_fog_info(self) -> bool:
+        """公開前の霧の情報を判定・表示に使ってよいインスタンスか"""
+        return FogEarlyRead.early_read_allowed(self.st.instance_access)
+
+    def _send_early_statistics(self, tid: int):
+        """DB にだけ送る。判定には使わない。送信について何も出さない"""
+        st = self.st
+        if st.statistics_sent:
+            return
+        st.statistics_sent = True
+        ConnectDB.send_ToNRoundStatistics(
+            st.round_type, [tid], st.map_id, st.transformed_uid, quiet=True)
+
+    def _on_network_object(self, name: str):
+        """看破: 霧の間に [NetworkProcessing] に出たオブジェクト名を照合する"""
+        st = self.st
+        if not st.fog_reading:
+            return
+        key = ReadJson.normalize_object_name(name)
+        if not key or key in st.early_read_hits:
+            return
+        tid = ReadJson.fog_terror_id_by_object_name(name, config.TERRORS)
+        if tid is None or not FogEarlyRead.trust.usable(key):
+            return
+        st.early_read_hits[key] = (tid, name)
+        if len({t for t, _n in st.early_read_hits.values()}) > 1:
+            # 取り違えを避けるため、このラウンドの看破は使わない
+            if not st.early_read_void and self._may_show_fog_info():
+                self._log("看破: 別々のテラー名が見えました → このラウンドの看破は使いません")
+            st.early_read_void = True
+            return
+        if st.early_read_tid is not None:
+            return
+        if not self._fog_terror_unknown():
+            return          # Enrage 系で先に決まった（二重に判定しない）
+        st.early_read_tid = tid
+        self._identify_fog_terror(tid, "看破", name)
+
+    def _check_early_read(self, ids: list[int], round_type: str):
+        """答え合わせ。看破で見えた名前ごとに、公開と一致したかを記録する。
+
+        公開の ID はオルタネイトなら +134 してから比べる（33 → 167 Walpurgisnacht）。
+        一度でも食い違った名前は以後使わない。
+        """
+        st = self.st
+        hits, st.early_read_hits = st.early_read_hits, {}
+        if not hits or not ids:
+            return
+        public = RoundDecision.normalize_killer_ids(list(ids)[:1], round_type)[0]
+        for key, (tid, name) in hits.items():
+            matched = tid == public
+            FogEarlyRead.trust.record(key, matched)
+            if not matched:
+                self._log(f"⚠ 看破の名前「{name}」が公開と食い違いました。"
+                          "以後この名前は使いません")

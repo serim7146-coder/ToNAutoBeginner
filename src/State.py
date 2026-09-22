@@ -37,6 +37,14 @@ class WindowConfig:
 @dataclass
 class WindowState:
     instance_type: str = "public"
+    # Joining 行の公開範囲（LogParser.ACCESS_*）。空＝判定できない（看破は NG 扱い）
+    instance_access: str = ""
+    # ── 霧の看破（ラウンドごと） ──
+    fog_reading: bool = False             # Killers is unknown から公開/RoundOver まで
+    early_read_hits: dict = field(default_factory=dict)   # 正規化した名前 → ID
+    early_read_tid: Optional[int] = None  # 看破で使ったID
+    early_read_void: bool = False         # 2種類以上のIDが出た → このラウンドは使わない
+    statistics_quiet: bool = False        # 看破・Enrage 系の結果で送る統計は黙って送る
     log_pos: int = 0
     in_round: bool = False
     round_type: str = ""

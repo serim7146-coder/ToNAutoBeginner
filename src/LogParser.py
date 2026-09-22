@@ -98,8 +98,76 @@ def strip_prefix(line: str) -> str:
     return RE_LOG_PREFIX.sub("", line).strip()
 
 
+# ── 看破（--enable-sdk-log-levels 付きのログだけに出る行） ──
+# `[NetworkProcessing] … [番号] 名前 …`。番号はテラーIDではない（[7] THE SUN は
+# Black Sun = 6）ので使わない。数字とも限らない（[29b] SmileyWalker）。
+# 名前だけを取り出す。実ログで見えた形:
+#   Ignoring TrySetOwner attempt on [20] Immortal Snail because tsuki__2 already owner
+#   Transferred ownership of [86] WALPURGISNACHT to 20
+#   serim01 would like to transfer [10] Kuro GuidingStar to すぅみ_suumi
+#   Non-owner attempted to request ownership of [10] Kuro GuidingStar for someone else.
+#   Setting [12] witchling (15) to request ownership
+#   Transferred ownership of [29b] SmileyWalker to 17
+EVENT_NETWORK_OBJECT = "network_object"
+NETWORK_PROCESSING_TAG = "[NetworkProcessing] "
+RE_NETWORK_OBJECT = re.compile(r"^\[NetworkProcessing\] .*?\[[^\]]+\] (.+)$")
+
+
+def network_object_name(line: str) -> str:
+    """`[NetworkProcessing]` の行からオブジェクト名を取り出す。無ければ空文字"""
+    m = RE_NETWORK_OBJECT.match(line)
+    if not m:
+        return ""
+    rest = m.group(1)
+    for tail in (" to request ownership", " for someone else."):
+        if rest.endswith(tail):
+            return rest[:-len(tail)].strip()
+    if rest.endswith(" already owner") and " because " in rest:
+        return rest.rsplit(" because ", 1)[0].strip()
+    # 「… to 20」「… to 相手の名前」。名前に " to " を含むテラー（Express
+    # Train to Hell）があるので、最後の " to " で切る
+    if " to " in rest:
+        return rest.rsplit(" to ", 1)[0].strip()
+    return ""
+
+
+# ── インスタンスの公開範囲（Joining 行の suffix から） ──
+ACCESS_INVITE = "invite"
+ACCESS_INVITE_PLUS = "invite_plus"
+ACCESS_FRIENDS = "friends"
+ACCESS_FRIENDS_PLUS = "friends_plus"
+ACCESS_GROUP_MEMBERS = "group_members"
+ACCESS_GROUP_PLUS = "group_plus"
+ACCESS_GROUP_PUBLIC = "group_public"
+ACCESS_PUBLIC = "public"
+ACCESS_UNKNOWN = "unknown"
+RE_GROUP_ACCESS = re.compile(r"~groupAccessType\((\w+)\)")
+
+
+def instance_access(suffix) -> str:
+    """Joining 行の suffix（`~private(usr_…)~canRequestInvite` など）から公開範囲を返す"""
+    if not isinstance(suffix, str):
+        return ACCESS_UNKNOWN
+    if "~private(" in suffix:
+        return ACCESS_INVITE_PLUS if "~canRequestInvite" in suffix else ACCESS_INVITE
+    if "~friends(" in suffix:
+        return ACCESS_FRIENDS
+    if "~hidden(" in suffix:
+        return ACCESS_FRIENDS_PLUS
+    if "~group(" in suffix:
+        m = RE_GROUP_ACCESS.search(suffix)
+        return {"members": ACCESS_GROUP_MEMBERS, "plus": ACCESS_GROUP_PLUS,
+                "public": ACCESS_GROUP_PUBLIC}.get(m.group(1) if m else "",
+                                                   ACCESS_UNKNOWN)
+    return ACCESS_PUBLIC
+
+
 def parse(line: str) -> LogEvent | None:
     line = strip_prefix(line)
+
+    if line.startswith(NETWORK_PROCESSING_TAG):
+        name = network_object_name(line)
+        return LogEvent(EVENT_NETWORK_OBJECT, player_name=name) if name else None
 
     if RE_BEGIN_DONE.match(line):
         return LogEvent(EVENT_BEGIN_DONE)
