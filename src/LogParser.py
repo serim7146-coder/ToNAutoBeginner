@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 import MatchTNL
 
@@ -94,6 +95,20 @@ class LogEvent:
     item_id: int = 0
     previous_item_id: int | None = None
     player_name: str = ""
+
+
+RE_LOG_TIME = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
+
+
+def log_time(line: str) -> float | None:
+    """行頭の時刻（1秒刻み）を epoch 秒で。時刻の無い行・壊れた時刻は None"""
+    m = RE_LOG_TIME.match(line or "")
+    if not m:
+        return None
+    try:
+        return datetime(*map(int, m.groups())).timestamp()
+    except ValueError:
+        return None
 
 
 def strip_prefix(line: str) -> str:

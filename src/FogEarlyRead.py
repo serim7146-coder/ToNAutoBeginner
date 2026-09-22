@@ -15,6 +15,14 @@ import LogParser
 
 LOG_HEAD_BYTES = 8192       # 起動引数はログの先頭付近に出る（VRChatDiscovery と同じ）
 
+# 最初に当たった名前は、ログの時刻でこの秒数のあいだ保留する。参加直後などに
+# 全オブジェクトの同期で100種類以上の名前が1〜2秒のうちに出ることがあり、
+# 最初の1件ですぐ決めると適当な名前で判定してしまう。ログの時刻は1秒刻みなので、
+# 「最初の時刻 + HOLD_SEC」の刻印の行までを保留の中に数える
+HOLD_SEC = 2
+# 行が来ないときは監視ループの tick で確定させる。1秒刻みの切り捨ての分だけ余分に待つ
+HOLD_TICK_MARGIN_SEC = 1
+
 # 看破してよい公開範囲（依頼者の決定）。判定できないものは入れない＝安全側
 EARLY_READ_ACCESS = frozenset({
     LogParser.ACCESS_INVITE, LogParser.ACCESS_INVITE_PLUS,

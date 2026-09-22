@@ -44,6 +44,9 @@ class WindowState:
     early_read_hits: dict = field(default_factory=dict)   # 正規化した名前 → ID
     early_read_tid: Optional[int] = None  # 看破で使ったID
     early_read_void: bool = False         # 2種類以上のIDが出た → このラウンドは使わない
+    early_read_holding: bool = False      # 最初に当たった名前を保留中（FogEarlyRead.HOLD_SEC）
+    early_read_hold_log_t: Optional[float] = None   # 保留を始めた行のログ時刻
+    early_read_hold_wall: float = 0.0     # 保留を始めた実時刻（tick で確定させる用）
     statistics_quiet: bool = False        # 看破の結果で送る統計は黙って送る
     log_pos: int = 0
     in_round: bool = False
