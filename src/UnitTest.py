@@ -2282,59 +2282,62 @@ class TestOBSPasswordStorage(unittest.TestCase):
 # ── 霧の看破: 実ログ（--enable-sdk-log-levels 付き）から抜き出した固定データ ──
 # 依頼者の実ログのパスには依存しない。公開の ID は「オフセット済み」
 FOG_EARLY_READ_ROUNDS = [
-    # (ログ・時刻, [NetworkProcessing] の行, 公開の行, 公開ID, 別名なしで決まるID, 別名ありで決まるID)
+    # (ログ・時刻, [NetworkProcessing] の行, 公開の行, 公開ID, objects で決まるID)
     ("16-30-13 16:38",
      ["2026.09.21 16:38:23 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [7] THE SUN because y_ui already owner"],
      "2026.09.21 16:39:14 Debug      -  Killers have been revealed - 6 0 0 // Round type is Fog",
-     6, 6, 6),
+     6, 6),
     ("16-30-13 17:20",
      ["2026.09.21 17:20:30 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [32] Paradise Bird (1) because tsuki__2 already owner"],
      "2026.09.21 17:21:20 Debug      -  Killers have been revealed - 12 0 0 // Round type is Fog (Alternate)",
-     146, 146, 146),
+     146, 146),
     ("16-30-13 17:31",
      ["2026.09.21 17:31:15 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [86] WALPURGISNACHT because tsuki__2 already owner",
       "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling (15) because tsuki__2 already owner",
       "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling because tsuki__2 already owner"],
      "2026.09.21 17:32:05 Debug      -  Killers have been revealed - 33 0 0 // Round type is Fog (Alternate)",
-     167, 167, 167),
+     167, 167),
     ("18-59-24 22:04",
      ["2026.09.21 22:04:41 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [20] Immortal Snail because meteor? already owner"],
      "2026.09.21 22:05:31 Debug      -  Killers have been revealed - 101 0 0 // Round type is Fog",
-     101, 101, 101),
+     101, 101),
     ("08-39-27 08:43",
      ["2026.09.21 08:43:40 Debug      -  [NetworkProcessing] serim01 would like to transfer [10] Kuro GuidingStar to すぅみ_suumi"],
      "2026.09.21 08:44:30 Debug      -  Killers have been revealed - 6 0 0 // Round type is Fog (Alternate)",
-     140, None, 140),
+     140, 140),
     ("18-59-24 20:45",
      ["2026.09.21 20:45:59 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [29b] SmileyWalker because meteor? already owner",
       "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] Transferred ownership of [29b] SmileyWalker to 5",
       "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] serim01 would like to transfer [29b] SmileyWalker to meteor?",
       "2026.09.21 20:46:01 Error      -  [NetworkProcessing] Non-owner attempted to request ownership of [29b] SmileyWalker for someone else."],
      "2026.09.21 20:46:49 Debug      -  Killers have been revealed - 8 0 0 // Round type is Fog (Alternate)",
-     142, None, 142),
+     142, 142),
 ]
 
 
-def fog_early_read_terrors(with_aliases=False):
-    """terrors.json の該当部分だけ（コミット済みの値を写した）。依頼者の作業中の
-    terrors.json には依存しない"""
-    def entry(tid, name, members, aliases=None):
-        e = {"id": tid, "name": name, "terrors": members}
-        if with_aliases and aliases:
-            e["fog_names"] = aliases
-        return e
+def fog_early_read_terrors():
+    """terrors.json の該当部分だけ（値を写した）。本物の terrors.json には依存しない。
+    "objects" は実ログの [NetworkProcessing] に出た名前"""
+    def entry(tid, name, members, objects):
+        return {"id": tid, "name": name, "terrors": members, "objects": objects}
     return ReadJson.normalize_terrors({
         "classic": [
-            entry(6, "Black Sun", ["The Sun"]),
-            entry(12, "An Arbiter", ["An Arbiter"]),
-            entry(101, "Immortal Snail", ["Immortal Snail"]),
+            entry(6, "Black Sun", ["The Sun"], ["THE SUN"]),
+            entry(12, "An Arbiter", ["An Arbiter"], ["Arbiter"]),
+            entry(28, "Smileghost", ["Smileghost"], ["Innyume"]),
+            entry(101, "Immortal Snail", ["Immortal Snail"], ["Immortal Snail"]),
+            entry(133, "Malicious Twins", ["Malicious Twin"], ["Twin1"]),
         ],
         "alternate": [
-            entry(140, "The Knight of Toren", ["The Knight of Toren"],
-                  ["Kuro GuidingStar"]),
+            entry(139, "Chomper", ["Chomper"], []),
+            entry(140, "The Knight of Toren", ["The Knight Of Toren"], ["Kuro GuidingStar"]),
             entry(142, "Smile Walker", ["Smile Walker"], ["SmileyWalker"]),
-            entry(146, "Paradise Bird", ["Paradise Bird"]),
-            entry(167, "Walpurgisnacht", ["Walpurgisnacht", "Unknown Witch"]),
+            entry(146, "Paradise Bird", ["Paradise Bird"], ["Paradise Bird"]),
+            entry(167, "Walpurgisnacht", ["Walpurgisnacht", "Unknown Witch"],
+                  ["WALPURGISNACHT", "witchling"]),
+        ],
+        "unbound": [
+            entry(227, "Byte Horde", ["Byte Horde"], ["Duke"]),
         ],
     })
 
@@ -2428,19 +2431,13 @@ class TestEarlyReadNames(unittest.TestCase):
         return [LogParser.parse(line).player_name for line in lines]
 
     def test_the_real_log_table(self):
-        """別名なし: 4件が決まり、2件は決まらない。別名あり: 6件すべて決まる。
-        決まったものはどれも公開と一致する（食い違い0件）"""
-        for with_aliases, col in ((False, 4), (True, 5)):
-            data = fog_early_read_terrors(with_aliases)
-            for row in FOG_EARLY_READ_ROUNDS:
-                where, lines, _reveal, public = row[0], row[1], row[2], row[3]
-                decided = {ReadJson.fog_terror_id_by_object_name(n, data)
-                           for n in self._names(lines)} - {None}
-                expected = row[col]
-                self.assertEqual(decided, {expected} if expected else set(),
-                                 f"{where} 別名={with_aliases}")
-                if expected is not None:
-                    self.assertEqual(expected, public, f"{where}: 公開と一致")
+        """objects で 6件すべて決まり、どれも公開と一致する（食い違い0件）"""
+        data = fog_early_read_terrors()
+        for where, lines, _reveal, public, expected in FOG_EARLY_READ_ROUNDS:
+            decided = {ReadJson.fog_terror_id_by_object_name(n, data)
+                       for n in self._names(lines)} - {None}
+            self.assertEqual(decided, {expected}, where)
+            self.assertEqual(expected, public, f"{where}: 公開と一致")
 
     def test_the_bracket_is_not_the_id(self):
         """[7] THE SUN は Black Sun（6）。[29b] のように数字でないこともある"""
@@ -2476,22 +2473,61 @@ class TestEarlyReadNames(unittest.TestCase):
 
     def test_a_name_for_two_ids_is_none(self):
         data = ReadJson.normalize_terrors({
-            "classic": [{"id": 1, "name": "A", "terrors": ["Twin"]}],
-            "alternate": [{"id": 140, "name": "B", "terrors": ["twin"]}]})
+            "classic": [{"id": 1, "name": "A", "terrors": [], "objects": ["Twin"]}],
+            "alternate": [{"id": 140, "name": "B", "terrors": [], "objects": ["twin"]}]})
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Twin", data))
 
-    def test_fog_names_are_for_early_read_only(self):
-        data = fog_early_read_terrors(with_aliases=True)
+    def test_the_objects_names_match(self):
+        data = fog_early_read_terrors()
+        for name, tid in (("Kuro GuidingStar", 140), ("SmileyWalker", 142),
+                          ("Innyume", 28), ("Twin1 (2)", 133), ("witchling (15)", 167)):
+            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, data), tid, name)
+
+    def test_display_and_individual_names_do_not_match(self):
+        """objects に無い名前は、表示名でも個体名でも当たらない"""
+        data = fog_early_read_terrors()
+        for name in ("Smileghost",                      # 28 の表示名
+                     "Malicious Twins", "Malicious Twin",   # 133 の表示名・個体名
+                     "Smile Walker", "The Knight of Toren",
+                     "Unknown Witch", "An Arbiter"):
+            self.assertIsNone(ReadJson.fog_terror_id_by_object_name(name, data), name)
+
+    def test_an_empty_or_missing_objects_matches_nothing(self):
+        data = fog_early_read_terrors()
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Chomper", data), "139 は空")
+        data = ReadJson.normalize_terrors({"classic": [
+            {"id": 5, "name": "Nameless", "terrors": ["Nameless"]}]})
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Nameless", data), "objects が無い行")
+
+    def test_unbound_objects_are_not_used(self):
+        data = fog_early_read_terrors()
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Duke", data), "227 は unbound")
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Byte Horde", data))
+
+    def test_objects_are_for_early_read_only(self):
+        data = fog_early_read_terrors()
         self.assertEqual(ReadJson.fog_terror_id_by_object_name("Kuro GuidingStar", data), 140)
         self.assertIsNone(ReadJson.fog_terror_id_by_name("Kuro GuidingStar", data), "Enrage には使わない")
         self.assertIsNone(ReadJson.terror_id_by_name("Kuro GuidingStar", data))
 
-    def test_broken_fog_names_are_ignored(self):
+    def test_broken_objects_are_ignored(self):
         data = ReadJson.normalize_terrors({"alternate": [
-            {"id": 140, "name": "K", "terrors": [], "fog_names": "Kuro"},
-            {"id": 141, "name": "T", "terrors": [], "fog_names": [3, None, " ", "Deal2"]}]})
+            {"id": 140, "name": "K", "terrors": [], "objects": "Kuro"},
+            {"id": 141, "name": "T", "terrors": [], "objects": [3, None, " ", "Deal2"]}]})
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Kuro", data))
         self.assertEqual(ReadJson.fog_terror_id_by_object_name("Deal2", data), 141)
+
+    def test_the_real_terrors_json_has_no_name_for_two_ids(self):
+        """ガード: 本物の terrors.json の classic / alternate の objects に、2つ以上の ID に当たる名前が無い"""
+        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        objects = data[ReadJson.OBJECTS_KEY]
+        owners: dict = {}
+        for category in ReadJson.FOG_CATEGORIES:
+            for id_, names in objects[category].items():
+                for name in names:
+                    owners.setdefault(ReadJson.normalize_object_name(name), set()).add(int(id_))
+        self.assertTrue(owners, "objects が読めていない")
+        self.assertEqual({k: v for k, v in owners.items() if len(v) > 1}, {})
 
 
 class TestFogEarlyReadUse(unittest.TestCase):
@@ -2505,7 +2541,9 @@ class TestFogEarlyReadUse(unittest.TestCase):
     SNAIL = 101
     SNAIL_LINE = FOG_EARLY_READ_ROUNDS[3][1][0]
     SNAIL_REVEAL = FOG_EARLY_READ_ROUNDS[3][2]
-    KURO_LINE = FOG_EARLY_READ_ROUNDS[4][1][0]
+    # objects に無い名前（表示名）の行。看破では決まらない
+    UNDECIDED_LINE = ("2026.09.21 08:43:40 Debug      -  [NetworkProcessing] serim01 would "
+                      "like to transfer [10] The Knight of Toren to すぅみ_suumi")
     UNKNOWN = ("2026.09.21 22:04:41 Debug      -  Killers is unknown - ??? // "
                "Will be revealed after 50 seconds // Round type is Fog")
 
@@ -2580,7 +2618,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
     def test_ok_capable_falls_back_to_enrage(self):
         monitor = self._monitor()
 
-        monitor._process(self.KURO_LINE)            # 別名が無いので決まらない
+        monitor._process(self.UNDECIDED_LINE)       # objects に無いので決まらない
         self.assertFalse(self._judged(monitor))
         monitor._on_enrage("Immortal Snail")
 
@@ -2799,7 +2837,7 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         self.addCleanup(self._dir.cleanup)
         self.path = Path(self._dir.name) / "fog_object_names.json"
         self.trust = FogEarlyRead.NameTrust(self.path)
-        for p in (patch.object(config, "TERRORS", fog_early_read_terrors(True)),
+        for p in (patch.object(config, "TERRORS", fog_early_read_terrors()),
                   patch.object(FogEarlyRead, "trust", self.trust),
                   patch.object(ConnectDB, "send_ToNRoundStatistics"),
                   patch.object(LogMonitor.threading, "Thread"),
@@ -2831,7 +2869,7 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         return logs_before_reveal
 
     def test_the_real_rounds_all_match(self):
-        """実ログの6件を流す。食い違いは0件（別名ありの固定データ）"""
+        """実ログの6件を流す。食い違いは0件"""
         monitor = self._monitor()
         for _where, lines, reveal, *_rest in FOG_EARLY_READ_ROUNDS:
             self._round(monitor, lines, reveal)
@@ -2839,7 +2877,9 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual({k: v.get("mismatch", 0) for k, v in data.items()},
                          {k: 0 for k in data})
-        self.assertEqual(sum(v["match"] for v in data.values()), 6)
+        # 名前ごとに数える。Walpurgisnacht は WALPURGISNACHT と witchling の2つ
+        self.assertEqual(sum(v["match"] for v in data.values()), 7)
+        self.assertEqual(data["witchling"], {"match": 1})
 
     def test_an_alternate_reveal_is_offset_before_comparing(self):
         """33 は Fog (Alternate) なら 167 Walpurgisnacht。オフセット前で比べると Luigi 扱いになる"""
@@ -2894,6 +2934,26 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
             self.assertTrue(trust.usable("thesun"), text)
             trust.record("thesun", True)                 # 落ちない
             self.assertEqual(trust.counts("thesun")[0], 1, text)
+
+    def test_a_flood_of_names_after_the_reveal_is_not_read(self):
+        """実ログ（2026-09-22 22:06:23）: 公開の約1分後に全オブジェクトの同期で数百の名前が
+        一度に出た。看破は公開までなので、判定・DB・答え合わせのどれにも使わない"""
+        monitor = self._monitor()
+        self._round(monitor, [], FOG_EARLY_READ_ROUNDS[3][2])
+        self.send.reset_mock()
+        before = self.trust.counts("immortalsnail")
+
+        for name in ("Innyume", "Twin1 (2)", "Kuro GuidingStar", "SmileyWalker", "Arbiter"):
+            monitor._process("2026.09.21 22:06:23 Debug      -  [NetworkProcessing] "
+                             f"Ignoring TrySetOwner attempt on [3] {name} because x already owner")
+        monitor._process("2026.09.21 22:07:30 Debug      -  RoundOver")
+
+        self.send.assert_not_called()
+        self.assertIsNone(monitor.st.early_read_tid)
+        self.assertEqual(monitor.st.early_read_hits, {})
+        self.assertFalse(monitor.st.early_read_void)
+        self.assertEqual(self.trust.counts("immortalsnail"), before)
+        self.assertFalse(self.path.exists() and "innyume" in self.path.read_text(encoding="utf-8"))
 
     def test_a_round_that_ends_before_the_reveal_is_not_checked(self):
         monitor = self._monitor()

@@ -4,13 +4,13 @@ from pathlib import Path
 
 
 MAIN_CATEGORIES = ("classic", "alternate", "unbound")
-# 霧に出るのはこの2つだけ。unbound まで引くと個体名が大量に重複する
+# 霧に出るのはこの2つだけ。看破の照合もこの2つの "objects" だけを使う
 FOG_CATEGORIES = ("classic", "alternate")
 # 新しい形の "terrors"（Enrage に出る個体名）を分けて持つキー
 INDIVIDUALS_KEY = "individuals"
-# 看破（[NetworkProcessing] のオブジェクト名）専用の別名 `"fog_names": [...]` を持つキー。
-# Enrage・スタン・terror_id_by_name() には使わない
-FOG_NAMES_KEY = "fog_names"
+# 看破（[NetworkProcessing] に実際に出たオブジェクト名）`"objects": [...]` を持つキー。
+# 看破の照合はこれだけで行う。Enrage・スタン・terror_id_by_name() には使わない
+OBJECTS_KEY = "objects"
 
 
 def load_terrors(path: Path) -> dict:
@@ -24,18 +24,19 @@ def normalize_terrors(raw: dict) -> dict:
     新しい形は `[{"id": 0, "name": "Huggy", "terrors": [...]}]`。そろえて
     おけば、統計画面などIDと名前しか見ない側は形の違いを知らずに済む。
     個体名は `INDIVIDUALS_KEY` に `{カテゴリ: {"ID": [個体名...]}}` で持つ。
+    看破のオブジェクト名は `OBJECTS_KEY` に同じ形で持つ。
     ID が文字列の "8pages" などはそのまま残す（通常のID引きには混ぜない）。
     """
     data: dict = {}
     individuals: dict = {}
-    fog_names: dict = {}
+    objects: dict = {}
     for category, value in raw.items():
         if category not in MAIN_CATEGORIES or not isinstance(value, list):
             data[category] = value
             continue
         names: dict = {}
         members: dict = {}
-        aliases: dict = {}
+        seen: dict = {}
         for entry in value:
             if not isinstance(entry, dict):
                 continue
@@ -49,17 +50,17 @@ def normalize_terrors(raw: dict) -> dict:
             names[str(tid)] = name
             members[str(tid)] = [t for t in (entry.get("terrors") or [])
                                  if isinstance(t, str) and t.strip()]
-            extra = entry.get(FOG_NAMES_KEY)
-            if isinstance(extra, list):
-                extra = [t for t in extra if isinstance(t, str) and t.strip()]
-                if extra:
-                    aliases[str(tid)] = extra
+            found = entry.get(OBJECTS_KEY)
+            if isinstance(found, list):
+                found = [t for t in found if isinstance(t, str) and t.strip()]
+                if found:
+                    seen[str(tid)] = found
         data[category] = names
         individuals[category] = members
-        fog_names[category] = aliases
+        objects[category] = seen
     if individuals:
         data[INDIVIDUALS_KEY] = individuals
-        data[FOG_NAMES_KEY] = fog_names
+        data[OBJECTS_KEY] = objects
     return data
 
 
@@ -159,22 +160,22 @@ _OBJECT_INDEX: dict = {}
 
 
 def _object_index(data: dict) -> dict:
-    """{正規化した名前: {ID, ...}}。classic と alternate のテラー名・個体名・看破用の別名"""
+    """{正規化した名前: {ID, ...}}。classic と alternate の "objects" だけ。
+
+    表示名・個体名は使わない（実ログに出た名前でないと取り違える）
+    """
     global _OBJECT_INDEX_SOURCE, _OBJECT_INDEX
     if _OBJECT_INDEX_SOURCE is data:
         return _OBJECT_INDEX
     index: dict = {}
-    individuals = data.get(INDIVIDUALS_KEY) or {}
-    aliases = data.get(FOG_NAMES_KEY) or {}
+    objects = data.get(OBJECTS_KEY) or {}
     for category in FOG_CATEGORIES:
-        members = individuals.get(category) or {}
-        extra = aliases.get(category) or {}
-        for id_, n in (data.get(category) or {}).items():
+        for id_, names in (objects.get(category) or {}).items():
             try:
                 tid = int(id_)
             except (TypeError, ValueError):
                 continue
-            for name in (n, *members.get(id_, ()), *extra.get(id_, ())):
+            for name in names:
                 key = normalize_object_name(name)
                 if key:
                     index.setdefault(key, set()).add(tid)
