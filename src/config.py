@@ -151,7 +151,7 @@ VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 ROUND_FREEZE_SELECTABLE = [
-    "Alternate", "Unbound", "Ghost", "Midnight", "Punished", "8 Pages", "Fog",
+    "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "Punished", "8 Pages"
 ]
 # 霧に入ったときの音声。既定では鳴らさない（仕組みと voice_fog の設定は残す）
 ANNOUNCE_FOG_ON_ENTRY = False
@@ -230,11 +230,11 @@ EQUIP_RELEASE_DELAY_SEC = 2.0            # アイテム装備確認後のフリ�
 # ── インスタンスタイプ ──
 INSTANCE_PUBLIC        = "public"
 INSTANCE_PRIVATE       = "private"
-INSTANCE_HOSHIIMO      = "hoshiimo"
-INSTANCE_YAKIIMO       = "yakiimo"
-INSTANCE_CBPS          = "cbps"
+INSTANCE_HOSHIIMO      = "干し芋"
+INSTANCE_YAKIIMO       = "焼き芋"
+INSTANCE_CBPS          = "CBPS"
 INSTANCE_OTHER_GROUP   = "other_group"
-INSTANCE_EMERALD_CITY  = "emerald_city"
+INSTANCE_EMERALD_CITY  = "Emerald City"
 
 # ── インスタンスid ──
 HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
