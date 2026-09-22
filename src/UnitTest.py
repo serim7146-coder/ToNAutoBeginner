@@ -2396,6 +2396,9 @@ class TestEarlyReadNames(unittest.TestCase):
         self.assertEqual(LogParser.network_object_name(
             "[NetworkProcessing] Setting [12] witchling (15) to request ownership"),
             "witchling (15)")
+        self.assertEqual(LogParser.parse(
+            "2026.09.21 20:46:00 Debug      -  [NetworkProcessing] Setting [29b] "
+            "SmileyWalker to request ownership").player_name, "SmileyWalker")
         self.assertEqual(LogParser.network_object_name(
             "[NetworkProcessing] Transferred ownership of [3] Express Train to Hell to 20"),
             "Express Train to Hell", "名前の中の to で切らない")
@@ -2803,6 +2806,143 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
 
         self.assertEqual(self.trust.counts("immortalsnail"), (0, 0))
         self.assertFalse(monitor.st.fog_reading)
+
+
+class TestFogVariantsHidden(unittest.TestCase):
+    """看破 NG の霧では、公開前に Variant の合図（Foxy など）も一切出さない・判定しない"""
+
+    PREFIX = "2026.09.21 22:04:45 Debug      -  "
+    SIGNALS = {
+        "Foxy": "foxy the pirate turned evil!",
+        "Bloodthirsty": "The creature is bloodthirsty today...",
+        "Hungry Home Invader": "I hear strange sounds coming from the kitchen.",
+        "Gigabytes": "The Gigabytes have come.",
+        "Atrached": "Lets play a game...",
+    }
+
+    def setUp(self):
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+        self.record = self._start(patch.object(Recorder, "on_continue_start"))
+        self.printed = self._start(patch("builtins.print"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, access, round_type="Fog", keep=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           voice_foxy="foxy.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep or {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = access
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        if round_type == "Fog":
+            monitor._process(self.PREFIX + "Killers is unknown - ??? // Will be "
+                             "revealed after 50 seconds // Round type is Fog")
+        return monitor
+
+    def _started(self):
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs]
+
+    # ── NG の霧・公開前 ─────────────────────────
+    def test_ng_fog_shows_and_decides_nothing_before_the_reveal(self):
+        for source, line in self.SIGNALS.items():
+            self.thread.reset_mock()
+            self.play.reset_mock()
+            monitor = self._monitor("public")
+            before = list(monitor.logs)
+
+            monitor._process(self.PREFIX + line)
+
+            self.assertEqual(monitor.logs, before, source)
+            self.play.assert_not_called()                       # voice_foxy も
+            self.assertEqual(self._started(), [], f"{source}: 自爆しない")
+            self.assertFalse(monitor.st.is_continue_round, source)
+            self.assertEqual(SharedState.get_continue_round_count(), 0, source)
+            self.record.assert_not_called()
+            self.printed.assert_not_called()
+
+    def test_ng_fog_still_records_the_variant_internally(self):
+        monitor = self._monitor("friends_plus")
+
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+        monitor._process(self.PREFIX + self.SIGNALS["Bloodthirsty"])
+
+        self.assertTrue(monitor.st.foxy)
+        self.assertTrue(monitor.st.bloodthirsty_creature_variant)
+        self.assertEqual(monitor.st.terror_ids, [], "公開前に判明扱いにしない")
+        self.send.assert_called_once_with("Fog", [config.FOXY_ID], 0, None, quiet=True)
+
+    def test_ng_fog_foxy_is_judged_at_the_reveal(self):
+        """公開で Sanic が出たら、記録しておいた Foxy に差し替えて今までどおり判定する"""
+        monitor = self._monitor("group_plus")
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        sanic_in_log = config.SANIC_ID - MatchTNL.ALTERNATE_OFFSET
+        monitor._process(self.PREFIX + f"Killers have been revealed - {sanic_in_log} 0 0 "
+                         "// Round type is Fog (Alternate)")
+
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
+        self.assertIn("do_skip", self._started())
+
+    def test_after_the_reveal_it_is_shown_as_before(self):
+        monitor = self._monitor("public")
+        monitor._process(self.PREFIX + "Killers have been revealed - 101 0 0 "
+                         "// Round type is Fog")
+
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
+        self.play.assert_called_with("foxy.mp3")
+
+    # ── OK の霧は今までどおり ─────────────────────
+    def test_ok_fog_foxy_is_as_before(self):
+        monitor = self._monitor("invite")
+
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
+        self.play.assert_any_call("foxy.mp3")
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID], "Foxy で確定")
+        self.assertIn("do_skip", self._started())
+
+    def test_ok_fog_bloodthirsty_signal_is_logged(self):
+        monitor = self._monitor("friends")
+
+        monitor._process(self.PREFIX + self.SIGNALS["Bloodthirsty"])
+
+        self.assertTrue(any("の合図" in m for m in monitor.logs), monitor.logs)
+
+    # ── 霧以外は今までどおり ──────────────────────
+    def test_other_rounds_are_as_before_even_in_ng(self):
+        expected = {"Gigabytes": "👾", "Atrached": "🎮",
+                    "Hungry Home Invader": "の合図", "Bloodthirsty": "の合図"}
+        for source, mark in expected.items():
+            monitor = self._monitor("public", round_type="Classic")
+
+            monitor._process(self.PREFIX + self.SIGNALS[source])
+
+            self.assertTrue(any(mark in m for m in monitor.logs), (source, monitor.logs))
+
+    def test_foxy_outside_fog_is_as_before_even_in_ng(self):
+        monitor = self._monitor("public", round_type="Alternate")
+
+        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
+        self.play.assert_called_once_with("foxy.mp3")
 
 
 class TestQuietStatistics(unittest.TestCase):
@@ -4470,6 +4610,7 @@ class TestFogFoxy(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
+        monitor.st.instance_access = "invite"      # 公開前の霧の情報を使ってよいインスタンス
         monitor.st.in_round = True
         monitor.st.round_type = "Fog"
         monitor.st.fog = True
@@ -13430,6 +13571,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         """Foxy検出はオルタ枠を引数で伝える。st.round_type は Fog のまま"""
         monitor = self._monitor()      # 干し芋 → Fog は全続行
         monitor.st.round_type = "Fog"
+        monitor.st.instance_access = "group_members"   # 看破 OK（干し芋は Group Only）
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"), \

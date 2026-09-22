@@ -545,6 +545,10 @@ class LogMonitor:
             if replaced != st.terror_ids:
                 st.terror_ids = replaced
                 changed.append(row)
+        if self._hide_fog_info():
+            # 看破 NG の霧で公開前。フラグ（公開後の差し替えに要る）だけ立てて、
+            # 何が出たかは出さない。テラーはまだ分からないので差し替えも無い
+            return
         if changed:
             for row in changed:
                 self._log(f"{row.name} に差し替え")
@@ -875,13 +879,15 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_GIGABYTES:
-            self._log("👾 The Gigabytes 出現")
+            if not self._hide_fog_info():
+                self._log("👾 The Gigabytes 出現")
             self._mark_replacement("gigabytes")
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
-            self._log("🎮 Atrached 出現（SonicのVariant）")
+            if not self._hide_fog_info():
+                self._log("🎮 Atrached 出現（SonicのVariant）")
             self._mark_replacement("atrached_variant")
             return
 
@@ -1120,10 +1126,17 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_FOXY:
-            self._log("🦊 Foxyが出た！")
-            if not self._hands_free():
-                PlaySound.play_sound(self.cfg.voice_foxy)
+            # 看破 NG の霧で公開前なら、出たことも音も出さず判定もしない。
+            # 差し替えの記録と DB への黙った送信だけ（公開で今までどおり判定）
+            hide = self._hide_fog_info()
+            if not hide:
+                self._log("🦊 Foxyが出た！")
+                if not self._hands_free():
+                    PlaySound.play_sound(self.cfg.voice_foxy)
             self._mark_replacement("foxy")
+            if hide:
+                self._send_early_statistics(config.FOXY_ID)
+                return
             if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
                     and st.enrage_identified is None):
                 # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
@@ -1473,6 +1486,18 @@ class LogMonitor:
     def _may_show_fog_info(self) -> bool:
         """公開前の霧の情報を判定・表示に使ってよいインスタンスか"""
         return FogEarlyRead.early_read_allowed(self.st.instance_access)
+
+    def _hide_fog_info(self) -> bool:
+        """看破 NG の窓で、霧のテラーがまだ公開されていないか。
+
+        このあいだはテラーを特定できる情報（Variant の合図も含む）を画面・
+        音声・アナウンス・フリーズ・録画のどこにも出さず、判定にも使わない。
+        霧以外のラウンドと、公開の後は今までどおり。
+        """
+        st = self.st
+        return (st.round_type in GroupRound.FOG_ROUND_TYPES
+                and not st.terror_ids
+                and not self._may_show_fog_info())
 
     def _send_early_statistics(self, tid: int):
         """DB にだけ送る。判定には使わない。送信について何も出さない"""
