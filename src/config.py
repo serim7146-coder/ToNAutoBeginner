@@ -265,6 +265,9 @@ CBPS_SKIP_ROUNDS = {
 TERROR_VARIANT_WAIT_SEC = 0.3
 TERROR_VARIANT_POLL_SEC = 0.2
 
+# 起動オプション
+LAUNCH_OPTION = ["--enable-debug-gui", "--enable-sdk-log-levels", "--enable-udon-debug-logging"]
+
 # ── ToNワールド ──
 TON_WORLD_ID = "wrld_a61cdabe-1218-4287-9ffc-2a4d1414e5bd"  # Terrors of Nowhere
 TON_DEFAULT_REGION = "jp"

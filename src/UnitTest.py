@@ -610,16 +610,25 @@ class TestVRChatLauncher(unittest.TestCase):
 
     def test_build_launch_args_desktop(self):
         args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 2, desktop_mode=True)
-        self.assertEqual(args, ["C:\\VRChat.exe", "--profile=2", "--no-vr"])
+        self.assertEqual(args, ["C:\\VRChat.exe", "--profile=2", "--no-vr",
+                                *config.LAUNCH_OPTION])
 
     def test_build_launch_args_vr_omits_no_vr(self):
         args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0, desktop_mode=False)
-        self.assertEqual(args, ["C:\\VRChat.exe", "--profile=0"])
+        self.assertEqual(args, ["C:\\VRChat.exe", "--profile=0", *config.LAUNCH_OPTION])
 
     def test_build_launch_args_with_instance_link(self):
         link = "vrchat://launch?ref=vrchat.com&id=wrld_abc:1234"
         args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 1, True, link)
-        self.assertEqual(args[-1], link)
+        self.assertIn(link, args)
+        self.assertEqual(args[len(args) - len(config.LAUNCH_OPTION):],
+                         list(config.LAUNCH_OPTION), "起動オプションは最後に付く")
+
+    def test_the_launch_options_enable_the_early_read(self):
+        """看破は --enable-sdk-log-levels 付きのログにしか出ない行を読む"""
+        self.assertIn(config.FOG_EARLY_READ_LAUNCH_FLAG, config.LAUNCH_OPTION)
+        args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0, osc_index=1)
+        self.assertIn(config.FOG_EARLY_READ_LAUNCH_FLAG, args)
 
     def test_normalize_instance_link_accepts_raw_id(self):
         self.assertEqual(

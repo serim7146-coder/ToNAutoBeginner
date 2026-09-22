@@ -240,6 +240,7 @@ def build_launch_args(
         args.append(OSCClient.osc_launch_arg(osc_index))
     if instance_link:
         args.append(instance_link)
+    args.extend(config.LAUNCH_OPTION)
     return args
 
 
