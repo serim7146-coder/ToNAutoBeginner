@@ -545,11 +545,6 @@ class LogMonitor:
             if replaced != st.terror_ids:
                 st.terror_ids = replaced
                 changed.append(row)
-        if self._hide_fog_info():
-            # 看破 NG の霧で公開前。フラグ（公開後の差し替えに要る）は立てて、
-            # 何が出たかは公開まで保留する。テラーはまだ分からないので差し替えも無い
-            self._fog_notice(f"{' / '.join(row.name for row in rows)} の合図")
-            return
         if changed:
             for row in changed:
                 self._log(f"{row.name} に差し替え")
@@ -884,13 +879,13 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_GIGABYTES:
-            self._fog_notice("👾 The Gigabytes 出現")
+            self._log("👾 The Gigabytes 出現")
             self._mark_replacement("gigabytes")
             return
 
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
-            self._fog_notice("🎮 Atrached 出現（SonicのVariant）")
+            self._log("🎮 Atrached 出現（SonicのVariant）")
             self._mark_replacement("atrached_variant")
             return
 
@@ -921,7 +916,6 @@ class LogMonitor:
             st.map_id                      = event.map_id
             st.statistics_sent             = False
             st.statistics_quiet            = False
-            st.held_fog_notices            = []
             st.fog_reading                 = False
             st.early_read_hits             = {}
             st.early_read_tid              = None
@@ -1037,8 +1031,6 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
-            # 公開前に終わった霧。保留していた合図はここで出す
-            self._release_fog_notices()
             st.in_round = False
             st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
             st.early_read_hits = {}
@@ -1132,14 +1124,10 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_FOXY:
-            # 看破 NG の霧で公開前なら、出たことと音は公開まで保留し、判定もしない。
-            # 差し替えの記録と DB への黙った送信だけ（公開で今までどおり判定）
-            hide = self._hide_fog_info()
-            self._fog_notice("🦊 Foxyが出た！", self.cfg.voice_foxy)
+            self._log("🦊 Foxyが出た！")
+            if not self._hands_free():
+                PlaySound.play_sound(self.cfg.voice_foxy)
             self._mark_replacement("foxy")
-            if hide:
-                self._send_early_statistics(config.FOXY_ID)
-                return
             if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
                     and st.enrage_identified is None):
                 # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
@@ -1154,8 +1142,6 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
             st.fog_reading = False
-            # 保留していた合図を、判定より先に起きた順で出す
-            self._release_fog_notices()
             self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
             # 答え合わせは公開の後（食い違いの警告はもう出してよい）
             self._check_early_read(event.terror_ids or [], event.round_type)
@@ -1225,8 +1211,7 @@ class LogMonitor:
             return
         tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
-            if self._may_show_fog_info():
-                self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
+            self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Enrage", name)
         
@@ -1241,8 +1226,7 @@ class LogMonitor:
             return
         tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
-            if self._may_show_fog_info():
-                self._log(f"Stunned: {name}（テラー表に無し→revealed待ち）")
+            self._log(f"Stunned: {name}（テラー表に無し→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Stunned", name)
 
@@ -1253,19 +1237,24 @@ class LogMonitor:
                 and not st.terror_ids
                 and st.enrage_identified is None)
 
-    def _identify_fog_terror(self, tid: int, how: str, name: str):
+    def _identify_fog_terror(self, tid: int, how: str, name: str,
+                             early_read: bool = False):
         """霧のテラーを前倒しで判明させ、判定に回す（看破 / Enrage / Joy / スタン）。
 
-        使い分けはここの入口だけで決める。看破してよいインスタンス（Invite /
-        Invite+ / Friends / Group Only）でなければ、判定には一切使わず DB に
-        黙って送るだけ（公開まで何も出さない）。
+        使い分けはここの入口だけで決める。
+        - 通常のログに出る行（Enrage / Joy / スタン）: どのインスタンスでも
+          表示して判定する。DB へも公開のときと同じく普通に送る
+        - 看破（early_read。--enable-sdk-log-levels 由来の行）: 看破してよい
+          インスタンス（Invite / Invite+ / Friends / Group Only）でなければ、
+          判定には一切使わず DB に黙って送るだけ（公開まで何も出さない）
         """
         st = self.st
-        if not self._may_show_fog_info():
-            self._send_early_statistics(tid)
-            return
-        # 判定＋DB。DB への送信は黙って行う（公開前の情報なので）
-        st.statistics_quiet = True
+        if early_read:
+            if not self._may_show_fog_info():
+                self._send_early_statistics(tid)
+                return
+            # 判定＋DB。DB への送信は黙って行う（看破した情報なので）
+            st.statistics_quiet = True
         # `Killers is unknown` の行には「Fog (Alternate)」が出ない。焼き芋は
         # オルタネイト枠のFogだけを続行リスト判定に回すので、枠を伝えないと
         # リストを見ずに自爆する。alternate のテラーが出た時点で枠は確定する
@@ -1508,36 +1497,6 @@ class LogMonitor:
         """公開前の霧の情報を判定・表示に使ってよいインスタンスか"""
         return FogEarlyRead.early_read_allowed(self.st.instance_access)
 
-    def _hide_fog_info(self) -> bool:
-        """看破 NG の窓で、霧のテラーがまだ公開されていないか。
-
-        このあいだはテラーを特定できる情報（Variant の合図も含む）を画面・
-        音声・アナウンス・フリーズ・録画のどこにも出さず、判定にも使わない。
-        霧以外のラウンドと、公開の後は今までどおり。
-        """
-        st = self.st
-        return (st.round_type in GroupRound.FOG_ROUND_TYPES
-                and not st.terror_ids
-                and not self._may_show_fog_info())
-
-    def _fog_notice(self, text: str, voice: Optional[str] = None):
-        """Variant の合図の通知。看破 NG の霧で公開前なら公開まで保留する"""
-        if self._hide_fog_info():
-            self.st.held_fog_notices.append((text, voice))
-            return
-        self._show_fog_notice(text, voice)
-
-    def _show_fog_notice(self, text: str, voice: Optional[str]):
-        self._log(text)
-        if voice is not None and not self._hands_free():
-            PlaySound.play_sound(voice)
-
-    def _release_fog_notices(self):
-        """保留していた合図の通知を、来た順に出す"""
-        held, self.st.held_fog_notices = self.st.held_fog_notices, []
-        for text, voice in held:
-            self._show_fog_notice(text, voice)
-
     def _send_early_statistics(self, tid: int):
         """DB にだけ送る。判定には使わない。送信について何も出さない"""
         st = self.st
@@ -1570,7 +1529,7 @@ class LogMonitor:
         if not self._fog_terror_unknown():
             return          # Enrage 系で先に決まった（二重に判定しない）
         st.early_read_tid = tid
-        self._identify_fog_terror(tid, "看破", name)
+        self._identify_fog_terror(tid, "看破", name, early_read=True)
 
     def _check_early_read(self, ids: list[int], round_type: str):
         """答え合わせ。看破で見えた名前ごとに、公開と一致したかを記録する。

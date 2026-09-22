@@ -2446,7 +2446,11 @@ class TestEarlyReadNames(unittest.TestCase):
 
 
 class TestFogEarlyReadUse(unittest.TestCase):
-    """看破・Enrage 系の使い分け（インスタンス × 起動方法）"""
+    """看破・Enrage 系の使い分け（インスタンス × 起動方法）。
+
+    看破だけがインスタンスで分かれる。通常のログに出る Enrage / Joy / スタンは
+    どのインスタンスでも表示して判定し、DB へも普通に送る。
+    """
 
     FOG_KEY = "Fog/霧"
     SNAIL = 101
@@ -2572,12 +2576,11 @@ class TestFogEarlyReadUse(unittest.TestCase):
             elif how == "Joy":
                 monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
             else:
-                # 依頼者が作業中の _on_stunned() はこれを呼ぶ
-                monitor._identify_fog_terror(self.SNAIL, "Stunned", "Immortal Snail")
+                monitor._on_stunned("Immortal Snail")
 
             self.assertEqual(self._skipped(), 1, how)
             self.assertEqual(self.send.call_count, 1, how)
-            self.assertTrue(self.send.call_args.kwargs["quiet"], how)
+            self.assertFalse(self.send.call_args.kwargs["quiet"], f"{how}: 公開と同じく普通に送る")
 
     # ── NG・看破できる ──────────────────────────
     def test_ng_capable_sends_to_the_db_only(self):
@@ -2590,21 +2593,46 @@ class TestFogEarlyReadUse(unittest.TestCase):
         self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
 
     # ── NG・看破できない ────────────────────────
-    def test_ng_not_capable_sends_the_enrage_family_to_the_db_only(self):
-        for how in ("Enrage", "Joy", "Stunned"):
+    JOY_LINE = "2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN..."
+
+    def _identify_by(self, monitor, how):
+        if how == "Enrage":
+            monitor._on_enrage("Immortal Snail")
+        elif how == "Joy":
+            monitor._process(self.JOY_LINE)
+        else:
+            monitor._process("2026.09.21 22:04:50 Debug      -  Immortal Snail was stunned.")
+
+    def test_ng_not_capable_judges_by_the_enrage_family_and_skips(self):
+        for how, tid in (("Enrage", self.SNAIL), ("Joy", config.JOY_ID),
+                         ("Stunned", self.SNAIL)):
+            self.thread.reset_mock()
             self.send.reset_mock()
             monitor = self._monitor(access="public", capable=False)
 
-            if how == "Enrage":
-                monitor._on_enrage("Immortal Snail")
-            elif how == "Joy":
-                monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
-            else:
-                monitor._identify_fog_terror(self.SNAIL, "Stunned", "Immortal Snail")
+            self._identify_by(monitor, how)
 
-            self.assertFalse(self._judged(monitor), how)
+            self.assertTrue(any(f"🔎 テラー判明({how})" in m for m in monitor.logs),
+                            (how, monitor.logs))
+            self.assertEqual(self._skipped(), 1, how)
             self.assertEqual(self.send.call_count, 1, how)
-            self.assertTrue(self.send.call_args.kwargs["quiet"], how)
+            self.assertEqual(self.send.call_args.args[1], [tid], how)
+            self.assertFalse(self.send.call_args.kwargs["quiet"], how)
+
+    def test_ng_not_capable_judges_by_the_enrage_family_and_continues(self):
+        for how, tid in (("Enrage", self.SNAIL), ("Joy", config.JOY_ID),
+                         ("Stunned", self.SNAIL)):
+            self.thread.reset_mock()
+            self.play.reset_mock()
+            SharedState.continue_round_reset()
+            monitor = self._monitor(access="public", capable=False,
+                                    keep={self.FOG_KEY: {tid}})
+
+            self._identify_by(monitor, how)
+
+            self.assertTrue(monitor.st.is_continue_round, how)
+            self.play.assert_called_once_with("continue.mp3")
+            self.assertEqual(self._skipped(), 0, how)
 
     def test_ng_sends_only_once_per_round(self):
         monitor = self._monitor(access="group_plus")
@@ -2615,31 +2643,40 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
         self.assertEqual(self.send.call_count, 1)
 
-    def test_ng_still_judges_at_the_reveal(self):
+    def test_ng_the_enrage_after_a_silent_early_read_judges_once(self):
+        """看破は黙って DB に送るだけ。後から来た Enrage でその場で判定し、公開で二重にしない"""
         monitor = self._monitor(access="unknown")
         monitor._process(self.SNAIL_LINE)
+        self.assertEqual(self._skipped(), 0, "看破では判定しない")
+        self.assertFalse(any("🔎" in m for m in monitor.logs), monitor.logs)
+
         monitor._on_enrage("Immortal Snail")
-        self.assertEqual(self._skipped(), 0)
+        self.assertEqual(self._skipped(), 1, "Enrage でその場で自爆する")
+        self.assertTrue(any("🔎 テラー判明(Enrage)" in m for m in monitor.logs), monitor.logs)
 
         monitor._process(self.SNAIL_REVEAL)
-
-        self.assertEqual(self._skipped(), 1, "公開で今までどおり自爆する")
-        self.assertTrue(any("Terror revealed" in m for m in monitor.logs), "公開の後はログが出る")
+        self.assertEqual(self._skipped(), 1, "公開で二重に自爆しない")
 
     # ── ログを流さない ───────────────────────────
-    def test_nothing_about_the_fog_is_shown_before_the_reveal_in_ng(self):
+    def test_nothing_about_the_early_read_is_shown_in_ng(self):
         monitor = self._monitor(access="public",
                                 keep={self.FOG_KEY: {self.SNAIL}})
         before = list(monitor.logs)
 
         monitor._process(self.SNAIL_LINE)
-        monitor._on_enrage("Immortal Snail")
-        monitor._on_enrage("存在しないテラー名XYZ")     # 表に無い名前も出さない
-        monitor._process("2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN...")
+        monitor._process(FOG_EARLY_READ_ROUNDS[0][1][0])  # 別の名前（取り違え）も出さない
 
         self.assertEqual(monitor.logs, before, "画面のログ・オーバーレイに何も足されない")
         self.printed.assert_not_called()
         self.play.assert_not_called()
+
+    def test_an_unknown_enrage_name_is_logged_in_ng(self):
+        monitor = self._monitor(access="public")
+
+        monitor._on_enrage("存在しないテラー名XYZ")
+
+        self.assertTrue(any("Enrage: 存在しないテラー名XYZ" in m for m in monitor.logs),
+                        monitor.logs)
 
     def test_the_early_read_db_send_is_quiet_even_in_ok(self):
         monitor = self._monitor()
@@ -2691,8 +2728,10 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
             self.send.reset_mock()
             ng = self._monitor(access="public")
+            ng._process(self.SNAIL_LINE)
+            self.assertEqual(self._skipped(), 1, "看破の行は読まない")
             ng._on_enrage("Immortal Snail")
-            self.assertEqual(self._skipped(), 1, "NG では判定しない")
+            self.assertEqual(self._skipped(), 2, "NG でも Enrage で判定")
             self.assertEqual(self.send.call_count, 1)
 
 
@@ -2817,8 +2856,8 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         self.assertFalse(monitor.st.fog_reading)
 
 
-class TestFogVariantsHidden(unittest.TestCase):
-    """看破 NG の霧では、公開前に Variant の合図（Foxy など）も一切出さない・判定しない"""
+class TestFogVariantsInNg(unittest.TestCase):
+    """Variant の合図（Foxy など）は通常のログ。看破 NG の霧でもその場で出して判定する"""
 
     PREFIX = "2026.09.21 22:04:45 Debug      -  "
     SIGNALS = {
@@ -2866,45 +2905,30 @@ class TestFogVariantsHidden(unittest.TestCase):
                 for c in self.thread.call_args_list if "target" in c.kwargs]
 
     # ── NG の霧・公開前 ─────────────────────────
-    def test_ng_fog_shows_and_decides_nothing_before_the_reveal(self):
-        for source, line in self.SIGNALS.items():
-            self.thread.reset_mock()
-            self.play.reset_mock()
+    def test_ng_fog_signals_are_shown_on_the_spot(self):
+        expected = {"Foxy": "🦊 Foxyが出た！", "Bloodthirsty": "の合図"}   # 霧が対象の合図
+        for source, mark in expected.items():
             monitor = self._monitor("public")
-            before = list(monitor.logs)
 
-            monitor._process(self.PREFIX + line)
+            monitor._process(self.PREFIX + self.SIGNALS[source])
 
-            self.assertEqual(monitor.logs, before, source)
-            self.play.assert_not_called()                       # voice_foxy も
-            self.assertEqual(self._started(), [], f"{source}: 自爆しない")
-            self.assertFalse(monitor.st.is_continue_round, source)
-            self.assertEqual(SharedState.get_continue_round_count(), 0, source)
-            self.record.assert_not_called()
-            self.printed.assert_not_called()
+            self.assertTrue(any(mark in m for m in monitor.logs), (source, monitor.logs))
 
-    def test_ng_fog_still_records_the_variant_internally(self):
-        monitor = self._monitor("friends_plus")
-
-        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
-        monitor._process(self.PREFIX + self.SIGNALS["Bloodthirsty"])
-
-        self.assertTrue(monitor.st.foxy)
-        self.assertTrue(monitor.st.bloodthirsty_creature_variant)
-        self.assertEqual(monitor.st.terror_ids, [], "公開前に判明扱いにしない")
-        self.send.assert_called_once_with("Fog", [config.FOXY_ID], 0, None, quiet=True)
-
-    def test_ng_fog_foxy_is_judged_at_the_reveal(self):
-        """公開で Sanic が出たら、記録しておいた Foxy に差し替えて今までどおり判定する"""
+    def test_ng_fog_foxy_is_shown_and_judged_on_the_spot(self):
         monitor = self._monitor("group_plus")
+
         monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
+
+        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
+        self.play.assert_any_call("foxy.mp3")
+        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID], "Foxy で確定")
+        self.assertEqual(self._started().count("do_skip"), 1)
+        self.assertFalse(self.send.call_args.kwargs["quiet"])
 
         sanic_in_log = config.SANIC_ID - MatchTNL.ALTERNATE_OFFSET
         monitor._process(self.PREFIX + f"Killers have been revealed - {sanic_in_log} 0 0 "
                          "// Round type is Fog (Alternate)")
-
-        self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
-        self.assertIn("do_skip", self._started())
+        self.assertEqual(self._started().count("do_skip"), 1, "公開で二重に自爆しない")
 
     def test_after_the_reveal_it_is_shown_as_before(self):
         monitor = self._monitor("public")
@@ -2915,63 +2939,6 @@ class TestFogVariantsHidden(unittest.TestCase):
 
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
         self.play.assert_called_with("foxy.mp3")
-
-    # ── NG の霧・保留した通知は公開か RoundOver で出す ─────────
-    REVEAL = "Killers have been revealed - 101 0 0 // Round type is Fog"
-
-    def test_ng_fog_notices_come_out_at_the_reveal_in_order(self):
-        monitor = self._monitor("public")
-        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
-        monitor._process(self.PREFIX + self.SIGNALS["Bloodthirsty"])
-        before = list(monitor.logs)
-        self.play.assert_not_called()
-
-        monitor._process(self.PREFIX + self.REVEAL)
-
-        new = monitor.logs[len(before):]
-        # 判定より先に、来た順で出す
-        self.assertGreaterEqual(len(new), 3, new)
-        for line, mark in zip(new, ("🦊 Foxyが出た！", "Foxy の合図", "Bloodthirsty Creature の合図")):
-            self.assertIn(mark, line, new)
-        self.play.assert_any_call("foxy.mp3")
-        self.assertEqual(monitor.st.held_fog_notices, [])
-
-    def test_ng_fog_notices_come_out_at_round_over_without_a_reveal(self):
-        monitor = self._monitor("public")
-        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
-        before = list(monitor.logs)
-
-        monitor._process(self.PREFIX + "RoundOver")
-
-        new = monitor.logs[len(before):]
-        self.assertIn("🦊 Foxyが出た！", new[0])
-        self.assertIn("の合図", new[1])
-        self.play.assert_any_call("foxy.mp3")
-        self.assertEqual(monitor.st.held_fog_notices, [])
-
-        monitor._process(self.PREFIX + self.REVEAL)       # 2回は出さない
-        self.assertEqual(sum("🦊" in m for m in monitor.logs), 1)
-
-    def test_ng_fog_notice_has_no_voice_in_hands_free_at_the_release(self):
-        monitor = self._monitor("public")
-        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
-        SharedState.set_hands_free(True)
-        self.addCleanup(SharedState.set_hands_free, False)
-
-        monitor._process(self.PREFIX + self.REVEAL)
-
-        self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
-        self.assertNotIn(unittest.mock.call("foxy.mp3"), self.play.call_args_list)
-
-    def test_held_notices_do_not_leak_into_the_next_round(self):
-        monitor = self._monitor("public")
-        monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
-
-        monitor._process(self.PREFIX + "This round is taking place at Facility (12) "
-                         "and the round type is Classic")
-        monitor._process(self.PREFIX + "RoundOver")
-
-        self.assertFalse(any("🦊" in m for m in monitor.logs), monitor.logs)
 
     # ── OK の霧は今までどおり ─────────────────────
     def test_ok_fog_foxy_is_as_before(self):
@@ -3063,27 +3030,28 @@ class TestFogStunned(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
         self.play.assert_called_once_with("continue.mp3")
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
-        self.assertTrue(self.send.call_args.kwargs["quiet"])
+        self.assertFalse(self.send.call_args.kwargs["quiet"])
 
-    def test_ng_instance_only_sends_to_the_db(self):
+    def test_ng_instance_decides_by_the_stun_too(self):
+        """スタンは通常のログ。看破 NG のインスタンスでも表示して判定する"""
         monitor = self._monitor("public", keep={self.FOG_KEY: {self.WITCH}})
-        before = list(monitor.logs)
 
         monitor._process(self.STUN)
 
-        self.assertEqual(monitor.logs, before, "公開前は何も出さない")
-        self.assertFalse(monitor.st.is_continue_round)
-        self.play.assert_not_called()
-        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=True)
+        self.assertEqual(monitor.st.enrage_identified, self.WITCH)
+        self.assertTrue(monitor.st.is_continue_round)
+        self.play.assert_called_once_with("continue.mp3")
+        self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
+        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=False)
 
-    def test_an_unknown_name_is_logged_only_where_allowed(self):
-        for access, shown in (("invite", True), ("public", False)):
+    def test_an_unknown_name_is_logged_in_any_instance(self):
+        for access in ("invite", "public"):
             monitor = self._monitor(access)
 
             monitor._process("2026.09.21 17:31:40 Debug      -  存在しない名前XYZ was stunned.")
 
-            self.assertEqual(any("Stunned: 存在しない名前XYZ" in m for m in monitor.logs),
-                             shown, access)
+            self.assertTrue(any("Stunned: 存在しない名前XYZ" in m for m in monitor.logs),
+                            (access, monitor.logs))
 
     def test_only_while_the_fog_terror_is_unknown(self):
         monitor = self._monitor("invite")

@@ -44,9 +44,7 @@ class WindowState:
     early_read_hits: dict = field(default_factory=dict)   # 正規化した名前 → ID
     early_read_tid: Optional[int] = None  # 看破で使ったID
     early_read_void: bool = False         # 2種類以上のIDが出た → このラウンドは使わない
-    statistics_quiet: bool = False        # 看破・Enrage 系の結果で送る統計は黙って送る
-    # 看破 NG の霧で公開前に止めた通知 (文言, 音声)。公開か RoundOver で順に出す
-    held_fog_notices: list = field(default_factory=list)
+    statistics_quiet: bool = False        # 看破の結果で送る統計は黙って送る
     log_pos: int = 0
     in_round: bool = False
     round_type: str = ""
