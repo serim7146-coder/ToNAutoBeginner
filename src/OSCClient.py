@@ -8,6 +8,10 @@ VRChatは既定でUDP 9000を掴むため、2窓目以降は --osc=<in>:<ip>:<ou
 送れるのは移動と視点のみ。クリック相当（/input/UseRight等）は
 「手に持ったアイテムを使う」入力で、ワールドUIのクリックには使えない。
 （VRChatのOSCQueryで全39項目を確認済み。該当する入力は存在しない）
+実機でも確認済み（2026-09-21、詰め物バグを直した後の送信で）: 裏窓の照準を
+Beginに合わせて /input/UseRight・UseLeft・GrabRight・GrabLeft を送っても
+Beginは押されず、持っていたアイテム（Emerald Coil）が使われた。同じ窓で
+/input/Jump は効くので、届いた上でUIに効かない。送り方の問題ではない。
 """
 import socket
 import struct

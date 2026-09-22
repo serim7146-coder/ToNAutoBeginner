@@ -227,6 +227,29 @@ def hold_key(key: str, sec: float):
     time.sleep(config.OPERATOR_WAIT_SEC)
 
 def click():
+    """前面の窓のクロスヘア位置をクリックする。必ずフォーカスを取ってから呼ぶ。
+
+    背面クリックは実現できない。キーは hold_key_background() で背面に送れるのに、
+    クリックだけフォーカスが要るのは、UnityがマウスボタンをRaw Inputで読むため。
+    Raw Inputはカーネルの入力スタックからフォーカスのある窓へ届くもので、
+    ユーザーモードから特定の窓へ差し込む口が無い。実機で確認済み:
+
+        背面へ w を送る（PostMessage + AttachThreadInput + SetKeyboardState）
+            → 前進する。キーはメッセージと GetKeyState でも読まれるため
+        同じ経路で VK_LBUTTON + WM_LBUTTONDOWN/UP をクライアント座標へ送る
+            → 反応しない（押しっぱなしの間を空けても同じ）
+
+    以下は検討して否定済み。作り直さないこと:
+
+        DirectInput          デバイスを「読む」APIで、他プロセスへ「送る」口が無い
+                             （Send系はフォースフィードバック用）
+        仮想マウスドライバ    作れても本物のマウスと同じ扱いになり、行き先は前面の
+                             窓のまま。窓を選べないので複窓では意味が無い
+        VRChatへのDLL注入     EAC対象。規約違反
+        OSC                  OSCClient冒頭の通り、ワールドUIを押す入力が存在しない
+        窓ごとに別デスクトップ CreateDesktopなら窓ごとに前面を持てるが、切り替えない
+                             と画面が見えなくなるため採用しない（依頼者の判断）
+    """
     pydirectinput.mouseDown()
     time.sleep(0.1)
     pydirectinput.mouseUp()
