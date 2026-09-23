@@ -1066,30 +1066,37 @@ class App(tk.Tk):
         """続行リストの供給元を状況から決める。
 
         ToN ListTool が動いていて参加者がいれば主催リスト、それ以外は .tnl。
-        ツールを閉じても host_save.json.gz はディスクに残るので、鮮度は
+        ツールを閉じても保存ファイルはディスクに残るので、鮮度は
         mtime ではなくプロセスの生死で見る（古いファイルを掴まないため）。
+
+        新しい ToN ListTool は host_state.sqlite3 に書く。あればそちらを読み、
+        無ければ古い host_save.json.gz を読む。
         """
         if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
             self._host_list_lost("ToN ListTool が起動していません")
             return
 
-        path = config.HOST_SAVE_PATH
+        path, load = config.HOST_STATE_PATH, MatchTNL.load_host_state
+        if not os.path.exists(path):
+            path, load = config.HOST_SAVE_PATH, MatchTNL.load_host_save
+        name = os.path.basename(path)
         try:
             stat = os.stat(path)
         except OSError as e:
-            self._host_list_lost(f"host_save が読めません: {e}")
+            self._host_list_lost(f"{name} が読めません: {e}")
             return
 
-        # 自分のリストだけ更新されたときも読み直す
+        # 自分のリストだけ更新されたときも読み直す。SQLite は本体を触らずに
+        # -wal だけ伸びることがあるので、そちらも見る
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
-                 _file_stamp(config.USER_SAVE_PATH))
+                 _file_stamp(config.USER_SAVE_PATH),
+                 _file_stamp(path + "-wal"))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             self._host_loss_since = None        # 取れている
             return
 
         try:
-            keep_on, meta, wishes = MatchTNL.load_host_save(
-                path, config.USER_SAVE_PATH)
+            keep_on, meta, wishes = load(path, config.USER_SAVE_PATH)
         except Exception as e:
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する

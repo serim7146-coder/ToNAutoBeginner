@@ -23,6 +23,10 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 # 参加者の続行希望が変わると数秒で追従する。
 HOST_SAVE_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "ToN ListTool", "host_save.json.gz")
+# ToN ListTool は保存先を SQLite に変えた。こちらがあれば優先して読む
+# （古い ListTool を使っている人のために host_save.json.gz も残す）
+HOST_STATE_PATH = os.path.join(
+    os.environ.get("APPDATA", ""), "ToN ListTool", "host_state.sqlite3")
 HOST_SAVE_POLL_SEC = 3.0
 # 外部ツール起動ボタンの「起動中」表示を見直す間隔。
 # 続行リストの供給元判定とは別のループで回す（片方の失敗を巻き込まないため）

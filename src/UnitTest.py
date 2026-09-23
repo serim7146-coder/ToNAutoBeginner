@@ -10,6 +10,7 @@ import sys
 import json
 import tempfile
 import gzip
+import sqlite3
 import ctypes
 import io
 import os
@@ -6848,6 +6849,7 @@ class TestHostListGrace(unittest.TestCase):
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
+        self.db = str(Path(self._dir.name) / "host_state.sqlite3")      # 既定では作らない
         self.user_save = str(Path(self._dir.name) / "user_save.json")
         self.tnl = Path(self._dir.name) / "list.tnl"
         self.tnl.write_text(json.dumps(
@@ -6886,6 +6888,7 @@ class TestHostListGrace(unittest.TestCase):
         stat = patch.object(mainGUI.os, "stat", side_effect=OSError("swapping")) \
             if stat_fails else patch.object(mainGUI.os, "stat", wraps=os.stat)
         with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
              patch.object(ProcessCheck, "is_process_running", return_value=running), \
              patch.object(mainGUI.time, "monotonic", side_effect=lambda: self.now), \
@@ -6986,6 +6989,189 @@ class TestHostListGrace(unittest.TestCase):
         self.assertEqual(self._grace_logs(), [])
 
 
+def wish_bits(ids):
+    raw = bytearray(40)
+    for tid in ids:
+        raw[tid // 8] |= 1 << (tid % 8)
+    return bytes(raw)
+
+
+def write_host_state(path, tabs):
+    """ToN ListTool の新しい保存形式（SQLite）を作る。
+    tabs は [[(section, 名前, {ラウンド: {ID, ...}}), ...], ...]"""
+    Path(path).unlink(missing_ok=True)
+    con = sqlite3.connect(str(path))
+    try:
+        con.executescript("""
+            create table meta(key text primary key, value text);
+            create table tabs(tab_index integer primary key, name text,
+                              apply_nocontinue integer, nocontinue_targets text,
+                              nocontinue_metadata text);
+            create table participants(id integer primary key, tab_index integer,
+                                      section integer, position integer, vrc_name text,
+                                      original_name text, memo text, created_at text,
+                                      is_visible integer);
+            create table wishes(participant_id integer, round_name text, bits blob,
+                                primary key(participant_id, round_name));
+            create table wish_counts(tab_index integer, round_name text,
+                                     terror_id integer, count integer);
+            create table host_survived(tab_index integer, round_name text, terror_id integer);
+            create table force_skips(tab_index integer, round_name text, terror_id integer);
+        """)
+        con.execute("insert into meta values ('version', '6')")
+        pid = 0
+        for tab_index, members in enumerate(tabs):
+            con.execute("insert into tabs(tab_index, name) values (?, ?)",
+                        (tab_index, f"タブ {tab_index + 1}"))
+            for position, (section, name, rounds) in enumerate(members):
+                pid += 1
+                con.execute("insert into participants(id, tab_index, section, position,"
+                            " vrc_name, is_visible) values (?, ?, ?, ?, ?, 1)",
+                            (pid, tab_index, section, position, name))
+                for round_name, ids in (rounds or {}).items():
+                    bits = ids if isinstance(ids, (bytes, bytearray)) else wish_bits(ids)
+                    con.execute("insert into wishes values (?, ?, ?)",
+                                (pid, round_name, bits))
+        con.commit()
+    finally:
+        con.close()
+
+
+class TestHostStateSqlite(unittest.TestCase):
+    """ToN ListTool の新しい保存形式（host_state.sqlite3）を読む"""
+
+    CLASSIC = "Classic/クラシック"
+    FOG = "Fog (Alternate)/霧 (Alternate)"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.db = Path(self._dir.name) / "host_state.sqlite3"
+
+    def _load(self, tabs, user_save=None):
+        write_host_state(self.db, tabs)
+        return MatchTNL.load_host_state(str(self.db), user_save)
+
+    # ── 参加者と待機 ──────────────────────────
+    def test_only_participants_are_folded_into_the_shared_list(self):
+        keep_on, meta, wishes = self._load([[
+            (0, "さんかしゃ", {self.CLASSIC: {5}}),
+            (1, "たいき", {self.CLASSIC: {7}}),
+        ]])
+
+        self.assertEqual(keep_on, {self.CLASSIC: {5}}, "待機は畳まない")
+        self.assertEqual(wishes["たいき"], {self.CLASSIC: {7}}, "待機も名前では引ける")
+        self.assertEqual(meta["participants"], 1)
+        self.assertEqual(meta["participant_names"], {"さんかしゃ"})
+        self.assertEqual(meta["listed"], 2, "参加者＋待機のうちリストを持つ人")
+        self.assertEqual(meta["tabs"], 1)
+        self.assertIsNone(meta["host_self"])
+
+    def test_the_same_name_in_two_tabs_is_folded(self):
+        keep_on, meta, _w = self._load([
+            [(0, "ふたり", {self.CLASSIC: {1}})],
+            [(0, "ふたり", {self.CLASSIC: {2}})],
+        ])
+
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 2}})
+        self.assertEqual(meta["tabs"], 2)
+        self.assertEqual(meta["participants"], 2)
+
+    # ── ビット列 ────────────────────────────
+    def test_the_bits_are_read_from_the_lowest_bit(self):
+        keep_on, _meta, _w = self._load([[(0, "ひと", {self.CLASSIC: {0, 1, 7, 8, 9, 134, 319}})]])
+
+        self.assertEqual(keep_on[self.CLASSIC], {0, 1, 7, 8, 9, 134, 319})
+
+    def test_a_single_byte_is_not_reversed(self):
+        """下位ビットから: 0x01 は ID 0、0x80 は ID 7"""
+        for raw, expected in ((b"\x01", {0}), (b"\x80", {7}), (b"\x00\x02", {9})):
+            keep_on, _meta, _w = self._load([[(0, "ひと", {self.CLASSIC: raw})]])
+            self.assertEqual(keep_on.get(self.CLASSIC, set()), expected, raw)
+
+    def test_empty_or_odd_length_bits(self):
+        for raw, expected in ((b"", set()), (bytes(40), set()),
+                              (b"\x00" * 60 + b"\x01", {480})):
+            keep_on, meta, _w = self._load([[(0, "ひと", {self.CLASSIC: raw})]])
+            self.assertEqual(keep_on.get(self.CLASSIC, set()), expected, raw)
+            self.assertEqual(meta["listed"], 1, "行があればリストは持っている")
+
+    # ── 古い JSON と同じ結果になること ──────────────
+    def test_it_matches_the_json_reader(self):
+        people = [(0, "さんかしゃA", {self.CLASSIC: {1, 300}, self.FOG: {9}}),
+                  (0, "さんかしゃB", {self.CLASSIC: {2}}),
+                  (1, "たいきC", {self.FOG: {4, 5}})]
+        json_path = Path(self._dir.name) / "host_save.json.gz"
+        members = {"participants": [], "waiting": []}
+        for section, name, rounds in people:
+            key = "participants" if section == 0 else "waiting"
+            members[key].append({"vrc_name": name, "data": {
+                r: {str(i): 1 for i in ids} for r, ids in rounds.items()}})
+        with gzip.open(json_path, "wb") as f:
+            f.write(json.dumps({"version": 5, "tabs": [members]}).encode("utf-8"))
+
+        from_db = self._load([people])
+        from_json = MatchTNL.load_host_save(str(json_path))
+
+        self.assertEqual(from_db, from_json)
+
+    # ── 主催者自身 ──────────────────────────
+    def test_the_host_own_list_is_added(self):
+        user_save = Path(self._dir.name) / "user_save.json"
+        user_save.write_text(json.dumps({
+            "last_active": "ぬし",
+            "accounts": {"ぬし": {"data": {self.CLASSIC: {"42": 1}}}}}),
+            encoding="utf-8")
+
+        keep_on, meta, wishes = self._load(
+            [[(0, "さんかしゃ", {self.CLASSIC: {5}})]], user_save=str(user_save))
+
+        self.assertEqual(keep_on[self.CLASSIC], {5, 42})
+        self.assertEqual(meta["host_self"], "ぬし")
+        self.assertEqual(meta["participants"], 1, "主催者は数えない")
+        self.assertIn("ぬし", meta["participant_names"])
+        self.assertEqual(wishes["ぬし"], {self.CLASSIC: {42}})
+
+    # ── 読み方 ─────────────────────────────
+    def test_a_wal_file_is_copied_too(self):
+        """ListTool が開いている間、新しい行は -wal にだけある（本体はまだ古い）"""
+        write_host_state(self.db, [[(0, "ひと", {self.CLASSIC: {3}})]])
+        con = sqlite3.connect(str(self.db))
+        self.addCleanup(con.close)
+        con.execute("pragma journal_mode=wal")
+        con.execute("insert into participants(id, tab_index, section, position,"
+                    " vrc_name, is_visible) values (99, 0, 0, 1, 'あとから', 1)")
+        con.execute("insert into wishes values (99, ?, ?)",
+                    (self.CLASSIC, wish_bits({11})))
+        con.commit()
+        self.assertTrue(Path(str(self.db) + "-wal").exists(), "前提: -wal がある")
+
+        keep_on, meta, _w = MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11}, "-wal のぶんも読む")
+        self.assertEqual(meta["participants"], 2)
+
+    def test_the_list_tool_folder_is_not_written_to(self):
+        """読むだけ。ListTool のフォルダに何も足さない・触らない"""
+        write_host_state(self.db, [[(0, "ひと", {self.CLASSIC: {3}})]])
+        before = {p.name: p.stat().st_mtime_ns for p in Path(self._dir.name).iterdir()}
+
+        MatchTNL.load_host_state(str(self.db))
+
+        after = {p.name: p.stat().st_mtime_ns for p in Path(self._dir.name).iterdir()}
+        self.assertEqual(after, before)
+
+    def test_a_broken_file_raises(self):
+        self.db.write_bytes(b"not a database at all")
+
+        with self.assertRaises(Exception):
+            MatchTNL.load_host_state(str(self.db))
+
+    def test_a_missing_file_raises(self):
+        with self.assertRaises(Exception):
+            MatchTNL.load_host_state(str(self.db) + ".nope")
+
+
 class TestHostListSource(unittest.TestCase):
     """続行リストの供給元を状況から決める（チェックボックスは無い）
 
@@ -7003,6 +7189,7 @@ class TestHostListSource(unittest.TestCase):
         SharedState.set_list_source(None)
         self._dir = tempfile.TemporaryDirectory()
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
+        self.db = str(Path(self._dir.name) / "host_state.sqlite3")      # 既定では作らない
         self.user_save = str(Path(self._dir.name) / "user_save.json")   # 作らない
         self.tnl = Path(self._dir.name) / "list.tnl"
         self.tnl.write_text(json.dumps(
@@ -7051,6 +7238,7 @@ class TestHostListSource(unittest.TestCase):
     def _refresh(self, app, running=True):
         # 主催者自身のリストは既定では使わない（実ファイルに引きずられないため）
         with patch.object(config, "HOST_SAVE_PATH", self.path), \
+             patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
              patch.object(ProcessCheck, "is_process_running", return_value=running), \
              patch.object(mainGUI, "save_settings"), \
@@ -7091,6 +7279,38 @@ class TestHostListSource(unittest.TestCase):
         self.assertEqual(SharedState.get_list_source(), "tnl")
         self.assertTrue(any("続行リストを持つ人がいません" in m for m in app.logs),
                         app.logs)
+
+    # ── 新しい保存先（SQLite）を優先する ─────────────
+    def test_the_sqlite_file_wins_over_the_json(self):
+        self._write(3)                       # 古い JSON には3人
+        write_host_state(self.db, [[(0, "いまのひと", {self.CLASSIC: {9}})]])
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {9}}, "sqlite の中身を使う")
+
+    def test_without_the_sqlite_file_the_json_is_used(self):
+        self._write(2)
+        app = self._app()
+
+        self._refresh(app)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6}})
+
+    def test_a_wal_only_change_is_picked_up(self):
+        """SQLite は本体を触らずに -wal だけ伸びることがある"""
+        write_host_state(self.db, [[(0, "ひと", {self.CLASSIC: {9}})]])
+        app = self._app()
+        self._refresh(app)
+        stamp = app._host_save_stamp
+
+        Path(self.db + "-wal").write_bytes(b"x" * 16)
+        self._refresh(app)
+
+        self.assertNotEqual(app._host_save_stamp, stamp, "読み直している")
 
     # ── 供給元の選択 ──────────────────────────
     def test_a_closed_list_tool_uses_the_tnl(self):
@@ -7288,10 +7508,10 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
         self._refresh(app)
-        mtime, size, user = app._host_save_stamp
+        mtime, size, user, wal = app._host_save_stamp
 
         # サイズは同じで mtime だけ違う（同じ秒内の書き換え相当）
-        app._host_save_stamp = (mtime - 1, size, user)
+        app._host_save_stamp = (mtime - 1, size, user, wal)
         with patch.object(MatchTNL, "load_host_save",
                           return_value=({"x": {1}}, {"participants": 1, "listed": 1, "tabs": 1},
                                         {})) as mock_load:

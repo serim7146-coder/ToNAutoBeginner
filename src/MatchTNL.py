@@ -1,5 +1,9 @@
 import gzip
 import json
+import shutil
+import sqlite3
+import tempfile
+from pathlib import Path
 
 
 # ═══════════════════════════════════════════════
@@ -107,6 +111,94 @@ def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
             if mine is not None:
                 # 同名が複数タブにいることがある。畳んで持つ
                 mine.setdefault(round_key, set()).update(ids)
+
+
+HOST_STATE_SIDECARS = ("-wal", "-shm")
+PARTICIPANT_SECTION = 0        # 1 は待機
+
+
+def _wish_ids(bits) -> set:
+    """ビット列をテラーIDの集合へ。下位ビットから順に id = i*8 + j"""
+    if not isinstance(bits, (bytes, bytearray)):
+        return set()
+    return {i * 8 + j for i, byte in enumerate(bits)
+            for j in range(8) if byte >> j & 1}
+
+
+def load_host_state(path: str,
+                    user_save_path: str | None = None
+                    ) -> tuple[dict[str, set[int]], dict, dict]:
+    """ToN ListTool の主催リスト（SQLite 版）を load_host_save と同じ形で読む。
+
+    section は 0 が参加者・1 が待機。畳んだ keepOn_set には参加者だけを足し、
+    待機は名前ごとの wishes にだけ入れる（load_host_save と同じ方針）。
+
+    ListTool が書いている最中を掴まないよう、本体と -wal / -shm を一時フォルダへ
+    写してから読む。ListTool のフォルダには一切書かない。壊れている・途中だった
+    場合は例外を投げる（呼び出し側の再試行に任せる。load_host_save と同じ）。
+    """
+    with tempfile.TemporaryDirectory() as work:
+        copy = Path(work) / "host_state.sqlite3"
+        shutil.copy2(path, copy)
+        for suffix in HOST_STATE_SIDECARS:
+            side = Path(str(path) + suffix)
+            if side.exists():
+                shutil.copy2(side, str(copy) + suffix)
+        con = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        try:
+            members = con.execute(
+                "select id, section, vrc_name from participants").fetchall()
+            rows = con.execute(
+                "select participant_id, round_name, bits from wishes").fetchall()
+            tabs = con.execute("select count(*) from tabs").fetchone()[0]
+        finally:
+            con.close()
+
+    keepOn_set: dict[str, set[int]] = {}
+    wishes: dict[str, dict[str, set[int]]] = {}
+    by_id = {pid: (section, name) for pid, section, name in members}
+    participants = 0
+    participant_names: set = set()
+    for _pid, section, name in members:
+        if section == PARTICIPANT_SECTION:
+            participants += 1
+            if isinstance(name, str) and name:
+                participant_names.add(name)
+
+    listed_ids = set()
+    for pid, round_key, bits in rows:
+        section, name = by_id.get(pid, (None, None))
+        if section is None:
+            continue
+        # 行が1つでもあれば「リストを持っている人」。全部OFFでも {} で残すのは
+        # load_host_save と同じ（「続行したいものが無い」と「リストが無い」を分ける）
+        listed_ids.add(pid)
+        mine = (wishes.setdefault(name, {})
+                if isinstance(name, str) and name else None)
+        if round_key in HOST_SAVE_IGNORED_KEYS:
+            continue
+        ids = _wish_ids(bits)
+        if not ids:
+            continue
+        if section == PARTICIPANT_SECTION:
+            keepOn_set.setdefault(round_key, set()).update(ids)
+        if mine is not None:
+            # 同名が複数タブにいることがある。畳んで持つ
+            mine.setdefault(round_key, set()).update(ids)
+
+    host_self = None
+    if user_save_path:
+        host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
+    if host_self:
+        participant_names.add(host_self)
+    # listed は「続行リストを持っている人」。ListTool は全部OFFの行を書かないので、
+    # 行が1件でもある人を数える（JSON 版の「data を持つ人」と同じ意味）
+    meta = {"participants": participants,   # 自分は数えない
+            "listed": len(listed_ids),
+            "participant_names": participant_names,
+            "tabs": tabs,
+            "host_self": host_self}
+    return keepOn_set, meta, wishes
 
 
 def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None:
