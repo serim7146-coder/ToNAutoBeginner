@@ -23,11 +23,9 @@ HOLD_SEC = 2
 # 行が来ないときは監視ループの tick で確定させる。1秒刻みの切り捨ての分だけ余分に待つ
 HOLD_TICK_MARGIN_SEC = 1
 
-# 看破してよい公開範囲（依頼者の決定）。判定できないものは入れない＝安全側
-EARLY_READ_ACCESS = frozenset({
-    LogParser.ACCESS_INVITE, LogParser.ACCESS_INVITE_PLUS,
-    LogParser.ACCESS_FRIENDS, LogParser.ACCESS_GROUP_MEMBERS,
-})
+# 看破してよい公開範囲（依頼者の決定）。自分が呼んだ人しか入れないインバイトだけ。
+# インバイト+・フレンド・グループオンリーも外した（安全側に倒す）
+EARLY_READ_ACCESS = frozenset({LogParser.ACCESS_INVITE})
 
 
 def early_read_allowed(access: str) -> bool:

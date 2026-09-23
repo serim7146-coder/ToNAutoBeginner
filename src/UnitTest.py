@@ -2360,9 +2360,9 @@ class TestInstanceAccess(unittest.TestCase):
     def test_the_nine_kinds(self):
         cases = {
             "~private(usr_0e01408a)": ("invite", True),
-            "~private(usr_0e01408a)~canRequestInvite": ("invite_plus", True),
-            "~friends(usr_0e01408a)": ("friends", True),
-            "~group(grp_8f8ace13)~groupAccessType(members)": ("group_members", True),
+            "~private(usr_0e01408a)~canRequestInvite": ("invite_plus", False),
+            "~friends(usr_0e01408a)": ("friends", False),
+            "~group(grp_8f8ace13)~groupAccessType(members)": ("group_members", False),
             "~hidden(usr_0e01408a)": ("friends_plus", False),
             "~group(grp_8f8ace13)~groupAccessType(plus)": ("group_plus", False),
             "~group(grp_8f8ace13)~groupAccessType(public)": ("group_public", False),
@@ -2687,6 +2687,30 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.assertEqual(self._skipped(), 1, how)
             self.assertEqual(self.send.call_count, 1, how)
             self.assertFalse(self.send.call_args.kwargs["quiet"], f"{how}: 公開と同じく普通に送る")
+
+    # ── 看破してよいのはインバイトだけ ─────────────────
+    def test_only_an_invite_instance_is_read_early(self):
+        """インバイト以外は、公開範囲が狭くても DB に黙って送るだけ"""
+        for access, allowed in (("invite", True), ("invite_plus", False), ("friends", False),
+                                ("group_members", False), ("friends_plus", False),
+                                ("group_plus", False), ("group_public", False),
+                                ("public", False), ("unknown", False)):
+            self.thread.reset_mock()
+            self.play.reset_mock()
+            self.record.reset_mock()
+            self.send.reset_mock()
+            SharedState.continue_round_reset()
+            monitor = self._monitor(access=access, keep={self.FOG_KEY: {self.SNAIL}})
+            before = list(monitor.logs)
+
+            monitor._process(self.SNAIL_LINE)
+            monitor._process(self.AFTER_HOLD)
+
+            self.assertEqual(self._judged(monitor), allowed, access)
+            self.assertEqual(any("🔎 テラー判明(看破)" in m for m in monitor.logs), allowed, access)
+            if not allowed:
+                self.assertEqual(monitor.logs, before, access)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
 
     # ── NG・看破できる ──────────────────────────
     def test_ng_capable_sends_to_the_db_only(self):
@@ -13969,7 +13993,6 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         """Foxy検出はオルタ枠を引数で伝える。st.round_type は Fog のまま"""
         monitor = self._monitor()      # 干し芋 → Fog は全続行
         monitor.st.round_type = "Fog"
-        monitor.st.instance_access = "group_members"   # 看破 OK（干し芋は Group Only）
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"), \
