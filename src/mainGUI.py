@@ -677,6 +677,17 @@ class App(tk.Tk):
         ttk.Label(lf2, text="※ 空欄ならToNの新規インスタンスを自動生成（窓ごとに別インスタンス）",
                   foreground=config.GUI_YLW).pack(side="left", padx=(8, 0))
 
+        lf22 = ttk.Frame(f2_launch)
+        lf22.pack(fill="x", pady=(4, 0))
+        ttk.Label(lf22, text="新規インスタンスの公開範囲:").pack(side="left")
+        self.v_ton_access = tk.StringVar(value=config.TON_INSTANCE_ACCESS_DEFAULT)
+        ttk.Radiobutton(lf22, text="インバイト", variable=self.v_ton_access,
+                        value=config.TON_INSTANCE_ACCESS_INVITE).pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(lf22, text="インバイト+", variable=self.v_ton_access,
+                        value=config.TON_INSTANCE_ACCESS_INVITE_PLUS).pack(side="left", padx=(6, 0))
+        ttk.Label(lf22, text="※ インバイト+ では霧の看破は働きません",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+
         lf25 = ttk.Frame(f2_launch)
         lf25.pack(fill="x", pady=(4, 0))
         self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
@@ -1153,6 +1164,10 @@ class App(tk.Tk):
         self.v_ton_entry.set(bool(data.get("ton_entry", config.TON_ENTRY_ENABLED)))
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         self.v_join_world.set(bool(data.get("join_world", False)))
+        access = data.get("ton_instance_access")
+        if access not in config.TON_INSTANCE_ACCESS_CHOICES:
+            access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
+        self.v_ton_access.set(access)
         self.v_instance_link.set(data.get("instance_link", ""))
         self._saved_profiles = data.get("profiles", [])
         # ラウンド指定（skip_rounds / continue_rounds）は
@@ -1669,7 +1684,8 @@ class App(tk.Tk):
                         "自分のユーザーIDを検出できませんでした。\n"
                         "一度VRChatにログインするか、参加リンクを直接入力してください")
                     return
-                base_link = VRChatLauncher.build_ton_link(user_id)
+                base_link = VRChatLauncher.build_ton_link(
+                    user_id, access=self.v_ton_access.get())
                 self._log("[起動] ToNの新規インスタンスを生成します（%s）" % user_id)
 
         tabs = list(self.tabs)
@@ -1889,6 +1905,7 @@ class App(tk.Tk):
             "ton_entry":     self.v_ton_entry.get(),
             "ton_begin":     self.v_ton_begin.get(),
             "join_world":    self.v_join_world.get(),
+            "ton_instance_access": self.v_ton_access.get(),
             "instance_link": self.v_instance_link.get().strip(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
             "tool_launchers": [p for p in (row.v_path.get().strip()

@@ -271,6 +271,12 @@ LAUNCH_OPTION = ["--enable-debug-gui", "--enable-sdk-log-levels", "--enable-udon
 # ── ToNワールド ──
 TON_WORLD_ID = "wrld_a61cdabe-1218-4287-9ffc-2a4d1414e5bd"  # Terrors of Nowhere
 TON_DEFAULT_REGION = "jp"
+# 起動時に作るインスタンスの公開範囲（全窓で共通）。インバイト+ は自分の招待を
+# 持っている人が友達を呼べるぶん、霧の看破は働かない（FogEarlyRead.EARLY_READ_ACCESS）
+TON_INSTANCE_ACCESS_INVITE      = "invite"
+TON_INSTANCE_ACCESS_INVITE_PLUS = "invite_plus"
+TON_INSTANCE_ACCESS_CHOICES     = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACCESS_INVITE_PLUS)
+TON_INSTANCE_ACCESS_DEFAULT     = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
 # 的の位置は画面比率で持つ。スポーン地点と向きが固定なので毎回同じ位置に出る。

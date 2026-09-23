@@ -190,14 +190,20 @@ def latest_user_id(log_dir) -> Optional[str]:
 
 
 def build_ton_link(owner_user_id: str, index: int = 0,
-                   region: str = None) -> Optional[str]:
-    """ToNの private インスタンスへの参加リンクを組み立てる"""
+                   region: str = None, access: str = None) -> Optional[str]:
+    """ToNの private インスタンスへの参加リンクを組み立てる。
+
+    access が TON_INSTANCE_ACCESS_INVITE_PLUS ならインバイト+（招待を持つ人が
+    友達を呼べる）。省いたときは今までどおりインバイト
+    """
     if not owner_user_id:
         return None
     region = region or config.TON_DEFAULT_REGION
     number = new_instance_number(index)
-    return ("vrchat://launch?ref=vrchat.com&id=%s:%d~private(%s)~region(%s)"
-            % (config.TON_WORLD_ID, number, owner_user_id, region))
+    plus = ("~canRequestInvite"
+            if access == config.TON_INSTANCE_ACCESS_INVITE_PLUS else "")
+    return ("vrchat://launch?ref=vrchat.com&id=%s:%d~private(%s)%s~region(%s)"
+            % (config.TON_WORLD_ID, number, owner_user_id, plus, region))
 
 
 def instance_link_from_log(log_path) -> Optional[str]:

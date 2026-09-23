@@ -318,6 +318,26 @@ class TestPerWindowInstance(unittest.TestCase):
     def test_build_ton_link_requires_user_id(self):
         self.assertIsNone(VRChatLauncher.build_ton_link("", 0))
 
+    def test_build_ton_link_takes_the_instance_access(self):
+        """インバイト+ は ~canRequestInvite 付き。省いたときはインバイト"""
+        plain = VRChatLauncher.build_ton_link("usr_abc", 0)
+        invite = VRChatLauncher.build_ton_link(
+            "usr_abc", 0, access=config.TON_INSTANCE_ACCESS_INVITE)
+        plus = VRChatLauncher.build_ton_link(
+            "usr_abc", 0, access=config.TON_INSTANCE_ACCESS_INVITE_PLUS)
+
+        for link in (plain, invite):
+            self.assertNotIn("canRequestInvite", link)
+            self.assertRegex(link, r"~private\(usr_abc\)~region\(jp\)$")
+        self.assertRegex(plus, r"~private\(usr_abc\)~canRequestInvite~region\(jp\)$")
+
+    def test_only_an_invite_instance_can_be_read_early(self):
+        """インバイト+ を選ぶと看破は働かない（GUI の注意書きのとおり）"""
+        self.assertTrue(FogEarlyRead.early_read_allowed(config.TON_INSTANCE_ACCESS_INVITE))
+        self.assertFalse(FogEarlyRead.early_read_allowed(config.TON_INSTANCE_ACCESS_INVITE_PLUS))
+        self.assertEqual(config.TON_INSTANCE_ACCESS_DEFAULT,
+                         config.TON_INSTANCE_ACCESS_INVITE_PLUS, "既定はインバイト+")
+
     def test_latest_user_id_reads_auth_line(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "output_log_2026-08-20_10-00-00.txt"
@@ -2186,7 +2206,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
@@ -2227,7 +2247,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
@@ -11682,7 +11702,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -11907,6 +11927,76 @@ class TestToolLauncherRows(unittest.TestCase):
         self.assertNotIn("ToolLauncher", tab)
 
 
+class TestTonInstanceAccessSetting(unittest.TestCase):
+    """起動時に作るインスタンスの公開範囲（全窓で共通。既定はインバイト+）"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def _app(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_tnl",
+                     "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        return app
+
+    def _load(self, data):
+        app = self._app()
+        app._add_tool_row = lambda p, save=True: None
+        app._refresh_emergency_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._apply_obs_settings = lambda: None
+        app._apply_saved_window_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app._log = lambda _m: None
+        with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
+             patch.object(mainGUI, "save_settings", lambda _d: None):
+            mainGUI.App._load_saved_settings(app)
+        return app.v_ton_access.get()
+
+    def test_it_is_saved(self):
+        app = self._app()
+        app.v_ton_access.set(config.TON_INSTANCE_ACCESS_INVITE)
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["ton_instance_access"], config.TON_INSTANCE_ACCESS_INVITE)
+
+    def test_it_is_restored(self):
+        for access in config.TON_INSTANCE_ACCESS_CHOICES:
+            self.assertEqual(self._load({"ton_instance_access": access}), access)
+
+    def test_a_missing_or_broken_value_is_invite_plus(self):
+        for data in ({}, {"ton_instance_access": ""}, {"ton_instance_access": "public"},
+                     {"ton_instance_access": None}, {"ton_instance_access": 3}):
+            self.assertEqual(self._load(data), config.TON_INSTANCE_ACCESS_INVITE_PLUS, data)
+
+    def test_the_setting_reaches_the_launcher(self):
+        """新規インスタンスを作る経路が、選んだ公開範囲でリンクを組み立てる"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        i = src.index("build_ton_link(")
+        self.assertIn("access=self.v_ton_access.get()", src[i:i + 120])
+
+    def test_a_pasted_link_is_untouched(self):
+        """依頼者が貼った参加リンクの経路は変えない"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertEqual(src.count("build_ton_link("), 1)
+
+
 class TestSettingsArePersisted(unittest.TestCase):
     """設定は VRChat を起動しなくても保存されること。
 
@@ -11980,7 +12070,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -11994,7 +12084,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         self.assertEqual(set(saved), {
             "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
-            "join_world", "instance_link", "profiles", "freeze_8pages",
+            "join_world", "instance_link", "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
@@ -12004,7 +12094,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -12148,7 +12238,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         app.tabs = []
         app.tool_rows = [self._row(p) for p in paths]
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13376,7 +13466,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = tabs
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link",
+                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13496,7 +13586,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = [self._tab(), self._tab()]
         for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
