@@ -21,13 +21,7 @@ LAUNCHER_NAME = "launch.exe"
 OFFLINE_EXE_NAME = "VRChat.exe"
 RE_LIBRARY_PATH = re.compile(r'"path"\s+"([^"]+)"')
 # ログの Joining 行から ワールドID:インスタンスID（region等の修飾込み）を取り出す
-RE_JOINING_FULL = re.compile(r"\[Behaviour\] Joining (wrld_[\w-]+:\S+)")
 # 各種URL形式からワールドID・インスタンスIDを取り出す
-RE_LAUNCH_ID    = re.compile(r"[?&]id=([^&\s]+)")
-RE_WEB_WORLD    = re.compile(r"[?&]worldId=([^&\s]+)")
-RE_WEB_INSTANCE = re.compile(r"[?&]instanceId=([^&\s]+)")
-RE_RAW_ID       = re.compile(r"^(wrld_[\w-]+:\S+)$")
-RE_INSTANCE_NUM = re.compile(r"(id=wrld_[\w-]+:)(\d+)")
 RE_USER_AUTH    = re.compile(r"User Authenticated: .*?\((usr_[0-9a-fA-F-]+)\)")
 
 
@@ -71,17 +65,6 @@ def steam_library_paths() -> list[Path]:
     return libraries
 
 
-def prefer_launcher(exe: Path) -> Path:
-    """VRChat.exe が指定された場合、同じフォルダの launch.exe を優先する。
-    VRChat.exe 直接起動はオフラインテストモードになるため。"""
-    exe = Path(exe)
-    if exe.name.lower() == OFFLINE_EXE_NAME.lower():
-        launcher = exe.with_name(LAUNCHER_NAME)
-        if launcher.exists():
-            return launcher
-    return exe
-
-
 def find_vrchat_exe() -> Optional[Path]:
     """VRChatの起動exe(launch.exe)を自動検出する。見つからなければNone。"""
     for library in steam_library_paths():
@@ -95,43 +78,7 @@ def find_vrchat_exe() -> Optional[Path]:
     return None
 
 
-def resolve_vrchat_exe(manual_path: str = "") -> Optional[Path]:
-    """手動指定を優先し、無ければ自動検出する。
-    VRChat.exeが指定された場合は launch.exe へ読み替える。"""
-    manual = (manual_path or "").strip()
-    if manual:
-        path = Path(manual)
-        return prefer_launcher(path) if path.exists() else None
-    return find_vrchat_exe()
-
-
 # ── 参加リンク ────────────────────────────────
-
-def normalize_instance_link(text: str) -> Optional[str]:
-    """入力されたワールド情報を vrchat:// のlaunchリンクへ正規化する。
-    受け付ける形式:
-      - vrchat://launch?ref=vrchat.com&id=wrld_xxx:12345~region(jp)
-      - https://vrchat.com/home/launch?worldId=wrld_xxx&instanceId=12345~region(jp)
-      - wrld_xxx:12345~region(jp)
-    """
-    text = (text or "").strip()
-    if not text:
-        return None
-
-    raw = RE_RAW_ID.match(text)
-    if raw:
-        return f"vrchat://launch?ref=vrchat.com&id={raw.group(1)}"
-
-    world = RE_WEB_WORLD.search(text)
-    instance = RE_WEB_INSTANCE.search(text)
-    if world and instance:
-        return f"vrchat://launch?ref=vrchat.com&id={world.group(1)}:{instance.group(1)}"
-
-    launch_id = RE_LAUNCH_ID.search(text)
-    if launch_id and launch_id.group(1).startswith("wrld_"):
-        return f"vrchat://launch?ref=vrchat.com&id={launch_id.group(1)}"
-    return None
-
 
 def new_instance_number(index: int) -> int:
     """窓ごとに重複しないインスタンス番号を作る。
@@ -141,14 +88,6 @@ def new_instance_number(index: int) -> int:
     """
     base = int(time.time()) % 90000 + 10000
     return (base + index * 137) % 90000 + 10000
-
-
-def with_unique_instance(link: str, index: int) -> str:
-    """参加リンクのインスタンス番号だけを窓ごとに差し替える"""
-    if not link:
-        return link
-    return RE_INSTANCE_NUM.sub(
-        lambda m: m.group(1) + str(new_instance_number(index)), link, count=1)
 
 
 def joined_world_id(log_path) -> Optional[str]:
@@ -204,24 +143,6 @@ def build_ton_link(owner_user_id: str, index: int = 0,
             if access == config.TON_INSTANCE_ACCESS_INVITE_PLUS else "")
     return ("vrchat://launch?ref=vrchat.com&id=%s:%d~private(%s)%s~region(%s)"
             % (config.TON_WORLD_ID, number, owner_user_id, plus, region))
-
-
-def instance_link_from_log(log_path) -> Optional[str]:
-    """ログの末尾から最新のJoining行を探し、参加リンクを組み立てる"""
-    try:
-        path = Path(log_path)
-        if not path.exists():
-            return None
-        import LogMonitor
-        lines = LogMonitor.LogMonitor._iter_log_lines_reversed(
-            path, config.LOG_START_SCAN_CHUNK_BYTES)
-        for line in lines:
-            m = RE_JOINING_FULL.search(line)
-            if m:
-                return f"vrchat://launch?ref=vrchat.com&id={m.group(1)}"
-    except Exception:
-        return None
-    return None
 
 
 # ── 起動 ──────────────────────────────────────

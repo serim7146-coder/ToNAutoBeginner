@@ -292,22 +292,17 @@ class TestOSCClient(unittest.TestCase):
 class TestPerWindowInstance(unittest.TestCase):
     """窓ごとに別のprivateインスタンスへ入る（同じインスタンスには入れないため）"""
 
-    LINK = "vrchat://launch?ref=vrchat.com&id=wrld_abc-123:12345~private(usr_x)~region(jp)"
-
     def test_instance_number_differs_per_window(self):
-        links = [VRChatLauncher.with_unique_instance(self.LINK, i) for i in range(4)]
+        links = [VRChatLauncher.build_ton_link("usr_x", i) for i in range(4)]
         nums = [l.split(":")[-1].split("~")[0] for l in links]
         self.assertEqual(len(set(nums)), 4, "窓ごとに別インスタンスでなければならない")
 
-    def test_only_instance_number_changes(self):
-        out = VRChatLauncher.with_unique_instance(self.LINK, 1)
-        self.assertIn("wrld_abc-123:", out)
-        self.assertIn("~private(usr_x)~region(jp)", out)
-        self.assertNotIn(":12345~", out)
-
-    def test_empty_link_passthrough(self):
-        self.assertEqual(VRChatLauncher.with_unique_instance("", 0), "")
-        self.assertIsNone(VRChatLauncher.with_unique_instance(None, 0))
+    def test_only_the_instance_number_differs(self):
+        first, second = (VRChatLauncher.build_ton_link("usr_x", i) for i in (0, 1))
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.split(":")[:-1], second.split(":")[:-1])
+        for link in (first, second):
+            self.assertTrue(link.endswith("~private(usr_x)~region(jp)"), link)
 
     def test_build_ton_link_uses_ton_world(self):
         link = VRChatLauncher.build_ton_link("usr_abc", 0)
@@ -699,61 +694,6 @@ class TestVRChatLauncher(unittest.TestCase):
         args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0, osc_index=1)
         self.assertIn(config.FOG_EARLY_READ_LAUNCH_FLAG, args)
 
-    def test_normalize_instance_link_accepts_raw_id(self):
-        self.assertEqual(
-            VRChatLauncher.normalize_instance_link("wrld_abc-123:4567~region(jp)"),
-            "vrchat://launch?ref=vrchat.com&id=wrld_abc-123:4567~region(jp)",
-        )
-
-    def test_normalize_instance_link_accepts_vrchat_scheme(self):
-        src = "vrchat://launch?ref=vrchat.com&id=wrld_abc:4567~private(usr_1)~region(jp)"
-        self.assertEqual(VRChatLauncher.normalize_instance_link(src), src)
-
-    def test_normalize_instance_link_accepts_web_url(self):
-        src = "https://vrchat.com/home/launch?worldId=wrld_abc&instanceId=4567~region(jp)"
-        self.assertEqual(
-            VRChatLauncher.normalize_instance_link(src),
-            "vrchat://launch?ref=vrchat.com&id=wrld_abc:4567~region(jp)",
-        )
-
-    def test_normalize_instance_link_rejects_garbage(self):
-        for bad in ("", "   ", "https://example.com/", "just text"):
-            with self.subTest(bad=bad):
-                self.assertIsNone(VRChatLauncher.normalize_instance_link(bad))
-
-    def test_instance_link_from_log_uses_latest_joining(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "output_log_test.txt"
-            p.write_text(
-                "2026.08.05 10:00:00 Log        -  [Behaviour] Joining wrld_old:1111~region(jp)\n"
-                "2026.08.05 11:00:00 Log        -  [Behaviour] Joining wrld_new:2222~region(us)\n",
-                encoding="utf-8")
-            self.assertEqual(
-                VRChatLauncher.instance_link_from_log(p),
-                "vrchat://launch?ref=vrchat.com&id=wrld_new:2222~region(us)",
-            )
-
-    def test_instance_link_from_log_returns_none_without_joining(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "output_log_test.txt"
-            p.write_text("no joining here\n", encoding="utf-8")
-            self.assertIsNone(VRChatLauncher.instance_link_from_log(p))
-
-    def test_resolve_vrchat_exe_prefers_manual_path(self):
-        with tempfile.TemporaryDirectory() as d:
-            exe = Path(d) / "VRChat.exe"
-            exe.write_text("x", encoding="utf-8")
-            with patch.object(VRChatLauncher, "find_vrchat_exe") as mock_find:
-                self.assertEqual(VRChatLauncher.resolve_vrchat_exe(str(exe)), exe)
-            mock_find.assert_not_called()
-
-    def test_resolve_vrchat_exe_falls_back_to_autodetect(self):
-        with patch.object(VRChatLauncher, "find_vrchat_exe", return_value=Path("C:/auto/VRChat.exe")):
-            self.assertEqual(VRChatLauncher.resolve_vrchat_exe(""), Path("C:/auto/VRChat.exe"))
-
-    def test_resolve_vrchat_exe_returns_none_for_missing_manual(self):
-        self.assertIsNone(VRChatLauncher.resolve_vrchat_exe("Z:/nope/VRChat.exe"))
-
     def test_find_vrchat_exe_prefers_launch_exe(self):
         """VRChat.exe直接起動はオフラインテストモードになるためlaunch.exeを選ぶ"""
         with tempfile.TemporaryDirectory() as d:
@@ -773,16 +713,6 @@ class TestVRChatLauncher(unittest.TestCase):
             (install / "VRChat.exe").write_text("x", encoding="utf-8")
             with patch.object(VRChatLauncher, "steam_library_paths", return_value=[lib]):
                 self.assertEqual(VRChatLauncher.find_vrchat_exe(), install / "VRChat.exe")
-
-    def test_resolve_rewrites_vrchat_exe_to_launcher(self):
-        """手動でVRChat.exeを指定されてもlaunch.exeへ読み替える"""
-        with tempfile.TemporaryDirectory() as d:
-            install = Path(d)
-            (install / "VRChat.exe").write_text("x", encoding="utf-8")
-            (install / "launch.exe").write_text("x", encoding="utf-8")
-            self.assertEqual(
-                VRChatLauncher.resolve_vrchat_exe(str(install / "VRChat.exe")),
-                install / "launch.exe")
 
     def test_wait_for_windows_returns_new_hwnds_only(self):
         states = [[1, 2], [1, 2], [1, 2, 5], [1, 2, 5, 6]]
@@ -2205,8 +2135,8 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
@@ -2246,8 +2176,8 @@ class TestOBSPasswordStorage(unittest.TestCase):
         """_load_saved_settings を回す（他の項目は既存テストと同じ偽物）"""
         app = type("FakeApp", (), {})()
         app.tabs = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc",
+                     "v_ton_entry", "v_ton_begin", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
@@ -7530,7 +7460,7 @@ class TestLaunchWidgetsStillReachable(unittest.TestCase):
                       self.source)
 
     def test_the_details_are_inside_the_collapsible(self):
-        for frame in ("lf2", "lf25", "lf3"):
+        for frame in ("lf22", "lf25"):
             self.assertIn(f"{frame} = ttk.Frame(f2_launch)", self.source, frame)
 
     def test_the_window_count_warning_is_outside(self):
@@ -8953,8 +8883,7 @@ class TestMultiWindowLaunch(unittest.TestCase):
 
     def test_eight_windows_get_distinct_instances(self):
         """同じprivateインスタンスには入れないので、窓ごとに別インスタンスが要る"""
-        link = "vrchat://launch?ref=vrchat.com&id=wrld_abc-123:12345~private(usr_x)~region(jp)"
-        nums = [VRChatLauncher.with_unique_instance(link, i).split(":")[-1].split("~")[0]
+        nums = [VRChatLauncher.build_ton_link("usr_x", i).split(":")[-1].split("~")[0]
                 for i in range(config.MAX_WINDOWS)]
 
         self.assertEqual(len(set(nums)), config.MAX_WINDOWS)
@@ -11701,8 +11630,8 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app = self._app("f9")
         app.tabs = []
         app.tool_rows = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -11927,6 +11856,139 @@ class TestToolLauncherRows(unittest.TestCase):
         self.assertNotIn("ToolLauncher", tab)
 
 
+class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
+    """起動は常に「窓ごとのToN新規インスタンス」。exeは自動検出だけ"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class FakeWidget:
+        def config(self, **kwargs):
+            pass
+
+    def _app(self, access=None, windows=2):
+        app = type("FakeApp", (), {})()
+        app._running = False
+        app.v_desktop_mode = self.FakeVar(True)
+        app.v_use_osc = self.FakeVar(True)
+        app.v_ton_access = self.FakeVar(access or config.TON_INSTANCE_ACCESS_INVITE_PLUS)
+        app.v_launch_count = self.FakeVar(windows)
+        app.tabs = []
+        for i in range(windows):
+            tab = type("FakeTab", (), {})()
+            tab.idx = i
+            tab.v_profile = self.FakeVar(i)
+            app.tabs.append(tab)
+        app.btn_launch = self.FakeWidget()
+        app.lbl_launch = self.FakeWidget()
+        app._launch_count_value = lambda n: windows
+        app._save_launch_settings = lambda: None
+        app.after = lambda _ms, fn=None: None
+        app.logs = []
+        app._log = app.logs.append
+        return app
+
+    def _launch(self, app, exe=Path("C:/VRChat/launch.exe"), user_id="usr_me"):
+        """worker スレッドは同じスレッドで走らせて、起動引数を集める"""
+        launched = []
+
+        def fake_thread(target=None, daemon=None):
+            thread = MagicMock()
+            thread.start = target
+            return thread
+
+        with patch.object(mainGUI, "messagebox") as box, \
+             patch.object(VRChatLauncher, "find_vrchat_exe", return_value=exe), \
+             patch.object(VRChatLauncher, "latest_user_id", return_value=user_id), \
+             patch.object(VRChatLauncher, "launch_one",
+                          side_effect=lambda *a, **kw: launched.append((a, kw)) or ["exe"]), \
+             patch.object(VRChatLauncher, "wait_for_windows", return_value=set()), \
+             patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time", return_value=[]), \
+             patch.object(mainGUI.threading, "Thread", side_effect=fake_thread), \
+             patch.object(mainGUI.time, "sleep"):
+            mainGUI.App._launch_vrchat(app)
+        return launched, box
+
+    def _links(self, launched):
+        return [a[3] for a, _kw in launched]
+
+    def test_each_window_gets_its_own_new_instance(self):
+        launched, box = self._launch(self._app(windows=3))
+
+        links = self._links(launched)
+        self.assertEqual(len(links), 3)
+        self.assertEqual(len(set(links)), 3, "窓ごとに別インスタンス")
+        for link in links:
+            self.assertIn(config.TON_WORLD_ID, link)
+            self.assertIn("~private(usr_me)", link)
+        box.showerror.assert_not_called()
+
+    def test_the_instance_access_setting_is_used(self):
+        for access, plus in ((config.TON_INSTANCE_ACCESS_INVITE, False),
+                             (config.TON_INSTANCE_ACCESS_INVITE_PLUS, True)):
+            launched, _box = self._launch(self._app(access=access))
+
+            for link in self._links(launched):
+                self.assertEqual("canRequestInvite" in link, plus, (access, link))
+
+    def test_without_an_exe_nothing_is_launched(self):
+        launched, box = self._launch(self._app(), exe=None)
+
+        self.assertEqual(launched, [])
+        self.assertIn("launch.exe", box.showerror.call_args.args[1])
+        self.assertNotIn("起動exe", box.showerror.call_args.args[1])
+
+    def test_without_a_user_id_nothing_is_launched(self):
+        launched, box = self._launch(self._app(), user_id=None)
+
+        self.assertEqual(launched, [])
+        self.assertIn("ユーザーID", box.showerror.call_args.args[1])
+        self.assertNotIn("参加リンク", box.showerror.call_args.args[1])
+
+    # ── 消した設定 ──────────────────────────
+    def test_the_gui_has_no_link_or_exe_fields(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        for gone in ("v_instance_link", "v_join_world", "v_vrchat_exe",
+                     "最新ログから取得", "ToNへ自動的にJoin", "起動exe",
+                     "with_unique_instance", "normalize_instance_link",
+                     "instance_link_from_log", "resolve_vrchat_exe"):
+            self.assertNotIn(gone, src, gone)
+
+    def test_an_old_settings_file_still_loads(self):
+        """古い settings.json に残っているキーは無視する（落ちない）"""
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_ton_access", "v_emergency_key", "v_freeze_8pages",
+                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        app._add_tool_row = lambda p, save=True: None
+        app._refresh_emergency_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._apply_obs_settings = lambda: None
+        app._apply_saved_window_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app._log = lambda _m: None
+        old = {"vrchat_exe": "C:/old/launch.exe", "join_world": True,
+               "instance_link": "vrchat://launch?ref=vrchat.com&id=wrld_x:1~region(jp)",
+               "ton_instance_access": config.TON_INSTANCE_ACCESS_INVITE}
+
+        with patch.object(mainGUI, "load_settings", return_value=dict(old)), \
+             patch.object(mainGUI, "save_settings", lambda _d: None):
+            mainGUI.App._load_saved_settings(app)
+
+        self.assertEqual(app.v_ton_access.get(), config.TON_INSTANCE_ACCESS_INVITE)
+
+
 class TestTonInstanceAccessSetting(unittest.TestCase):
     """起動時に作るインスタンスの公開範囲（全窓で共通。既定はインバイト+）"""
 
@@ -11944,8 +12006,8 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_tnl",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
@@ -11985,16 +12047,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
                      {"ton_instance_access": None}, {"ton_instance_access": 3}):
             self.assertEqual(self._load(data), config.TON_INSTANCE_ACCESS_INVITE_PLUS, data)
 
-    def test_the_setting_reaches_the_launcher(self):
-        """新規インスタンスを作る経路が、選んだ公開範囲でリンクを組み立てる"""
-        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        i = src.index("build_ton_link(")
-        self.assertIn("access=self.v_ton_access.get()", src[i:i + 120])
-
-    def test_a_pasted_link_is_untouched(self):
-        """依頼者が貼った参加リンクの経路は変えない"""
-        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertEqual(src.count("build_ton_link("), 1)
+    # 設定がランチャーに渡ることは TestLaunchAlwaysMakesNewInstances で動きとして確かめる
 
 
 class TestSettingsArePersisted(unittest.TestCase):
@@ -12069,8 +12122,8 @@ class TestSettingsArePersisted(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -12083,8 +12136,8 @@ class TestSettingsArePersisted(unittest.TestCase):
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
-            "vrchat_exe", "desktop_mode", "use_osc", "ton_entry", "ton_begin",
-            "join_world", "instance_link", "ton_instance_access", "profiles", "freeze_8pages",
+            "desktop_mode", "use_osc", "ton_entry", "ton_begin",
+            "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
@@ -12093,8 +12146,8 @@ class TestSettingsArePersisted(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -12237,8 +12290,8 @@ class TestToolLauncherSettings(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = [self._row(p) for p in paths]
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13465,8 +13518,8 @@ class TestSkipRoundsSettings(unittest.TestCase):
     def _save(self, tabs, stored=None):
         app = type("FakeApp", (), {})()
         app.tabs = tabs
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_instance_link", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
+                     "v_ton_begin", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13585,8 +13638,8 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
     def _load(self, data):
         app = type("FakeApp", (), {})()
         app.tabs = [self._tab(), self._tab()]
-        for name in ("v_vrchat_exe", "v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
+        for name in ("v_desktop_mode", "v_use_osc",
+                     "v_ton_entry", "v_ton_begin", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
