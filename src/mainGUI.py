@@ -665,8 +665,16 @@ class App(tk.Tk):
         f2_launch.pack(fill="x", pady=(6, 0))
         f2_launch = f2_launch.content
 
+        lf2 = ttk.Frame(f2_launch)
+        lf2.pack(fill="x")
+        self.v_join_world = tk.BooleanVar(value=False)
+        ttk.Checkbutton(lf2, text="ToNへ自動的にJoin",
+                        variable=self.v_join_world).pack(side="left")
+        ttk.Label(lf2, text="※ 外すとホームで起動します（立っているインスタンスへ自分で入る用）",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(8, 0))
+
         lf22 = ttk.Frame(f2_launch)
-        lf22.pack(fill="x")
+        lf22.pack(fill="x", pady=(4, 0))
         ttk.Label(lf22, text="インスタンスタイプ:").pack(side="left")
         self.v_ton_access = tk.StringVar(value=config.TON_INSTANCE_ACCESS_DEFAULT)
         ttk.Radiobutton(lf22, text="インバイト", variable=self.v_ton_access,
@@ -1141,6 +1149,7 @@ class App(tk.Tk):
         self.v_desktop_mode.set(bool(data.get("desktop_mode", config.LAUNCH_DESKTOP_MODE)))
         self.v_use_osc.set(bool(data.get("use_osc", config.OSC_ENABLED)))
         self.v_ton_entry.set(bool(data.get("ton_entry", config.TON_ENTRY_ENABLED)))
+        self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
@@ -1622,15 +1631,20 @@ class App(tk.Tk):
                 "Steamのライブラリから VRChat の launch.exe を見つけられませんでした")
             return
 
-        user_id = VRChatLauncher.latest_user_id(config.VRCHAT_LOG_DIR)
-        if not user_id:
-            messagebox.showerror(
-                "エラー",
-                "自分のユーザーIDを検出できませんでした。\n"
-                "一度VRChatにログインしてください")
-            return
+        join_ton = self.v_join_world.get()
+        user_id = None
         ton_access = self.v_ton_access.get()
-        self._log("[起動] ToNの新規インスタンスを生成します（%s）" % user_id)
+        if join_ton:
+            user_id = VRChatLauncher.latest_user_id(config.VRCHAT_LOG_DIR)
+            if not user_id:
+                messagebox.showerror(
+                    "エラー",
+                    "自分のユーザーIDを検出できませんでした。\n"
+                    "一度VRChatにログインしてください")
+                return
+            self._log("[起動] ToNの新規インスタンスを生成します（%s）" % user_id)
+        else:
+            self._log("[起動] ホームで起動します（ToNへは入りません）")
 
         tabs = list(self.tabs)
         if not tabs:
@@ -1665,8 +1679,9 @@ class App(tk.Tk):
                 # 待ち切れなくても次に進む（残りの窓まで巻き添えにしない）。
                 for i, (window_no, profile_id, osc_index) in enumerate(launch_plan):
                     # 同じprivateインスタンスにはオーナー以外入れないため窓ごとに分ける
-                    link = VRChatLauncher.build_ton_link(
+                    link = (VRChatLauncher.build_ton_link(
                         user_id, index=osc_index, access=ton_access)
+                        if join_ton else None)
                     args = VRChatLauncher.launch_one(
                         exe, profile_id, desktop, link,
                         osc_index=osc_index if use_osc else None)
@@ -1847,6 +1862,7 @@ class App(tk.Tk):
             "use_osc":       self.v_use_osc.get(),
             "ton_entry":     self.v_ton_entry.get(),
             "ton_begin":     self.v_ton_begin.get(),
+            "join_world":    self.v_join_world.get(),
             "ton_instance_access": self.v_ton_access.get(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
             "tool_launchers": [p for p in (row.v_path.get().strip()

@@ -2136,7 +2136,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
@@ -2177,7 +2177,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_ton_access",
+                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
@@ -11631,7 +11631,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -11873,9 +11873,10 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         def config(self, **kwargs):
             pass
 
-    def _app(self, access=None, windows=2):
+    def _app(self, access=None, windows=2, join=True):
         app = type("FakeApp", (), {})()
         app._running = False
+        app.v_join_world = self.FakeVar(join)
         app.v_desktop_mode = self.FakeVar(True)
         app.v_use_osc = self.FakeVar(True)
         app.v_ton_access = self.FakeVar(access or config.TON_INSTANCE_ACCESS_INVITE_PLUS)
@@ -11952,11 +11953,33 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         self.assertIn("ユーザーID", box.showerror.call_args.args[1])
         self.assertNotIn("参加リンク", box.showerror.call_args.args[1])
 
+    # ── Join を外したとき（ホームで起動して、自分でインスタンスへ入る） ──
+    def test_without_the_join_check_no_link_is_passed(self):
+        with patch.object(VRChatLauncher, "build_ton_link") as build:
+            launched, box = self._launch(self._app(windows=3, join=False))
+
+        self.assertEqual(self._links(launched), [None, None, None])
+        build.assert_not_called()           # リンクを組み立てもしない
+        box.showerror.assert_not_called()
+
+    def test_without_the_join_check_a_missing_user_id_is_fine(self):
+        """リンクを作らないので、ユーザーIDは要らない"""
+        launched, box = self._launch(self._app(join=False), user_id=None)
+
+        self.assertEqual(len(launched), 2)
+        box.showerror.assert_not_called()
+
+    def test_without_the_join_check_a_missing_exe_still_stops(self):
+        launched, box = self._launch(self._app(join=False), exe=None)
+
+        self.assertEqual(launched, [])
+        self.assertIn("launch.exe", box.showerror.call_args.args[1])
+
     # ── 消した設定 ──────────────────────────
     def test_the_gui_has_no_link_or_exe_fields(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        for gone in ("v_instance_link", "v_join_world", "v_vrchat_exe",
-                     "最新ログから取得", "ToNへ自動的にJoin", "起動exe",
+        for gone in ("v_instance_link", "v_vrchat_exe",
+                     "最新ログから取得", "起動exe",
                      "with_unique_instance", "normalize_instance_link",
                      "instance_link_from_log", "resolve_vrchat_exe"):
             self.assertNotIn(gone, src, gone)
@@ -11966,7 +11989,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_ton_access", "v_emergency_key", "v_freeze_8pages",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
@@ -11978,7 +12001,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app._apply_saved_window_settings = lambda: None
         app._load_tnl = lambda show_error=True: None
         app._log = lambda _m: None
-        old = {"vrchat_exe": "C:/old/launch.exe", "join_world": True,
+        old = {"vrchat_exe": "C:/old/launch.exe", "join_world": True,   # join_world は戻した
                "instance_link": "vrchat://launch?ref=vrchat.com&id=wrld_x:1~region(jp)",
                "ton_instance_access": config.TON_INSTANCE_ACCESS_INVITE}
 
@@ -11987,6 +12010,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
             mainGUI.App._load_saved_settings(app)
 
         self.assertEqual(app.v_ton_access.get(), config.TON_INSTANCE_ACCESS_INVITE)
+        self.assertTrue(app.v_join_world.get(), "join_world は復元する")
 
 
 class TestTonInstanceAccessSetting(unittest.TestCase):
@@ -12007,14 +12031,14 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_tnl",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
         return app
 
-    def _load(self, data):
+    def _load(self, data, var="v_ton_access"):
         app = self._app()
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
@@ -12026,7 +12050,20 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
             mainGUI.App._load_saved_settings(app)
-        return app.v_ton_access.get()
+        return getattr(app, var).get()
+
+    def test_the_join_check_is_saved_and_restored(self):
+        app = self._app()
+        app.v_join_world.set(True)
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertIs(saved["join_world"], True)
+        self.assertIs(self._load({"join_world": True}, "v_join_world"), True)
+        self.assertIs(self._load({"join_world": False}, "v_join_world"), False)
+        self.assertIs(self._load({}, "v_join_world"), False, "既定は外れている")
 
     def test_it_is_saved(self):
         app = self._app()
@@ -12123,7 +12160,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -12136,7 +12173,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
-            "desktop_mode", "use_osc", "ton_entry", "ton_begin",
+            "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
@@ -12147,7 +12184,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -12291,7 +12328,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         app.tabs = []
         app.tool_rows = [self._row(p) for p in paths]
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13519,7 +13556,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = tabs
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_ton_access",
+                     "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13639,7 +13676,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = [self._tab(), self._tab()]
         for name in ("v_desktop_mode", "v_use_osc",
-                     "v_ton_entry", "v_ton_begin", "v_ton_access",
+                     "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_instance_link", "v_emergency_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
