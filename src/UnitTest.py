@@ -7056,19 +7056,18 @@ class TestUIFont(unittest.TestCase):
             return 1080
 
     def setUp(self):
-        self.ui, self.mono = UIFont.UI, UIFont.MONO
+        self.ui = UIFont.UI
         self.addCleanup(self._restore)
 
     def _restore(self):
-        UIFont.UI, UIFont.MONO = self.ui, self.mono
+        UIFont.UI = self.ui
 
     # ── 選び方 ────────────────────────────────
     def test_the_first_available_candidate_wins(self):
         for families, expected in (
-                (["Yu Gothic UI", "Meiryo UI", "MS UI Gothic"], "Yu Gothic UI"),
-                (["Meiryo UI", "MS UI Gothic"], "Meiryo UI"),
-                (["MS UI Gothic", "Segoe UI"], "MS UI Gothic"),
-                (["Arial", "Segoe UI"], "既定")):
+                (["Yu Gothic UI", "Yu Gothic", "Meiryo UI"], "Yu Gothic UI"),
+                (["Yu Gothic", "Meiryo UI", "ＭＳ ゴシック"], "Yu Gothic"),
+                (["Arial", "Segoe UI", "Consolas", "ＭＳ ゴシック"], "既定")):
             self.assertEqual(
                 UIFont.pick_font(UIFont.UI_CANDIDATES, families, "既定"), expected, families)
 
@@ -7079,41 +7078,43 @@ class TestUIFont(unittest.TestCase):
     def test_the_fallback_is_the_named_font(self):
         with patch.object(UIFont.tkfont, "families", return_value=["Arial"]), \
              patch.object(UIFont, "named_family", side_effect=lambda n: f"<{n}>"):
-            ui, mono = UIFont.resolve(None)
+            self.assertEqual(UIFont.resolve(None), "<TkDefaultFont>")
 
-        self.assertEqual((ui, mono), ("<TkDefaultFont>", "<TkFixedFont>"))
+    def test_the_log_uses_the_same_font(self):
+        """等幅は分けない。ログで桁をそろえているのは時刻だけで、
+        Yu Gothic UI は数字がどれも同じ幅なので揃う"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
 
-    def test_the_mono_font_can_show_japanese(self):
-        """Consolas は日本語を持たない。等幅も日本語が出るものだけを候補にする"""
-        self.assertNotIn("Consolas", UIFont.MONO_CANDIDATES)
-        self.assertEqual(UIFont.pick_font(UIFont.MONO_CANDIDATES,
-                                          ["Consolas", "ＭＳ ゴシック"], "既定"), "ＭＳ ゴシック")
-        self.assertEqual(UIFont.pick_font(UIFont.MONO_CANDIDATES,
-                                          ["Consolas", "Meiryo UI"], "既定"), "Meiryo UI")
-
-    def test_resolve_sets_both(self):
+        self.assertNotIn("UIFont.MONO", src)
+        self.assertFalse(hasattr(UIFont, "MONO_CANDIDATES"), "等幅の候補は持たない")
         with patch.object(UIFont.tkfont, "families",
-                          return_value=["Meiryo UI", "ＭＳ ゴシック", "Segoe UI"]):
-            ui, mono = UIFont.resolve(None)
+                          return_value=["Yu Gothic UI", "ＭＳ ゴシック", "Consolas"]):
+            self.assertEqual(UIFont.resolve(None), "Yu Gothic UI")
 
-        self.assertEqual((ui, mono), ("Meiryo UI", "ＭＳ ゴシック"))
-        self.assertEqual((UIFont.UI, UIFont.MONO), (ui, mono))
+    def test_resolve_sets_the_global(self):
+        with patch.object(UIFont.tkfont, "families",
+                          return_value=["Yu Gothic", "Segoe UI"]):
+            picked = UIFont.resolve(None)
+
+        self.assertEqual(picked, "Yu Gothic")
+        self.assertEqual(UIFont.UI, picked)
 
     # ── 名指しが残っていないこと ───────────────────
     def test_no_font_is_named_in_the_gui(self):
+        """family を直書きしない。1か所でも名指しがあると、そこだけ字が出ない"""
         for module in (mainGUI, StatisticsGUI):
             src = Path(module.__file__).read_text(encoding="utf-8")
-            for named in ('"Segoe UI"', '"Consolas"'):
-                self.assertNotIn(named, src, f"{module.__name__}: {named}")
-            self.assertIn("UIFont.UI", src, module.__name__)
+            families = re.findall(r"font=\(([^,)]+)", src)
+            self.assertTrue(families, module.__name__)
+            self.assertEqual(set(families), {"UIFont.UI"}, module.__name__)
 
     # ── 起動時のログ ────────────────────────────
     def test_the_startup_line_has_what_is_needed_to_tell(self):
-        UIFont.UI, UIFont.MONO = "Meiryo UI", "ＭＳ ゴシック"
+        UIFont.UI = "Yu Gothic"
 
         line = UIFont.describe(self.FakeRoot())
 
-        for part in ("Meiryo UI", "ＭＳ ゴシック", "1920x1080", "150%", "144"):
+        for part in ("Yu Gothic", "1920x1080", "150%", "144"):
             self.assertIn(part, line, line)
 
     def test_the_startup_line_survives_a_root_that_cannot_answer(self):

@@ -347,13 +347,13 @@ class LogOverlay(tk.Toplevel):
         hf = tk.Frame(self, bg="#1e1e2e", cursor="fleur")
         hf.pack(fill="x")
         tk.Label(hf, text="ToNAutoBeginner Log", bg="#1e1e2e", fg="#89b4fa",
-                 font=(UIFont.MONO, 9, "bold")).pack(side="left", padx=6)
+                 font=(UIFont.UI, 9, "bold")).pack(side="left", padx=6)
         tk.Button(hf, text="✕", bg="#1e1e2e", fg="#f38ba8",
-                  font=(UIFont.MONO, 9), relief="flat", bd=0,
+                  font=(UIFont.UI, 9), relief="flat", bd=0,
                   command=self.close).pack(side="right", padx=4)
         # 透明度スライダー
         tk.Label(hf, text="α:", bg="#1e1e2e", fg="#cdd6f4",
-                 font=(UIFont.MONO, 8)).pack(side="right")
+                 font=(UIFont.UI, 8)).pack(side="right")
         self._alpha = tk.DoubleVar(value=0.75)
         tk.Scale(hf, from_=0.2, to=1.0, resolution=0.05,
                  variable=self._alpha, orient="horizontal", length=80,
@@ -367,7 +367,7 @@ class LogOverlay(tk.Toplevel):
         # ログテキスト
         self.text = tk.Text(
             self, bg="#000000", fg="#a6e3a1",
-            font=(UIFont.MONO, 9), state="disabled",
+            font=(UIFont.UI, 9), state="disabled",
             relief="flat", bd=0, wrap="word",
             insertbackground="#cdd6f4"
         )
@@ -375,7 +375,7 @@ class LogOverlay(tk.Toplevel):
 
         # リサイズグリップ
         grip = tk.Label(self, text="⠿", bg="#000000", fg="#444444",
-                        cursor="size_nw_se", font=(UIFont.MONO, 10))
+                        cursor="size_nw_se", font=(UIFont.UI, 10))
         grip.place(relx=1.0, rely=1.0, anchor="se")
         grip.bind("<ButtonPress-1>",  self._resize_start)
         grip.bind("<B1-Motion>",      self._resize_move)
@@ -871,7 +871,7 @@ class App(tk.Tk):
         fl.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.log_text = scrolledtext.ScrolledText(
             fl, height=16, bg="#181825", fg=config.GUI_FG, width=80,
-            font=(UIFont.MONO, 9), state="disabled"
+            font=(UIFont.UI, 9), state="disabled"
         )
         self.log_text.pack(fill="both", expand=True)
         ttk.Button(fl, text="クリア", command=self._clear_log).pack(anchor="e", pady=(2, 0))

@@ -5,19 +5,16 @@
 フォントが効かない環境がある）。日本語を持つフォントを在るものから選ぶ。
 
 大きさと bold はそれぞれの呼び出し側のまま。ここでは family だけ決める。
-参照は `UIFont.UI` / `UIFont.MONO` のように属性で行う（`resolve()` の後に
-書き換わるため、`from UIFont import UI` では古い値を掴む）。
+参照は `UIFont.UI` のように属性で行う（`resolve()` の後に書き換わるため、
+`from UIFont import UI` では古い値を掴む）。
 """
 from tkinter import font as tkfont
 
-# 画面の文字。前から順に、在るものを使う
-UI_CANDIDATES = ("Yu Gothic UI", "Meiryo UI", "MS UI Gothic")
-# ログ・オーバーレイの等幅。Consolas は日本語を持たないので使わない。
-# ＭＳ ゴシックは等幅で日本語も持つ。無ければ画面の文字と同じものに落とす
-MONO_CANDIDATES = ("ＭＳ ゴシック", "MS Gothic") + UI_CANDIDATES
+# 今の Windows には必ず入っている。ログの等幅もこれ1本にする——桁をそろえて
+# 出しているのはログの時刻だけで、Yu Gothic UI は数字がすべて同じ幅なので揃う
+UI_CANDIDATES = ("Yu Gothic UI", "Yu Gothic")
 
 UI = "TkDefaultFont"
-MONO = "TkFixedFont"
 
 
 def pick_font(candidates, families, fallback: str) -> str:
@@ -37,16 +34,15 @@ def named_family(name: str) -> str:
         return name
 
 
-def resolve(root=None) -> tuple[str, str]:
-    """root ができた後に呼ぶ。選んだ (画面, 等幅) を返し、UI / MONO に入れる"""
-    global UI, MONO
+def resolve(root=None) -> str:
+    """root ができた後に呼ぶ。選んだ family を返し、UI に入れる"""
+    global UI
     try:
         families = tkfont.families(root)
     except Exception:
         families = ()
     UI = pick_font(UI_CANDIDATES, families, named_family("TkDefaultFont"))
-    MONO = pick_font(MONO_CANDIDATES, families, named_family("TkFixedFont"))
-    return UI, MONO
+    return UI
 
 
 def describe(root) -> str:
@@ -55,7 +51,7 @@ def describe(root) -> str:
         dpi = root.winfo_fpixels("1i")
         size = f"{root.winfo_screenwidth()}x{root.winfo_screenheight()}"
     except Exception:
-        return f"フォント: {UI} / 等幅: {MONO}"
+        return f"フォント: {UI}"
     # Windows の拡大率は 96dpi が100%（150% なら 144dpi）
-    return (f"フォント: {UI} / 等幅: {MONO} / 画面: {size} / "
+    return (f"フォント: {UI} / 画面: {size} / "
             f"拡大率: {dpi / 96:.0%} ({dpi:.0f} dpi)")
