@@ -79,6 +79,12 @@ def decide(
     従来どおり通常判定へ落とす。
     """
     if instance_type not in GROUP_INSTANCES:
+        # プラベ系の Sabotage だけは焼き芋と同じ判定を通す（依頼者の決定）。
+        # 続行リストには `Sabotage star` と `Sabotage murder` の枠しかなく、
+        # `Sabotage` の枠が無いので、リストに落とすと毎回自爆になる
+        if round_type == "Sabotage" and instance_type == config.INSTANCE_PRIVATE:
+            return _decide_sabotage(instance_type, terror_ids, sus_players,
+                                    host_wishes, follow_host)
         return NORMAL
 
     if round_type == "Classic":
@@ -128,7 +134,7 @@ def _decide_sabotage(instance_type, terror_ids, sus_players, host_wishes,
     murderers = set(sus_players)
     ids = set(terror_ids)
 
-    if instance_type == config.INSTANCE_YAKIIMO:
+    if instance_type in (config.INSTANCE_YAKIIMO, config.INSTANCE_PRIVATE):
         # 選出されたマーダーがマーダー枠で続行を希望している → 自爆
         # （主催リストに載っていないマーダーは「希望なし」扱い）
         for name in murderers:

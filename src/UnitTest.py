@@ -5555,7 +5555,7 @@ class TestGroupMoonSkipWiring(unittest.TestCase):
 
 
 class TestPrivateSabotageContinues(unittest.TestCase):
-    """プラベ系の Sabotage は既定で続行する。
+    """プラベ系の Sabotage は焼き芋と同じ判定にする。
 
     続行リストには `Sabotage star` と `Sabotage murder` の枠しかなく、
     `Sabotage` の枠はどのリストにも無い。リスト判定に落とすと毎回自爆になる
@@ -5564,6 +5564,9 @@ class TestPrivateSabotageContinues(unittest.TestCase):
 
     SABO = "Sabotage/サボタージュ"
     CLASSIC = "Classic/クラシック"
+    MURDER = GroupRound.SABOTAGE_MURDER_KEY
+    STAR = GroupRound.SABOTAGE_STAR_KEY
+    TERROR = 7
 
     def setUp(self):
         SharedState.continue_round_reset()
@@ -5582,11 +5585,19 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.addCleanup(p.stop)
         return mock
 
-    def _monitor(self, instance_type=None, keep=None, **cfg_kwargs):
+    def _monitor(self, instance_type=None, keep=None, wishes=None,
+                 murderer=None, **cfg_kwargs):
         cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", **cfg_kwargs)
         monitor = LogMonitor.LogMonitor(cfg, keep or {}, lambda _m: None, window_idx=1)
         monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
         monitor.st.in_round = True
+        monitor.st.sus_players = [murderer] if murderer else []
+        monitor.host_wishes = dict(wishes or {})
+        # この窓にいる人の希望だけで判定する（_effective_wishes）
+        monitor.st.players_known = True
+        monitor.st.players = set(range(len(monitor.host_wishes)))
+        monitor.st.player_names = dict(zip(monitor.st.players, monitor.host_wishes))
+        monitor.host_participants = set(monitor.host_wishes)
         monitor.logs = []
         monitor.logger = monitor.logs.append
         return monitor
@@ -5596,9 +5607,12 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in self.thread.call_args_list if "target" in c.kwargs]
 
-    # ── 既定 ─────────────────────────────────
-    def test_a_private_sabotage_continues_and_announces(self):
-        monitor = self._monitor()
+    # ── 焼き芋と同じ判定 ───────────────────────
+    def test_a_wish_from_someone_else_continues_and_announces(self):
+        """マーダー以外が star 枠で希望 → 続行（WANTED と同じ扱い）"""
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"ほかのひと": {self.STAR: {self.TERROR}}})
 
         started = self._run(monitor)
 
@@ -5608,18 +5622,63 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.assertEqual(SharedState.get_continue_round_count(), 1, "他窓フリーズ")
         self.record.assert_called_once_with(1)
 
-    def test_the_continue_list_is_not_consulted(self):
-        """`Sabotage` の枠はどのリストにも無い。空のリストでも続行する"""
-        monitor = self._monitor(keep={self.SABO: set(), self.CLASSIC: {7}})
+    def test_the_murderers_own_wish_skips(self):
+        """選ばれたマーダーがマーダー枠で希望 → 自爆（焼き芋と同じ）"""
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"マーダー": {self.MURDER: {self.TERROR},
+                                 self.STAR: {self.TERROR}}})
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.play.assert_not_called()
+
+    def test_the_murderers_wish_beats_someone_elses_star(self):
+        """マーダーが欲しがっているなら、ほかの人が star で欲しがっていても自爆"""
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"マーダー": {self.MURDER: {self.TERROR}},
+                    "ほかのひと": {self.STAR: {self.TERROR}}})
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+        self.play.assert_not_called()
+
+    def test_no_wish_at_all_skips(self):
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"ほかのひと": {self.STAR: {42}}})   # 別のテラーの希望
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_without_the_host_list_it_falls_back_to_the_list(self):
+        """follow_host 無し（host_wishes が空）→ 今までどおり通常判定"""
+        monitor = self._monitor(wishes={}, keep={self.CLASSIC: {self.TERROR}})
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started, "`Sabotage` の枠が無いので自爆のまま")
+        self.assertTrue(any("判定" in m for m in monitor.logs), monitor.logs)
+
+    def test_the_continue_list_is_not_used_when_the_wishes_decide(self):
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"ほかのひと": {self.STAR: {self.TERROR}}},
+            keep={self.SABO: set()})
 
         started = self._run(monitor)
 
         self.assertNotIn("do_skip", started)
-        self.assertTrue(monitor.st.is_continue_round)
 
     # ── 指定が勝つ ──────────────────────────────
     def test_the_skip_setting_still_wins(self):
-        monitor = self._monitor(skip_rounds={"Sabotage"})
+        monitor = self._monitor(skip_rounds={"Sabotage"}, murderer="マーダー",
+                                wishes={"ほかのひと": {self.STAR: {self.TERROR}}})
 
         started = self._run(monitor)
 
@@ -5628,7 +5687,8 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.play.assert_not_called()
 
     def test_the_continue_setting_stays_quiet(self):
-        monitor = self._monitor(continue_rounds={"Sabotage"})
+        monitor = self._monitor(continue_rounds={"Sabotage"}, murderer="マーダー",
+                                wishes={"マーダー": {self.MURDER: {self.TERROR}}})
 
         started = self._run(monitor)
 
@@ -5638,7 +5698,8 @@ class TestPrivateSabotageContinues(unittest.TestCase):
 
     def test_hands_free_still_skips_at_once(self):
         SharedState.set_hands_free(True)
-        monitor = self._monitor()
+        monitor = self._monitor(murderer="マーダー",
+                                wishes={"ほかのひと": {self.STAR: {self.TERROR}}})
         monitor.st.item_id = 0
 
         started = self._run(monitor)
@@ -5674,7 +5735,9 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.play.assert_not_called()
 
     def test_a_public_window_is_unchanged(self):
-        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC)
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC,
+                                murderer="マーダー",
+                                wishes={"ほかのひと": {self.STAR: {self.TERROR}}})
 
         started = self._run(monitor)
 
@@ -5692,12 +5755,20 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.assertNotIn("do_skip", self._run(monitor, "Classic", "42 0 0"), "リストにある")
 
     def test_the_sabotage_star_round_type_is_unchanged(self):
-        """グループの Killers 行に出る Sabotage star / murder は触らない"""
-        monitor = self._monitor(keep={})
+        """グループの Killers 行に出る Sabotage star は触らない。
 
-        started = self._run(monitor, "Sabotage star", "7 0 0")
+        マーダー本人の star の希望は、Sabotage では数えない（自爆）が、
+        Sabotage star のラウンドでは今までどおり希望として効く（続行）
+        """
+        wishes = {"マーダー": {self.STAR: {self.TERROR}}}
+        star = self._monitor(murderer="マーダー", wishes=wishes)
 
-        self.assertIn("do_skip", started)
+        self.assertNotIn("do_skip", self._run(star, "Sabotage star", "7 0 0"))
+
+        self.thread.reset_mock()
+        SharedState.continue_round_reset()
+        sabo = self._monitor(murderer="マーダー", wishes=wishes)
+        self.assertIn("do_skip", self._run(sabo), "Sabotage では数えない")
 
 
 class TestGroupRoundSabotage(unittest.TestCase):

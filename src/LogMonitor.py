@@ -1391,19 +1391,17 @@ class LogMonitor:
         if (is_private and self.cfg.skip_rounds
                 and self._should_skip_by_round(ids, bloodthirsty)):
             return ("round_skip",)
+        # プラベ系の Sabotage は焼き芋と同じ判定にする（依頼者の決定）。ここへ
+        # 置くのは、「自爆する」の指定と放置モードの即自爆を先に効かせるため
+        if is_private and st.round_type == "Sabotage":
+            decision = self._group_decision(round_type, ids)
+            if decision != GroupRound.NORMAL:
+                return ("group", decision)
         return self._list_plan(ids, bloodthirsty)
 
     def _list_plan(self, ids, bloodthirsty) -> tuple:
-        """続行リストでの判定。
-
-        Sabotage はプラベ系では既定で続行する（依頼者の決定）。続行リストには
-        `Sabotage star` と `Sabotage murder` の枠しかなく、`Sabotage` の枠は
-        どのリストにも無いので、リストに落とすと必ず自爆になる。「自爆する」の
-        指定と放置モードの即自爆は、_plan の側で先に効く
-        """
+        """続行リストでの判定"""
         st = self.st
-        if st.instance_type == config.INSTANCE_PRIVATE and st.round_type == "Sabotage":
-            return ("list", True, False)
         decision = RoundDecision.decide_killers(
             self._keep_on(), ids, st.round_type,
             st.open_special_round_wins, self.cfg.cancel_afk,
