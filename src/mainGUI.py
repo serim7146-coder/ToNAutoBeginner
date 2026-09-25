@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 import config
+import UIFont
 from config import resource_path
 import AutoUpdate
 import LogMonitor
@@ -191,7 +192,7 @@ class WindowTab(ttk.Frame):
 
         def section(text):
             ttk.Label(a, text=text, background=config.GUI_BG, foreground=config.GUI_ACC,
-                      font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+                      font=(UIFont.UI, 10, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
 
         # ── VRChatウィンドウ ──
         section("■ VRChatウィンドウ")
@@ -346,13 +347,13 @@ class LogOverlay(tk.Toplevel):
         hf = tk.Frame(self, bg="#1e1e2e", cursor="fleur")
         hf.pack(fill="x")
         tk.Label(hf, text="ToNAutoBeginner Log", bg="#1e1e2e", fg="#89b4fa",
-                 font=("Consolas", 9, "bold")).pack(side="left", padx=6)
+                 font=(UIFont.MONO, 9, "bold")).pack(side="left", padx=6)
         tk.Button(hf, text="✕", bg="#1e1e2e", fg="#f38ba8",
-                  font=("Consolas", 9), relief="flat", bd=0,
+                  font=(UIFont.MONO, 9), relief="flat", bd=0,
                   command=self.close).pack(side="right", padx=4)
         # 透明度スライダー
         tk.Label(hf, text="α:", bg="#1e1e2e", fg="#cdd6f4",
-                 font=("Consolas", 8)).pack(side="right")
+                 font=(UIFont.MONO, 8)).pack(side="right")
         self._alpha = tk.DoubleVar(value=0.75)
         tk.Scale(hf, from_=0.2, to=1.0, resolution=0.05,
                  variable=self._alpha, orient="horizontal", length=80,
@@ -366,7 +367,7 @@ class LogOverlay(tk.Toplevel):
         # ログテキスト
         self.text = tk.Text(
             self, bg="#000000", fg="#a6e3a1",
-            font=("Consolas", 9), state="disabled",
+            font=(UIFont.MONO, 9), state="disabled",
             relief="flat", bd=0, wrap="word",
             insertbackground="#cdd6f4"
         )
@@ -374,7 +375,7 @@ class LogOverlay(tk.Toplevel):
 
         # リサイズグリップ
         grip = tk.Label(self, text="⠿", bg="#000000", fg="#444444",
-                        cursor="size_nw_se", font=("Consolas", 10))
+                        cursor="size_nw_se", font=(UIFont.MONO, 10))
         grip.place(relx=1.0, rely=1.0, anchor="se")
         grip.bind("<ButtonPress-1>",  self._resize_start)
         grip.bind("<B1-Motion>",      self._resize_move)
@@ -429,12 +430,12 @@ class CollapsibleFrame(tk.Frame):
         hf.pack(fill="x")
         self._toggle_btn = tk.Button(
             hf, text="▶" if collapsed else "▼",
-            bg=config.GUI_BG, fg=config.GUI_ACC, font=("Segoe UI", 9),
+            bg=config.GUI_BG, fg=config.GUI_ACC, font=(UIFont.UI, 9),
             relief="flat", bd=0, cursor="hand2",
             command=self._toggle)
         self._toggle_btn.pack(side="left")
         tk.Label(hf, text=text, bg=config.GUI_BG, fg=config.GUI_ACC,
-                 font=("Segoe UI", 10, "bold")).pack(side="left", padx=4)
+                 font=(UIFont.UI, 10, "bold")).pack(side="left", padx=4)
         # 区切り線
         tk.Frame(hf, bg=config.GUI_SUB, height=1).pack(side="left", fill="x", expand=True, pady=6)
         # コンテンツ領域
@@ -459,6 +460,9 @@ class App(tk.Tk):
         icon_path = resource_path("ToNAutoBeginnerIcon.ico")
         if icon_path.exists():
             self.iconbitmap(default=str(icon_path))
+
+        # 画面のフォントはこの PC に在るものから選ぶ（root ができた後でないと見えない）
+        UIFont.resolve(self)
 
         self.title("ToNAutoBeginner")
         # 大きさは中身に任せる。固定すると折りたたんでも縦が縮まない
@@ -487,6 +491,7 @@ class App(tk.Tk):
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._build_ui()
+        self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
         self._auto_detect_windows()
         self._sync_launch_count()
@@ -593,13 +598,13 @@ class App(tk.Tk):
         s = ttk.Style(self)
         s.theme_use("clam")
         s.configure("TFrame",            background=config.GUI_BG)
-        s.configure("TLabel",            background=config.GUI_BG, foreground=config.GUI_FG, font=("Segoe UI", 10))
-        s.configure("TButton",           font=("Segoe UI", 10, "bold"), padding=4)
-        s.configure("TCheckbutton",      background=config.GUI_BG, foreground=config.GUI_FG, font=("Segoe UI", 10))
+        s.configure("TLabel",            background=config.GUI_BG, foreground=config.GUI_FG, font=(UIFont.UI, 10))
+        s.configure("TButton",           font=(UIFont.UI, 10, "bold"), padding=4)
+        s.configure("TCheckbutton",      background=config.GUI_BG, foreground=config.GUI_FG, font=(UIFont.UI, 10))
         s.map("TCheckbutton", background=[("active", config.GUI_BG)])
         s.configure("TLabelframe",       background=config.GUI_BG, foreground=config.GUI_ACC)
         s.configure("TLabelframe.Label", background=config.GUI_BG, foreground=config.GUI_ACC,
-                    font=("Segoe UI", 10, "bold"))
+                    font=(UIFont.UI, 10, "bold"))
         s.configure("TEntry",            fieldbackground=config.GUI_SUB, foreground=config.GUI_FG)
         s.configure("TSpinbox",          fieldbackground=config.GUI_SUB, foreground=config.GUI_FG)
         s.configure("TNotebook",         background=config.GUI_BG, tabmargins=[2, 2, 2, 0])
@@ -822,7 +827,7 @@ class App(tk.Tk):
         fhf.pack(pady=(0, 4))
         self.btn_hands_free = tk.Button(
             fhf, text="完全放置モード: OFF",
-            bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
+            bg=config.GUI_SUB, fg=config.GUI_FG, font=(UIFont.UI, 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_hands_free)
         self.btn_hands_free.pack(side="left")
@@ -830,7 +835,7 @@ class App(tk.Tk):
         # アイテム取得→Begin
         self.btn_item_get_begin = tk.Button(
             fhf, text="アイテム取得→Begin: OFF",
-            bg=config.GUI_SUB, fg=config.GUI_FG, font=("Segoe UI", 11, "bold"),
+            bg=config.GUI_SUB, fg=config.GUI_FG, font=(UIFont.UI, 11, "bold"),
             relief="raised", padx=12, pady=5,
             command=self._toggle_item_get_begin)
         self.btn_item_get_begin.pack(side="left", padx=(8, 0))
@@ -838,7 +843,7 @@ class App(tk.Tk):
         # 速度によるラウンド種別の検知（全窓共通）
         self.btn_speed_detect = tk.Button(
             fhf, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
-            font=("Segoe UI", 11, "bold"), relief="raised", padx=12, pady=5,
+            font=(UIFont.UI, 11, "bold"), relief="raised", padx=12, pady=5,
             command=self._toggle_speed_detect)
         self.btn_speed_detect.pack(side="left", padx=(8, 0))
         self._refresh_speed_detect_button()
@@ -866,14 +871,14 @@ class App(tk.Tk):
         fl.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         self.log_text = scrolledtext.ScrolledText(
             fl, height=16, bg="#181825", fg=config.GUI_FG, width=80,
-            font=("Consolas", 9), state="disabled"
+            font=(UIFont.MONO, 9), state="disabled"
         )
         self.log_text.pack(fill="both", expand=True)
         ttk.Button(fl, text="クリア", command=self._clear_log).pack(anchor="e", pady=(2, 0))
 
         # クレジット表示
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
-                 bg=config.GUI_BG, fg=config.GUI_SUB, font=("Segoe UI", 8)).pack(anchor="e", padx=12)
+                 bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
 
     def _rebuild_tabs(self, count: int):
         for tab in self.tabs:

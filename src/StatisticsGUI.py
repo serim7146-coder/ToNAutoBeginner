@@ -6,6 +6,7 @@ from datetime import datetime
 from tkinter import ttk, messagebox
 
 import config
+import UIFont
 import ConnectDB
 import Statistics
 
@@ -224,7 +225,7 @@ class StatisticsWindow(tk.Toplevel):
                 fg=FG,
                 activebackground=ACC,
                 activeforeground=BG,
-                font=("Segoe UI", 9, "bold"),
+                font=(UIFont.UI, 9, "bold"),
             )
             btn.pack(side="left", padx=(0, 6))
             self._category_buttons[value] = btn
@@ -392,7 +393,7 @@ class StatisticsWindow(tk.Toplevel):
                 selectcolor=ACC,
                 activebackground=ACC,
                 activeforeground=BG,
-                font=("Segoe UI", 9, "bold"),
+                font=(UIFont.UI, 9, "bold"),
                 relief="raised",
                 bd=1,
                 width=ROUND_CHIP_WIDTH,
@@ -680,8 +681,8 @@ class StatisticsWindow(tk.Toplevel):
             fill=BG,
             outline=BG,
         )
-        canvas.create_text(cx, cy - 8, text=str(total), fill=FG, font=("Segoe UI", 18, "bold"))
-        canvas.create_text(cx, cy + 14, text="rounds", fill=YLW, font=("Segoe UI", 9))
+        canvas.create_text(cx, cy - 8, text=str(total), fill=FG, font=(UIFont.UI, 18, "bold"))
+        canvas.create_text(cx, cy + 14, text="rounds", fill=YLW, font=(UIFont.UI, 9))
 
     def _show_round_stats(self, rows: list[tuple[str, int, int]]):
         ordered_rows = sorted(rows, key=_round_count_sort_key)

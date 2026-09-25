@@ -53,6 +53,7 @@ import FogEarlyRead
 import ScreenCapture
 import ToNEntry
 import mainGUI
+import UIFont
 import AutoUpdate
 import config
 from State import WindowConfig, WindowState
@@ -7035,6 +7036,98 @@ def write_host_state(path, tabs):
         con.commit()
     finally:
         con.close()
+
+
+class TestUIFont(unittest.TestCase):
+    """画面のフォントは、その PC に在るものから選ぶ。
+
+    "Segoe UI" を名指しすると、配布した exe を別の PC で動かしたときに漢字が
+    出ないことがある（実際に依頼者の配布先で起きた）。
+    """
+
+    class FakeRoot:
+        def winfo_fpixels(self, _unit):
+            return 144.0
+
+        def winfo_screenwidth(self):
+            return 1920
+
+        def winfo_screenheight(self):
+            return 1080
+
+    def setUp(self):
+        self.ui, self.mono = UIFont.UI, UIFont.MONO
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        UIFont.UI, UIFont.MONO = self.ui, self.mono
+
+    # ── 選び方 ────────────────────────────────
+    def test_the_first_available_candidate_wins(self):
+        for families, expected in (
+                (["Yu Gothic UI", "Meiryo UI", "MS UI Gothic"], "Yu Gothic UI"),
+                (["Meiryo UI", "MS UI Gothic"], "Meiryo UI"),
+                (["MS UI Gothic", "Segoe UI"], "MS UI Gothic"),
+                (["Arial", "Segoe UI"], "既定")):
+            self.assertEqual(
+                UIFont.pick_font(UIFont.UI_CANDIDATES, families, "既定"), expected, families)
+
+    def test_no_candidate_falls_back(self):
+        self.assertEqual(UIFont.pick_font(UIFont.UI_CANDIDATES, [], "既定"), "既定")
+        self.assertEqual(UIFont.pick_font(UIFont.UI_CANDIDATES, None, "既定"), "既定")
+
+    def test_the_fallback_is_the_named_font(self):
+        with patch.object(UIFont.tkfont, "families", return_value=["Arial"]), \
+             patch.object(UIFont, "named_family", side_effect=lambda n: f"<{n}>"):
+            ui, mono = UIFont.resolve(None)
+
+        self.assertEqual((ui, mono), ("<TkDefaultFont>", "<TkFixedFont>"))
+
+    def test_the_mono_font_can_show_japanese(self):
+        """Consolas は日本語を持たない。等幅も日本語が出るものだけを候補にする"""
+        self.assertNotIn("Consolas", UIFont.MONO_CANDIDATES)
+        self.assertEqual(UIFont.pick_font(UIFont.MONO_CANDIDATES,
+                                          ["Consolas", "ＭＳ ゴシック"], "既定"), "ＭＳ ゴシック")
+        self.assertEqual(UIFont.pick_font(UIFont.MONO_CANDIDATES,
+                                          ["Consolas", "Meiryo UI"], "既定"), "Meiryo UI")
+
+    def test_resolve_sets_both(self):
+        with patch.object(UIFont.tkfont, "families",
+                          return_value=["Meiryo UI", "ＭＳ ゴシック", "Segoe UI"]):
+            ui, mono = UIFont.resolve(None)
+
+        self.assertEqual((ui, mono), ("Meiryo UI", "ＭＳ ゴシック"))
+        self.assertEqual((UIFont.UI, UIFont.MONO), (ui, mono))
+
+    # ── 名指しが残っていないこと ───────────────────
+    def test_no_font_is_named_in_the_gui(self):
+        for module in (mainGUI, StatisticsGUI):
+            src = Path(module.__file__).read_text(encoding="utf-8")
+            for named in ('"Segoe UI"', '"Consolas"'):
+                self.assertNotIn(named, src, f"{module.__name__}: {named}")
+            self.assertIn("UIFont.UI", src, module.__name__)
+
+    # ── 起動時のログ ────────────────────────────
+    def test_the_startup_line_has_what_is_needed_to_tell(self):
+        UIFont.UI, UIFont.MONO = "Meiryo UI", "ＭＳ ゴシック"
+
+        line = UIFont.describe(self.FakeRoot())
+
+        for part in ("Meiryo UI", "ＭＳ ゴシック", "1920x1080", "150%", "144"):
+            self.assertIn(part, line, line)
+
+    def test_the_startup_line_survives_a_root_that_cannot_answer(self):
+        line = UIFont.describe(object())
+
+        self.assertIn(UIFont.UI, line)
+
+    def test_the_app_resolves_and_logs_before_building(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        start = src.index("class App(tk.Tk):")
+        init = src[start:src.index("    def _start_emergency_stop_polling", start)]
+        self.assertLess(init.index("UIFont.resolve(self)"), init.index("self._build_ui()"),
+                        "フォントを決めてから画面を作る")
+        self.assertIn('self._log(f"[画面] {UIFont.describe(self)}")', init)
 
 
 class TestHostStateSqlite(unittest.TestCase):
