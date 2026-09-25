@@ -11,7 +11,7 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 
 # ── アプリ情報・自動アップデート ──
 # APP_VERSION はリリースごとに上げ、GitHubのリリースタグと一致させること
-APP_VERSION       = "v0.4.3"
+APP_VERSION       = "v0.5.1"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 
