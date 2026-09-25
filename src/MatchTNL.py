@@ -329,8 +329,11 @@ def parse_terror_ids(a: str, b: str, c: str, round_type: str = "") -> list[int]:
     ids = [int(x) for x in (a, b, c)]
     if round_type in ("Midnight", "Bloodbath"):
         return ids[:3]
-    elif round_type in ("Double Trouble", "8 Pages"):
+    elif round_type == "Double Trouble":
         return ids[:2]
+    elif round_type == "8 Pages":
+        # A だけでテラーが決まる。B は別物（マップIDでもない）
+        return ids[:1]
     else:
         return ids[:1]
 

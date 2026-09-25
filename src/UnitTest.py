@@ -10233,53 +10233,197 @@ class TestSpeedDetectNeedsOsc(unittest.TestCase):
             self.assertEqual(ActionExecutor.classify_speed(speed), "", speed)
 
 
-class TestEightPagesFirstSlot(unittest.TestCase):
-    """8 Pages の続行判定は1枠目（A）だけ。terror_ids は [A, B] のまま"""
+def eight_pages_terrors(pages):
+    """8pages の表だけ差し替えた TERRORS。pages は {ログ番号: list_id | None}"""
+    raw = {
+        "classic": [{"id": 39, "name": "Rush", "terrors": ["Rush"]},
+                    {"id": 85, "name": "Arrival", "terrors": ["Arrival"]}],
+        "alternate": [{"id": 135, "name": "Whiteface", "terrors": ["Whiteface"]},
+                      {"id": 172, "name": "Baldi", "terrors": ["Baldi"]}],
+        "8pages": [{"id": page, "name": f"p{page}", "terrors": [],
+                    **({} if list_id is _MISSING else {"list_id": list_id})}
+                   for page, list_id in pages.items()],
+    }
+    return ReadJson.normalize_terrors(raw)
+
+
+_MISSING = object()
+
+
+class TestEightPagesListId(unittest.TestCase):
+    """8 Pages のログ番号（A）は専用の番号。terrors.json の list_id で
+    続行リストのIDへ橋渡しする。B は別物なので捨てる"""
 
     PAGES = "8 Pages/8ページ"
+    REAL = {50: 135, 59: 39, 55: 85, 46: 172}      # 実ログと ListTool の履歴で確かめた対応
 
-    def _decide(self, keep, ids, round_type="8 Pages"):
-        return RoundDecision.decide_killers(keep, list(ids), round_type, 0, True)
-
-    def test_only_the_second_slot_listed_does_not_continue(self):
-        self.assertFalse(self._decide({self.PAGES: {23}}, [49, 23]).is_continue_round)
-
-    def test_the_first_slot_listed_continues(self):
-        self.assertTrue(self._decide({self.PAGES: {49}}, [49, 23]).is_continue_round)
-
-    def test_other_two_slot_rounds_still_use_both(self):
-        dt = "Double Trouble/ダブルトラブル"
-        self.assertTrue(self._decide({dt: {23}}, [49, 23],
-                                     "Double Trouble").is_continue_round)
-
-    def test_the_monitor_keeps_both_ids(self):
+    def setUp(self):
         SharedState.set_list_source("host")
         self.addCleanup(SharedState.set_list_source, None)
-        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
-        monitor = LogMonitor.LogMonitor(cfg, {self.PAGES: {23}}, lambda _m: None,
-                                        window_idx=1)
+        SharedState.continue_round_reset()
+        self.addCleanup(SharedState.continue_round_reset)
+
+    # ── 表 ────────────────────────────────
+    def test_the_real_table_is_in_terrors_json(self):
+        for page, list_id in self.REAL.items():
+            self.assertEqual(ReadJson.eight_pages_list_id(page, config.TERRORS),
+                             list_id, page)
+
+    def test_an_unknown_or_null_page_is_none(self):
+        self.assertIsNone(ReadJson.eight_pages_list_id(0, config.TERRORS), "list_id が null")
+        self.assertIsNone(ReadJson.eight_pages_list_id(44, config.TERRORS), "表に無い")
+        self.assertIsNone(ReadJson.eight_pages_list_id("いろは", config.TERRORS))
+
+    def test_a_missing_or_broken_table_does_not_raise(self):
+        for raw in ({"classic": []}, {"8pages": "壊れている"},
+                    {"8pages": [None, {"id": "x"}, {"id": 5, "list_id": "y"},
+                                {"id": True, "list_id": 3}, {"id": "7", "list_id": 9}]}):
+            data = ReadJson.normalize_terrors(raw)
+            self.assertIsNone(ReadJson.eight_pages_list_id(5, data), raw)
+        self.assertEqual(ReadJson.eight_pages_list_id(7, data), 9, "文字列のIDも読む")
+
+    def test_only_the_first_number_is_parsed(self):
+        self.assertEqual(MatchTNL.parse_terror_ids("50", "2", "0", "8 Pages"), [50])
+        self.assertEqual(MatchTNL.parse_terror_ids("49", "23", "0",
+                                                   "8 Pages (Alternate)"), [49])
+        self.assertEqual(MatchTNL.parse_terror_ids("49", "23", "0",
+                                                   "Double Trouble"), [49, 23])
+
+    # ── 窓の動き ───────────────────────────
+    def _monitor(self, keep, terrors=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", cancel_afk=True)
+        monitor = LogMonitor.LogMonitor(cfg, keep, lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.in_round = True
         monitor.st.round_type = "8 Pages"
-        logs = []
-        monitor.logger = logs.append
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        if terrors is not None:
+            p = patch.object(config, "TERRORS", terrors)
+            p.start()
+            self.addCleanup(p.stop)
+        return monitor
 
-        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
-             patch.object(PlaySound, "play_sound"), \
+    def _run(self, monitor, line="Killers have been set - 50 2 0 // Round type is 8 Pages"):
+        with patch.object(LogMonitor.threading, "Thread") as thread, \
+             patch.object(PlaySound, "play_sound") as play, \
+             patch.object(Recorder, "on_continue_start"), \
              patch.object(ConnectDB, "send_ToNRoundStatistics") as sent:
-            monitor._process("Killers have been set - 49 23 0 // Round type is 8 Pages")
-
+            monitor._process(line)
         started = [c.kwargs["target"].__func__.__name__
-                   for c in mock_thread.call_args_list if "target" in c.kwargs]
-        self.assertEqual(monitor.st.terror_ids, [49, 23], "ログ・統計には両方")
-        self.assertEqual(sent.call_args.args[1], [49, 23])
-        self.assertIn("do_skip", started, "B だけがリストにあっても続行しない")
-        both = LogMonitor.format_terror_ids([49, 23])
-        self.assertTrue(any(both in m for m in logs), logs)
+                   for c in thread.call_args_list if "target" in c.kwargs]
+        return started, sent, play
 
-    def test_the_alternate_eight_pages_is_already_one_slot(self):
-        self.assertEqual(MatchTNL.parse_terror_ids("5", "0", "0", "8 Pages (Alternate)"),
-                         [5])
+    def test_the_list_id_decides_the_continue(self):
+        monitor = self._monitor({self.PAGES: {135}})       # Whiteface
+
+        started, sent, play = self._run(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [135], "ログ番号 50 ではなく 135")
+        self.assertNotIn("do_skip", started, "リストにあるので続行")
+        play.assert_called_once_with("continue.mp3")
+        self.assertEqual(sent.call_args.args[1], [135], "統計・DB も変換後")
+
+    def test_the_log_number_alone_does_not_continue(self):
+        monitor = self._monitor({self.PAGES: {50}})        # ログ番号を書いても当たらない
+
+        started, _sent, _play = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+
+    def test_the_second_number_is_dropped(self):
+        monitor = self._monitor({self.PAGES: {2}})
+
+        started, _sent, _play = self._run(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [135])
+        self.assertIn("do_skip", started, "B（2）だけがリストにあっても続行しない")
+
+    def test_the_name_shown_is_the_real_terror(self):
+        monitor = self._monitor({self.PAGES: {135}})
+
+        self._run(monitor)
+
+        self.assertTrue(any("Whiteface" in m for m in monitor.logs), monitor.logs)
+
+    def test_an_unknown_number_is_logged_once_and_does_not_continue(self):
+        monitor = self._monitor({self.PAGES: {44, 135}})
+
+        started, sent, _play = self._run(
+            monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
+        self._run(monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        self.assertIn("do_skip", started)
+        warnings = [m for m in monitor.logs if "未登録の番号 44" in m]
+        self.assertEqual(len(warnings), 1, monitor.logs)
+        self.assertIn("terrors.json", warnings[0])
+
+    def test_a_null_list_id_is_unknown_too(self):
+        monitor = self._monitor({self.PAGES: {0}},
+                                terrors=eight_pages_terrors({0: None, 50: 135}))
+
+        started, _sent, _play = self._run(
+            monitor, "Killers have been set - 0 8 0 // Round type is 8 Pages")
+
+        self.assertEqual(monitor.st.terror_ids, [])
+        self.assertIn("do_skip", started)
+        self.assertTrue(any("未登録の番号 0" in m for m in monitor.logs), monitor.logs)
+
+    def test_the_warning_comes_back_next_round(self):
+        monitor = self._monitor({})
+        self._run(monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
+
+        monitor._process("This round is taking place at Facility (12) "
+                         "and the round type is 8 Pages")
+        self._run(monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
+
+        self.assertEqual(len([m for m in monitor.logs if "未登録の番号 44" in m]), 2)
+
+    # ── DTM/Waldo の誤爆（ログ番号 50 は Don't Touch Me ではない） ──
+    def test_the_log_number_is_not_taken_for_dtm(self):
+        """放置モードは DTM/Waldo のラウンドだけ自爆しない。
+        変換前は 8 Pages の 50（Whiteface）がその扱いになっていた"""
+        self.assertIn(50, config.OPEN_SPECIAL_ROUND_TERROR_IDS, "前提: 50 は DTM")
+        monitor = self._monitor({})
+        self.assertIsNone(monitor._hands_free_skip_reason([50]), "前提: 50 なら自爆しない")
+
+        self._run(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [135])
+        self.assertIsNotNone(monitor._hands_free_skip_reason(monitor.st.terror_ids),
+                             "変換後は DTM 扱いにしない")
+
+    def test_a_real_dtm_round_is_still_dtm(self):
+        monitor = self._monitor({})
+        monitor.st.round_type = "Classic"
+
+        self._run(monitor, "Killers have been set - 50 0 0 // Round type is Classic")
+
+        self.assertEqual(monitor.st.terror_ids, [50])
+        self.assertIsNone(monitor._hands_free_skip_reason(monitor.st.terror_ids))
+
+    # ── ほかのラウンドは今までどおり ────────────────
+    def test_other_rounds_are_untouched(self):
+        monitor = self._monitor({"Double Trouble/ダブルトラブル": {23}})
+        monitor.st.round_type = "Double Trouble"
+
+        started, _sent, _play = self._run(
+            monitor, "Killers have been set - 49 23 0 // Round type is Double Trouble")
+
+        self.assertEqual(monitor.st.terror_ids, [49, 23])
+        self.assertNotIn("do_skip", started)
+
+    def test_the_group_always_continue_still_wins(self):
+        monitor = self._monitor({})
+        monitor.st.instance_type = config.INSTANCE_HOSHIIMO
+        SharedState.set_list_source("host")
+
+        started, _sent, play = self._run(
+            monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
+
+        self.assertIn("8 Pages", GroupRound.ALWAYS_CONTINUE_ROUNDS)
+        self.assertNotIn("do_skip", started, "未登録でもグループの全続行は効く")
 
 
 class TestSpeedDetectRunsUntilTheRound(unittest.TestCase):

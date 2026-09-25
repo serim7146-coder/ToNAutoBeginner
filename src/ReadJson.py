@@ -8,6 +8,10 @@ MAIN_CATEGORIES = ("classic", "alternate", "unbound")
 FOG_CATEGORIES = ("classic", "alternate")
 # 新しい形の "terrors"（Enrage に出る個体名）を分けて持つキー
 INDIVIDUALS_KEY = "individuals"
+# 8 Pages。ログの `Killers have been set - A B 0` の A は 8 Pages 専用の番号で、
+# 続行リストのIDとは別体系。行の `"list_id"` がその橋渡し（無い・null は未登録）
+EIGHT_PAGES_KEY = "8pages"
+EIGHT_PAGES_INDEX_KEY = "8pages_index"      # {"ページ番号": list_id | None}
 # 看破（[NetworkProcessing] に実際に出たオブジェクト名）`"objects": [...]` を持つキー。
 # 看破の照合はこれだけで行う。Enrage・スタン・terror_id_by_name() には使わない
 OBJECTS_KEY = "objects"
@@ -30,6 +34,19 @@ def normalize_terrors(raw: dict) -> dict:
     data: dict = {}
     individuals: dict = {}
     objects: dict = {}
+    pages: dict = {}
+    for entry in (raw.get(EIGHT_PAGES_KEY) if isinstance(raw, dict) else None) or []:
+        if not isinstance(entry, dict):
+            continue
+        page = entry.get("id")
+        if isinstance(page, str) and page.isdigit():
+            page = int(page)
+        if isinstance(page, bool) or not isinstance(page, int):
+            continue
+        list_id = entry.get("list_id")
+        if isinstance(list_id, bool) or not isinstance(list_id, int):
+            list_id = None                  # 未登録（まだ分かっていない番号）
+        pages[str(page)] = list_id
     for category, value in raw.items():
         if category not in MAIN_CATEGORIES or not isinstance(value, list):
             data[category] = value
@@ -61,7 +78,14 @@ def normalize_terrors(raw: dict) -> dict:
     if individuals:
         data[INDIVIDUALS_KEY] = individuals
         data[OBJECTS_KEY] = objects
+    data[EIGHT_PAGES_INDEX_KEY] = pages
     return data
+
+
+def eight_pages_list_id(page_id, data: dict):
+    """8 Pages のログ番号 → 続行リストのID。未登録・表に無い番号は None"""
+    index = data.get(EIGHT_PAGES_INDEX_KEY) or {}
+    return index.get(str(page_id))
 
 
 def terror_name(id: int, data: dict) -> str | None:

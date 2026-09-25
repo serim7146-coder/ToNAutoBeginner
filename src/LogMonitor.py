@@ -930,6 +930,7 @@ class LogMonitor:
             st.early_read_tid              = None
             st.early_read_void             = False
             st.early_read_holding          = False
+            st.eight_pages_unknown_logged  = False
             st.fog                         = False
             st.begin_done                  = False
             st.speed_round_kind            = ""
@@ -1282,11 +1283,33 @@ class LogMonitor:
         self._on_killers([tid], round_type, revealed=True)
         st.enrage_identified = tid
 
+    def _eight_pages_ids(self, ids: list[int]) -> list[int]:
+        """8 Pages のログ番号を続行リストのIDへ直す。
+
+        `Killers have been set - A B 0` の A だけでテラーが決まる（B は別物）。
+        A は 8 Pages 専用の番号なので、terrors.json の 8pages の `list_id` で
+        橋渡しする。未登録なら空にする——分からないIDのまま続行判定・3クラ解放・
+        統計に流すと、無関係なテラーとして扱われる
+        """
+        page = ids[0] if ids else None
+        if page is None:
+            return []
+        tid = ReadJson.eight_pages_list_id(page, config.TERRORS)
+        if tid is None:
+            if not self.st.eight_pages_unknown_logged:
+                self.st.eight_pages_unknown_logged = True
+                self._log(f"8 Pages: 未登録の番号 {page}"
+                          "（terrors.json の 8pages に list_id を足してください）")
+            return []
+        return [tid]
+
     def _on_killers(self, ids: list[int], round_type: str, revealed: bool):
         st = self.st
         st.fog = False
 
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
+        if round_type == "8 Pages":
+            ids = self._eight_pages_ids(ids)
         ids = self._apply_replacements(ids, round_type)
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
