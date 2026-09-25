@@ -5554,6 +5554,152 @@ class TestGroupMoonSkipWiring(unittest.TestCase):
         self.assertFalse(seq.is_moon_repeat("Twilight"))
 
 
+class TestPrivateSabotageContinues(unittest.TestCase):
+    """プラベ系の Sabotage は既定で続行する。
+
+    続行リストには `Sabotage star` と `Sabotage murder` の枠しかなく、
+    `Sabotage` の枠はどのリストにも無い。リスト判定に落とすと毎回自爆になる
+    （依頼者の報告: フレンド+以下でサボタージュのたびに自爆する）。
+    """
+
+    SABO = "Sabotage/サボタージュ"
+    CLASSIC = "Classic/クラシック"
+
+    def setUp(self):
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+        self.record = self._start(patch.object(Recorder, "on_continue_start"))
+        self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, instance_type=None, keep=None, **cfg_kwargs):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", **cfg_kwargs)
+        monitor = LogMonitor.LogMonitor(cfg, keep or {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _run(self, monitor, round_type="Sabotage", ids="7 0 0"):
+        monitor._process(f"Killers have been set - {ids} // Round type is {round_type}")
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs]
+
+    # ── 既定 ─────────────────────────────────
+    def test_a_private_sabotage_continues_and_announces(self):
+        monitor = self._monitor()
+
+        started = self._run(monitor)
+
+        self.assertNotIn("do_skip", started, "自爆しない")
+        self.assertTrue(monitor.st.is_continue_round)
+        self.play.assert_called_once_with("continue.mp3")
+        self.assertEqual(SharedState.get_continue_round_count(), 1, "他窓フリーズ")
+        self.record.assert_called_once_with(1)
+
+    def test_the_continue_list_is_not_consulted(self):
+        """`Sabotage` の枠はどのリストにも無い。空のリストでも続行する"""
+        monitor = self._monitor(keep={self.SABO: set(), self.CLASSIC: {7}})
+
+        started = self._run(monitor)
+
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    # ── 指定が勝つ ──────────────────────────────
+    def test_the_skip_setting_still_wins(self):
+        monitor = self._monitor(skip_rounds={"Sabotage"})
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.play.assert_not_called()
+
+    def test_the_continue_setting_stays_quiet(self):
+        monitor = self._monitor(continue_rounds={"Sabotage"})
+
+        started = self._run(monitor)
+
+        self.assertNotIn("do_skip", started)
+        self.play.assert_not_called()
+        self.record.assert_not_called()
+
+    def test_hands_free_still_skips_at_once(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor()
+        monitor.st.item_id = 0
+
+        started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+        self.assertTrue(any("放置モード" in m for m in monitor.logs), monitor.logs)
+
+    # ── ほかは今までどおり ──────────────────────
+    def test_a_group_sabotage_is_unchanged(self):
+        for instance in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            self.thread.reset_mock()
+            self.play.reset_mock()
+            SharedState.continue_round_reset()
+            monitor = self._monitor(instance_type=instance)
+
+            with patch.object(monitor, "_group_decision",
+                              return_value=GroupRound.SKIP) as group:
+                started = self._run(monitor)
+
+            group.assert_called()
+            self.assertIn("do_skip", started, f"{instance}: グループの判定に従う")
+            self.assertFalse(monitor.st.is_continue_round)
+
+    def test_a_group_sabotage_without_a_wish_still_skips(self):
+        """グループで選出者でもない Sabotage は、今までどおりリスト判定（自爆）"""
+        monitor = self._monitor(instance_type=config.INSTANCE_HOSHIIMO, keep={})
+
+        with patch.object(monitor, "_group_decision", return_value=GroupRound.NORMAL):
+            started = self._run(monitor)
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.play.assert_not_called()
+
+    def test_a_public_window_is_unchanged(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC)
+
+        started = self._run(monitor)
+
+        self.assertEqual(started, [], "操作しない窓")
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_other_rounds_still_use_the_list(self):
+        monitor = self._monitor(keep={self.CLASSIC: {42}})
+
+        self.assertIn("do_skip", self._run(monitor, "Classic", "7 0 0"), "リストに無い")
+
+        self.thread.reset_mock()
+        monitor.st.terror_ids = []
+        monitor.st.round_type = ""
+        self.assertNotIn("do_skip", self._run(monitor, "Classic", "42 0 0"), "リストにある")
+
+    def test_the_sabotage_star_round_type_is_unchanged(self):
+        """グループの Killers 行に出る Sabotage star / murder は触らない"""
+        monitor = self._monitor(keep={})
+
+        started = self._run(monitor, "Sabotage star", "7 0 0")
+
+        self.assertIn("do_skip", started)
+
+
 class TestGroupRoundSabotage(unittest.TestCase):
     """第2部: Sabotage の選出者判定"""
 

@@ -1391,6 +1391,19 @@ class LogMonitor:
         if (is_private and self.cfg.skip_rounds
                 and self._should_skip_by_round(ids, bloodthirsty)):
             return ("round_skip",)
+        return self._list_plan(ids, bloodthirsty)
+
+    def _list_plan(self, ids, bloodthirsty) -> tuple:
+        """続行リストでの判定。
+
+        Sabotage はプラベ系では既定で続行する（依頼者の決定）。続行リストには
+        `Sabotage star` と `Sabotage murder` の枠しかなく、`Sabotage` の枠は
+        どのリストにも無いので、リストに落とすと必ず自爆になる。「自爆する」の
+        指定と放置モードの即自爆は、_plan の側で先に効く
+        """
+        st = self.st
+        if st.instance_type == config.INSTANCE_PRIVATE and st.round_type == "Sabotage":
+            return ("list", True, False)
         decision = RoundDecision.decide_killers(
             self._keep_on(), ids, st.round_type,
             st.open_special_round_wins, self.cfg.cancel_afk,
@@ -1460,26 +1473,22 @@ class LogMonitor:
         if kind == "round_skip":
             self._start_round_skip()
             return
-        self._decide_with_keep_on_set(round_type)
+        self._decide_with_keep_on_set(round_type, plan)
 
     # ── 通常判定（続行リスト照合） ──────────────
-    def _decide_with_keep_on_set(self, round_type: str):
+    def _decide_with_keep_on_set(self, round_type: str, plan: tuple | None = None):
         st = self.st
         is_private = st.instance_type == config.INSTANCE_PRIVATE
         is_group = st.instance_type in GroupRound.GROUP_INSTANCES
 
         all_ids = st.terror_ids
         was_continue_round = st.is_continue_round
-        decision = RoundDecision.decide_killers(
-            self._keep_on(),
-            all_ids,
-            st.round_type,
-            st.open_special_round_wins,
-            self.cfg.cancel_afk,
-            bloodthirsty_variant=st.bloodthirsty_creature_variant,
-        )
-        is_open_special_round_target = decision.is_open_special_round_target
-        st.is_continue_round = decision.is_continue_round
+        if plan is None:        # 単体で呼ばれたとき（テスト・取りこぼしの保険）
+            plan = self._list_plan(all_ids, st.bloodthirsty_creature_variant)
+        # `_plan()` が決めたものをそのまま実行する。ここで判定し直すと、
+        # 待つ判断（_plan）と本番が食い違う
+        _kind, is_continue, is_open_special_round_target = plan
+        st.is_continue_round = is_continue
 
         if was_continue_round and not st.is_continue_round:
             SharedState.continue_round_end()
