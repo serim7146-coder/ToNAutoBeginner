@@ -232,7 +232,11 @@ SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 
 
 def window_cursor_point(hwnd: int) -> tuple | None:
-    """その窓の中の、カーソルを置く点。置けないなら None。
+    """その窓の Begin ボタンの上に当たる点。置けないなら None。
+
+    Begin は照準の位置にあり、照準はクライアント領域の中央にある。矩形の中
+    ならどこでもよいわけではない（実測 2026-09-27。窓の隅では押せなかった）。
+    タイトルバーや枠を含めないよう、窓矩形ではなくクライアント領域を使う。
 
     置けないのは、最小化されている窓と、矩形が画面（全モニタ）の外にある窓。
     呼び出し側は None のとき従来の前面化＋クリックへ落とす。
@@ -242,12 +246,14 @@ def window_cursor_point(hwnd: int) -> tuple | None:
     try:
         if win32gui.IsIconic(hwnd):
             return None
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        if right <= left or bottom <= top:
+        _cl, _ct, cw, ch = win32gui.GetClientRect(hwnd)
+        if cw <= 0 or ch <= 0:
             return None
+        left, top = win32gui.ClientToScreen(hwnd, (0, 0))
+        right, bottom = left + cw, top + ch
         dx, dy = config.BEGIN_CURSOR_OFFSET
-        x = min(left + dx, right - 1)
-        y = min(top + dy, bottom - 1)
+        x = min(max(left, (left + right) // 2 + dx), right - 1)
+        y = min(max(top, (top + bottom) // 2 + dy), bottom - 1)
         vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
         vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
         vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
@@ -271,7 +277,7 @@ def cursor_position() -> tuple | None:
 
 @contextlib.contextmanager
 def cursor_over_window(hwnd: int):
-    """カーソルをその窓の中へ置き、抜けるときに必ず元の位置へ戻す。
+    """カーソルをその窓の Begin ボタンの上へ置き、抜けるときに必ず元へ戻す。
 
     置けたかを yield する。置けなければ何も動かさずに False を返すので、
     呼び出し側は従来の前面化＋クリックへ落とせる。前面化は一切しない。
@@ -298,12 +304,21 @@ def cursor_over_window(hwnd: int):
 def click():
     """前面の窓のクロスヘア位置をクリックする。必ずフォーカスを取ってから呼ぶ。
 
-    OSCが使える窓の Begin は、これではなく「カーソルをその窓の矩形内へ置いて
-    /input/UseRight を送る」で押せる（cursor_over_window()。前面化は不要）。
-    実測（2026-09-25）: 裏のままカーソルをその窓の矩形の中へ置いて UseRight を
-    パルス送信すると Begin が押される。別のウィンドウが上に重なっていても押せる。
-    対照として矩形の外へ置くと押せない。つまり条件はフォーカスではなく
-    「カーソルがその窓の矩形の中にあること」だった。
+    OSCが使える窓の Begin は、これではなく「カーソルをその窓の Begin ボタンの
+    上へ置いて /input/UseRight を送る」で押せる（cursor_over_window()。前面化は
+    不要）。条件はフォーカスではなく「カーソルが Begin のボタンの上にあること」。
+    デスクトップの照準はクライアント領域の中央にあるので、そこへ置く。
+
+    矩形の中ならどこでもよい、ではない。ここには一度そう書いてあり、それを
+    根拠に窓の左上（+20,60。実測の窓 1294x1399 では相対 1.5%, 4.3%）へ置く
+    実装が入って、背面では一度も押せていなかった。実測は次のとおり:
+
+        2026-09-25  裏のままカーソルを窓の中央へ置いて UseRight をパルス送信
+                    すると Begin が押された。別の窓が上に重なっていても押せる。
+                    対照として矩形の外へ置くと押せない
+                    （このとき試したのは中央だけで、隅は試していない）
+        2026-09-27  2窓へ UseRight を送りながら依頼者が手でカーソルを動かした。
+                    Begin の画面の上に置いたときだけ押せた。隅では押せない
 
     以下は、その条件を満たさないときの話。背面クリックは実現できない。キーは
     hold_key_background() で背面に送れるのに、クリックだけフォーカスが要るのは、

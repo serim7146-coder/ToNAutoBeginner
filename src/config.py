@@ -217,11 +217,14 @@ SUICIDE_RETRY_MAX     = 3     # 1回目を含めた回数
 SUICIDE_CONFIRM_SEC   = 1.5   # 長押しが終わってから死亡を待つ時間
 # 押した Begin が受理（本物の Verified）されなければ押し直す
 BEGIN_RETRY_MAX       = 3     # 1回目を含めた回数
-# Begin の押し方。OSCが使える窓は「カーソルをその窓の矩形内へ置いて
-# /input/UseRight を送る」で、前面化せずに押せる（実測。WindowOperator.click()
-# のコメント参照）。False にすると従来の前面化＋クリックへ戻る
+# Begin の押し方。OSCが使える窓は「カーソルをその窓の Begin のボタンの上へ
+# 置いて /input/UseRight を送る」で、前面化せずに押せる（実測。矩形の中なら
+# どこでもよいわけではない。WindowOperator.click() のコメント参照）。
+# False にすると従来の前面化＋クリックへ戻る
 BEGIN_BY_CURSOR        = True
-BEGIN_CURSOR_OFFSET    = (20, 60)   # 窓の左上からの相対位置（見た目の邪魔が少ない）
+# カーソルを置くのは Begin のボタンの上＝照準の位置＝クライアント領域の中央。
+# これは中央からのずれで、照準の位置を微調整したいときだけ動かす（通常は0,0）
+BEGIN_CURSOR_OFFSET    = (0, 0)
 # UseRight の連打は RoundOver から数えて始める。実測（521ラウンド）で
 # RoundOver → Verified Round End は13〜14秒、Verified Round End → Begin が
 # 押せるまでは 0 秒だった。カーソルは連打中は動かさない

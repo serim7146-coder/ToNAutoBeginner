@@ -9589,18 +9589,26 @@ class FakeUser32:
 
 
 class TestCursorOverWindow(unittest.TestCase):
-    """裏の窓のワールドUIは「カーソルがその窓の矩形の中にある」だけで押せる。
+    """裏の窓のワールドUIは「カーソルが Begin のボタンの上にある」と押せる。
 
-    実測（2026-09-25）で分かったこと。前面化は要らないので、この仕組みは
-    SetForegroundWindow を一切呼ばない。
+    ボタンはデスクトップの照準の位置＝クライアント領域の中央にある。矩形の中
+    ならどこでもよい、ではない（実測 2026-09-27。窓の隅では押せなかった）。
+    前面化は要らないので、この仕組みは SetForegroundWindow を一切呼ばない。
     """
 
-    RECT = (100, 200, 1000, 800)
+    RECT = (100, 200, 1000, 800)        # クライアント領域（スクリーン座標）
+
+    @staticmethod
+    def center(rect):
+        return ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
 
     def _window(self, user32=None, rect=None, iconic=False):
+        rect = rect or self.RECT
         return (patch.object(WindowOperator, "user32", user32 or FakeUser32()),
-                patch.object(WindowOperator.win32gui, "GetWindowRect",
-                             return_value=rect or self.RECT),
+                patch.object(WindowOperator.win32gui, "GetClientRect",
+                             return_value=(0, 0, rect[2] - rect[0], rect[3] - rect[1])),
+                patch.object(WindowOperator.win32gui, "ClientToScreen",
+                             return_value=(rect[0], rect[1])),
                 patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic))
 
     @contextlib.contextmanager
@@ -9614,18 +9622,38 @@ class TestCursorOverWindow(unittest.TestCase):
             for p in patches:
                 p.stop()
 
-    def test_the_point_is_inside_the_window(self):
+    def test_the_point_is_the_centre_of_the_client_area(self):
+        """窓の左上ではなく中央。左上（相対 1.5%, 4.3%）では押せなかった"""
         with self._patched():
-            x, y = WindowOperator.window_cursor_point(123)
+            self.assertEqual(WindowOperator.window_cursor_point(123),
+                             self.center(self.RECT))
 
-        dx, dy = config.BEGIN_CURSOR_OFFSET
-        self.assertEqual((x, y), (self.RECT[0] + dx, self.RECT[1] + dy))
-        self.assertTrue(self.RECT[0] <= x < self.RECT[2], x)
-        self.assertTrue(self.RECT[1] <= y < self.RECT[3], y)
+    def test_the_title_bar_is_not_counted(self):
+        """クライアント領域で測る。窓枠を含めると照準から縦にずれる"""
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(WindowOperator, "user32", FakeUser32()))
+            stack.enter_context(patch.object(WindowOperator.win32gui, "IsIconic",
+                                             return_value=False))
+            stack.enter_context(patch.object(WindowOperator.win32gui, "GetClientRect",
+                                             return_value=(0, 0, 900, 570)))
+            stack.enter_context(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                                             return_value=(108, 230)))
+            # 窓矩形が (100,200)-(1000,800) でも、枠とタイトルバーの分だけ違う
+            self.assertEqual(WindowOperator.window_cursor_point(123), (558, 515))
+
+    def test_the_offset_shifts_from_the_centre(self):
+        with self._patched(), patch.object(config, "BEGIN_CURSOR_OFFSET", (30, -40)):
+            cx, cy = self.center(self.RECT)
+            self.assertEqual(WindowOperator.window_cursor_point(123), (cx + 30, cy - 40))
+
+    def test_the_offset_cannot_leave_the_window(self):
+        with self._patched(), patch.object(config, "BEGIN_CURSOR_OFFSET", (9999, -9999)):
+            x, y = WindowOperator.window_cursor_point(123)
+        self.assertEqual((x, y), (self.RECT[2] - 1, self.RECT[1]))
 
     def test_a_small_window_still_gets_a_point_inside(self):
         with self._patched(rect=(0, 0, 10, 10)):
-            self.assertEqual(WindowOperator.window_cursor_point(123), (9, 9))
+            self.assertEqual(WindowOperator.window_cursor_point(123), (5, 5))
 
     def test_a_minimized_window_has_no_point(self):
         with self._patched(iconic=True):
@@ -9646,9 +9674,7 @@ class TestCursorOverWindow(unittest.TestCase):
         with self._patched(user32=user32):
             with WindowOperator.cursor_over_window(123) as over:
                 self.assertTrue(over)
-                self.assertEqual(user32.cursor,
-                                 (self.RECT[0] + config.BEGIN_CURSOR_OFFSET[0],
-                                  self.RECT[1] + config.BEGIN_CURSOR_OFFSET[1]))
+                self.assertEqual(user32.cursor, self.center(self.RECT))
 
         self.assertEqual(user32.cursor, (42, 43), "元の位置へ戻す")
         self.assertEqual(len(user32.moves), 2)
@@ -9685,7 +9711,11 @@ class TestCursorOverWindow(unittest.TestCase):
 class TestBeginByCursor(unittest.TestCase):
     """OSCが使える窓の Begin は、カーソルを置いて UseRight を送る（前面化しない）"""
 
-    RECT = (100, 200, 1000, 800)
+    RECT = (100, 200, 1000, 800)        # クライアント領域（スクリーン座標）
+
+    @staticmethod
+    def center(rect):
+        return ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
 
     class CountingStop:
         """N 周で必ず止まるストップ。止まらない実装でもテストが終わるように"""
@@ -9713,9 +9743,12 @@ class TestBeginByCursor(unittest.TestCase):
         user32 = user32 or FakeUser32()
         with contextlib.ExitStack() as stack:
             enter = stack.enter_context
+            rect = rect or self.RECT
             enter(patch.object(WindowOperator, "user32", user32))
-            enter(patch.object(WindowOperator.win32gui, "GetWindowRect",
-                               return_value=rect or self.RECT))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, rect[2] - rect[0], rect[3] - rect[1])))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(rect[0], rect[1])))
             enter(patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic))
             focus = enter(patch.object(WindowOperator, "focus_window", return_value=True))
             click = enter(patch.object(WindowOperator, "click"))
@@ -9738,9 +9771,8 @@ class TestBeginByCursor(unittest.TestCase):
         self.assertTrue(ok)
         focus.assert_not_called()
         click.assert_not_called()
-        inside = (self.RECT[0] + config.BEGIN_CURSOR_OFFSET[0],
-                  self.RECT[1] + config.BEGIN_CURSOR_OFFSET[1])
-        self.assertEqual(user32.moves, [inside, (500, 500)], "入って、すぐ戻る")
+        self.assertEqual(user32.moves, [self.center(self.RECT), (500, 500)],
+                         "Begin の上へ入って、すぐ戻る")
 
     def test_it_dips_again_until_it_is_accepted(self):
         executor, _st = self._executor()
