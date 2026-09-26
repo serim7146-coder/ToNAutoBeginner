@@ -229,7 +229,12 @@ BEGIN_CURSOR_OFFSET    = (0, 0)
 # RoundOver → Verified Round End は13〜14秒、Verified Round End → Begin が
 # 押せるまでは 0 秒だった。カーソルは連打中は動かさない
 BEGIN_USE_SPAM_START_SEC = 12.5
-BEGIN_USE_PULSE_SEC    = 0.1        # UseRight を押している時間（離すのも同じ）
+# UseRight を押している時間。離している時間も同じなので、押し下がる瞬間は
+# この2倍ごと（0.05秒ごと）に来る。差し込みの滞在（BEGIN_CURSOR_DWELL_SEC）が
+# 0.05秒なので、ひと差しの間に押し下がる瞬間が必ず1回入る。
+# 0.1（1周0.2秒）だったときは、0.05秒の差し込みに当たるのが4回に1回程度で、
+# 空振りして前面化へ落ちていた。ToN_Multi_Supporter も 0.05 秒間隔
+BEGIN_USE_PULSE_SEC    = 0.025
 # カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
 BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
 BEGIN_CURSOR_GAP_SEC   = 0.3        # ひと差しの間隔

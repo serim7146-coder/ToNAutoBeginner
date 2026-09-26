@@ -9903,6 +9903,26 @@ class TestBeginByCursor(unittest.TestCase):
         self.assertEqual([c.args[0] for c in press.call_args_list],
                          ["/input/UseRight"] * 3, "止まらずに送り続ける")
 
+    def test_one_spam_cycle_is_twice_the_pulse(self):
+        """押している時間と離している時間が同じ＝1周は押下時間の2倍。
+
+        押し下がる瞬間がこの周期で来る。ひと差しの滞在
+        （BEGIN_CURSOR_DWELL_SEC）より短くないと、差し込みが空振りする
+        """
+        executor, st = self._executor()
+        st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
+        waits = []
+
+        with patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            executor._spam_use_right(self.CountingStop(limit=3, waits=waits),
+                                     st.round_seq)
+
+        holds = [c.args[1] for c in press.call_args_list]
+        self.assertEqual(holds, [config.BEGIN_USE_PULSE_SEC] * 3, "押している時間")
+        self.assertEqual(waits, [config.BEGIN_USE_PULSE_SEC] * 3, "離している時間")
+        self.assertLessEqual(holds[0] + waits[0], config.BEGIN_CURSOR_DWELL_SEC,
+                             "1周がひと差しの滞在に収まること")
+
     def test_the_spam_sends_with_a_shop_item_equipped(self):
         executor, st = self._executor(item_id=3)
         st.round_over_time = time.time() - 60
