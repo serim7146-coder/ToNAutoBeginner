@@ -275,24 +275,29 @@ class ActionExecutor:
         return self._press_begin(again=True)
 
     def _begin_by_cursor(self) -> bool:
-        """カーソルを使う新方式を使ってよい窓か。
+        """カーソルを使う新方式を使ってよい窓か。OSCが使えるなら使う。
 
-        何か持っている窓は従来の前面化＋クリックへ落とす。持っているときの
-        /input/UseRight はその持ち物を使ってしまい、Begin は押されない
-        （2026-09-21 の実機検証で Emerald Coil が使われた）。押す前に落とす
-        処理は外したので（依頼者の判断。落とす必要のある局面が無かった）、
-        持っている窓にはカーソル方式で押す道が無い。
+        持ち物では分岐しない。st.item_id はアイテムショップで買って装備して
+        いるか（`Equipping <id>.`）であって、手に持っているかではない。手に
+        持つ／離すは `[Behaviour] Pickup object:` / `[Behaviour] Drop object:`
+        で出るが、こちらは読んでいない。
+
+        2026-09-21 に Emerald Coil が使われたのは手に持っていたときの話で、
+        ショップの装備の有無とは関係が無い。ロビーで拾い物を手に持っている
+        ことは無い想定なので、判定せずに背面で押す（依頼者の判断）。
+
+        以前ここで st.item_id を見ていたため、ショップでアイテムを買っている
+        窓では /input/UseRight が1発も送られていなかった。
         """
-        return bool(self.uses_osc and config.BEGIN_BY_CURSOR
-                    and not self._st.item_id)
+        return bool(self.uses_osc and config.BEGIN_BY_CURSOR)
 
     def _start_use_spam(self, round_seq: int):
         """UseRight の連打を始める（カーソルは動かさない）。
 
         RoundOver + BEGIN_USE_SPAM_START_SEC から送り始める。Verified Round End
         が出た時点でもう押せるので、その瞬間にカーソルを一瞬差し込むだけで
-        Begin が押される。スレッドは、押せた・停止・次のラウンドが始まった・
-        何か持った、のいずれかで自分から終わる
+        Begin が押される。スレッドは、押せた・停止・次のラウンドが始まった、
+        のいずれかで自分から終わる
         """
         if not self._begin_by_cursor():
             return None
@@ -308,9 +313,6 @@ class ActionExecutor:
         while not stop.is_set():
             if (not self._is_running() or st.begin_done or st.in_round
                     or st.round_seq != round_seq):
-                return
-            if st.item_id:
-                # 途中で何か持った。持ったまま送るとその持ち物を使ってしまう
                 return
             if time.time() < start:
                 stop.wait(0.1)
@@ -348,12 +350,12 @@ class ActionExecutor:
     def _press_begin(self, again: bool = False) -> bool:
         """Begin を押す。押せたら True。
 
-        手ぶらでOSCが使える窓は、連打している /input/UseRight に合わせて
-        カーソルをその窓の矩形内へ一瞬だけ置く。前面化しないので他窓の前面を
-        奪わず、カーソルを奪う時間も 0.05 秒ずつで済む（実測で、裏のまま押せる
-        ことを確認済み。WindowOperator.cursor_over_window() 参照）。
-        何か持っている窓・最小化などでカーソルを置けない窓・OSCが使えない窓は、
-        従来どおり前面化＋クリック。
+        OSCが使える窓は、連打している /input/UseRight に合わせて、カーソルを
+        Begin のボタンの上（＝照準＝クライアント領域の中央）へ一瞬だけ置く。
+        矩形の中ならどこでもよいわけではない（WindowOperator.click() 参照）。
+        前面化しないので他窓の前面を奪わず、カーソルを奪う時間も 0.05 秒ずつで
+        済む。最小化などでカーソルを置けない窓・OSCが使えない窓は、従来どおり
+        前面化＋クリック。
 
         全窓共通のロックは、カーソルを動かしている間・フォーカスを取っている
         間だけ取る（窓どうしでカーソルと前面を取り合わないため）。

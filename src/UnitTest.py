@@ -9804,18 +9804,27 @@ class TestBeginByCursor(unittest.TestCase):
         focus.assert_called_once()      # 打ち切ったら従来方式へ
         click.assert_called_once()
 
-    def test_an_item_in_hand_goes_to_the_front_click(self):
-        """持っているときの UseRight はその持ち物を使ってしまう（実機で確認済み）。
-        落とす処理は外したので、持っている窓はカーソル方式を使えない"""
-        executor, _st = self._executor(item_id=5)
+    def test_a_shop_item_still_uses_the_cursor(self):
+        """st.item_id はショップの装備で、手に持っているかではない。
 
-        ok, user32, focus, click, press = self._press(executor)
+        手に持つ／離すは [Behaviour] Pickup object: / Drop object: で出るが、
+        こちらは読んでいない。ここで分岐していたため、アイテムを買っている
+        窓では UseRight が1発も送られていなかった
+        """
+        executor, st = self._executor(item_id=5)
+
+        def accept(_sec):
+            st.begin_done = True        # ひと差しで押せた
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=accept):
+            ok, user32, focus, click, press = self._press(executor, sleep=False)
 
         self.assertTrue(ok)
-        focus.assert_called_once()
-        click.assert_called_once()
-        press.assert_not_called()
-        self.assertEqual(user32.moves, [], "カーソルも動かさない")
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertTrue(user32.moves, "カーソルを差す")
+        self.assertEqual([c.args[0] for c in press.call_args_list],
+                         [], "差し込みの側からは送らない（連打が送る）")
 
     def test_an_empty_hand_uses_the_cursor(self):
         executor, st = self._executor()
@@ -9879,31 +9888,29 @@ class TestBeginByCursor(unittest.TestCase):
 
         press.assert_not_called()
 
-    def test_something_picked_up_mid_spam_ends_the_spam(self):
-        """連打の途中で拾ってしまったら、送るのをやめて終わる（落とさない）"""
+    def test_the_spam_keeps_going_when_the_item_changes(self):
+        """途中で装備が変わっても連打は止めない（ショップの装備は無関係）"""
         executor, st = self._executor()
         st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
-        stop = self.CountingStop(limit=5)
 
-        def pick_up(_address, _sec):
-            st.item_id = 4              # 1回送ったところで何か拾った
+        def equip(_address, _sec):
+            st.item_id = 4              # 1回送ったところで装備が変わった
             return True
 
-        with patch.object(OSCClient.OSCClient, "press", side_effect=pick_up) as press:
-            executor._spam_use_right(stop, st.round_seq)
+        with patch.object(OSCClient.OSCClient, "press", side_effect=equip) as press:
+            executor._spam_use_right(self.CountingStop(limit=3), st.round_seq)
 
         self.assertEqual([c.args[0] for c in press.call_args_list],
-                         ["/input/UseRight"], "拾った後は送らない")
-        self.assertLess(stop.calls, 5, "スレッドは自分で終わる")
+                         ["/input/UseRight"] * 3, "止まらずに送り続ける")
 
-    def test_the_spam_sends_nothing_with_an_item_in_hand(self):
+    def test_the_spam_sends_with_a_shop_item_equipped(self):
         executor, st = self._executor(item_id=3)
-        st.round_over_time = 0.0
+        st.round_over_time = time.time() - 60
 
-        with patch.object(OSCClient.OSCClient, "press") as press:
-            executor._spam_use_right(self.CountingStop(), st.round_seq)
+        with patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            executor._spam_use_right(self.CountingStop(limit=1), st.round_seq)
 
-        press.assert_not_called()
+        press.assert_called_once_with("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
 
     def test_the_spam_is_not_started_without_osc_or_with_the_switch_off(self):
         executor, st = self._executor(osc_port=0)
@@ -9914,8 +9921,8 @@ class TestBeginByCursor(unittest.TestCase):
             self.assertIsNone(executor._start_use_spam(st.round_seq))
 
         executor, st = self._executor(item_id=5)
-        self.assertIsNone(executor._start_use_spam(st.round_seq),
-                          "持っているなら従来方式")
+        self.assertIsNotNone(executor._start_use_spam(st.round_seq),
+                             "ショップの装備は関係ない")
 
     def test_the_round_flow_starts_the_spam_before_waiting(self):
         """Verified Round End を待つ前から連打を回しておく"""
