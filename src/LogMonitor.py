@@ -155,34 +155,39 @@ class LogMonitor:
                 "Alternate": self.cfg.voice_alternate,
                 "Ghost": self.cfg.voice_ghost}.get(round_type, "")
 
-    def _learn_periodic(self, t: float):
-        """定期シグナルと判定した時刻から周期を学習する。
+    def _is_periodic_verified(self, at: float) -> bool:
+        """この Verified は定期シグナルか。位相からの差が300秒の倍数なら定期。
 
-        周期は窓ごとに位相が違い、ドリフトもするので指数平滑で追従させる。
-        極端な間隔（ラウンド由来の取り違えなど）は学習に混ぜない。
+        位置をまだ掴んでいないときは False（Begin を取りこぼさない側に倒す）。
+        時刻はログの時刻で見る——壁時計だと、ログの追いつきや負荷で処理が
+        遅れたときに、定期を Begin 受理と取り違える（実際に起きた不具合）。
         """
         st = self.st
-        if st.periodic_last:
-            iv = t - st.periodic_last
-            if config.VERIFIED_PERIODIC_MIN_SEC <= iv <= config.VERIFIED_PERIODIC_MAX_SEC:
-                base = st.periodic_period or config.VERIFIED_PERIODIC_INIT_SEC
-                st.periodic_period = ((1 - config.VERIFIED_PERIODIC_SMOOTH) * base
-                                      + config.VERIFIED_PERIODIC_SMOOTH * iv)
-        st.periodic_last = t
+        if not st.periodic_phase or not at:
+            return False
+        delta = at - st.periodic_phase
+        period = config.VERIFIED_PERIODIC_SEC
+        if delta < period - config.VERIFIED_PERIODIC_TOL_SEC:
+            return False
+        mult = round(delta / period)
+        if mult > config.VERIFIED_PERIODIC_MAX_MULT:
+            return False
+        return abs(delta - mult * period) <= config.VERIFIED_PERIODIC_TOL_SEC
 
     def _check_pending_verified(self):
-        """採用したVerifiedに Everything recieved が続かなければ定期シグナルだった。
+        """採用したVerifiedにラウンド開始が続かなければ、定期シグナルだった。
 
-        位相を掴む唯一の手段。棄却したものだけで学習すると最初の1件を拾えず、
-        位相が永久に初期化されない。
+        位相を掴む唯一の手段。定期と分かった時刻を覚えて、次からは無視できる
+        ようにする（横移動はもう終わっているので、ここでは止めない）。
         """
         st = self.st
-        if not st.pending_verified_time:
+        if not st.pending_verified_time or not st.log_now:
             return
-        if (time.time() - st.pending_verified_time) <= config.VERIFIED_RECV_TIMEOUT_SEC:
+        if (st.log_now - st.pending_verified_time) <= config.VERIFIED_ROUND_START_WAIT_SEC:
             return
-        self._learn_periodic(st.pending_verified_time)
+        st.periodic_phase = st.pending_verified_time
         st.pending_verified_time = 0.0
+        self._log("直前の Verified は定期シグナルでした（ラウンド開始が来ない）")
 
     def _release_round_freeze_after_delay(self, round_seq: int):
         """死亡から一定時間後にラウンド突入フリーズを解除する。
@@ -789,6 +794,9 @@ class LogMonitor:
     # ── ログ行処理 ────────────────────────────
     def _process(self, line: str):
         st = self.st
+        at = LogParser.log_time(line)
+        if at is not None:
+            st.log_now = at         # 判定はすべてこのログの時刻で行う
         if st.early_read_holding:
             self._settle_early_read_by_line(line)
         event = LogParser.parse(line)
@@ -857,13 +865,13 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_BEGIN_DONE:
             # `Verified` はBegin受理専用のログではない。ラウンド結果の検証完了と
-            # 約300秒周期の定期シグナルでも同じ行が出る。
-            # 予測に使うのは「前回の“定期”からの間隔」であって、直前のVerifiedからの
-            # 間隔ではない（定期の直前には数十秒間隔でラウンド由来のVerifiedが入る）。
-            now = time.time()
-            period = st.periodic_period or config.VERIFIED_PERIODIC_INIT_SEC
-            if st.periodic_last and abs(now - (st.periodic_last + period)) <= config.VERIFIED_PERIODIC_TOL_SEC:
-                self._learn_periodic(now)
+            # 300秒ちょうどの定期シグナルでも同じ行が出る。定期は位相（前に定期
+            # だと分かった時刻）からの差が300秒の倍数になるので、それで見分ける。
+            # 後ろの行では見分けられない（定期でも Begin 由来でも String Download
+            # と Everything recieved が続く）
+            now = st.log_now
+            if self._is_periodic_verified(now):
+                st.periodic_phase = now
                 self._log("Verified を無視（定期シグナル）")
                 return
 
@@ -908,12 +916,10 @@ class LogMonitor:
             # 「区間の最初の1件」という前提が崩れる。起点は Verified Round End
             return
 
-        if event.kind == LogParser.EVENT_EVERYTHING_RECEIVED:
-            # 直前に採用したVerifiedは本物だった
-            st.pending_verified_time = 0.0
-            return
-
         if event.kind == LogParser.EVENT_ROUND_START:
+            # 採用した Verified にラウンド開始が続いた＝Begin 由来で確定。
+            # 位相は動かさない（定期ではなかったため）
+            st.pending_verified_time = 0.0
             if st.is_continue_round:
                 st.is_continue_round = False
                 SharedState.continue_round_end()

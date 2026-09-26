@@ -10697,6 +10697,8 @@ class TestGigabytesDetect(unittest.TestCase):
         after = dict(vars(monitor.st))
         self.assertTrue(after.pop("gigabytes"))
         before.pop("gigabytes")
+        for state in (after, before):
+            state.pop("log_now")        # 行の時刻は毎行覚える（判定用）
         self.assertEqual(after, before, "gigabytes 以外は変えないこと")
 
     def test_terror_ids_are_replaced_wholesale(self):
@@ -10866,15 +10868,18 @@ class TestVerifiedStrafe(unittest.TestCase):
             self.assertTrue(monitor.st.begin_done, f"{itype}: Verified 自体は採用")
 
     def test_a_periodic_verified_does_not_strafe(self):
+        """不具合の再現: intermission 中の定期で横移動を始めない"""
         monitor = self._monitor()
-        monitor.st.periodic_last = 1000.0
-        monitor.st.periodic_period = 300.0
+        base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
+        monitor.st.periodic_phase = base
+        stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
 
-        with patch.object(LogMonitor.time, "time", return_value=1302.0):
-            started = self._started(monitor)
+        started = self._started(
+            monitor, stamp.strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  Verified")
 
         self.assertNotIn("do_speed_strafe", started)
         self.assertFalse(monitor.st.speed_strafe_done)
+
 
     def test_a_verified_before_the_round_end_does_not_strafe(self):
         monitor = self._monitor()
@@ -11356,15 +11361,16 @@ class TestStringDownloadTrigger(unittest.TestCase):
 
     def test_verified_periodic_guard_still_works(self):
         monitor = self._monitor()
-        monitor.st.periodic_last = 1000.0
-        monitor.st.periodic_period = 300.0
+        base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
+        monitor.st.periodic_phase = base
+        stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
 
-        with patch.object(LogMonitor.time, "time", return_value=1302.0), \
-             patch.object(LogMonitor.threading, "Thread"):
-            monitor._process("Verified")
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(stamp.strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  Verified")
 
         self.assertFalse(monitor.st.begin_done)
-        self.assertEqual(monitor.st.periodic_last, 1302.0)
+        self.assertEqual(monitor.st.periodic_phase, base + config.VERIFIED_PERIODIC_SEC)
+
 
     def test_verified_round_end_guard_still_works(self):
         monitor = self._monitor()
@@ -15624,98 +15630,159 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
 
 class TestLogMonitorBeginDone(unittest.TestCase):
-    """`Verified` はBegin受理以外に、約300秒周期の定期シグナルでも出る
+    """`Verified` は Begin 受理以外に、300秒ちょうどの定期シグナルでも出る。
 
-    予測に使うのは「前回の“定期”からの間隔」。直前のVerifiedからの間隔で
-    見ると、定期の直前に入るラウンド由来のVerified（24〜83秒間隔）に隠れて
-    まったく検出できない。
+    見分けるのは位相（前に定期だと分かった時刻）から300秒の倍数かどうか。
+    時刻はログの時刻で見る——壁時計だと、ログの追いつきや負荷で処理が遅れた
+    ときに定期を Begin 受理と取り違える（intermission 中に横移動が走った）。
     """
 
-    def _monitor(self):
+    PREFIX = "2026.09.26 "
+
+    def _monitor(self, phase=0.0):
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
+        monitor.st.periodic_phase = phase
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
         return monitor
 
-    def _verified_at(self, monitor, now: float):
-        with patch.object(LogMonitor.time, "time", return_value=now):
-            monitor._process("Verified")
+    @staticmethod
+    def _stamp(at: float) -> str:
+        return datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S")
 
-    def test_periodic_signal_is_ignored(self):
-        """前回の定期から周期ぶん経って来たVerifiedは棄却する"""
-        monitor = self._monitor()
-        monitor.st.periodic_last = 1000.0
-        monitor.st.periodic_period = 300.0
+    def _at(self, monitor, at: float, body="Verified"):
+        """ログの時刻 at の行として流す（壁時計はわざとずらしておく）"""
+        with patch.object(LogMonitor.time, "time", return_value=at + 12345.0):
+            monitor._process(f"{self._stamp(at)} Debug      -  {body}")
 
-        self._verified_at(monitor, 1302.0)   # 予測1300±8以内
+    def _base(self) -> float:
+        return datetime(2026, 9, 26, 12, 0, 0).timestamp()
+
+    # ── 定期を無視する ──────────────────────────
+    def test_a_periodic_verified_is_ignored(self):
+        """不具合の再現: intermission 中の定期で begin_done を立てない"""
+        base = self._base()
+        monitor = self._monitor(phase=base)
+
+        self._at(monitor, base + config.VERIFIED_PERIODIC_SEC)
 
         self.assertFalse(monitor.st.begin_done)
-        self.assertEqual(monitor.st.periodic_last, 1302.0, "位相を更新すること")
+        self.assertEqual(monitor.st.periodic_phase, base + config.VERIFIED_PERIODIC_SEC,
+                         "位相を更新すること")
+        self.assertTrue(any("定期シグナル" in m for m in monitor.logs), monitor.logs)
 
-    def test_verified_61_seconds_after_periodic_is_accepted(self):
-        """実障害と同じ条件: 直前のVerifiedから61秒でも本物として通す
+    def test_a_missed_periodic_is_still_recognised(self):
+        """1回取りこぼしても、倍数で追いつける"""
+        base = self._base()
+        monitor = self._monitor(phase=base)
 
-        「直前のVerifiedから300秒」で判定すると、このケースを取り逃がす。
-        """
-        monitor = self._monitor()
-        monitor.st.periodic_last = 1000.0
-        monitor.st.periodic_period = 300.0
+        self._at(monitor, base + 2 * config.VERIFIED_PERIODIC_SEC)
 
-        self._verified_at(monitor, 1061.0)
+        self.assertFalse(monitor.st.begin_done)
+
+    def test_too_far_is_not_periodic(self):
+        base = self._base()
+        monitor = self._monitor(phase=base)
+
+        self._at(monitor, base + (config.VERIFIED_PERIODIC_MAX_MULT + 1)
+                 * config.VERIFIED_PERIODIC_SEC)
+
+        self.assertTrue(monitor.st.begin_done, "遠すぎる倍数は当てにしない")
+
+    def test_the_boundary_is_one_second(self):
+        base = self._base()
+        for offset, periodic in ((-2, False), (-1, True), (0, True), (1, True), (2, False)):
+            monitor = self._monitor(phase=base)
+
+            self._at(monitor, base + config.VERIFIED_PERIODIC_SEC + offset)
+
+            self.assertEqual(not monitor.st.begin_done, periodic, offset)
+
+    def test_a_round_verified_between_periodics_is_accepted(self):
+        """定期の合間に来るラウンド由来の Verified は今までどおり通す"""
+        base = self._base()
+        monitor = self._monitor(phase=base)
+
+        self._at(monitor, base + 61)
 
         self.assertTrue(monitor.st.begin_done)
-        self.assertEqual(monitor.st.pending_verified_time, 1061.0)
+        self.assertEqual(monitor.st.pending_verified_time, base + 61)
 
-    def test_everything_received_clears_the_pending_check(self):
-        """Everything recieved が続けば、その採用は正しかった"""
+    def test_without_a_phase_it_is_accepted(self):
+        """位相を掴む前は Begin 受理として扱う（取りこぼさない側に倒す）"""
+        base = self._base()
         monitor = self._monitor()
-        self._verified_at(monitor, 1061.0)
-        self.assertEqual(monitor.st.pending_verified_time, 1061.0)
 
-        monitor._process("Everything recieved, looks good to meee~!")
+        self._at(monitor, base + config.VERIFIED_PERIODIC_SEC)
+
+        self.assertTrue(monitor.st.begin_done)
+
+    def test_it_judges_by_the_log_time_not_the_clock(self):
+        """行の処理が遅れても結果が変わらないこと"""
+        base = self._base()
+        monitor = self._monitor(phase=base)
+
+        with patch.object(LogMonitor.time, "time", return_value=base + 99999.0):
+            monitor._process(f"{self._stamp(base + config.VERIFIED_PERIODIC_SEC)} "
+                             "Debug      -  Verified")
+
+        self.assertFalse(monitor.st.begin_done, "壁時計ではなくログの時刻で見る")
+
+    # ── 位相を掴む ───────────────────────────
+    def test_a_round_start_confirms_the_verified(self):
+        base = self._base()
+        monitor = self._monitor()
+        self._at(monitor, base)
+        self.assertEqual(monitor.st.pending_verified_time, base)
+
+        self._at(monitor, base + 12, "This round is taking place at Facility (12) "
+                                     "and the round type is Classic")
 
         self.assertEqual(monitor.st.pending_verified_time, 0.0)
+        self.assertEqual(monitor.st.periodic_phase, 0.0, "位相は書き換えない")
 
-    def test_missing_everything_received_learns_the_phase(self):
-        """Everything recieved が来なければ、あれは定期シグナルだった
-
-        棄却したものだけで学習すると最初の1件を掴めず位相が永久に定まらない。
-        この事後学習がブートストラップの唯一の手段。
-        """
+    def test_no_round_start_learns_the_phase(self):
+        base = self._base()
         monitor = self._monitor()
-        self._verified_at(monitor, 1000.0)
-        self.assertEqual(monitor.st.periodic_last, 0.0, "この時点ではまだ未学習")
+        self._at(monitor, base)
 
-        # 待ち時間ぎりぎりでは学習しない
-        with patch.object(LogMonitor.time, "time",
-                          return_value=1000.0 + config.VERIFIED_RECV_TIMEOUT_SEC):
-            monitor._check_pending_verified()
-        self.assertEqual(monitor.st.periodic_last, 0.0)
+        # 待ち時間ちょうどではまだ待つ
+        monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC
+        monitor._check_pending_verified()
+        self.assertEqual(monitor.st.periodic_phase, 0.0)
 
-        with patch.object(LogMonitor.time, "time",
-                          return_value=1000.0 + config.VERIFIED_RECV_TIMEOUT_SEC + 1):
-            monitor._check_pending_verified()
+        monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC + 1
+        monitor._check_pending_verified()
 
-        self.assertEqual(monitor.st.periodic_last, 1000.0, "Verifiedの時刻で位相を取る")
+        self.assertEqual(monitor.st.periodic_phase, base, "Verified の時刻で位相を取る")
         self.assertEqual(monitor.st.pending_verified_time, 0.0)
 
-    def test_out_of_range_intervals_do_not_update_the_period(self):
-        """範囲外の間隔は周期学習に混ぜない（位相だけ更新する）"""
+    def test_the_phase_it_learned_is_used_next_time(self):
+        """掴んだ位相で、次の定期を無視できること（通しの流れ）"""
+        base = self._base()
         monitor = self._monitor()
-        monitor.st.periodic_last = 1000.0
-        monitor.st.periodic_period = 300.0
+        self._at(monitor, base)                         # 位相を掴む前なので採用
+        monitor.st.log_now = base + 60
+        monitor._check_pending_verified()               # ラウンド開始が来ない → 定期だった
+        monitor.st.begin_done = False
 
-        monitor._learn_periodic(1000.0 + config.VERIFIED_PERIODIC_MIN_SEC - 1)
-        self.assertEqual(monitor.st.periodic_period, 300.0, "短すぎる間隔は無視")
+        self._at(monitor, base + config.VERIFIED_PERIODIC_SEC)
 
-        monitor.st.periodic_last = 2000.0
-        monitor._learn_periodic(2000.0 + config.VERIFIED_PERIODIC_MAX_SEC + 1)
-        self.assertEqual(monitor.st.periodic_period, 300.0, "長すぎる間隔も無視")
+        self.assertFalse(monitor.st.begin_done)
 
-        # 範囲内なら指数平滑で追従する
-        monitor.st.periodic_last = 3000.0
-        monitor._learn_periodic(3310.0)
-        self.assertAlmostEqual(monitor.st.periodic_period, 0.7 * 300.0 + 0.3 * 310.0)
+    # ── 既存の守り ──────────────────────────
+    def test_a_verified_before_the_round_end_is_ignored(self):
+        base = self._base()
+        monitor = self._monitor()
+        monitor.st.round_end_seen = False
+
+        self._at(monitor, base)
+
+        self.assertFalse(monitor.st.begin_done)
+        self.assertTrue(any("Verified Round End より前" in m for m in monitor.logs),
+                        monitor.logs)
 
 
 class TestLogMonitorItemLostVoice(unittest.TestCase):

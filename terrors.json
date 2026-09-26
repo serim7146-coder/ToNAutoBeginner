@@ -290,6 +290,7 @@
     {"id": 1, "name": "Punishing Bird", "terrors": ["Punishing Bird"], "objects": [], "list_id": 76},
     {"id": 9, "name": "Withered Bonnie", "terrors": ["Withered Bonnie"], "objects": [], "list_id": 35},
     {"id": 21, "name": "With Many Voices", "terrors": ["With Many Voices"], "objects": [], "list_id": 25},
-    {"id": 48, "name": "Clockey", "terrors": ["Clockey"], "objects": [], "list_id": 132}
+    {"id": 48, "name": "Clockey", "terrors": ["Clockey"], "objects": [], "list_id": 132},
+    {"id": 40, "name": "Tinky Winky", "terrors": ["Tinky Winky"], "objects": ["Tinky Winky"], "list_id": 89}
   ]
 }

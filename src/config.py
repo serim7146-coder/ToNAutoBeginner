@@ -146,11 +146,13 @@ BEGIN_LEFT_SEC_LATER  = 0.16   # パニッシュ後
 # 判定に使うのは「前回の“定期シグナル”からの間隔」であって「前回のVerifiedからの
 # 間隔」ではない（定期の直前には24〜83秒間隔でラウンド由来のVerifiedが入るため）。
 # 周期は窓ごとに位相が違い、ドリフトもするので指数平滑で追従させる。
-VERIFIED_PERIODIC_INIT_SEC = 300.0   # 周期の初期推定
-VERIFIED_PERIODIC_TOL_SEC  = 8.0     # 予測からの許容ズレ
-VERIFIED_PERIODIC_MIN_SEC  = 250.0   # 学習に採用する間隔の下限
-VERIFIED_PERIODIC_MAX_SEC  = 360.0   # 同上限
-VERIFIED_PERIODIC_SMOOTH   = 0.3     # 指数平滑の係数
+# 定期シグナルの Verified はぴったり300秒ごと（実ログで27回連続、ぶれ0）。
+# 位相（最後に定期だと分かった時刻）からの差が300秒の倍数なら定期と見なす
+VERIFIED_PERIODIC_SEC      = 300.0
+VERIFIED_PERIODIC_TOL_SEC  = 1.0     # 予測からの許容ズレ
+VERIFIED_PERIODIC_MAX_MULT = 10      # 取りこぼしても復帰できるよう50分先まで見る
+# 採用した Verified の後、ラウンド開始が来るまでの実測は12〜13秒
+VERIFIED_ROUND_START_WAIT_SEC = 15.0
 VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）

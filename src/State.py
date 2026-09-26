@@ -58,9 +58,10 @@ class WindowState:
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
     round_end_seen: bool = False   # Verified Round End を受けたか（クリック可の合図）
     # 定期シグナル（約300秒周期のVerified）の追跡。ラウンドをまたぐのでROUND_STARTでは消さない
-    periodic_last: float = 0.0          # 最後に「定期」と判定したVerifiedの時刻
-    periodic_period: float = 0.0        # 推定周期（0ならconfigの初期値を使う）
-    pending_verified_time: float = 0.0  # 本物として採用したVerifiedの時刻（Everything recieved待ち）
+    # 時刻はどれもログの時刻（壁時計ではない。負荷で処理が遅れてもずれないため）
+    log_now: float = 0.0                # 最後に読んだ行の時刻
+    periodic_phase: float = 0.0         # 最後に「定期」と分かったVerifiedの時刻
+    pending_verified_time: float = 0.0  # 本物として採用したVerifiedの時刻（ラウンド開始待ち）
     statistics_sent: bool = False
     transformed_uid: int | None = None
     local_player_name: str = ""
