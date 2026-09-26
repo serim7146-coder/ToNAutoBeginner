@@ -271,35 +271,118 @@ class ActionExecutor:
             return False
         return self._press_begin(again=True)
 
+    def _begin_by_cursor(self) -> bool:
+        """カーソルを使う新方式を使ってよい窓か。
+
+        持っているときの /input/UseRight はその持ち物を使ってしまい、Begin は
+        押されない（2026-09-21 の実機検証で Emerald Coil が使われた）。なので
+        押す前に落とす（_drop_for_begin）。落とす設定を切っている場合は、
+        持っている窓は従来の前面化＋クリックへ落とす。
+        """
+        if not (self.uses_osc and config.BEGIN_BY_CURSOR):
+            return False
+        return bool(config.BEGIN_DROP_BEFORE_USE or not self._st.item_id)
+
+    def _drop_for_begin(self) -> None:
+        """押す前に持ち物を落とす。拾い直しはしない（依頼者の指定）。
+
+        落としたことを覚えておき、このラウンドのロスト判定には数えない
+        （_mark_item_lost が見る）。音声も他窓フリーズも装備待ちも走らせない。
+        """
+        st = self._st
+        if not st.item_id or not config.BEGIN_DROP_BEFORE_USE:
+            return
+        st.item_dropped_for_begin = True
+        self._log("Begin のためにアイテムを落とします")
+        for _ in range(config.BEGIN_DROP_PULSES):
+            self._osc.press("/input/DropRight", config.BEGIN_DROP_PULSE_SEC)
+
+    def _start_use_spam(self, round_seq: int):
+        """UseRight の連打を始める（カーソルは動かさない）。
+
+        RoundOver + BEGIN_USE_SPAM_START_SEC から送り始める。Verified Round End
+        が出た時点でもう押せるので、その瞬間にカーソルを一瞬差し込むだけで
+        Begin が押される。スレッドは、押せた・停止・次のラウンドが始まった・
+        何か持った、のいずれかで自分から終わる
+        """
+        if not self._begin_by_cursor():
+            return None
+        self._drop_for_begin()
+        stop = threading.Event()
+        thread = threading.Thread(target=self._spam_use_right,
+                                  args=(stop, round_seq), daemon=True)
+        thread.start()
+        return stop
+
+    def _spam_use_right(self, stop, round_seq: int):
+        st = self._st
+        start = (st.round_over_time or time.time()) + config.BEGIN_USE_SPAM_START_SEC
+        while not stop.is_set():
+            if (not self._is_running() or st.begin_done or st.in_round
+                    or st.round_seq != round_seq):
+                return
+            if st.item_id:
+                # 途中で何か持った。持ったまま送ると使ってしまうので落とす
+                self._drop_for_begin()
+                if st.item_id:
+                    return          # 落とす設定が切られている
+            if time.time() < start:
+                stop.wait(0.1)
+                continue
+            self._osc.press("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
+            stop.wait(config.BEGIN_USE_PULSE_SEC)
+
+    def _dip_cursor_for_begin(self, tail: str) -> bool:
+        """カーソルをその窓へ一瞬だけ置く。押せたら True。
+
+        置けない窓（最小化など）は False を返し、呼び出し側が従来方式へ落とす。
+        連打は _start_use_spam() のスレッドが送り続けている
+        """
+        st = self._st
+        deadline = time.time() + config.BEGIN_CURSOR_LIMIT_SEC
+        dipped = False
+        for dip in range(config.BEGIN_CURSOR_DIPS):
+            if st.begin_done:
+                return True
+            if time.time() >= deadline or not self._is_running() or st.in_round:
+                break
+            if dip:
+                time.sleep(config.BEGIN_CURSOR_GAP_SEC)
+            with SharedState._GLOBAL_ACTION_LOCK:
+                with WindowOperator.cursor_over_window(self._cfg.hwnd) as over:
+                    if not over:
+                        return False
+                    if not dipped:
+                        self._log(f"Begin: カーソルを一瞬合わせる{tail}")
+                        dipped = True
+                    time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
+        # 押せていなければ False。呼び出し側が従来方式（前面化＋クリック）へ落とす
+        return bool(dipped and st.begin_done)
+
     def _press_begin(self, again: bool = False) -> bool:
         """Begin を押す。押せたら True。
 
-        OSCが使える窓は、カーソルをその窓の矩形内へ置いて /input/UseRight を
-        パルス送信する。前面化しないので、他窓の前面を奪わない（実測で、裏の
-        まま押せることを確認済み。WindowOperator.cursor_over_window() 参照）。
-        最小化などでカーソルを置けない窓と、OSCが使えない窓は、従来どおり
-        前面化＋クリック。
+        手ぶらでOSCが使える窓は、連打している /input/UseRight に合わせて
+        カーソルをその窓の矩形内へ一瞬だけ置く。前面化しないので他窓の前面を
+        奪わず、カーソルを奪う時間も 0.05 秒ずつで済む（実測で、裏のまま押せる
+        ことを確認済み。WindowOperator.cursor_over_window() 参照）。
+        何か持っている窓・最小化などでカーソルを置けない窓・OSCが使えない窓は、
+        従来どおり前面化＋クリック。
 
         全窓共通のロックは、カーソルを動かしている間・フォーカスを取っている
         間だけ取る（窓どうしでカーソルと前面を取り合わないため）。
         """
         st = self._st
         tail = "（押し直し）" if again else ""
-        if self.uses_osc and config.BEGIN_BY_CURSOR:
-            with SharedState._GLOBAL_ACTION_LOCK:
-                if not self._is_running() or st.in_round:
-                    return False
-                with WindowOperator.cursor_over_window(self._cfg.hwnd) as over:
-                    if over:
-                        self._log(f"Begin: カーソルを合わせてUseRight{tail}")
-                        for i in range(config.BEGIN_CURSOR_PULSES):
-                            if st.begin_done:
-                                break
-                            if i:
-                                time.sleep(config.BEGIN_CURSOR_GAP_SEC)
-                            self._osc.press("/input/UseRight",
-                                            config.BEGIN_CURSOR_DWELL_SEC)
-                        return True
+        if self._begin_by_cursor():
+            self._drop_for_begin()
+            stop = self._start_use_spam(st.round_seq) if again else None
+            try:
+                if self._dip_cursor_for_begin(tail):
+                    return True
+            finally:
+                if stop is not None:
+                    stop.set()
         with SharedState._GLOBAL_ACTION_LOCK:
             if not self._is_running() or st.in_round:
                 return False
@@ -461,6 +544,7 @@ class ActionExecutor:
         st = self._st
         round_seq = st.round_seq
         clicked = False
+        spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
         # Verified Round End が出てクリックできる状態になる想定。
         if config.BEGIN_WAIT_SEC > 0:
@@ -494,6 +578,10 @@ class ActionExecutor:
                 return
             if not st.in_round:
                 self._begin_move()
+                # Verified Round End が出た瞬間には、もう Begin が押せる。
+                # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
+                # 差し込むだけにする（カーソルを奪う時間を最小にする）
+                spam = self._start_use_spam(round_seq)
                 # ロスト判定は Verified Round End で行われるので、必ず
                 # 待ってからフリーズ処理をする。RoundOver時点で判定すると
                 # まだ立っておらずフリーズが張られない。
@@ -534,6 +622,8 @@ class ActionExecutor:
 
         if clicked:
             self._confirm_begin(round_seq)
+        if spam is not None:
+            spam.set()      # 連打を止める（条件が変われば自分でも終わる）
 
         # ── フェーズ2: アイテムロスト装備待ち（ロック外）──
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない

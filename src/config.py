@@ -220,9 +220,22 @@ BEGIN_RETRY_MAX       = 3     # 1回目を含めた回数
 # のコメント参照）。False にすると従来の前面化＋クリックへ戻る
 BEGIN_BY_CURSOR        = True
 BEGIN_CURSOR_OFFSET    = (20, 60)   # 窓の左上からの相対位置（見た目の邪魔が少ない）
-BEGIN_CURSOR_DWELL_SEC = 0.15       # UseRight を押している時間
-BEGIN_CURSOR_PULSES    = 3          # 1回のBeginで送るパルスの上限
-BEGIN_CURSOR_GAP_SEC   = 0.2        # パルスの間隔
+# UseRight の連打は RoundOver から数えて始める。実測（521ラウンド）で
+# RoundOver → Verified Round End は13〜14秒、Verified Round End → Begin が
+# 押せるまでは 0 秒だった。カーソルは連打中は動かさない
+BEGIN_USE_SPAM_START_SEC = 12.5
+BEGIN_USE_PULSE_SEC    = 0.1        # UseRight を押している時間（離すのも同じ）
+# カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
+BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
+BEGIN_CURSOR_GAP_SEC   = 0.3        # ひと差しの間隔
+BEGIN_CURSOR_DIPS      = 6          # ひと差しの上限回数
+BEGIN_CURSOR_LIMIT_SEC = 4.0        # ひと差しを続ける上限（実測13〜14秒に収まる）
+# 何か持っている窓は、押す前に落とす。持ったままの UseRight はその持ち物を
+# 使ってしまい、Begin は押されない（2026-09-21 の実機検証）。拾い直しはしない。
+# False にすると、持っている窓は従来の前面化＋クリックへ落ちる
+BEGIN_DROP_BEFORE_USE  = True
+BEGIN_DROP_PULSES      = 3          # 確実に落とすため複数回パルスを送る
+BEGIN_DROP_PULSE_SEC   = 0.1
 BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
 # 主催リストが取れない状態がこれだけ続いたら tnl へ切り替える。プロセスの
 # 見え方・host_save の差し替え・参加者の入れ替えは一瞬だけ起きうる

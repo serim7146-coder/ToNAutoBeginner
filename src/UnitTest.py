@@ -9334,56 +9334,219 @@ class TestBeginByCursor(unittest.TestCase):
 
     RECT = (100, 200, 1000, 800)
 
-    def _executor(self, osc_port=9000, hwnd=123):
+    class CountingStop:
+        """N 周で必ず止まるストップ。止まらない実装でもテストが終わるように"""
+
+        def __init__(self, limit=3, waits=None):
+            self.limit = limit
+            self.calls = 0
+            self.waits = waits if waits is not None else []
+
+        def is_set(self):
+            self.calls += 1
+            return self.calls > self.limit
+
+        def wait(self, sec):
+            self.waits.append(sec)
+
+    def _executor(self, osc_port=9000, hwnd=123, item_id=0):
         cfg = WindowConfig(hwnd=hwnd, osc_port=osc_port)
-        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        # item_id=0 が手ぶら。持っていると UseRight でその持ち物を使ってしまう
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=item_id)
         return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
 
-    def _press(self, executor, user32=None, iconic=False, rect=None, again=False):
+    def _press(self, executor, user32=None, iconic=False, rect=None, again=False,
+               sleep=True):
         user32 = user32 or FakeUser32()
-        with patch.object(WindowOperator, "user32", user32), \
-             patch.object(WindowOperator.win32gui, "GetWindowRect",
-                          return_value=rect or self.RECT), \
-             patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic), \
-             patch.object(WindowOperator, "focus_window", return_value=True) as focus, \
-             patch.object(WindowOperator, "click") as click, \
-             patch.object(ActionExecutor.time, "sleep"), \
-             patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "GetWindowRect",
+                               return_value=rect or self.RECT))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic))
+            focus = enter(patch.object(WindowOperator, "focus_window", return_value=True))
+            click = enter(patch.object(WindowOperator, "click"))
+            press = enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+            if sleep:
+                enter(patch.object(ActionExecutor.time, "sleep"))
             ok = executor._press_begin(again=again)
         return ok, user32, focus, click, press
 
-    def test_it_presses_with_the_cursor_and_osc(self):
-        executor, _st = self._executor()
+    def test_it_dips_the_cursor_into_the_window(self):
+        """押すのは連打側。ここはカーソルを一瞬だけ置く"""
+        executor, st = self._executor()
 
-        ok, user32, focus, click, press = self._press(executor)
+        def accept(_sec):
+            st.begin_done = True        # ひと差しで押せた
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=accept):
+            ok, user32, focus, click, press = self._press(executor, sleep=False)
 
         self.assertTrue(ok)
         focus.assert_not_called()
         click.assert_not_called()
-        self.assertEqual(press.call_args_list,
-                         [call("/input/UseRight", config.BEGIN_CURSOR_DWELL_SEC)]
-                         * config.BEGIN_CURSOR_PULSES)
         inside = (self.RECT[0] + config.BEGIN_CURSOR_OFFSET[0],
                   self.RECT[1] + config.BEGIN_CURSOR_OFFSET[1])
-        self.assertEqual(user32.moves[0], inside, "窓の中へ動かす")
-        self.assertEqual(user32.cursor, (500, 500), "終わったら元の位置")
+        self.assertEqual(user32.moves, [inside, (500, 500)], "入って、すぐ戻る")
 
-    def test_it_stops_pulsing_once_begin_is_accepted(self):
+    def test_it_dips_again_until_it_is_accepted(self):
+        executor, _st = self._executor()
+        slept = []
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=slept.append):
+            ok, user32, focus, click, _press = self._press(executor, sleep=False)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()      # 押せないままなら従来方式へ落とす
+        click.assert_called_once()
+        self.assertEqual(user32.moves.count((500, 500)), config.BEGIN_CURSOR_DIPS,
+                         "毎回カーソルを戻す")
+        # DWELL は WindowOperator 側の待ちと同じ秒数なので、回数ではなく有無で見る
+        self.assertIn(config.BEGIN_CURSOR_DWELL_SEC, slept)
+        self.assertEqual(slept.count(config.BEGIN_CURSOR_GAP_SEC),
+                         config.BEGIN_CURSOR_DIPS - 1, "間隔を空ける")
+
+    def test_it_gives_up_at_the_time_limit(self):
+        executor, _st = self._executor()
+        clock = iter([0.0, 0.0, 99.0, 99.0, 99.0])
+
+        with patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ActionExecutor.time, "time", side_effect=lambda: next(clock)):
+            ok, user32, focus, click, _press = self._press(executor, sleep=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(len(user32.moves), 2, "1回だけ差して打ち切る")
+        focus.assert_called_once()      # 打ち切ったら従来方式へ
+        click.assert_called_once()
+
+    def test_an_item_in_hand_is_dropped_first(self):
+        """持っているときの UseRight はその持ち物を使ってしまう（実機で確認済み）。
+        なので押す前に落とす。拾い直しはしない"""
+        executor, st = self._executor(item_id=5)
+
+        def accept(_sec):
+            st.begin_done = True        # ひと差しで押せた
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=accept):
+            ok, user32, focus, click, press = self._press(executor, sleep=False)
+
+        self.assertTrue(ok)
+        focus.assert_not_called()
+        self.assertEqual(
+            press.call_args_list[:config.BEGIN_DROP_PULSES],
+            [call("/input/DropRight", config.BEGIN_DROP_PULSE_SEC)]
+            * config.BEGIN_DROP_PULSES)
+        self.assertTrue(st.item_dropped_for_begin)
+        self.assertTrue(user32.moves, "落としたあとはカーソルを差す")
+
+    def test_dropping_can_be_turned_off(self):
+        executor, st = self._executor(item_id=5)
+
+        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False):
+            ok, user32, focus, click, press = self._press(executor)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        press.assert_not_called()
+        self.assertEqual(user32.moves, [], "カーソルも動かさない")
+        self.assertFalse(st.item_dropped_for_begin)
+
+    def test_an_empty_hand_is_not_dropped(self):
         executor, st = self._executor()
 
-        def accept(*_a, **_kw):
-            st.begin_done = True
+        _ok, _user32, _focus, _click, press = self._press(executor)
+
+        self.assertFalse(any(c.args[0] == "/input/DropRight"
+                             for c in press.call_args_list), press.call_args_list)
+        self.assertFalse(st.item_dropped_for_begin)
+
+    # ── 連打（カーソルは動かさない） ─────────────────
+    def test_the_spam_waits_for_the_start_and_then_pulses(self):
+        executor, st = self._executor()
+        st.round_over_time = 1000.0
+        user32 = FakeUser32()
+        waits, clock = [], iter([1000.0, 1000.0 + config.BEGIN_USE_SPAM_START_SEC])
+
+        with patch.object(WindowOperator, "user32", user32), \
+             patch.object(ActionExecutor.time, "time", side_effect=lambda: next(clock)), \
+             patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            executor._spam_use_right(self.CountingStop(limit=2, waits=waits), st.round_seq)
+
+        self.assertEqual(waits[0], 0.1, "始まる時刻まで待つ")
+        press.assert_called_once_with("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
+        self.assertEqual(user32.moves, [], "連打の間はカーソルを動かさない")
+
+    def test_the_spam_starts_by_dropping(self):
+        """連打を立てる時点で、持っているものを落としてから送り始める"""
+        executor, st = self._executor(item_id=5)
+
+        with patch.object(ActionExecutor.threading, "Thread") as thread,              patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            self.assertIsNotNone(executor._start_use_spam(st.round_seq))
+
+        self.assertEqual([c.args[0] for c in press.call_args_list],
+                         ["/input/DropRight"] * config.BEGIN_DROP_PULSES,
+                         "スレッドを立てる前に落とす")
+        thread.assert_called_once()
+
+    def test_the_spam_stops_when_begin_is_accepted(self):
+        executor, st = self._executor()
+        st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
+        st.begin_done = True
+
+        with patch.object(OSCClient.OSCClient, "press") as press:
+            executor._spam_use_right(self.CountingStop(), st.round_seq)
+
+        press.assert_not_called()
+
+    def test_something_picked_up_mid_spam_is_dropped(self):
+        """連打の途中で拾ってしまったら、持ったまま送らずに落としてから続ける"""
+        executor, st = self._executor(item_id=3)
+        st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
+
+        def drop(address, _sec):
+            if address == "/input/DropRight":
+                st.item_id = 0
             return True
 
-        with patch.object(OSCClient.OSCClient, "press", side_effect=accept) as press:
-            with patch.object(WindowOperator, "user32", FakeUser32()), \
-                 patch.object(WindowOperator.win32gui, "GetWindowRect",
-                              return_value=self.RECT), \
-                 patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
-                 patch.object(ActionExecutor.time, "sleep"):
-                executor._press_begin()
+        with patch.object(OSCClient.OSCClient, "press", side_effect=drop) as press:
+            executor._spam_use_right(self.CountingStop(limit=2), st.round_seq)
 
-        self.assertEqual(press.call_count, 1, "受理されたら送るのをやめる")
+        addresses = [c.args[0] for c in press.call_args_list]
+        self.assertEqual(addresses[:config.BEGIN_DROP_PULSES],
+                         ["/input/DropRight"] * config.BEGIN_DROP_PULSES)
+        self.assertIn("/input/UseRight", addresses)
+
+    def test_the_spam_stops_if_it_cannot_drop(self):
+        executor, st = self._executor(item_id=3)
+        st.round_over_time = 0.0
+
+        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False), \
+             patch.object(OSCClient.OSCClient, "press") as press:
+            executor._spam_use_right(self.CountingStop(), st.round_seq)
+
+        press.assert_not_called()
+
+    def test_the_spam_is_not_started_without_osc_or_with_the_switch_off(self):
+        executor, st = self._executor(osc_port=0)
+        self.assertIsNone(executor._start_use_spam(st.round_seq))
+
+        with patch.object(config, "BEGIN_BY_CURSOR", False):
+            executor, st = self._executor()
+            self.assertIsNone(executor._start_use_spam(st.round_seq))
+
+        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False):
+            executor, st = self._executor(item_id=5)
+            self.assertIsNone(executor._start_use_spam(st.round_seq),
+                              "落とせないなら従来方式")
+
+    def test_the_round_flow_starts_the_spam_before_waiting(self):
+        """Verified Round End を待つ前から連打を回しておく"""
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        flow = src[src.index("    def do_after_round"):]
+        self.assertLess(flow.index("self._start_use_spam(round_seq)"),
+                        flow.index("self._wait_round_end()"))
+        self.assertIn("spam.set()", flow)
 
     def test_a_minimized_window_falls_back_to_the_click(self):
         executor, _st = self._executor()
@@ -9435,6 +9598,17 @@ class TestBeginByCursor(unittest.TestCase):
             self.assertFalse(executor._press_begin())
         click.assert_not_called()
 
+    def test_the_retry_starts_its_own_spam(self):
+        """押し直しのときは連打が止まっているので、その場で立て直す"""
+        executor, st = self._executor()
+
+        with patch.object(executor, "_start_use_spam") as spam, \
+             patch.object(executor, "_dip_cursor_for_begin", return_value=True):
+            self.assertTrue(executor._press_begin(again=True))
+
+        spam.assert_called_once_with(st.round_seq)
+        spam.return_value.set.assert_called_once()
+
     def test_the_retry_presses_the_same_way(self):
         executor, st = self._executor()
         st.round_seq = 4
@@ -9464,6 +9638,90 @@ class TestBeginByCursor(unittest.TestCase):
             executor._confirm_begin(st.round_seq)
 
         self.assertEqual(presses, [True, True], "2回目と3回目を押し直して諦める")
+
+
+class TestBeginDropIsNotAnItemLoss(unittest.TestCase):
+    """Begin のために自分で落としたものは、アイテムロストとして扱わない。
+
+    ロストの扱い（音声・他窓フリーズ・装備待ち）は周回の要なので、
+    本当のロストが鈍らないことも合わせて確かめる。
+    """
+
+    def _monitor(self, item_id=5):
+        cfg = WindowConfig(hwnd=1, voice_item_lost="lost.mp3", auto_begin=False)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.item_id = item_id
+        monitor.st.in_round = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def test_a_drop_for_begin_is_not_a_loss(self):
+        monitor = self._monitor()
+        monitor.st.item_dropped_for_begin = True
+
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+
+        self.assertEqual(monitor.st.item_id, 0, "持ち物は無くなっている")
+        self.assertFalse(monitor.st.item_lost_this_round)
+        self.assertFalse(monitor._round_lost_item())
+        self.assertFalse(monitor._round_item_warning())
+        self.assertEqual(monitor.logs, [], "ロストとして知らせない")
+
+    def test_a_real_loss_is_still_a_loss(self):
+        monitor = self._monitor()
+
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
+        self.assertTrue(monitor._round_lost_item())
+        self.assertTrue(monitor._round_item_warning())
+        self.assertTrue(any("アイテムロスト" in m for m in monitor.logs), monitor.logs)
+
+    def test_a_real_loss_still_announces_and_freezes(self):
+        """本当のロストは、今までどおり RoundOver で通知して装備待ちに入る"""
+        monitor = self._monitor()
+        monitor._mark_item_lost("Run死亡: アイテムロスト")
+
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(monitor._action, "announce_item_lost_once") as announce:
+            monitor._process("2026.09.25 00:00:00 Debug      -  RoundOver")
+
+        announce.assert_called_once()
+        self.assertTrue(monitor.st.waiting_for_equip)
+
+    def test_the_drop_itself_announces_nothing(self):
+        """落とした瞬間に、音声・他窓フリーズ・装備待ちのどれも起きないこと。
+
+        実機の順番では RoundOver と Verified Round End は落とすより前に来る。
+        落とした後に起きうるのは、この executor 自身の通知だけ
+        """
+        cfg = WindowConfig(hwnd=1, osc_port=9000, voice_item_lost="lost.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5)
+        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+        with patch.object(OSCClient.OSCClient, "press", return_value=True),              patch.object(ActionExecutor.PlaySound, "play_sound") as play,              patch.object(ActionExecutor.SharedState, "equip_freeze_start") as freeze:
+            executor._drop_for_begin()
+
+        self.assertTrue(st.item_dropped_for_begin)
+        play.assert_not_called()
+        freeze.assert_not_called()
+        self.assertFalse(st.waiting_for_equip)
+        self.assertFalse(st.item_lost_this_round)
+
+
+    def test_the_next_round_forgets_the_drop(self):
+        monitor = self._monitor()
+        monitor.st.item_dropped_for_begin = True
+
+        monitor._process("This round is taking place at Facility (12) "
+                         "and the round type is Classic")
+
+        self.assertFalse(monitor.st.item_dropped_for_begin)
+        monitor.st.item_id = 7
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+        self.assertTrue(monitor.st.item_lost_this_round, "次のラウンドは普通にロスト")
 
 
 class TestItemLostAnnounceTiming(unittest.TestCase):
