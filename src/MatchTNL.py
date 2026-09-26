@@ -133,6 +133,11 @@ def load_host_state(path: str,
     section は 0 が参加者・1 が待機。畳んだ keepOn_set には参加者だけを足し、
     待機は名前ごとの wishes にだけ入れる（load_host_save と同じ方針）。
 
+    ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
+    タブごとに続行リストの中身が違う。畳んだものだけだと別の窓の希望が混ざる
+    ので、タブごとの内訳も `meta["tabs_data"]` に入れて返す（畳んだ戻り値は
+    そのまま。呼び出し側は対応づけできたときだけ内訳を使う）。
+
     ListTool が書いている最中を掴まないよう、本体と -wal / -shm を一時フォルダへ
     写してから読む。ListTool のフォルダには一切書かない。壊れている・途中だった
     場合は例外を投げる（呼び出し側の再試行に任せる。load_host_save と同じ）。
@@ -147,7 +152,7 @@ def load_host_state(path: str,
         con = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
         try:
             members = con.execute(
-                "select id, section, vrc_name from participants").fetchall()
+                "select id, tab_index, section, vrc_name from participants").fetchall()
             rows = con.execute(
                 "select participant_id, round_name, bits from wishes").fetchall()
             tabs = con.execute("select count(*) from tabs").fetchone()[0]
@@ -156,18 +161,24 @@ def load_host_state(path: str,
 
     keepOn_set: dict[str, set[int]] = {}
     wishes: dict[str, dict[str, set[int]]] = {}
-    by_id = {pid: (section, name) for pid, section, name in members}
+    by_id = {pid: (tab, section, name) for pid, tab, section, name in members}
     participants = 0
     participant_names: set = set()
-    for _pid, section, name in members:
+    tabs_data: dict = {}
+    for _pid, tab, section, name in members:
+        data = tabs_data.setdefault(tab, {"participants": set(), "waiting": set(),
+                                          "keepOn": {}, "wishes": {}})
         if section == PARTICIPANT_SECTION:
             participants += 1
             if isinstance(name, str) and name:
                 participant_names.add(name)
+                data["participants"].add(name)
+        elif isinstance(name, str) and name:
+            data["waiting"].add(name)
 
     listed_ids = set()
     for pid, round_key, bits in rows:
-        section, name = by_id.get(pid, (None, None))
+        tab, section, name = by_id.get(pid, (None, None, None))
         if section is None:
             continue
         # 行が1つでもあれば「リストを持っている人」。全部OFFでも {} で残すのは
@@ -180,25 +191,66 @@ def load_host_state(path: str,
         ids = _wish_ids(bits)
         if not ids:
             continue
+        tab_data = tabs_data.get(tab)
         if section == PARTICIPANT_SECTION:
             keepOn_set.setdefault(round_key, set()).update(ids)
+            if tab_data is not None:
+                tab_data["keepOn"].setdefault(round_key, set()).update(ids)
         if mine is not None:
             # 同名が複数タブにいることがある。畳んで持つ
             mine.setdefault(round_key, set()).update(ids)
+        if tab_data is not None and isinstance(name, str) and name:
+            tab_data["wishes"].setdefault(name, {}).setdefault(
+                round_key, set()).update(ids)
 
     host_self = None
     if user_save_path:
         host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
     if host_self:
         participant_names.add(host_self)
+        # 主催者はどのタブの窓にいても自分のリストで判定する。タブごとの
+        # 内訳にも足しておく（参加者の人数には数えない）
+        own = wishes.get(host_self) or {}
+        for data in tabs_data.values():
+            data["wishes"].setdefault(host_self, {})
+            for round_key, ids in own.items():
+                data["keepOn"].setdefault(round_key, set()).update(ids)
+                data["wishes"][host_self].setdefault(round_key, set()).update(ids)
     # listed は「続行リストを持っている人」。ListTool は全部OFFの行を書かないので、
     # 行が1件でもある人を数える（JSON 版の「data を持つ人」と同じ意味）
     meta = {"participants": participants,   # 自分は数えない
             "listed": len(listed_ids),
             "participant_names": participant_names,
             "tabs": tabs,
+            # 窓ごとの対応づけに使うタブの内訳。
+            # {tab_index: {"participants": {名前}, "waiting": {名前},
+            #              "keepOn": {ラウンド: {ID}}, "wishes": {名前: {...}}}}
+            "tabs_data": tabs_data,
             "host_self": host_self}
     return keepOn_set, meta, wishes
+
+
+def tab_for_window(tabs_data: dict, present_names) -> int | None:
+    """その窓にいる人の名前から、対応するタブを選ぶ。
+
+    ListTool は窓とタブの対応をどこにも記録しないので、参加者の名前の重なりで
+    決める。重なりが最大のタブ。1人も重ならない・同点が複数あるときは None
+    （対応づけできない＝呼び出し側は全タブを畳んだ共有リストへ落とす）。
+    待機の名前では選ばない——待機はその場にいない人なので、別の窓の人が
+    混ざっている
+    """
+    present = set(present_names or ())
+    if not present or not tabs_data:
+        return None
+    best, best_overlap, tied = None, 0, False
+    for tab, data in sorted(tabs_data.items(), key=lambda kv: str(kv[0])):
+        overlap = len(present & set(data.get("participants") or ()))
+        if overlap > best_overlap:
+            best, best_overlap, tied = tab, overlap, False
+        elif overlap == best_overlap and overlap > 0:
+            tied = True
+    # best は重なりが1人以上あるタブでしか埋まらない（重なり0なら None のまま）
+    return None if tied else best
 
 
 def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None:

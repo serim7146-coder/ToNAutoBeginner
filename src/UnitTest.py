@@ -7081,6 +7081,7 @@ class TestHostListGrace(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.keepOn_set = {}
         app.host_wishes = {}
+        app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._host_save_warned = False
         app._host_loss_since = None
@@ -7088,7 +7089,7 @@ class TestHostListGrace(unittest.TestCase):
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
-        for name in ("_apply_keep_on", "_apply_host_wishes", "_host_list_lost",
+        for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
                      "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
             method = getattr(mainGUI.App, name)
             setattr(app, name, (lambda m: lambda *a, **kw: m(app, *a, **kw))(method))
@@ -7422,10 +7423,15 @@ class TestHostStateSqlite(unittest.TestCase):
         with gzip.open(json_path, "wb") as f:
             f.write(json.dumps({"version": 5, "tabs": [members]}).encode("utf-8"))
 
-        from_db = self._load([people])
-        from_json = MatchTNL.load_host_save(str(json_path))
+        keep_db, meta_db, wishes_db = self._load([people])
+        keep_json, meta_json, wishes_json = MatchTNL.load_host_save(str(json_path))
 
-        self.assertEqual(from_db, from_json)
+        tabs_data = meta_db.pop("tabs_data")     # タブの内訳は SQLite 版だけが持つ
+        self.assertEqual((keep_db, meta_db, wishes_db),
+                         (keep_json, meta_json, wishes_json))
+        self.assertEqual(set(tabs_data), {0}, "1タブぶん")
+        self.assertEqual(tabs_data[0]["participants"], {"さんかしゃA", "さんかしゃB"})
+        self.assertEqual(tabs_data[0]["waiting"], {"たいきC"})
 
     # ── 主催者自身 ──────────────────────────
     def test_the_host_own_list_is_added(self):
@@ -7484,6 +7490,188 @@ class TestHostStateSqlite(unittest.TestCase):
             MatchTNL.load_host_state(str(self.db) + ".nope")
 
 
+class TestWindowTabMatching(unittest.TestCase):
+    """ToN ListTool の複窓対応: 窓ごとに、対応するタブの続行リストだけを使う。
+
+    窓とタブの対応はどこにも記録されていないので、その窓にいる人の名前と、
+    タブの参加者の名前の重なりで決める。
+    """
+
+    CLASSIC = "Classic/クラシック"
+    FOG = "Fog/霧"
+
+    def _tabs(self, *tabs):
+        """(参加者名の集合, keepOn, 待機名の集合) の並びからタブの内訳を作る"""
+        data = {}
+        for index, tab in enumerate(tabs):
+            names, keep_on, waiting = tab
+            data[index] = {
+                "participants": set(names),
+                "waiting": set(waiting or ()),
+                "keepOn": {k: set(v) for k, v in (keep_on or {}).items()},
+                "wishes": {name: {k: set(v) for k, v in (keep_on or {}).items()}
+                           for name in set(names) | set(waiting or ())},
+            }
+        return {"version": 1, "tabs": data}
+
+    def _monitor(self, host_tabs, present=(), me="ぬし", known=True):
+        monitor = LogMonitor.LogMonitor(
+            WindowConfig(), {"共有": {999}}, lambda _m: None, window_idx=1,
+            host_wishes={name: {} for name in present},
+            host_tabs=host_tabs)
+        monitor.st.local_player_name = me
+        monitor.st.players_known = known
+        monitor.st.players = set(range(len(present)))
+        monitor.st.player_names = dict(zip(monitor.st.players, present))
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        return monitor
+
+    # ── 対応づけ ────────────────────────────
+    def test_each_window_uses_its_own_tab(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []),
+                          (["う", "え"], {self.CLASSIC: {2}}, []))
+
+        first = self._monitor(tabs, present=["あ", "い"])
+        second = self._monitor(tabs, present=["う", "え"])
+
+        self.assertEqual(first._keep_on(), {self.CLASSIC: {1}})
+        self.assertEqual(second._keep_on(), {self.CLASSIC: {2}})
+        self.assertNotIn(2, first._keep_on().get(self.CLASSIC, set()),
+                         "別のタブの希望は混ぜない")
+
+    def test_the_tab_with_the_most_names_wins(self):
+        tabs = self._tabs((["あ"], {self.CLASSIC: {1}}, []),
+                          (["あ", "い", "う"], {self.CLASSIC: {2}}, []))
+
+        monitor = self._monitor(tabs, present=["あ", "い", "う"])
+
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {2}})
+        self.assertTrue(any("タブ2 に対応" in m for m in monitor.logs), monitor.logs)
+
+    def test_no_overlap_falls_back_to_the_shared_list(self):
+        tabs = self._tabs((["あ"], {self.CLASSIC: {1}}, []))
+
+        monitor = self._monitor(tabs, present=["か", "き"])
+
+        self.assertEqual(monitor._keep_on(), {}, "共有リスト＋名前の絞り込みのまま")
+        self.assertTrue(any("見つかりません" in m for m in monitor.logs), monitor.logs)
+
+    def test_a_tie_is_not_matched(self):
+        tabs = self._tabs((["あ", "か"], {self.CLASSIC: {1}}, []),
+                          (["い", "き"], {self.CLASSIC: {2}}, []))
+
+        monitor = self._monitor(tabs, present=["あ", "い"])
+
+        self.assertIsNone(MatchTNL.tab_for_window(tabs["tabs"], {"あ", "い"}))
+        self.assertEqual(monitor._keep_on(), {})
+
+    def test_unknown_players_are_not_matched(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []))
+
+        monitor = self._monitor(tabs, present=["あ", "い"], known=False)
+
+        self.assertEqual(monitor._keep_on(), {"共有": {999}}, "共有リストのまま")
+
+    def test_a_solo_window_is_not_matched(self):
+        """自分しかいない窓は、参加者0人のタブと区別できない"""
+        tabs = self._tabs((["ぬし"], {self.CLASSIC: {1}}, []))
+
+        monitor = self._monitor(tabs, present=["ぬし"], me="ぬし")
+
+        self.assertEqual(monitor._keep_on(), {})
+
+    def test_waiting_names_do_not_match(self):
+        """待機はその場にいない人。待機で対応づけない"""
+        tabs = self._tabs(([], {self.CLASSIC: {1}}, ["あ", "い"]),
+                          (["う"], {self.CLASSIC: {2}}, []))
+
+        self.assertIsNone(MatchTNL.tab_for_window(tabs["tabs"], {"あ", "い"}))
+
+    def test_the_wishes_come_from_the_tab(self):
+        tabs = self._tabs((["あ"], {self.FOG: {7}}, ["たいき"]),
+                          (["う"], {self.FOG: {8}}, []))
+
+        monitor = self._monitor(tabs, present=["あ"])
+
+        self.assertEqual(monitor._effective_wishes(), {"あ": {self.FOG: {7}}})
+
+    # ── 計算のやり直し ───────────────────────
+    def test_it_recomputes_when_the_players_change(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []),
+                          (["う", "え"], {self.CLASSIC: {2}}, []))
+        monitor = self._monitor(tabs, present=["あ", "い"])
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {1}})
+
+        monitor.st.players = {0, 1}
+        monitor.st.player_names = {0: "う", 1: "え"}
+
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {2}}, "在室者が変われば選び直す")
+
+    def test_it_does_not_recompute_while_nothing_changes(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []))
+        monitor = self._monitor(tabs, present=["あ", "い"])
+
+        with patch.object(MatchTNL, "tab_for_window",
+                          side_effect=MatchTNL.tab_for_window) as match:
+            for _ in range(5):
+                monitor._keep_on()
+
+        self.assertEqual(match.call_count, 1, "在室者も主催リストも変わっていない")
+
+    def test_a_new_host_list_recomputes(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []))
+        monitor = self._monitor(tabs, present=["あ", "い"])
+        monitor._keep_on()
+
+        tabs["tabs"][0]["keepOn"] = {self.CLASSIC: {5}}
+        tabs["version"] += 1
+
+        with patch.object(MatchTNL, "tab_for_window",
+                          side_effect=MatchTNL.tab_for_window) as match:
+            self.assertEqual(monitor._keep_on(), {self.CLASSIC: {5}})
+
+        match.assert_called_once()
+
+    # ── 複窓オフ ────────────────────────────
+    def test_a_single_tab_still_works(self):
+        tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, ["たいき"]))
+
+        monitor = self._monitor(tabs, present=["あ", "い"])
+
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {1}})
+
+    def test_without_tabs_nothing_changes(self):
+        monitor = self._monitor({"version": 0, "tabs": {}}, present=["あ"])
+
+        self.assertIsNone(monitor._window_tab())
+        self.assertEqual(monitor._keep_on(), {}, "名前で絞った共有リスト")
+
+
+class TestRealHostStateTabs(unittest.TestCase):
+    """依頼者の実ファイルで、タブごとの内訳が読めること（無ければスキップ）"""
+
+    def test_the_real_file_splits_into_tabs(self):
+        path = Path(config.HOST_STATE_PATH)
+        if not path.exists():
+            self.skipTest("host_state.sqlite3 が無い")
+
+        _keep, meta, _wishes = MatchTNL.load_host_state(str(path))
+
+        tabs = meta["tabs_data"]
+        self.assertTrue(tabs, "タブの内訳が空")
+        counts = {tab: len(data["participants"]) for tab, data in sorted(tabs.items())}
+        self.assertEqual(sum(counts.values()), meta["participants"],
+                         "タブごとの人数の合計が全体と合う")
+        # 参加者がいるタブは、その名前で引ける
+        for tab, data in tabs.items():
+            if data["participants"]:
+                self.assertEqual(
+                    MatchTNL.tab_for_window(tabs, data["participants"]), tab)
+
+
 class TestHostListSource(unittest.TestCase):
     """続行リストの供給元を状況から決める（チェックボックスは無い）
 
@@ -7523,6 +7711,7 @@ class TestHostListSource(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.keepOn_set = {}
         app.host_wishes = {}
+        app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._host_save_warned = False
         app._host_loss_since = None
@@ -7530,7 +7719,7 @@ class TestHostListSource(unittest.TestCase):
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
-        for name in ("_apply_keep_on", "_apply_host_wishes", "_host_list_lost",
+        for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
                      "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
             setattr(app, name, self._bind(app, name))
         return app
@@ -12534,6 +12723,7 @@ class TestListSourceShared(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.keepOn_set = {}
         app.host_wishes = {}
+        app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._host_save_warned = False
         app.logs = []
@@ -12542,6 +12732,7 @@ class TestListSourceShared(unittest.TestCase):
         app.v_tnl = TestHostListSource.FakeVar("")
         app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
         app._apply_host_wishes = lambda new: mainGUI.App._apply_host_wishes(app, new)
+        app._apply_host_tabs = lambda new: mainGUI.App._apply_host_tabs(app, new)
         app._load_tnl = lambda **kw: None
 
         SharedState.set_list_source("host")

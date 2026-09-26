@@ -13,6 +13,7 @@ import Recorder
 import FogEarlyRead
 import ReadJson
 import LogParser
+import MatchTNL
 import RoundDecision
 import RoundSequence
 import TerrorReplacement
@@ -29,6 +30,9 @@ def _terror_name_cached(tid: int) -> str:
     return ReadJson.terror_name(tid, config.TERRORS) or f"ID:{tid}"
 
 
+_UNSET = object()       # 「まだ計算していない」を None（対応づけできない）と分ける
+
+
 def format_terror_ids(ids: list[int]) -> str:
     return ", ".join(_terror_name_cached(tid) for tid in ids)
 
@@ -42,6 +46,7 @@ class LogMonitor:
     def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0,
                  host_wishes: dict | None = None,
                  host_participants: set | None = None,
+                 host_tabs: dict | None = None,
                  on_round_settings_cleared=None):
         self.cfg = cfg
         self.keepOn_set = keepOn_set
@@ -50,6 +55,11 @@ class LogMonitor:
         # host_wishes のうち参加者（＋主催者本人）の名前。待機と区別するため。
         # None なら区別しない（host_wishes が参加者だけのとき）
         self.host_participants = host_participants
+        # ToN ListTool の複窓対応のタブ。{"version": n, "tabs": {タブ: {...}}}
+        # 全窓で共有する dict を掴む（mainGUI が in-place で入れ替える）
+        self.host_tabs = host_tabs if host_tabs is not None else {}
+        self._tab_key = None        # 対応づけを計算したときの (版, 在室者)
+        self._tab_index = _UNSET    # 対応づいたタブ（_UNSET はまだ計算していない）
         self.logger = logger
         self.window_idx = window_idx
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
@@ -337,6 +347,42 @@ class LogMonitor:
             names.add(st.local_player_name)
         return names
 
+    def _window_tab(self) -> dict | None:
+        """この窓に対応するタブのデータ。対応づけできなければ None。
+
+        ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
+        タブごとに続行リストの中身が違う。対応はどこにも記録されていないので、
+        その窓にいる人の名前と、タブの参加者の名前の重なりで決める。
+        在室者か主催リストが変わったときだけ計算し直す（毎ラウンド全タブを
+        走査しない）
+        """
+        st = self.st
+        tabs = (self.host_tabs or {}).get("tabs") or {}
+        if not tabs or SharedState.get_list_source() != "host":
+            return None
+        if not st.players_known:
+            return None
+        present = self._present_names()
+        # ソロの窓（自分しかいない）は、参加者0人のタブと区別できない
+        if not (present - {st.local_player_name}):
+            return None
+        key = ((self.host_tabs or {}).get("version"), frozenset(present))
+        if key != self._tab_key:
+            self._tab_key = key
+            index = MatchTNL.tab_for_window(tabs, present)
+            if index != self._tab_index:
+                self._tab_index = index
+                if index is None:
+                    self._log("[主催リスト] 対応するタブが見つかりません"
+                              "（共有リストを使います）")
+                else:
+                    hit = len(present & set(tabs[index].get("participants") or ()))
+                    self._log(f"[主催リスト] タブ{index + 1} に対応"
+                              f"（一致 {hit}/{len(present)}人）")
+        if self._tab_index is None or self._tab_index is _UNSET:
+            return None
+        return tabs.get(self._tab_index)
+
     def _effective_wishes(self) -> dict | None:
         """この窓の判定に使う、参加者別の希望。絞り込めなければ None。
 
@@ -352,12 +398,19 @@ class LogMonitor:
         if not self.st.players_known:
             return None
         present = self._present_names()
+        tab = self._window_tab()
+        # 対応づいた窓は、そのタブの人の希望だけを見る（別のタブは別の窓の周回）
+        source = tab["wishes"] if tab is not None else self.host_wishes
         # 中身が空でもリストを持っている人は残す（全部 OFF＝全部自爆）
-        return {name: wish for name, wish in self.host_wishes.items()
+        return {name: wish for name, wish in source.items()
                 if name in present}
 
     def _keep_on(self) -> dict:
         """この窓の続行リスト"""
+        tab = self._window_tab()
+        if tab is not None:
+            # そのタブの参加者の希望だけ（主催者自身のぶんは読み込み側で足してある）
+            return tab["keepOn"]
         wishes = self._effective_wishes()
         if wishes is None:
             return self.keepOn_set

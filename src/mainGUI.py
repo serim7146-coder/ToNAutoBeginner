@@ -477,6 +477,8 @@ class App(tk.Tk):
         self.host_wishes: dict = {}
         # 参加者（＋自分）の名前。host_wishes には待機も入るので区別する。これも in-place
         self.host_participants: set = set()
+        # ToN ListTool の複窓対応のタブ。窓ごとに対応するタブだけを使う
+        self.host_tabs: dict = {"version": 0, "tabs": {}}
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
@@ -1002,6 +1004,16 @@ class App(tk.Tk):
         self.keepOn_set.clear()
         self.keepOn_set.update(new_set)
 
+    def _apply_host_tabs(self, tabs_data: dict):
+        """タブごとの内訳。LogMonitor が同じ dict を掴むので in-place で更新する。
+
+        版を上げて、窓側の対応づけ（名前の重なり）を計算し直させる
+        """
+        tabs = self.host_tabs.setdefault("tabs", {})
+        tabs.clear()
+        tabs.update(tabs_data or {})
+        self.host_tabs["version"] = self.host_tabs.get("version", 0) + 1
+
     def _apply_host_wishes(self, new_wishes: dict, participants=()):
         """参加者別の希望も LogMonitor が同じ dict を掴む。in-place で更新する"""
         self.host_wishes.clear()
@@ -1040,6 +1052,7 @@ class App(tk.Tk):
         self._log(f"[続行リスト] tnlへ切替（{reason}）")
         # 参加者別の希望を残すと Sabotage の判定に古い希望が効いてしまう
         self._apply_host_wishes({})
+        self._apply_host_tabs({})
         # tnlが未設定だと _load_tnl は何もせず、主催リストが居座る。それでは
         # 「古いリストで判定しない」という目的を果たせないので先に空にする
         # （tnlが読めればこの直後に上書きされる。読めなければ続行0件）
@@ -1123,6 +1136,7 @@ class App(tk.Tk):
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
         self._apply_host_wishes(wishes, meta.get("participant_names", ()))
+        self._apply_host_tabs(meta.get("tabs_data") or {})
         if switched:
             self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")
         if changed or switched:
@@ -1416,6 +1430,7 @@ class App(tk.Tk):
                 window_idx=tab.idx + 1,
                 host_wishes=self.host_wishes,
                 host_participants=self.host_participants,
+                host_tabs=self.host_tabs,
                 on_round_settings_cleared=self._clear_tab_round_settings)
             self.monitors.append(mon)
             mon.start()
