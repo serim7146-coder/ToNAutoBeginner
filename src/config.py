@@ -371,6 +371,9 @@ LAUNCH_DESKTOP_MODE     = True   # 既定はデスクトップモード(--no-vr)
 # ── ウィンドウ↔ログの対応付け ──
 LOG_MATCH_TOLERANCE_SEC   = 120.0  # プロセス起動時刻とログ作成時刻の許容差
 LOG_MATCH_CANDIDATE_COUNT = 20     # 突き合わせ対象にするログの本数
+# これより長く更新が止まったログは、VRChatが終了したものとして候補から外す
+# （生きている窓のログは絶えず伸びる）
+LOG_LIVE_GRACE_SEC        = 120.0
 
 # ── ログの更新頻度 ──
 LOG_POLL_INTERVAL    = 0.3

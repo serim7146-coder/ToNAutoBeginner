@@ -2,6 +2,7 @@ import datetime
 import glob
 import os
 import re
+import time
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -11,6 +12,7 @@ import win32con
 import win32process
 
 import config
+import VRChatLauncher
 
 
 LOG_NAME_PREFIX = "output_log_"
@@ -266,6 +268,37 @@ class WindowAssignment(NamedTuple):
     log: Optional[Path]
     osc_in: int = 0
     osc_out: int = 0
+
+
+def live_ton_logs(paths, grace_sec: float = None, now: float = None):
+    """割り当ての候補にしてよいログだけを返す。
+
+    外すのは2種類。どちらも「その窓はもう ToN を回していない」ので、
+    割り当てると死んだログを掴んで永久に何も検出しなくなる。
+      - 更新が止まっているログ（VRChat が終了した）
+      - 最後に入ったワールドが ToN でないログ（ToN から離れた）
+    まだ Joining の行が無いログは外さない（窓が立ち上がっている最中）。
+
+    戻り値は (残したログ, [(ログ, 理由), ...])。呼び出し側が理由をログに出す
+    """
+    grace = config.LOG_LIVE_GRACE_SEC if grace_sec is None else grace_sec
+    now = time.time() if now is None else now
+    kept, dropped = [], []
+    for path in paths or []:
+        try:
+            quiet_for = now - Path(path).stat().st_mtime
+        except OSError:
+            dropped.append((path, "読めません"))
+            continue
+        if quiet_for > grace:
+            dropped.append((path, "更新が止まっています"))
+            continue
+        world = VRChatLauncher.joined_world_id(path)
+        if world is not None and world != config.TON_WORLD_ID:
+            dropped.append((path, "ToN を離れています"))
+            continue
+        kept.append(path)
+    return kept, dropped
 
 
 def assign_windows(

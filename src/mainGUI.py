@@ -480,6 +480,7 @@ class App(tk.Tk):
         # ToN ListTool の複窓対応のタブ。窓ごとに対応するタブだけを使う
         self.host_tabs: dict = {"version": 0, "tabs": {}}
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
+        self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
@@ -1289,10 +1290,29 @@ class App(tk.Tk):
         self._log(f"[起動時検出] VRChatウィンドウを{n}窓検出 → 窓数を{n}に設定")
         self._assign_windows_and_logs(windows)
 
+    def _live_candidates(self, candidates: list) -> list:
+        """終わったログ・ToN を離れたログを候補から外す。
+
+        全部外れたら絞り込む前の一覧を使う（割り当て不能にしない）。
+        外した顔ぶれが変わったときだけログを出す
+        """
+        kept, dropped = VRChatDiscovery.live_ton_logs(candidates)
+        reasons = tuple(sorted((Path(p).name, why) for p, why in dropped))
+        if not kept and candidates:
+            if self._dropped_logs != reasons:
+                self._dropped_logs = reasons
+                self._log("[割り当て] 生きているログがありません → 全部を候補にします")
+            return candidates
+        if reasons != self._dropped_logs:
+            self._dropped_logs = reasons
+            for name, why in reasons:
+                self._log(f"[割り当て] 候補から除外: {name}（{why}）")
+        return kept
+
     def _resolve_windows(self, windows: list) -> list:
         """窓↔ログ↔OSCポートを確定する。netstatは1回だけ撃つ"""
-        candidates = VRChatDiscovery.find_latest_logs(
-            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
+        candidates = self._live_candidates(VRChatDiscovery.find_latest_logs(
+            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT))
         ports_by_pid = OSCClient.udp_ports_by_pid()
         if ports_by_pid is None:
             self._log("[割り当て] UDPポート一覧を取得できません（netstat失敗）"
@@ -1748,8 +1768,8 @@ class App(tk.Tk):
         """ログファイルが起動時刻で紐づけられるようになり次第、割り当てる。
         固定待ちだとウィンドウ出現から無駄に待つため、準備でき次第すぐ進める。"""
         windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
-        candidates = VRChatDiscovery.find_latest_logs(
-            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT)
+        candidates = self._live_candidates(VRChatDiscovery.find_latest_logs(
+            config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT))
         ready = VRChatDiscovery.count_time_matched_logs(
             windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
         if ready >= expected:

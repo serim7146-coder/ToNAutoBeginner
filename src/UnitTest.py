@@ -1105,6 +1105,127 @@ class TestOSCLogBinding(unittest.TestCase):
         self.assertEqual(assigned[0].osc_in, 0)
 
 
+class TestLiveLogCandidates(unittest.TestCase):
+    """終わったログ・ToN を離れたログは、窓への割り当ての候補から外す。
+
+    掴むと死んだログを読み続けて、その窓は永久に何も検出しなくなる。
+    """
+
+    TON = None      # setUp で config から取る
+
+    def setUp(self):
+        self.TON = config.TON_WORLD_ID
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.now = time.time()
+
+    def _log(self, name, world=TON, quiet_for=0.0, joining=True):
+        path = Path(self._dir.name) / name
+        line = ""
+        if joining:
+            world = self.TON if world is None else world
+            line = (f"2026.09.26 12:00:00 Debug      -  [Behaviour] Joining "
+                    f"{world}:12345~private(usr_x)~region(jp)\n")
+        path.write_text("2026.09.26 11:59:00 Debug      -  start\n" + line, encoding="utf-8")
+        os.utime(path, (self.now - quiet_for, self.now - quiet_for))
+        return str(path)
+
+    def _keep(self, *paths):
+        kept, dropped = VRChatDiscovery.live_ton_logs(paths, now=self.now)
+        return [Path(p).name for p in kept], [(Path(p).name, why) for p, why in dropped]
+
+    def test_a_quiet_log_is_dropped(self):
+        live = self._log("live.txt")
+        dead = self._log("dead.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+
+        kept, dropped = self._keep(live, dead)
+
+        self.assertEqual(kept, ["live.txt"])
+        self.assertEqual(dropped, [("dead.txt", "更新が止まっています")])
+
+    def test_the_grace_is_the_boundary(self):
+        just = self._log("just.txt", quiet_for=config.LOG_LIVE_GRACE_SEC - 1)
+
+        kept, _dropped = self._keep(just)
+
+        self.assertEqual(kept, ["just.txt"], "猶予の内なら残す")
+
+    def test_a_log_that_left_ton_is_dropped(self):
+        ton = self._log("ton.txt")
+        away = self._log("away.txt", world="wrld_somewhere-else")
+
+        kept, dropped = self._keep(ton, away)
+
+        self.assertEqual(kept, ["ton.txt"])
+        self.assertEqual(dropped, [("away.txt", "ToN を離れています")])
+
+    def test_a_fresh_log_without_joining_is_kept(self):
+        """起動直後でまだ Joining が無い。窓が立ち上がっている最中"""
+        starting = self._log("starting.txt", joining=False)
+
+        kept, dropped = self._keep(starting)
+
+        self.assertEqual(kept, ["starting.txt"])
+        self.assertEqual(dropped, [])
+
+    def test_a_missing_file_is_dropped(self):
+        kept, dropped = self._keep(str(Path(self._dir.name) / "nope.txt"))
+
+        self.assertEqual(kept, [])
+        self.assertEqual(dropped, [("nope.txt", "読めません")])
+
+    # ── 窓への割り当て ───────────────────────
+    def _app(self):
+        app = type("FakeApp", (), {})()
+        app.logs = []
+        app._log = app.logs.append
+        app._dropped_logs = None
+        app._live_candidates = lambda c: mainGUI.App._live_candidates(app, c)
+        return app
+
+    def test_the_assignment_uses_only_live_logs(self):
+        app = self._app()
+        live = self._log("live.txt")
+        dead = self._log("dead.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+
+        kept = app._live_candidates([live, dead])
+
+        self.assertEqual(kept, [live])
+        self.assertTrue(any("候補から除外: dead.txt" in m for m in app.logs), app.logs)
+
+    def test_all_dead_falls_back_to_every_log(self):
+        """全部外れたら絞り込む前の一覧を使う（割り当て不能にしない）"""
+        app = self._app()
+        dead = self._log("dead.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+        away = self._log("away.txt", world="wrld_somewhere-else")
+
+        kept = app._live_candidates([dead, away])
+
+        self.assertEqual(kept, [dead, away])
+        self.assertTrue(any("生きているログがありません" in m for m in app.logs), app.logs)
+
+    def test_it_logs_only_when_the_dropped_set_changes(self):
+        app = self._app()
+        live = self._log("live.txt")
+        dead = self._log("dead.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+
+        for _ in range(3):
+            app._live_candidates([live, dead])
+        self.assertEqual(len(app.logs), 1, app.logs)
+
+        away = self._log("away.txt", world="wrld_somewhere-else")
+        app._live_candidates([live, dead, away])
+
+        self.assertEqual(len(app.logs), 3, "顔ぶれが変わったら出す")
+
+    def test_nothing_dropped_says_nothing(self):
+        app = self._app()
+        live = self._log("live.txt")
+
+        self.assertEqual(app._live_candidates([live]), [live])
+        self.assertEqual(app.logs, [])
+
+
 class TestOSCPortsFromAssignment(unittest.TestCase):
     """GUI: 割り当てで得たポートを使う（9000 + idx*10 の決め打ちをやめる）"""
 
@@ -1214,6 +1335,8 @@ class TestOSCPortsFromAssignment(unittest.TestCase):
 
     def test_a_netstat_failure_is_logged(self):
         app = self._app([], [])
+        app._dropped_logs = None
+        app._live_candidates = lambda c: mainGUI.App._live_candidates(app, c)
         with patch.object(mainGUI.OSCClient, "udp_ports_by_pid", return_value=None), \
              patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]):
             mainGUI.App._resolve_windows(app, [])
@@ -10234,7 +10357,8 @@ class TestStartWithoutTnl(unittest.TestCase):
         for name in ("v_voice_continue", "v_voice_fog", "v_voice_item_lost",
                      "v_voice_intermission", "v_voice_foxy"):
             setattr(app, name, self.FakeVar(""))
-        for name in ("_resolve_tab_ports", "_resolve_windows"):
+        app._dropped_logs = None
+        for name in ("_resolve_tab_ports", "_resolve_windows", "_live_candidates"):
             setattr(app, name, getattr(mainGUI.App, name).__get__(app))
         app._apply_obs_settings = lambda: None
         app._assign_source = mainGUI.App._assign_source
