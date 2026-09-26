@@ -3,7 +3,7 @@ import hashlib
 import base64
 import struct
 import socket
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 import threading
 import time
 import sys
@@ -13,6 +13,7 @@ import gzip
 import sqlite3
 import ctypes
 import io
+import contextlib
 import os
 import re
 from datetime import datetime
@@ -9206,6 +9207,265 @@ class TestLaunchWindowCount(unittest.TestCase):
         self.assertEqual(mainGUI.App._launch_count_value(app, 4), 0)
 
 
+class FakeUser32:
+    """WindowOperator が使う user32 の代わり。カーソルの動きを記録する"""
+
+    def __init__(self, cursor=(500, 500), screen=(0, 0, 2560, 1440), set_ok=True):
+        self.cursor = cursor
+        self.screen = screen
+        self.set_ok = set_ok
+        self.moves: list[tuple] = []
+
+    def GetCursorPos(self, ref):
+        point = ref._obj
+        point.x, point.y = self.cursor
+        return 1
+
+    def SetCursorPos(self, x, y):
+        if not self.set_ok:
+            return 0
+        self.moves.append((x, y))
+        self.cursor = (x, y)
+        return 1
+
+    def GetSystemMetrics(self, index):
+        return self.screen[{WindowOperator.SM_XVIRTUALSCREEN: 0,
+                            WindowOperator.SM_YVIRTUALSCREEN: 1,
+                            WindowOperator.SM_CXVIRTUALSCREEN: 2,
+                            WindowOperator.SM_CYVIRTUALSCREEN: 3}[index]]
+
+
+class TestCursorOverWindow(unittest.TestCase):
+    """裏の窓のワールドUIは「カーソルがその窓の矩形の中にある」だけで押せる。
+
+    実測（2026-09-25）で分かったこと。前面化は要らないので、この仕組みは
+    SetForegroundWindow を一切呼ばない。
+    """
+
+    RECT = (100, 200, 1000, 800)
+
+    def _window(self, user32=None, rect=None, iconic=False):
+        return (patch.object(WindowOperator, "user32", user32 or FakeUser32()),
+                patch.object(WindowOperator.win32gui, "GetWindowRect",
+                             return_value=rect or self.RECT),
+                patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic))
+
+    @contextlib.contextmanager
+    def _patched(self, **kwargs):
+        patches = self._window(**kwargs)
+        for p in patches:
+            p.start()
+        try:
+            yield
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_the_point_is_inside_the_window(self):
+        with self._patched():
+            x, y = WindowOperator.window_cursor_point(123)
+
+        dx, dy = config.BEGIN_CURSOR_OFFSET
+        self.assertEqual((x, y), (self.RECT[0] + dx, self.RECT[1] + dy))
+        self.assertTrue(self.RECT[0] <= x < self.RECT[2], x)
+        self.assertTrue(self.RECT[1] <= y < self.RECT[3], y)
+
+    def test_a_small_window_still_gets_a_point_inside(self):
+        with self._patched(rect=(0, 0, 10, 10)):
+            self.assertEqual(WindowOperator.window_cursor_point(123), (9, 9))
+
+    def test_a_minimized_window_has_no_point(self):
+        with self._patched(iconic=True):
+            self.assertIsNone(WindowOperator.window_cursor_point(123))
+
+    def test_a_window_off_screen_has_no_point(self):
+        for rect in ((5000, 200, 5900, 800), (100, -3000, 1000, -2400),
+                     (100, 200, 100, 800)):
+            with self._patched(rect=rect):
+                self.assertIsNone(WindowOperator.window_cursor_point(123), rect)
+
+    def test_no_hwnd_has_no_point(self):
+        with self._patched():
+            self.assertIsNone(WindowOperator.window_cursor_point(0))
+
+    def test_the_cursor_moves_in_and_comes_back(self):
+        user32 = FakeUser32(cursor=(42, 43))
+        with self._patched(user32=user32):
+            with WindowOperator.cursor_over_window(123) as over:
+                self.assertTrue(over)
+                self.assertEqual(user32.cursor,
+                                 (self.RECT[0] + config.BEGIN_CURSOR_OFFSET[0],
+                                  self.RECT[1] + config.BEGIN_CURSOR_OFFSET[1]))
+
+        self.assertEqual(user32.cursor, (42, 43), "元の位置へ戻す")
+        self.assertEqual(len(user32.moves), 2)
+
+    def test_the_cursor_comes_back_after_an_exception(self):
+        user32 = FakeUser32(cursor=(42, 43))
+        with self._patched(user32=user32):
+            with self.assertRaises(RuntimeError):
+                with WindowOperator.cursor_over_window(123):
+                    raise RuntimeError("押している途中で落ちた")
+
+        self.assertEqual(user32.cursor, (42, 43))
+
+    def test_a_window_without_a_point_moves_nothing(self):
+        user32 = FakeUser32(cursor=(42, 43))
+        with self._patched(user32=user32, iconic=True):
+            with WindowOperator.cursor_over_window(123) as over:
+                self.assertFalse(over)
+
+        self.assertEqual(user32.moves, [], "動かさない")
+
+    def test_it_never_brings_the_window_to_the_front(self):
+        user32 = FakeUser32()
+        with self._patched(user32=user32), \
+             patch.object(WindowOperator, "focus_window") as focus, \
+             patch.object(WindowOperator, "_attach_and_raise") as raise_:
+            with WindowOperator.cursor_over_window(123):
+                pass
+
+        focus.assert_not_called()
+        raise_.assert_not_called()
+
+
+class TestBeginByCursor(unittest.TestCase):
+    """OSCが使える窓の Begin は、カーソルを置いて UseRight を送る（前面化しない）"""
+
+    RECT = (100, 200, 1000, 800)
+
+    def _executor(self, osc_port=9000, hwnd=123):
+        cfg = WindowConfig(hwnd=hwnd, osc_port=osc_port)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+
+    def _press(self, executor, user32=None, iconic=False, rect=None, again=False):
+        user32 = user32 or FakeUser32()
+        with patch.object(WindowOperator, "user32", user32), \
+             patch.object(WindowOperator.win32gui, "GetWindowRect",
+                          return_value=rect or self.RECT), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=iconic), \
+             patch.object(WindowOperator, "focus_window", return_value=True) as focus, \
+             patch.object(WindowOperator, "click") as click, \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            ok = executor._press_begin(again=again)
+        return ok, user32, focus, click, press
+
+    def test_it_presses_with_the_cursor_and_osc(self):
+        executor, _st = self._executor()
+
+        ok, user32, focus, click, press = self._press(executor)
+
+        self.assertTrue(ok)
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertEqual(press.call_args_list,
+                         [call("/input/UseRight", config.BEGIN_CURSOR_DWELL_SEC)]
+                         * config.BEGIN_CURSOR_PULSES)
+        inside = (self.RECT[0] + config.BEGIN_CURSOR_OFFSET[0],
+                  self.RECT[1] + config.BEGIN_CURSOR_OFFSET[1])
+        self.assertEqual(user32.moves[0], inside, "窓の中へ動かす")
+        self.assertEqual(user32.cursor, (500, 500), "終わったら元の位置")
+
+    def test_it_stops_pulsing_once_begin_is_accepted(self):
+        executor, st = self._executor()
+
+        def accept(*_a, **_kw):
+            st.begin_done = True
+            return True
+
+        with patch.object(OSCClient.OSCClient, "press", side_effect=accept) as press:
+            with patch.object(WindowOperator, "user32", FakeUser32()), \
+                 patch.object(WindowOperator.win32gui, "GetWindowRect",
+                              return_value=self.RECT), \
+                 patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+                 patch.object(ActionExecutor.time, "sleep"):
+                executor._press_begin()
+
+        self.assertEqual(press.call_count, 1, "受理されたら送るのをやめる")
+
+    def test_a_minimized_window_falls_back_to_the_click(self):
+        executor, _st = self._executor()
+
+        ok, user32, focus, click, press = self._press(executor, iconic=True)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        press.assert_not_called()
+        self.assertEqual(user32.moves, [])
+
+    def test_a_window_off_screen_falls_back_to_the_click(self):
+        executor, _st = self._executor()
+
+        ok, _u, focus, click, press = self._press(executor, rect=(9000, 9000, 9900, 9600))
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        press.assert_not_called()
+
+    def test_a_window_without_osc_uses_the_click(self):
+        executor, _st = self._executor(osc_port=0)
+
+        ok, user32, focus, click, _press = self._press(executor)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        self.assertEqual(user32.moves, [], "カーソルは動かさない")
+
+    def test_the_switch_goes_back_to_the_old_way(self):
+        executor, _st = self._executor()
+
+        with patch.object(config, "BEGIN_BY_CURSOR", False):
+            ok, user32, focus, click, press = self._press(executor)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        press.assert_not_called()
+        self.assertEqual(user32.moves, [])
+
+    def test_a_failed_focus_does_not_press(self):
+        executor, _st = self._executor(osc_port=0)
+        with patch.object(WindowOperator, "focus_window", return_value=False), \
+             patch.object(WindowOperator, "click") as click:
+            self.assertFalse(executor._press_begin())
+        click.assert_not_called()
+
+    def test_the_retry_presses_the_same_way(self):
+        executor, st = self._executor()
+        st.round_seq = 4
+        logs = []
+        executor._log = logs.append
+
+        with patch.object(executor, "_wait_other_windows", return_value=True), \
+             patch.object(executor, "_begin_precheck", return_value=True), \
+             patch.object(executor, "_should_retry_begin", return_value=True), \
+             patch.object(executor, "_press_begin", return_value=True) as press:
+            self.assertTrue(executor._click_begin_again(4))
+
+        press.assert_called_once_with(again=True)
+
+    def test_the_retry_gives_up_after_the_limit(self):
+        executor, st = self._executor()
+        presses = []
+
+        with patch.object(config, "BEGIN_RETRY_MAX", 3), \
+             patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0), \
+             patch.object(executor, "_should_retry_begin", return_value=True), \
+             patch.object(executor, "_wait_other_windows", return_value=True), \
+             patch.object(executor, "_begin_precheck", return_value=True), \
+             patch.object(executor, "_press_begin",
+                          side_effect=lambda again=False: presses.append(again) or True), \
+             patch.object(ActionExecutor.time, "sleep"):
+            executor._confirm_begin(st.round_seq)
+
+        self.assertEqual(presses, [True, True], "2回目と3回目を押し直して諦める")
+
+
 class TestItemLostAnnounceTiming(unittest.TestCase):
     """アイテムロストの通知はBeginクリックの直前に鳴らす"""
 
@@ -9249,10 +9509,14 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
         return order
 
     def test_announce_comes_right_before_the_click_osc(self):
-        """OSC窓: 移動・フリーズ・フォーカスの後、クリックの直前に鳴らす"""
+        """OSC窓: 移動・フリーズの後、押す直前に鳴らす
+
+        カーソルを置けない窓（このテストでは矩形を作らない）は従来どおり
+        前面化＋クリックへ落ちる
+        """
         order = self._order_of_actions(osc_port=9000)
 
-        self.assertEqual(order, ["move", "freeze", "focus", "sound", "click"])
+        self.assertEqual(order, ["move", "freeze", "sound", "focus", "click"])
 
     def test_announce_comes_right_before_the_click_no_osc(self):
         """非OSC窓: 移動もロック内なので、移動を終えてから鳴らす"""

@@ -1,3 +1,4 @@
+import contextlib
 import ctypes
 from ctypes import wintypes
 import time
@@ -226,11 +227,87 @@ def hold_key(key: str, sec: float):
     keyboard.release(key)
     time.sleep(config.OPERATOR_WAIT_SEC)
 
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
+SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
+
+
+def window_cursor_point(hwnd: int) -> tuple | None:
+    """その窓の中の、カーソルを置く点。置けないなら None。
+
+    置けないのは、最小化されている窓と、矩形が画面（全モニタ）の外にある窓。
+    呼び出し側は None のとき従来の前面化＋クリックへ落とす。
+    """
+    if not hwnd:
+        return None
+    try:
+        if win32gui.IsIconic(hwnd):
+            return None
+        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        if right <= left or bottom <= top:
+            return None
+        dx, dy = config.BEGIN_CURSOR_OFFSET
+        x = min(left + dx, right - 1)
+        y = min(top + dy, bottom - 1)
+        vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+        vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+        vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+        vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+        if not (vx <= x < vx + vw and vy <= y < vy + vh):
+            return None        # 画面の外（別モニタを外した後など）
+    except Exception:
+        return None
+    return (x, y)
+
+
+def cursor_position() -> tuple | None:
+    point = wintypes.POINT()
+    try:
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            return None
+    except Exception:
+        return None
+    return (point.x, point.y)
+
+
+@contextlib.contextmanager
+def cursor_over_window(hwnd: int):
+    """カーソルをその窓の中へ置き、抜けるときに必ず元の位置へ戻す。
+
+    置けたかを yield する。置けなければ何も動かさずに False を返すので、
+    呼び出し側は従来の前面化＋クリックへ落とせる。前面化は一切しない。
+    """
+    point = window_cursor_point(hwnd)
+    if point is None:
+        yield False
+        return
+    before = cursor_position()
+    moved = False
+    try:
+        moved = bool(user32.SetCursorPos(*point))
+        if moved:
+            time.sleep(config.OPERATOR_WAIT_SEC)
+        yield moved
+    finally:
+        if moved and before is not None:
+            try:
+                user32.SetCursorPos(*before)      # 例外が出ても必ず戻す
+            except Exception:
+                pass
+
+
 def click():
     """前面の窓のクロスヘア位置をクリックする。必ずフォーカスを取ってから呼ぶ。
 
-    背面クリックは実現できない。キーは hold_key_background() で背面に送れるのに、
-    クリックだけフォーカスが要るのは、UnityがマウスボタンをRaw Inputで読むため。
+    OSCが使える窓の Begin は、これではなく「カーソルをその窓の矩形内へ置いて
+    /input/UseRight を送る」で押せる（cursor_over_window()。前面化は不要）。
+    実測（2026-09-25）: 裏のままカーソルをその窓の矩形の中へ置いて UseRight を
+    パルス送信すると Begin が押される。別のウィンドウが上に重なっていても押せる。
+    対照として矩形の外へ置くと押せない。つまり条件はフォーカスではなく
+    「カーソルがその窓の矩形の中にあること」だった。
+
+    以下は、その条件を満たさないときの話。背面クリックは実現できない。キーは
+    hold_key_background() で背面に送れるのに、クリックだけフォーカスが要るのは、
+    UnityがマウスボタンをRaw Inputで読むため。
     Raw Inputはカーネルの入力スタックからフォーカスのある窓へ届くもので、
     ユーザーモードから特定の窓へ差し込む口が無い。実機で確認済み:
 

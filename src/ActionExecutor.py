@@ -262,18 +262,50 @@ class ActionExecutor:
                 and st.instance_type == config.INSTANCE_PRIVATE)
 
     def _click_begin_again(self, round_seq: int) -> bool:
-        """クリックだけ押し直す。フォーカスが要るので、他窓の解除とロックを待つ"""
-        st = self._st
+        """押すところだけやり直す。他窓の解除を待ってから押す"""
         if not self._wait_other_windows():
             return False
+        if not self._should_retry_begin(round_seq):
+            return False
+        if not self._begin_precheck():
+            return False
+        return self._press_begin(again=True)
+
+    def _press_begin(self, again: bool = False) -> bool:
+        """Begin を押す。押せたら True。
+
+        OSCが使える窓は、カーソルをその窓の矩形内へ置いて /input/UseRight を
+        パルス送信する。前面化しないので、他窓の前面を奪わない（実測で、裏の
+        まま押せることを確認済み。WindowOperator.cursor_over_window() 参照）。
+        最小化などでカーソルを置けない窓と、OSCが使えない窓は、従来どおり
+        前面化＋クリック。
+
+        全窓共通のロックは、カーソルを動かしている間・フォーカスを取っている
+        間だけ取る（窓どうしでカーソルと前面を取り合わないため）。
+        """
+        st = self._st
+        tail = "（押し直し）" if again else ""
+        if self.uses_osc and config.BEGIN_BY_CURSOR:
+            with SharedState._GLOBAL_ACTION_LOCK:
+                if not self._is_running() or st.in_round:
+                    return False
+                with WindowOperator.cursor_over_window(self._cfg.hwnd) as over:
+                    if over:
+                        self._log(f"Begin: カーソルを合わせてUseRight{tail}")
+                        for i in range(config.BEGIN_CURSOR_PULSES):
+                            if st.begin_done:
+                                break
+                            if i:
+                                time.sleep(config.BEGIN_CURSOR_GAP_SEC)
+                            self._osc.press("/input/UseRight",
+                                            config.BEGIN_CURSOR_DWELL_SEC)
+                        return True
         with SharedState._GLOBAL_ACTION_LOCK:
-            if not self._should_retry_begin(round_seq):
-                return False
-            if not self._begin_precheck():
+            if not self._is_running() or st.in_round:
                 return False
             if not self.focus():
                 return False
-            self._log("Beginクリック（押し直し）")
+            self._log(f"Beginクリック{tail}")
             WindowOperator.click()
         return True
 
@@ -476,15 +508,8 @@ class ActionExecutor:
                     return
                 time.sleep(0.1)
                 if not st.in_round:
-                    with SharedState._GLOBAL_ACTION_LOCK:
-                        if not self._is_running() or st.in_round:
-                            return
-                        if not self.focus():
-                            return
-                        self.announce_item_lost_if_needed()
-                        self._log("Beginクリック")
-                        WindowOperator.click()
-                        clicked = True
+                    self.announce_item_lost_if_needed()
+                    clicked = self._press_begin()
         else:
             # キー入力での移動はフォーカスが要るのでロック内で行う。
             # ロスト処理はロックを取る前に済ませる（フリーズ待ちで

@@ -215,6 +215,14 @@ SUICIDE_RETRY_MAX     = 3     # 1回目を含めた回数
 SUICIDE_CONFIRM_SEC   = 1.5   # 長押しが終わってから死亡を待つ時間
 # 押した Begin が受理（本物の Verified）されなければ押し直す
 BEGIN_RETRY_MAX       = 3     # 1回目を含めた回数
+# Begin の押し方。OSCが使える窓は「カーソルをその窓の矩形内へ置いて
+# /input/UseRight を送る」で、前面化せずに押せる（実測。WindowOperator.click()
+# のコメント参照）。False にすると従来の前面化＋クリックへ戻る
+BEGIN_BY_CURSOR        = True
+BEGIN_CURSOR_OFFSET    = (20, 60)   # 窓の左上からの相対位置（見た目の邪魔が少ない）
+BEGIN_CURSOR_DWELL_SEC = 0.15       # UseRight を押している時間
+BEGIN_CURSOR_PULSES    = 3          # 1回のBeginで送るパルスの上限
+BEGIN_CURSOR_GAP_SEC   = 0.2        # パルスの間隔
 BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
 # 主催リストが取れない状態がこれだけ続いたら tnl へ切り替える。プロセスの
 # 見え方・host_save の差し替え・参加者の入れ替えは一瞬だけ起きうる
