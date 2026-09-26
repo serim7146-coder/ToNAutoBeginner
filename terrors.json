@@ -165,7 +165,7 @@
     {"id": 155, "name": "Try Not to Touch Me", "terrors": ["Try Not to Touch Me"], "objects": ["Don't Touch Me Mobile"]},
     {"id": 156, "name": "Ambush", "terrors": ["Ambush"], "objects": ["Ambush"]},
     {"id": 157, "name": "Teuthida", "terrors": ["Teuthida"], "objects": []},
-    {"id": 158, "name": "Eggman's Announcement", "terrors": ["Eggman's Announcement"], "objects": []},
+    {"id": 158, "name": "Eggman's Announcement", "terrors": ["Eggman's Announcement"], "objects": ["Eggman's Announcement"]},
     {"id": 159, "name": "S.T.G.M", "terrors": ["S.T.G.M", "S.T.G.M. Missile"], "objects": ["S.T.G.M", "STMGMissle"]},
     {"id": 160, "name": "Army in Black", "terrors": ["Army in Black"], "objects": []},
     {"id": 161, "name": "Bliss", "terrors": ["Bliss", "Umbra"], "objects": ["Bliss"]},
@@ -291,6 +291,7 @@
     {"id": 9, "name": "Withered Bonnie", "terrors": ["Withered Bonnie"], "objects": [], "list_id": 35},
     {"id": 21, "name": "With Many Voices", "terrors": ["With Many Voices"], "objects": [], "list_id": 25},
     {"id": 48, "name": "Clockey", "terrors": ["Clockey"], "objects": [], "list_id": 132},
-    {"id": 40, "name": "Tinky Winky", "terrors": ["Tinky Winky"], "objects": ["Tinky Winky"], "list_id": 89}
+    {"id": 40, "name": "Tinky Winky", "terrors": ["Tinky Winky"], "objects": ["Tinky Winky"], "list_id": 89},
+    {"id": 23, "name": "Big Bird", "terrors": ["Big Bird"], "objects": ["Big Bird"], "list_id": null}
   ]
 }
