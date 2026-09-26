@@ -96,8 +96,6 @@ class WindowState:
     waiting_for_equip: bool = False
     equip_freeze_held: bool = False
     item_lost_announced: bool = False
-    # Begin のために自分で落とした。このラウンドのロスト判定には数えない
-    item_dropped_for_begin: bool = False
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False
     died_this_round: bool = False

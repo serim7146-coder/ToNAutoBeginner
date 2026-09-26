@@ -9804,47 +9804,43 @@ class TestBeginByCursor(unittest.TestCase):
         focus.assert_called_once()      # 打ち切ったら従来方式へ
         click.assert_called_once()
 
-    def test_an_item_in_hand_is_dropped_first(self):
+    def test_an_item_in_hand_goes_to_the_front_click(self):
         """持っているときの UseRight はその持ち物を使ってしまう（実機で確認済み）。
-        なので押す前に落とす。拾い直しはしない"""
-        executor, st = self._executor(item_id=5)
+        落とす処理は外したので、持っている窓はカーソル方式を使えない"""
+        executor, _st = self._executor(item_id=5)
 
-        def accept(_sec):
-            st.begin_done = True        # ひと差しで押せた
-
-        with patch.object(ActionExecutor.time, "sleep", side_effect=accept):
-            ok, user32, focus, click, press = self._press(executor, sleep=False)
-
-        self.assertTrue(ok)
-        focus.assert_not_called()
-        self.assertEqual(
-            press.call_args_list[:config.BEGIN_DROP_PULSES],
-            [call("/input/DropRight", config.BEGIN_DROP_PULSE_SEC)]
-            * config.BEGIN_DROP_PULSES)
-        self.assertTrue(st.item_dropped_for_begin)
-        self.assertTrue(user32.moves, "落としたあとはカーソルを差す")
-
-    def test_dropping_can_be_turned_off(self):
-        executor, st = self._executor(item_id=5)
-
-        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False):
-            ok, user32, focus, click, press = self._press(executor)
+        ok, user32, focus, click, press = self._press(executor)
 
         self.assertTrue(ok)
         focus.assert_called_once()
         click.assert_called_once()
         press.assert_not_called()
         self.assertEqual(user32.moves, [], "カーソルも動かさない")
-        self.assertFalse(st.item_dropped_for_begin)
 
-    def test_an_empty_hand_is_not_dropped(self):
+    def test_an_empty_hand_uses_the_cursor(self):
         executor, st = self._executor()
 
-        _ok, _user32, _focus, _click, press = self._press(executor)
+        def accept(_sec):
+            st.begin_done = True        # ひと差しで押せた
 
-        self.assertFalse(any(c.args[0] == "/input/DropRight"
-                             for c in press.call_args_list), press.call_args_list)
-        self.assertFalse(st.item_dropped_for_begin)
+        with patch.object(ActionExecutor.time, "sleep", side_effect=accept):
+            ok, user32, focus, click, _press = self._press(executor, sleep=False)
+
+        self.assertTrue(ok)
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertTrue(user32.moves, "カーソルを差す")
+
+    def test_the_begin_path_never_drops(self):
+        """手ぶらでも持っていても、Begin の経路から DropRight は出さない"""
+        for item_id in (0, 5):
+            executor, _st = self._executor(item_id=item_id)
+
+            _ok, _u, _focus, _click, press = self._press(executor)
+
+            self.assertFalse(any(c.args[0] == "/input/DropRight"
+                                 for c in press.call_args_list),
+                             (item_id, press.call_args_list))
 
     # ── 連打（カーソルは動かさない） ─────────────────
     def test_the_spam_waits_for_the_start_and_then_pulses(self):
@@ -9862,16 +9858,15 @@ class TestBeginByCursor(unittest.TestCase):
         press.assert_called_once_with("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
         self.assertEqual(user32.moves, [], "連打の間はカーソルを動かさない")
 
-    def test_the_spam_starts_by_dropping(self):
-        """連打を立てる時点で、持っているものを落としてから送り始める"""
-        executor, st = self._executor(item_id=5)
+    def test_starting_the_spam_never_drops(self):
+        """連打を立てるときに何も落とさない"""
+        executor, st = self._executor()
 
-        with patch.object(ActionExecutor.threading, "Thread") as thread,              patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+        with patch.object(ActionExecutor.threading, "Thread") as thread, \
+             patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
             self.assertIsNotNone(executor._start_use_spam(st.round_seq))
 
-        self.assertEqual([c.args[0] for c in press.call_args_list],
-                         ["/input/DropRight"] * config.BEGIN_DROP_PULSES,
-                         "スレッドを立てる前に落とす")
+        press.assert_not_called()
         thread.assert_called_once()
 
     def test_the_spam_stops_when_begin_is_accepted(self):
@@ -9884,30 +9879,28 @@ class TestBeginByCursor(unittest.TestCase):
 
         press.assert_not_called()
 
-    def test_something_picked_up_mid_spam_is_dropped(self):
-        """連打の途中で拾ってしまったら、持ったまま送らずに落としてから続ける"""
-        executor, st = self._executor(item_id=3)
+    def test_something_picked_up_mid_spam_ends_the_spam(self):
+        """連打の途中で拾ってしまったら、送るのをやめて終わる（落とさない）"""
+        executor, st = self._executor()
         st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
+        stop = self.CountingStop(limit=5)
 
-        def drop(address, _sec):
-            if address == "/input/DropRight":
-                st.item_id = 0
+        def pick_up(_address, _sec):
+            st.item_id = 4              # 1回送ったところで何か拾った
             return True
 
-        with patch.object(OSCClient.OSCClient, "press", side_effect=drop) as press:
-            executor._spam_use_right(self.CountingStop(limit=2), st.round_seq)
+        with patch.object(OSCClient.OSCClient, "press", side_effect=pick_up) as press:
+            executor._spam_use_right(stop, st.round_seq)
 
-        addresses = [c.args[0] for c in press.call_args_list]
-        self.assertEqual(addresses[:config.BEGIN_DROP_PULSES],
-                         ["/input/DropRight"] * config.BEGIN_DROP_PULSES)
-        self.assertIn("/input/UseRight", addresses)
+        self.assertEqual([c.args[0] for c in press.call_args_list],
+                         ["/input/UseRight"], "拾った後は送らない")
+        self.assertLess(stop.calls, 5, "スレッドは自分で終わる")
 
-    def test_the_spam_stops_if_it_cannot_drop(self):
+    def test_the_spam_sends_nothing_with_an_item_in_hand(self):
         executor, st = self._executor(item_id=3)
         st.round_over_time = 0.0
 
-        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False), \
-             patch.object(OSCClient.OSCClient, "press") as press:
+        with patch.object(OSCClient.OSCClient, "press") as press:
             executor._spam_use_right(self.CountingStop(), st.round_seq)
 
         press.assert_not_called()
@@ -9920,10 +9913,9 @@ class TestBeginByCursor(unittest.TestCase):
             executor, st = self._executor()
             self.assertIsNone(executor._start_use_spam(st.round_seq))
 
-        with patch.object(config, "BEGIN_DROP_BEFORE_USE", False):
-            executor, st = self._executor(item_id=5)
-            self.assertIsNone(executor._start_use_spam(st.round_seq),
-                              "落とせないなら従来方式")
+        executor, st = self._executor(item_id=5)
+        self.assertIsNone(executor._start_use_spam(st.round_seq),
+                          "持っているなら従来方式")
 
     def test_the_round_flow_starts_the_spam_before_waiting(self):
         """Verified Round End を待つ前から連打を回しておく"""
@@ -10025,11 +10017,12 @@ class TestBeginByCursor(unittest.TestCase):
         self.assertEqual(presses, [True, True], "2回目と3回目を押し直して諦める")
 
 
-class TestBeginDropIsNotAnItemLoss(unittest.TestCase):
-    """Begin のために自分で落としたものは、アイテムロストとして扱わない。
+class TestBeginNeverDropsTheItem(unittest.TestCase):
+    """Begin のために持ち物を落とす処理は外した（依頼者の判断）。
 
-    ロストの扱い（音声・他窓フリーズ・装備待ち）は周回の要なので、
-    本当のロストが鈍らないことも合わせて確かめる。
+    落とす必要のある局面が無かったため。持っている窓は前面化＋クリックで
+    押す。ロストの扱い（音声・他窓フリーズ・装備待ち）は周回の要なので、
+    Begin の前後で失っても見逃さないことを確かめる。
     """
 
     def _monitor(self, item_id=5):
@@ -10042,17 +10035,22 @@ class TestBeginDropIsNotAnItemLoss(unittest.TestCase):
         monitor.logger = monitor.logs.append
         return monitor
 
-    def test_a_drop_for_begin_is_not_a_loss(self):
+    def test_a_loss_around_begin_is_a_real_loss(self):
+        """intermission（ラウンド外）で失っても、ロストとして扱う。
+
+        以前は Begin のために自分で落とした分を見逃す抜け道があり、
+        そこへ本当のロストが紛れ込むと音声も装備待ちも走らなかった
+        """
         monitor = self._monitor()
-        monitor.st.item_dropped_for_begin = True
+        monitor.st.in_round = False
 
         monitor._mark_item_lost("リスポーン: アイテムロスト")
 
-        self.assertEqual(monitor.st.item_id, 0, "持ち物は無くなっている")
-        self.assertFalse(monitor.st.item_lost_this_round)
-        self.assertFalse(monitor._round_lost_item())
-        self.assertFalse(monitor._round_item_warning())
-        self.assertEqual(monitor.logs, [], "ロストとして知らせない")
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
+        self.assertTrue(monitor._round_lost_item())
+        self.assertTrue(monitor._round_item_warning())
+        self.assertTrue(any("アイテムロスト" in m for m in monitor.logs), monitor.logs)
 
     def test_a_real_loss_is_still_a_loss(self):
         monitor = self._monitor()
@@ -10070,40 +10068,43 @@ class TestBeginDropIsNotAnItemLoss(unittest.TestCase):
         monitor = self._monitor()
         monitor._mark_item_lost("Run死亡: アイテムロスト")
 
-        with patch.object(LogMonitor.threading, "Thread"),              patch.object(monitor._action, "announce_item_lost_once") as announce:
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(monitor._action, "announce_item_lost_once") as announce:
             monitor._process("2026.09.25 00:00:00 Debug      -  RoundOver")
 
         announce.assert_called_once()
         self.assertTrue(monitor.st.waiting_for_equip)
 
-    def test_the_drop_itself_announces_nothing(self):
-        """落とした瞬間に、音声・他窓フリーズ・装備待ちのどれも起きないこと。
-
-        実機の順番では RoundOver と Verified Round End は落とすより前に来る。
-        落とした後に起きうるのは、この executor 自身の通知だけ
-        """
-        cfg = WindowConfig(hwnd=1, osc_port=9000, voice_item_lost="lost.mp3")
-        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5)
-        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
-
-        with patch.object(OSCClient.OSCClient, "press", return_value=True),              patch.object(ActionExecutor.PlaySound, "play_sound") as play,              patch.object(ActionExecutor.SharedState, "equip_freeze_start") as freeze:
-            executor._drop_for_begin()
-
-        self.assertTrue(st.item_dropped_for_begin)
-        play.assert_not_called()
-        freeze.assert_not_called()
-        self.assertFalse(st.waiting_for_equip)
-        self.assertFalse(st.item_lost_this_round)
-
-
-    def test_the_next_round_forgets_the_drop(self):
+    def test_a_loss_just_before_begin_still_freezes(self):
+        """Begin の直前に失った場合も、装備待ちに入る（見逃さない）"""
         monitor = self._monitor()
-        monitor.st.item_dropped_for_begin = True
+        monitor.st.in_round = False
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(monitor._action, "announce_item_lost_once"):
+            monitor._process("2026.09.25 00:00:00 Debug      -  RoundOver")
+
+        self.assertTrue(monitor.st.waiting_for_equip)
+
+    def test_the_source_sends_no_drop_at_all(self):
+        """DropRight を送る箇所がコードから無くなっていること"""
+        here = Path(ActionExecutor.__file__).parent
+        for name in ("ActionExecutor.py", "LogMonitor.py", "WindowOperator.py",
+                     "config.py", "State.py", "SharedState.py"):
+            src = (here / name).read_text(encoding="utf-8")
+            self.assertNotIn("DropRight", src, name)
+            self.assertNotIn("item_dropped_for_begin", src, name)
+
+    def test_the_next_round_needs_no_flag_to_reset(self):
+        """ラウンド開始でロスト関連が戻ること（落とした印はもう無い）"""
+        monitor = self._monitor()
+        monitor.st.item_lost_this_round = True
 
         monitor._process("This round is taking place at Facility (12) "
                          "and the round type is Classic")
 
-        self.assertFalse(monitor.st.item_dropped_for_begin)
+        self.assertFalse(monitor.st.item_lost_this_round)
         monitor.st.item_id = 7
         monitor._mark_item_lost("リスポーン: アイテムロスト")
         self.assertTrue(monitor.st.item_lost_this_round, "次のラウンドは普通にロスト")

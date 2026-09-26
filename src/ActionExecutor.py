@@ -277,28 +277,14 @@ class ActionExecutor:
     def _begin_by_cursor(self) -> bool:
         """カーソルを使う新方式を使ってよい窓か。
 
-        持っているときの /input/UseRight はその持ち物を使ってしまい、Begin は
-        押されない（2026-09-21 の実機検証で Emerald Coil が使われた）。なので
-        押す前に落とす（_drop_for_begin）。落とす設定を切っている場合は、
-        持っている窓は従来の前面化＋クリックへ落とす。
+        何か持っている窓は従来の前面化＋クリックへ落とす。持っているときの
+        /input/UseRight はその持ち物を使ってしまい、Begin は押されない
+        （2026-09-21 の実機検証で Emerald Coil が使われた）。押す前に落とす
+        処理は外したので（依頼者の判断。落とす必要のある局面が無かった）、
+        持っている窓にはカーソル方式で押す道が無い。
         """
-        if not (self.uses_osc and config.BEGIN_BY_CURSOR):
-            return False
-        return bool(config.BEGIN_DROP_BEFORE_USE or not self._st.item_id)
-
-    def _drop_for_begin(self) -> None:
-        """押す前に持ち物を落とす。拾い直しはしない（依頼者の指定）。
-
-        落としたことを覚えておき、このラウンドのロスト判定には数えない
-        （_mark_item_lost が見る）。音声も他窓フリーズも装備待ちも走らせない。
-        """
-        st = self._st
-        if not st.item_id or not config.BEGIN_DROP_BEFORE_USE:
-            return
-        st.item_dropped_for_begin = True
-        self._log("Begin のためにアイテムを落とします")
-        for _ in range(config.BEGIN_DROP_PULSES):
-            self._osc.press("/input/DropRight", config.BEGIN_DROP_PULSE_SEC)
+        return bool(self.uses_osc and config.BEGIN_BY_CURSOR
+                    and not self._st.item_id)
 
     def _start_use_spam(self, round_seq: int):
         """UseRight の連打を始める（カーソルは動かさない）。
@@ -310,7 +296,6 @@ class ActionExecutor:
         """
         if not self._begin_by_cursor():
             return None
-        self._drop_for_begin()
         stop = threading.Event()
         thread = threading.Thread(target=self._spam_use_right,
                                   args=(stop, round_seq), daemon=True)
@@ -325,10 +310,8 @@ class ActionExecutor:
                     or st.round_seq != round_seq):
                 return
             if st.item_id:
-                # 途中で何か持った。持ったまま送ると使ってしまうので落とす
-                self._drop_for_begin()
-                if st.item_id:
-                    return          # 落とす設定が切られている
+                # 途中で何か持った。持ったまま送るとその持ち物を使ってしまう
+                return
             if time.time() < start:
                 stop.wait(0.1)
                 continue
@@ -378,7 +361,6 @@ class ActionExecutor:
         st = self._st
         tail = "（押し直し）" if again else ""
         if self._begin_by_cursor():
-            self._drop_for_begin()
             stop = self._start_use_spam(st.round_seq) if again else None
             try:
                 if self._dip_cursor_for_begin(tail):

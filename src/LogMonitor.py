@@ -502,11 +502,6 @@ class LogMonitor:
 
     def _mark_item_lost(self, message: str = ""):
         st = self.st
-        if st.item_dropped_for_begin:
-            # Begin のためにこちらが落としたもの。ロストとして扱わない
-            # （音声・他窓フリーズ・装備待ちを走らせない）。次のラウンド開始で戻る
-            st.item_id = 0
-            return
         already_lost = st.item_lost_this_round and st.item_id == 0
         st.item_lost_this_round = True
         st.randomizer_item_changed = False
@@ -1016,7 +1011,6 @@ class LogMonitor:
             st.item_id_at_round_start      = st.item_id
             st.item_lost_announced         = False
             st.item_lost_this_round        = False
-            st.item_dropped_for_begin      = False
             st.randomizer_item_changed     = False
             st.died_this_round             = False
             st.lived_this_round            = False
