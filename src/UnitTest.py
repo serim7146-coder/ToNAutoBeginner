@@ -513,11 +513,25 @@ class TestOscBranching(unittest.TestCase):
         mock_press.assert_called_once_with("/input/MoveForward", 2.1)
         mock_key.assert_not_called()
 
-    def test_move_falls_back_to_keyboard_without_osc(self):
+    def test_move_falls_back_to_the_background_key_without_osc(self):
+        """OSCが無い窓もフォーカスを奪わない（自爆と同じ背面送信）"""
         ex = self._executor(0)
-        with patch.object(WindowOperator, "hold_key") as mock_key:
+        with patch.object(WindowOperator, "hold_key_background",
+                          return_value=True) as mock_key,              patch.object(WindowOperator, "focus_window") as focus:
             ex.move("forward", 2.1)
-        mock_key.assert_called_once_with("w", 2.1)
+
+        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1)
+        focus.assert_not_called()
+
+    def test_a_failed_background_key_is_logged(self):
+        logs = []
+        ex = self._executor(0)
+        ex._log = logs.append
+        with patch.object(WindowOperator, "hold_key_background", return_value=False):
+            ex.move("forward", 1.0)
+
+        self.assertTrue(any("移動キーを送れませんでした" in m for m in logs), logs)
+
 
     def test_move_ignores_zero_duration(self):
         ex = self._executor(9000)
@@ -535,6 +549,33 @@ class TestOscBranching(unittest.TestCase):
              patch.object(ex._osc, "stop_all"):
             ex.move("forward", 1.0)
         self.assertEqual(held, [False], "OSC移動はロックを保持してはいけない")
+
+    def test_a_keyboard_move_does_not_hold_the_global_lock_either(self):
+        """背面送信になったので、非OSC窓の移動も他窓を妨げない"""
+        ex = self._executor(0)
+        held = []
+        with patch.object(WindowOperator, "hold_key_background",
+                          side_effect=lambda *_a: held.append(
+                              SharedState._GLOBAL_ACTION_LOCK.locked()) or True):
+            ex.move("forward", 1.0)
+
+        self.assertEqual(held, [False], "移動はロックを保持してはいけない")
+
+    def test_the_begin_move_is_outside_the_lock(self):
+        """Begin の流れでも、移動の間はロックを持たない（押すところだけ取る）"""
+        ex = self._executor(0)
+        ex._st.instance_type = config.INSTANCE_PRIVATE
+        held = []
+
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep"),              patch.object(ex, "_begin_precheck", return_value=True),              patch.object(ex, "_wait_round_end", return_value=False),              patch.object(ex, "move_forward_left",
+                          side_effect=lambda *_a: held.append(
+                              SharedState._GLOBAL_ACTION_LOCK.locked())),              patch.object(ex, "move",
+                          side_effect=lambda *_a: held.append(
+                              SharedState._GLOBAL_ACTION_LOCK.locked())):
+            ex.do_after_round()
+
+        self.assertTrue(held, "移動していない")
+        self.assertEqual(set(held), {False})
 
 
 class TestToNEntryLocking(unittest.TestCase):
@@ -10089,10 +10130,11 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
         self.assertEqual(order, ["move", "freeze", "sound", "focus", "click"])
 
     def test_announce_comes_right_before_the_click_no_osc(self):
-        """非OSC窓: 移動もロック内なので、移動を終えてから鳴らす"""
+        """非OSC窓も背面送信になったので、OSC窓と同じ順になる"""
         order = self._order_of_actions(osc_port=0)
 
-        self.assertEqual(order, ["freeze", "focus", "move", "sound", "click"])
+        self.assertEqual(order, ["move", "freeze", "sound", "focus", "click"])
+
 
     def test_announce_is_skipped_when_item_is_kept(self):
         """アイテムを持ったまま終わったラウンドでは鳴らさない"""
@@ -10213,18 +10255,19 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
         self.assertFalse(clicked_while_frozen, "フリーズ中にクリックしてはいけない")
         self.assertTrue(clicked_after_release, "解除後はクリックすること")
 
-    def test_keyboard_window_still_waits_before_moving(self):
-        """キー入力で移動する窓は従来どおり、移動もフリーズ解除まで待つ
+    def test_a_keyboard_window_also_moves_during_the_freeze(self):
+        """背面送信になったので、非OSC窓もフリーズ中に移動してよい。
 
-        キー移動はフォーカスを要するため、フリーズ中に動かすと他窓を妨げる。
+        待つのはクリックの直前だけ（フォーカスを取るのはそこだけ）
         """
         SharedState.continue_round_start()
         moves, observed_move, clicked_while_frozen, clicked_after_release =             self._run_frozen_begin(SharedState.continue_round_end, osc_port=0)
 
-        self.assertFalse(observed_move, "非OSC窓はフリーズ中に移動してはいけない")
-        self.assertFalse(clicked_while_frozen)
-        self.assertTrue(clicked_after_release, "解除後は移動してクリックすること")
+        self.assertTrue(observed_move, "フリーズ中でも移動する")
+        self.assertFalse(clicked_while_frozen, "クリックは解除まで待つ")
+        self.assertTrue(clicked_after_release)
         self.assertEqual(moves, ["forward+left"])
+
 
 
 class TestMultiWindowLaunch(unittest.TestCase):

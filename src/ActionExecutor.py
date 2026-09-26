@@ -58,14 +58,16 @@ class ActionExecutor:
         return self._osc is not None
 
     def move(self, direction: str, seconds: float):
-        """移動する。OSCが使えるならフォーカスを奪わずに送る。
+        """移動する。フォーカスは奪わない。
 
-        使えない場合（手動起動の2窓目以降など）は従来どおりキーを押す。
-        キー入力はフォーカスを要するため、呼び出し側がロックを取ること。
+        OSCが使える窓はOSCで送る。使えない窓（手動起動の2窓目以降など）は
+        背面へのキー送信（自爆と同じ経路）で送る。キーはメッセージでも
+        読まれるので、前面化しなくても前進できる（WindowOperator.click() の
+        docstring の実測を参照）。
 
-        OSC移動は他窓の操作を一切妨げないので、全窓フリーズ
+        どちらもフォーカスを奪わないので、他窓の操作を妨げない。全窓フリーズ
         （装備待ち・続行ラウンド）中でも実行してよい。待ち合わせるのは
-        フォーカスを要する操作（クリック・キー入力）だけ。
+        フォーカスを要する操作（Beginのクリック）だけ。
         """
         if seconds <= 0:
             return
@@ -79,8 +81,9 @@ class ActionExecutor:
                 self._osc.stop_all(repeat=1)
                 return
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
-        if key:
-            WindowOperator.hold_key(key, seconds)
+        if key and not WindowOperator.hold_key_background(
+                self._cfg.hwnd, key, seconds):
+            self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
 
     def move_forward_left(self, forward_sec: float, left_sec: float):
         """前進しながら、その前半だけ左にも寄る（斜め → 直進）。
@@ -91,8 +94,8 @@ class ActionExecutor:
         逐次だと前進の減速が終わらないうちに左移動が始まり、残留速度が
         混ざって到達点が毎回ズレる。同時押しならその結合が起きない。
 
-        OSCが使えない窓はキー入力になるため同時押しができない。その場合は
-        従来どおり逐次で動かす。
+        OSCが使えない窓は背面へのキー送信になるため同時押しができない。
+        その場合は従来どおり逐次で動かす（前進 → 左）。
         """
         if self._osc is not None:
             self._osc.press_multi([("/input/MoveForward", forward_sec),
@@ -537,9 +540,8 @@ class ActionExecutor:
         """
         ラウンド終了後: 待機 → [Begin前移動] → Beginクリック
 
-        ロック戦略:
-          - OSC窓: 移動はロック外（フォーカスを奪わない）、クリックだけロック内
-          - 非OSC窓: 移動もキー入力なので全体をロック内で行う
+        ロック戦略: 移動はどちらの窓もロック外（フォーカスを奪わない）。
+        ロックを取るのは押すところだけ（OSC窓はカーソル、非OSC窓は前面化＋クリック）
         """
         st = self._st
         round_seq = st.round_seq
@@ -559,66 +561,34 @@ class ActionExecutor:
             self._log("Begin キャンセル（停止 or 次のラウンドが開始）")
             return
 
-        # 他窓のフリーズ解除待ち。
-        # OSC窓は移動でフォーカスを奪わないので、フリーズ中でもBegin前移動まで
-        # 済ませておき、待つのはクリックの直前だけにする（解除された瞬間に
-        # 押せる位置に居られる）。キー入力で移動する窓は移動にもフォーカスが
-        # 要るため、従来どおり移動の前に待つ。
-        if not self.uses_osc:
-            if not self._wait_other_windows():
-                return
-
         # ── フェーズ1: Begin前移動 + 初回クリック ──
-        # OSCが使える窓は移動でフォーカスを奪わないため、ロックを取らずに
-        # 移動できる（他窓と並行して動ける）。クリックだけロック内で行う。
-        # OSCが使えない窓は移動もキー入力なので、従来どおり全体をロックする。
-        if self.uses_osc:
-            # 移動はフリーズ中でも行うので、ここでのフリーズ確認は省く
-            if not self._begin_precheck(check_freeze=False):
-                return
-            if not st.in_round:
-                self._begin_move()
-                # Verified Round End が出た瞬間には、もう Begin が押せる。
-                # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
-                # 差し込むだけにする（カーソルを奪う時間を最小にする）
-                spam = self._start_use_spam(round_seq)
-                # ロスト判定は Verified Round End で行われるので、必ず
-                # 待ってからフリーズ処理をする。RoundOver時点で判定すると
-                # まだ立っておらずフリーズが張られない。
-                if not self._wait_round_end():
-                    return
-                if not self._handle_item_lost():
-                    return
-                # ここから先はフォーカスを要するので他窓の解除を待つ
-                if not self._wait_other_windows():
-                    return
-                if not self._begin_precheck():
-                    return
-                time.sleep(0.1)
-                if not st.in_round:
-                    self.announce_item_lost_if_needed()
-                    clicked = self._press_begin()
-        else:
-            # キー入力での移動はフォーカスが要るのでロック内で行う。
-            # ロスト処理はロックを取る前に済ませる（フリーズ待ちで
-            # ロックを保持し続けると他窓が動けなくなるため）。
+        # 移動はどちらの窓もフォーカスを奪わないので、ロックを取らずに動ける
+        # （他窓と並行して進む）。他窓の解除を待つのは押す直前だけ。
+        # 移動はフリーズ中でも行うので、ここでのフリーズ確認は省く
+        if not self._begin_precheck(check_freeze=False):
+            return
+        if not st.in_round:
+            self._begin_move()
+            # Verified Round End が出た瞬間には、もう Begin が押せる。
+            # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
+            # 差し込むだけにする（カーソルを奪う時間を最小にする）
+            spam = self._start_use_spam(round_seq)
+            # ロスト判定は Verified Round End で行われるので、必ず
+            # 待ってからフリーズ処理をする。RoundOver時点で判定すると
+            # まだ立っておらずフリーズが張られない。
             if not self._wait_round_end():
                 return
             if not self._handle_item_lost():
                 return
-            with SharedState._GLOBAL_ACTION_LOCK:
-                if not self._begin_precheck():
-                    return
-                if not st.in_round:
-                    if not self.focus():
-                        return
-                    self._begin_move()
-                    time.sleep(0.1)
-                    if not st.in_round:
-                        self.announce_item_lost_if_needed()
-                        self._log("Beginクリック")
-                        WindowOperator.click()
-                        clicked = True
+            # ここから先はフォーカスを要するので他窓の解除を待つ
+            if not self._wait_other_windows():
+                return
+            if not self._begin_precheck():
+                return
+            time.sleep(0.1)
+            if not st.in_round:
+                self.announce_item_lost_if_needed()
+                clicked = self._press_begin()
 
         if clicked:
             self._confirm_begin(round_seq)
@@ -834,17 +804,8 @@ class ActionExecutor:
             elapsed = 0.0
             if _should_stop():
                 break
-            if self.uses_osc:
-                # OSCならフォーカス不要。他窓の操作を妨げない。
-                self.move("forward", config.OPERATOR_WAIT_SEC)
-            else:
-                with SharedState._GLOBAL_ACTION_LOCK:
-                    if _should_stop():
-                        break
-                    if not WindowOperator.focus_window(self._cfg.hwnd):
-                        self._log("⚠ フォーカス取得失敗 → 今回のAFK解除をスキップ")
-                        continue
-                    WindowOperator.hold_key("w", config.OPERATOR_WAIT_SEC)
+            # OSCでも背面キーでもフォーカス不要。他窓の操作を妨げない
+            self.move("forward", config.OPERATOR_WAIT_SEC)
             self._log("移動キー送信（ジャンプ代替）")
 
         self._log("AFK解除ループ終了")
