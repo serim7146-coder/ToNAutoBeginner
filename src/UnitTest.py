@@ -8829,6 +8829,194 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestContinueFreezeIsPerWindow(unittest.TestCase):
+    """続行フリーズは窓ごとの保持。足していない窓が引かないこと。
+
+    2026-09-27 21:16 の実機の不具合: 窓2 で Waldo をやっていて、それが終わった
+    瞬間に、別の窓が続行ラウンド中なのに全窓のフリーズが解除されて Begin が
+    走った。DTM/Waldo の窓は is_continue_round=True でも
+    continue_round_start() を呼ばない（他窓を止めない仕様）のに、終了側が
+    is_continue_round だけを見て無条件に引いていたため。
+    """
+
+    CLASSIC_KEY = "Classic/クラシック"
+    DTM_KEY = "Double Trouble/ダブルトラブル"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+
+    def _monitor(self, keep_on=None, idx=1):
+        cfg = WindowConfig(hwnd=100 + idx, do_skip=True,
+                           voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=idx)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor._running = True
+        return monitor
+
+    # ── 2〜4. API そのもの ─────────────────────
+    def test_a_window_that_did_not_freeze_does_not_release(self):
+        holder = WindowState()
+        SharedState.continue_round_start(holder)
+        bystander = WindowState()
+        bystander.is_continue_round = True      # DTM/Waldo はこれだけ True
+
+        SharedState.continue_round_end(bystander)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set(),
+                         "他窓のフリーズを壊さない")
+
+    def test_starting_twice_counts_once(self):
+        st = WindowState()
+
+        SharedState.continue_round_start(st)
+        SharedState.continue_round_start(st)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    def test_the_holder_can_release(self):
+        st = WindowState()
+        SharedState.continue_round_start(st)
+
+        SharedState.continue_round_end(st)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+        self.assertFalse(st.continue_freeze_held)
+
+    def test_releasing_twice_does_not_go_negative(self):
+        a, b = WindowState(), WindowState()
+        SharedState.continue_round_start(a)
+        SharedState.continue_round_start(b)
+
+        SharedState.continue_round_end(a)
+        SharedState.continue_round_end(a)        # 2回目は何もしない
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    def test_a_release_after_a_reset_does_not_go_negative(self):
+        """強制リセットは窓ごとのフラグを消さない（他の3つと同じ）。
+
+        止めたあとに古い WindowState が解除しても、カウントが負に回り込んで
+        「0 ではない」ままになってしまわないこと
+        """
+        stale = WindowState()
+        SharedState.continue_round_start(stale)
+        SharedState.continue_round_reset()
+
+        SharedState.continue_round_end(stale)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    def test_the_flag_is_separate_from_is_continue_round(self):
+        st = WindowState()
+        st.is_continue_round = True
+
+        self.assertFalse(st.continue_freeze_held,
+                         "DTM/Waldo は続行ラウンドだがフリーズは張らない")
+
+    def test_reset_clears_everything(self):
+        st = WindowState()
+        SharedState.continue_round_start(st)
+
+        SharedState.continue_round_reset()
+
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    # ── 1・6. 実機の不具合そのもの ───────────────────
+    def test_a_finished_dtm_round_leaves_another_windows_freeze_alone(self):
+        """窓Aが続行フリーズ中に、窓B（Waldo）のラウンドが終わっても解除しない"""
+        window_a = self._monitor({self.CLASSIC_KEY: {42}}, idx=1)
+        window_a.st.terror_ids = [42]
+        with patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread"):
+            window_a._decide_with_keep_on_set("Classic")
+        self.assertTrue(window_a.st.continue_freeze_held, "窓Aが張っている")
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+        window_b = self._monitor(idx=2)
+        window_b.st.round_type = "Double Trouble"
+        window_b.st.is_continue_round = True     # DTM/Waldo の窓
+        window_b.st.is_open_special_round_round = True
+
+        with patch.object(PlaySound, "play_sound"), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(Recorder, "on_round_over"):
+            window_b._process("2026.09.27 21:16:48 Debug      -  "
+                              "Verified Round End")
+            window_b._process("2026.09.27 21:16:48 Debug      -  RoundOver")
+
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set(),
+                         "窓Aのフリーズが残っていること")
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    def test_a_dtm_window_never_freezes_the_others(self):
+        """DTM/Waldo は他窓を止めない（この仕様は正しい。変えない）"""
+        monitor = self._monitor({self.DTM_KEY: {42}}, idx=3)
+        monitor.st.round_type = "Double Trouble"
+        monitor.st.terror_ids = [42]
+
+        with patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(monitor, "_list_plan",
+                          return_value=("list", True, True)):
+            monitor._decide_with_keep_on_set("Double Trouble")
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertFalse(monitor.st.continue_freeze_held, "他窓は止めない")
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    def test_that_dtm_window_ending_releases_nothing(self):
+        holder = WindowState()
+        SharedState.continue_round_start(holder)
+        monitor = self._monitor(idx=4)
+        monitor.st.is_continue_round = True     # 張っていない DTM/Waldo の窓
+
+        with patch.object(PlaySound, "play_sound"), \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process("2026.09.27 21:16:48 Debug      -  RoundOver")
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set())
+
+    # ── 5. 解除の全経路が st を渡していること ────────────
+    def test_every_release_passes_the_window(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+
+        self.assertNotIn("SharedState.continue_round_end()", src,
+                         "引数なしの解除が残っていないこと")
+        self.assertNotIn("SharedState.continue_round_start()", src)
+        self.assertEqual(src.count("SharedState.continue_round_end(st)"), 6,
+                         "解除は6か所")
+        self.assertEqual(src.count("SharedState.continue_round_start(st)"), 2,
+                         "開始は2か所")
+
+    def test_the_gui_reset_takes_no_window(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("SharedState.continue_round_reset()", src)
+
+
 class TestNothingFrozen(unittest.TestCase):
     """前面化してよいかは「どのフリーズも張られていない」で決める。
 
@@ -8945,7 +9133,7 @@ class TestContinueRoundFocus(unittest.TestCase):
     def test_an_ongoing_continue_does_not_focus_again(self):
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         monitor.st.is_continue_round = True
-        SharedState.continue_round_start()
+        SharedState.continue_round_start(monitor.st)
 
         focus = self._judge(monitor)
 
@@ -8953,7 +9141,7 @@ class TestContinueRoundFocus(unittest.TestCase):
 
     def test_another_windows_continue_freeze_blocks_it(self):
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
-        SharedState.continue_round_start()      # ほかの窓が張っている
+        _freeze_other_continue()                # ほかの窓が張っている
 
         focus = self._judge(monitor)
 
@@ -9312,7 +9500,7 @@ class TestSuicideIsolation(unittest.TestCase):
 
     # ── フリーズ ─────────────────────────────
     def test_another_windows_continue_freeze_does_not_stop_it(self):
-        SharedState.continue_round_start()
+        _freeze_other_continue()
         ex, _st = self._executor()
 
         finished, sent = self._skip(ex)
@@ -11248,8 +11436,8 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
 
     def test_begin_move_runs_during_continue_freeze_and_click_waits(self):
         """他窓が続行ラウンド中でも、Begin前移動は進みクリックだけ待つ"""
-        SharedState.continue_round_start()
-        moves, observed_move, clicked_while_frozen, clicked_after_release =             self._run_frozen_begin(SharedState.continue_round_end)
+        release = _freeze_other_continue()
+        moves, observed_move, clicked_while_frozen, clicked_after_release =             self._run_frozen_begin(release)
 
         self.assertTrue(observed_move, "フリーズ中でもOSC移動は行うこと")
         self.assertEqual(moves, ["forward+left"])
@@ -11272,8 +11460,8 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
 
         待つのはクリックの直前だけ（フォーカスを取るのはそこだけ）
         """
-        SharedState.continue_round_start()
-        moves, observed_move, clicked_while_frozen, clicked_after_release =             self._run_frozen_begin(SharedState.continue_round_end, osc_port=0)
+        release = _freeze_other_continue()
+        moves, observed_move, clicked_while_frozen, clicked_after_release =             self._run_frozen_begin(release, osc_port=0)
 
         self.assertTrue(observed_move, "フリーズ中でも移動する")
         self.assertFalse(clicked_while_frozen, "クリックは解除まで待つ")
@@ -13804,6 +13992,16 @@ class TestLegacySettings(unittest.TestCase):
             WindowConfig(hoshiimo_skip=True)
 
 
+def _freeze_other_continue():
+    """別の窓が続行フリーズを張っている状態を作り、解除する関数を返す。
+
+    続行フリーズは窓ごとの保持なので、他窓ぶんは別の WindowState で持つ
+    """
+    other = WindowState()
+    SharedState.continue_round_start(other)
+    return lambda: SharedState.continue_round_end(other)
+
+
 def _decision_threads(mock_thread):
     """立ったデーモンのうち、判定に関わるものだけを返す。
 
@@ -13901,7 +14099,7 @@ class TestSkipRoundsByType(unittest.TestCase):
     def test_no_announce_and_no_freeze(self):
         monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
         monitor.st.is_continue_round = True
-        SharedState.continue_round_start()
+        SharedState.continue_round_start(monitor.st)
 
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound") as mock_play:
@@ -16581,7 +16779,7 @@ class TestContinueRoundsByType(unittest.TestCase):
     def test_a_stale_continue_round_is_cleared(self):
         monitor = self._monitor()
         monitor.st.is_continue_round = True
-        SharedState.continue_round_start()
+        SharedState.continue_round_start(monitor.st)
 
         self._killers(monitor)
 
@@ -17551,7 +17749,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
         monitor.st.is_continue_round = True
-        SharedState.continue_round_start()
+        SharedState.continue_round_start(monitor.st)
 
         self._killers(monitor, [1, 2, 3])
 
@@ -18123,7 +18321,7 @@ class TestLogMonitorFogRound(unittest.TestCase):
 
     def test_a_fog_skip_leaves_another_windows_freeze_alone(self):
         """入場で足していないので、判明時に引いてもいけない"""
-        SharedState.continue_round_start()          # 別の窓の本物の続行
+        _freeze_other_continue()                    # 別の窓の本物の続行
         monitor = self._monitor()
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")

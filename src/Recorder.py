@@ -1,6 +1,6 @@
 """続行ラウンドを OBS で録画する。1本の録画を全窓で共有する。
 
-- 録画開始: 続行と決まった瞬間（LogMonitor が continue_round_start() を呼ぶ直後）
+- 録画開始: 続行と決まった瞬間（LogMonitor が continue_round_start(st) を呼ぶ直後）
 - 録画終了: 最後の窓の RoundOver から OBS_RECORD_TAIL_SEC 秒後
 - このツールが始めた録画だけ止める。利用者が手で始めた録画は絶対に止めない
 

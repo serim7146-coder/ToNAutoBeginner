@@ -128,7 +128,7 @@ class LogMonitor:
         速度検知フリーズ（ActionExecutor._focus_for_speed_freeze）と同じ扱い。
         付随機能なので、取れなくてもアナウンス・フリーズ・録画は続ける。
 
-        呼び出し側は `continue_round_start()` を呼ぶ**前**に呼ぶこと。後だと
+        呼び出し側は `continue_round_start(st)` を呼ぶ**前**に呼ぶこと。後だと
         自分のフリーズを数えてしまい、常に前面化しなくなる。
         """
         if self._hands_free():
@@ -167,7 +167,7 @@ class LogMonitor:
             return
         if st.is_continue_round:
             st.is_continue_round = False
-            SharedState.continue_round_end()
+            SharedState.continue_round_end(st)
             self._log(f"続行ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
 
     def _start_speed_probe(self):
@@ -650,7 +650,7 @@ class LogMonitor:
         st = self.st
         if st.is_continue_round:
             st.is_continue_round = False
-            SharedState.continue_round_end()
+            SharedState.continue_round_end(st)
 
     def _start_group_skip(self):
         st = self.st
@@ -696,7 +696,7 @@ class LogMonitor:
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_continue_round()     # 数える前に見る
-                SharedState.continue_round_start()
+                SharedState.continue_round_start(st)
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
@@ -1005,7 +1005,7 @@ class LogMonitor:
             st.pending_verified_time = 0.0
             if st.is_continue_round:
                 st.is_continue_round = False
-                SharedState.continue_round_end()
+                SharedState.continue_round_end(st)
             st.in_round                    = True
             st.round_seq                  += 1
             st.round_end_seen              = False
@@ -1087,8 +1087,8 @@ class LogMonitor:
             if st.round_type == "Fog":
                 # 既定では他窓を止めない。止めたいなら突入フリーズで Fog を選ぶ
                 # （上の一般の経路で張られる）。
-                # is_continue_round と continue_round_start() は必ずセットで外す。
-                # 片方だけ残すと、判明時に continue_round_end() が自分の足して
+                # is_continue_round と continue_round_start(st) は必ずセットで外す。
+                # 片方だけ残すと、判明時に continue_round_end(st) が自分の足して
                 # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
                 # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
                 if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
@@ -1176,7 +1176,7 @@ class LogMonitor:
             if st.is_continue_round:
                 # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
                 st.is_continue_round = False
-                SharedState.continue_round_end()
+                SharedState.continue_round_end(st)
                 self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
             round_lost_item = self._round_lost_item()
             round_item_warning = self._round_item_warning()
@@ -1550,7 +1550,7 @@ class LogMonitor:
         if kind == "restricted":
             if st.is_continue_round:
                 st.is_continue_round = False
-                SharedState.continue_round_end()
+                SharedState.continue_round_end(st)
             self._log(f"インスタンス制限: 操作スキップ ({st.instance_type})")
             return
         if kind == "hands_free":
@@ -1583,7 +1583,7 @@ class LogMonitor:
         st.is_continue_round = is_continue
 
         if was_continue_round and not st.is_continue_round:
-            SharedState.continue_round_end()
+            SharedState.continue_round_end(st)
 
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
@@ -1595,7 +1595,7 @@ class LogMonitor:
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_continue_round()     # 数える前に見る
-                SharedState.continue_round_start()
+                SharedState.continue_round_start(st)
                 # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
                 if not self._hands_free():

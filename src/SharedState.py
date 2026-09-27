@@ -277,17 +277,28 @@ CONTINUE_ROUND_EVENT.set()  # 初期値は通常動作可能
 _CONTINUE_ROUND_COUNT = 0
 _CONTINUE_ROUND_LOCK = threading.Lock()
 
-def continue_round_start():
-    """続行ラウンド開始：カウンターを増やしてフリーズ"""
+def continue_round_start(st):
+    """窓stを続行フリーズの保持者として登録（登録済みなら何もしない）。
+
+    保持を窓ごとに持つのは、足していない窓が引くのを防ぐため。DTM/Waldo の窓は
+    is_continue_round=True でもここを呼ばない（他窓を止めない仕様）ので、
+    終了側が無条件に引くと他窓の本物のフリーズを解除してしまう。
+    """
     global _CONTINUE_ROUND_COUNT
     with _CONTINUE_ROUND_LOCK:
+        if st.continue_freeze_held:
+            return
+        st.continue_freeze_held = True
         _CONTINUE_ROUND_COUNT += 1
         CONTINUE_ROUND_EVENT.clear()
 
-def continue_round_end():
-    """続行ラウンド終了：カウンターを減らし、0になったらフリーズ解除"""
+def continue_round_end(st):
+    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
     global _CONTINUE_ROUND_COUNT
     with _CONTINUE_ROUND_LOCK:
+        if not st.continue_freeze_held:
+            return
+        st.continue_freeze_held = False
         _CONTINUE_ROUND_COUNT = max(0, _CONTINUE_ROUND_COUNT - 1)
         if _CONTINUE_ROUND_COUNT == 0:
             CONTINUE_ROUND_EVENT.set()

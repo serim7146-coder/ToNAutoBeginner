@@ -77,6 +77,9 @@ class WindowState:
     unmatched_logged: set = field(default_factory=set)
     fog: bool = False
     is_continue_round: bool = False
+    # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、
+    # DTM/Waldo の窓は is_continue_round=True でもこちらは False（他窓を止めない）
+    continue_freeze_held: bool = False
     _skip_time: float = 0.0
     begin_done: bool = False
     speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）
