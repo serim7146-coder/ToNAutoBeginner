@@ -2304,7 +2304,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
         app.v_obs_password = self.FakeVar(password)
@@ -2345,13 +2345,14 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_freeze_8pages",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
@@ -13082,8 +13083,10 @@ class TestEmergencyKeyGui(unittest.TestCase):
         self._kb.start()
         self.addCleanup(self._kb.stop)
         self.app.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+        self.app.v_start_key.set("")
         self.app._capturing_key = False
         self.app._emergency_stop_key_pressed = False
+        self.app._start_key_pressed = False
         self.app.logs = []
         self._log = patch.object(mainGUI.App, "_log",
                                  lambda _s, m: self.app.logs.append(m))
@@ -13236,7 +13239,9 @@ class TestEmergencyKeySettings(unittest.TestCase):
     def _app(self, key="p"):
         app = type("FakeApp", (), {})()
         app.v_emergency_key = TestEmergencyKeySettings.FakeVar(key)
+        app.v_start_key = TestEmergencyKeySettings.FakeVar("")
         app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
         return app
 
     def _load(self, app, data):
@@ -13292,6 +13297,307 @@ class TestEmergencyKeySettings(unittest.TestCase):
         self._load(app, {"tnl_path": "C:/list/my.tnl"})
 
         self.assertEqual(app.v_emergency_key.get(), "p")
+
+
+class TestStartKeyGui(unittest.TestCase):
+    """マクロ開始のキー。停止キーと違い、既定は未設定で、不正なら無効にする。
+
+    停止は効かないと危ないので既定値へ倒すが、開始は勝手に動き出す方が危ない。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        real = _real_keyboard()
+        if real is None:
+            self.skipTest("keyboard が入っていない")
+        self._kb = patch.object(HotKey, "keyboard", real)
+        self._kb.start()
+        self.addCleanup(self._kb.stop)
+        self.app.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
+        self.app.v_start_key.set("")
+        self.app._capturing_key = False
+        self.app._emergency_stop_key_pressed = False
+        self.app._start_key_pressed = False
+        self.app.btn_start.config(state="normal")
+        self.app.logs = []
+        self._log = patch.object(mainGUI.App, "_log",
+                                 lambda _s, m: self.app.logs.append(m))
+        self._log.start()
+        self.addCleanup(self._log.stop)
+        self.addCleanup(lambda: self.app.v_start_key.set(""))
+        self.addCleanup(lambda: setattr(self.app, "_capturing_key", False))
+
+    def _poll(self, pressed=True, side_effect=None):
+        """200ms のループを1周させる。停止キーは押されていない扱い"""
+        def is_pressed(key):
+            if side_effect is not None and key == self.app.v_start_key.get():
+                raise side_effect
+            return pressed and key == self.app.v_start_key.get()
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after") as mock_after:
+            mock_keyboard.is_pressed.side_effect = is_pressed
+            mainGUI.App._poll_emergency_stop_key(self.app)
+        called = [c.args[0] for c in mock_keyboard.is_pressed.call_args_list]
+        started = [c.args[1] for c in mock_after.call_args_list if len(c.args) > 1]
+        return called, started
+
+    # ── 既定 ─────────────────────────────────
+    def test_the_default_is_unset(self):
+        self.assertEqual(config.START_KEY, "", "既定は未設定＝無効")
+        self.assertIn("未設定", self.app.lbl_start_key.cget("text"))
+
+    def test_an_unset_key_is_never_asked_about(self):
+        """is_pressed("") を呼ばないこと"""
+        called, started = self._poll()
+
+        self.assertNotIn("", called)
+        self.assertEqual(called, [config.EMERGENCY_STOP_KEY], called)
+        self.assertNotIn(self.app._start, started)
+
+    # ── 押されたとき ────────────────────────────
+    def test_the_configured_key_starts_the_macro(self):
+        self.app.v_start_key.set("f9")
+
+        called, started = self._poll()
+
+        self.assertIn("f9", called)
+        self.assertIn(self.app._start, started)
+
+    def test_holding_it_starts_only_once(self):
+        self.app.v_start_key.set("f9")
+        self._poll()
+
+        _called, started = self._poll()
+
+        self.assertNotIn(self.app._start, started, "押し続けても1回だけ")
+
+    def test_it_does_nothing_while_the_button_is_disabled(self):
+        """動作中・起動中は「▶ マクロ開始」が disabled になっている"""
+        self.app.v_start_key.set("f9")
+        self.app.btn_start.config(state="disabled")
+        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+
+        _called, started = self._poll()
+
+        self.assertNotIn(self.app._start, started)
+
+    def test_a_broken_key_at_poll_time_is_disabled(self):
+        """既定値へ倒さない。勝手に動き出す方が危ない"""
+        self.app.v_start_key.set("zzz")
+
+        self._poll(side_effect=ValueError("bad"))
+
+        self.assertEqual(self.app.v_start_key.get(), "")
+        self.assertNotEqual(self.app.v_start_key.get(), config.EMERGENCY_STOP_KEY)
+        self.assertTrue(any("使えないキー" in m for m in self.app.logs), self.app.logs)
+        self.assertIn("未設定", self.app.lbl_start_key.cget("text"))
+
+    def test_the_stop_key_still_stops(self):
+        """開始キーを足しても停止キーの挙動は変わらない"""
+        self.app.v_start_key.set("f9")
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after") as mock_after:
+            mock_keyboard.is_pressed.return_value = True
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        started = [c.args[1] for c in mock_after.call_args_list if len(c.args) > 1]
+        self.assertIn(self.app._stop, started)
+
+    # ── 捕捉 ─────────────────────────────────
+    def test_a_valid_key_is_adopted(self):
+        self.app._finish_capture_key("f9", "start")
+
+        self.assertEqual(self.app.v_start_key.get(), "f9")
+        self.assertIn("F9", self.app.lbl_start_key.cget("text"))
+
+    def test_an_invalid_key_leaves_it_unset(self):
+        self.app._finish_capture_key("zzz", "start")
+
+        self.assertEqual(self.app.v_start_key.get(), "")
+        self.assertTrue(any("使えないキー" in m for m in self.app.logs), self.app.logs)
+
+    def test_an_invalid_key_keeps_the_previous_one(self):
+        self.app.v_start_key.set("f9")
+
+        self.app._finish_capture_key("zzz", "start")
+
+        self.assertEqual(self.app.v_start_key.get(), "f9", "別のキーへ倒さない")
+
+    def test_a_timeout_leaves_the_key_alone(self):
+        self.app.v_start_key.set("f9")
+
+        self.app._finish_capture_key(None, "start")
+
+        self.assertEqual(self.app.v_start_key.get(), "f9")
+        self.assertTrue(any("取れませんでした" in m for m in self.app.logs))
+
+    def test_the_stop_key_cannot_be_reused_for_starting(self):
+        self.app.v_emergency_key.set("f9")
+
+        self.app._finish_capture_key("f9", "start")
+
+        self.assertEqual(self.app.v_start_key.get(), "", "設定しない")
+        self.assertTrue(any("緊急停止キーと同じ" in m for m in self.app.logs),
+                        self.app.logs)
+
+    def test_the_start_key_cannot_be_reused_for_stopping(self):
+        """逆向きも断る。どちらか一方しか働かないため"""
+        self.app.v_start_key.set("f9")
+        self.app.v_emergency_key.set("p")
+
+        self.app._finish_capture_key("f9")
+
+        self.assertEqual(self.app.v_emergency_key.get(), "p", "設定しない")
+        self.assertTrue(any("マクロ開始キーと同じ" in m for m in self.app.logs),
+                        self.app.logs)
+
+    def test_neither_key_is_seen_while_capturing(self):
+        self.app.v_start_key.set("f9")
+        self.app._capturing_key = True
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after"):
+            mainGUI.App._poll_emergency_stop_key(self.app)
+
+        mock_keyboard.is_pressed.assert_not_called()
+
+    def test_capturing_the_start_key_uses_its_own_button(self):
+        with patch.object(HotKey, "capture", return_value="f9"), \
+             patch.object(self.app, "after"):
+            self.app._begin_capture_key("start")
+
+        self.assertEqual(str(self.app.btn_capture_start_key.cget("state")),
+                         "disabled")
+        self.assertEqual(str(self.app.btn_capture_key.cget("state")), "normal",
+                         "停止側のボタンは触らない")
+        self.app._finish_capture_key("f9", "start")
+        self.assertEqual(str(self.app.btn_capture_start_key.cget("state")),
+                         "normal")
+
+    # ── 解除 ─────────────────────────────────
+    def test_it_can_be_cleared(self):
+        self.app.v_start_key.set("f9")
+
+        self.app._clear_start_key()
+
+        self.assertEqual(self.app.v_start_key.get(), "")
+        self.assertIn("未設定", self.app.lbl_start_key.cget("text"))
+        self.assertTrue(any("解除" in m for m in self.app.logs), self.app.logs)
+
+    def test_clearing_twice_is_harmless(self):
+        self.app._clear_start_key()
+
+        self.assertEqual(self.app.v_start_key.get(), "")
+
+    # ── 窓の幅 ────────────────────────────────
+    def test_the_control_row_did_not_grow(self):
+        """別のPCで崩れた件（47aefa4 / 73e577c）があるので幅を増やさない"""
+        self.assertIsNot(self.app.lbl_start_key.master,
+                         self.app.lbl_emergency.master,
+                         "同じ行には入らないので次の行に置く")
+        self.app.update_idletasks()
+        self.assertLessEqual(self.app.lbl_start_key.master.winfo_reqwidth(),
+                             self.app.lbl_emergency.master.winfo_reqwidth(),
+                             "開始キーの行が操作の行より広くならないこと")
+
+
+class TestStartKeySettings(unittest.TestCase):
+    """settings.json への保存と復元。壊れた値で勝手に動き出さないこと"""
+
+    class FakeVar:
+        def __init__(self, value=""):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, value):
+            self._v = value
+
+    def _load(self, data, valid=True):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_instance_link",
+                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
+                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        app._add_tool_row = lambda p, save=True: None
+        app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._apply_obs_settings = lambda: None
+        app._apply_saved_window_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app.logs = []
+        app._log = app.logs.append
+        with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
+             patch.object(mainGUI, "save_settings", lambda _d: None):
+            if valid:
+                mainGUI.App._load_saved_settings(app)
+            else:
+                with patch.object(HotKey, "is_valid",
+                                  side_effect=lambda k: k == "p"):
+                    mainGUI.App._load_saved_settings(app)
+        return app
+
+    def test_it_is_saved(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages",
+                     "v_freeze_punish", "v_emergency_key", "v_obs_enabled",
+                     "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_start_key = self.FakeVar("f9")
+        app.v_freeze_rounds = {}
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["start_key"], "f9")
+
+    def test_it_is_restored(self):
+        app = self._load({"start_key": "f9"})
+
+        self.assertEqual(app.v_start_key.get(), "f9")
+
+    def test_an_empty_value_stays_unset(self):
+        app = self._load({"start_key": ""})
+
+        self.assertEqual(app.v_start_key.get(), "")
+
+    def test_a_broken_value_is_disabled_not_defaulted(self):
+        app = self._load({"start_key": "zzz"}, valid=False)
+
+        self.assertEqual(app.v_start_key.get(), "")
+        self.assertNotEqual(app.v_start_key.get(), config.EMERGENCY_STOP_KEY)
+
+    def test_the_same_key_as_the_stop_key_is_disabled(self):
+        app = self._load({"emergency_stop_key": "f9", "start_key": "f9"})
+
+        self.assertEqual(app.v_emergency_key.get(), "f9", "停止キーは残す")
+        self.assertEqual(app.v_start_key.get(), "", "開始キーを無効にする")
+
+    def test_a_legacy_file_without_the_key_is_fine(self):
+        app = self._load({"tnl_path": "C:/list/my.tnl"})
+
+        self.assertEqual(app.v_start_key.get(), "")
 
 
 class TestToolLauncher(unittest.TestCase):
@@ -13610,13 +13916,14 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_freeze_8pages",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
@@ -13653,7 +13960,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_tnl",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_tnl",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -13663,6 +13970,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app = self._app()
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
@@ -13782,7 +14090,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
@@ -13796,7 +14104,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         self.assertEqual(set(saved), {
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
-            "freeze_punish", "freeze_rounds", "emergency_stop_key",
+            "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
 
@@ -13806,7 +14114,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key"):
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
@@ -13956,6 +14264,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
+        app.v_start_key = TestToolLauncherSettings.FakeVar("")
         return app
 
     def _save(self, app):
@@ -15185,6 +15494,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.tool_rows = []
         app.v_emergency_key = TestSkipRoundsSettings.FakeVar("p")
+        app.v_start_key = TestSkipRoundsSettings.FakeVar("")
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -15298,7 +15608,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app.tabs = [self._tab(), self._tab()]
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_freeze_8pages",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))
@@ -15308,6 +15618,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app.added_tools = []
         app._add_tool_row = lambda p, save=True: app.added_tools.append(p)
         app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
         app._apply_freeze_settings = lambda: None
         app._load_tnl = lambda show_error=True: None
         app._apply_saved_window_settings = \

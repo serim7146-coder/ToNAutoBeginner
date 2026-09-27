@@ -45,6 +45,11 @@ TON_LISTTOOL_PROCESS = "ton_listtool.exe"
 EMERGENCY_STOP_KEY = "p"
 EMERGENCY_STOP_POLL_MS = 200
 EMERGENCY_KEY_CAPTURE_SEC = 5.0   # 「キーを押して設定」で待つ時間
+# 「▶ マクロ開始」を押すのと同じことをするキー。既定は未設定＝無効。
+# 停止は効かないと危ないので、不正なキーなら既定値へ倒す。開始は逆で、
+# 勝手に動き出す方が危ない。だから既定は未設定、不正なら無効にするだけで、
+# 別のキーへは倒さない。ポーリングと捕捉の秒数は停止キーと共用する
+START_KEY = ""
 
 GUI_BG  = "#1e1e2e"
 GUI_FG  = "#cdd6f4"

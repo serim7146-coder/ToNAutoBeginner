@@ -488,8 +488,10 @@ class App(tk.Tk):
         self._overlay: LogOverlay | None = None
         self._log_line_count = 0
         self._emergency_stop_key_pressed = False
+        self._start_key_pressed = False
         # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
         self.v_emergency_key = tk.StringVar(value=config.EMERGENCY_STOP_KEY)
+        self.v_start_key = tk.StringVar(value=config.START_KEY)
         self._capturing_key = False
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
@@ -512,8 +514,9 @@ class App(tk.Tk):
 
     def _poll_emergency_stop_key(self):
         if self._capturing_key:
-            # 設定しようとしているキーで停止がかかると困る
+            # 設定しようとしているキーで停止や開始がかかると困る
             self._emergency_stop_key_pressed = False
+            self._start_key_pressed = False
             self._reschedule_emergency_poll()
             return
         key = self.v_emergency_key.get()
@@ -529,10 +532,47 @@ class App(tk.Tk):
             self._fall_back_to_default_key(
                 f"[緊急停止] ⚠ {key!r} は使えないキーです")
 
+        self._poll_start_key()
+
         try:
             self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
         except tk.TclError:
             pass
+
+    def _poll_start_key(self):
+        """マクロ開始のキー。停止キーと同じ200msのループに乗せる。
+
+        未設定なら何もしない（`is_pressed("")` を呼ばない）。不正なキーだった
+        ときは、別のキーへ倒さずに無効へ戻す——勝手に動き出す方が危ないので、
+        停止キーの `_fall_back_to_default_key()` とは逆に振る。
+        """
+        key = self.v_start_key.get()
+        if not key:
+            self._start_key_pressed = False
+            return
+        try:
+            now = keyboard.is_pressed(key)
+        except Exception:
+            self.v_start_key.set("")
+            self._start_key_pressed = False
+            self._refresh_start_key_label()
+            self._log(f"[マクロ開始] ⚠ {key!r} は使えないキーです。解除しました")
+            return
+        if now and not self._start_key_pressed and not self._start_button_disabled():
+            self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
+            self.after(0, self._start)
+        self._start_key_pressed = now
+
+    def _start_button_disabled(self) -> bool:
+        """「▶ マクロ開始」が押せない状態か（動作中・起動中など）。
+
+        走っているかを自前で持たず、ボタンの状態で見る。押せない場面は
+        ボタンを disabled にすることで表しているため
+        """
+        try:
+            return str(self.btn_start.cget("state")) == "disabled"
+        except (tk.TclError, AttributeError):
+            return True
 
     def _reschedule_emergency_poll(self):
         try:
@@ -557,32 +597,65 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
-    def _begin_capture_key(self):
-        """「キーを押して設定」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる"""
+    def _refresh_start_key_label(self):
+        key = self.v_start_key.get()
+        text = ("マクロ開始: 未設定" if not key
+                else f"マクロ開始: {HotKey.display(key)}キー長押し")
+        try:
+            self.lbl_start_key.config(text=text)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _clear_start_key(self):
+        """マクロ開始のキーを消して無効に戻す"""
+        if not self.v_start_key.get():
+            self._log("[マクロ開始] すでに未設定です")
+            return
+        self.v_start_key.set("")
+        self._start_key_pressed = False
+        self._refresh_start_key_label()
+        self._log("[マクロ開始] 解除しました")
+
+    def _capture_button(self, target: str):
+        return self.btn_capture_start_key if target == "start" else self.btn_capture_key
+
+    def _begin_capture_key(self, target: str = "stop"):
+        """「キーを押して設定」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる。
+
+        target は "stop"（緊急停止）か "start"（マクロ開始）。捕捉中は
+        _capturing_key で両方の検知を止める（設定しようとした打鍵で
+        停止したり動き出したりしないため）
+        """
         if self._capturing_key:
             return
         self._capturing_key = True
         try:
-            self.btn_capture_key.config(text="キーを押してください…", state="disabled")
-        except tk.TclError:
+            self._capture_button(target).config(text="キーを押してください…",
+                                                state="disabled")
+        except (tk.TclError, AttributeError):
             pass
 
         def worker():
             key = HotKey.capture(config.EMERGENCY_KEY_CAPTURE_SEC)
             try:
-                self.after(0, lambda: self._finish_capture_key(key))
+                self.after(0, lambda: self._finish_capture_key(key, target))
             except tk.TclError:
                 pass
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_capture_key(self, key):
+    def _finish_capture_key(self, key, target: str = "stop"):
         self._capturing_key = False
         self._emergency_stop_key_pressed = False
+        self._start_key_pressed = False
         try:
-            self.btn_capture_key.config(text="キーを押して設定", state="normal")
-        except tk.TclError:
+            self._capture_button(target).config(text="キーを押して設定",
+                                                state="normal")
+        except (tk.TclError, AttributeError):
             pass
+        if target == "start":
+            self._finish_capture_start_key(key)
+            return
         if key is None:
             self._log("[緊急停止] ⚠ キーを取れませんでした。設定は変えていません")
             return
@@ -593,9 +666,35 @@ class App(tk.Tk):
             self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
                       "キーに戻しました")
             return
+        if key == self.v_start_key.get():
+            self._log("[緊急停止] ⚠ マクロ開始キーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
         self._log(f"[緊急停止] {HotKey.display(key)}キーに変更しました")
+
+    def _finish_capture_start_key(self, key):
+        """マクロ開始のキーを設定する。
+
+        不正なときは既定値へ倒さない（勝手に動き出す方が危ない）。取れなかった
+        ときも不正なときも、いまの設定をそのまま残す
+        """
+        if key is None:
+            self._log("[マクロ開始] ⚠ キーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[マクロ開始] ⚠ {key!r} は使えないキーです。"
+                      "設定は変えていません")
+            return
+        if key == self.v_emergency_key.get():
+            self._log("[マクロ開始] ⚠ 緊急停止キーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
+        self.v_start_key.set(key)
+        self._start_key_pressed = False
+        self._refresh_start_key_label()
+        self._log(f"[マクロ開始] {HotKey.display(key)}キーに変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -824,6 +923,21 @@ class App(tk.Tk):
                                           command=self._begin_capture_key)
         self.btn_capture_key.pack(side="left", padx=(6, 0))
         self._refresh_emergency_key_label()
+
+        # マクロ開始のキー。緊急停止と同じ行には入らない（窓の幅を広げると
+        # 別のPCで崩れる。47aefa4 / 73e577c）ので、次の行に置く
+        fsk = ttk.Frame(self)
+        fsk.pack(pady=(0, 4))
+        self.lbl_start_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
+        self.lbl_start_key.pack(side="left")
+        self.btn_capture_start_key = ttk.Button(
+            fsk, text="キーを押して設定", width=16,
+            command=lambda: self._begin_capture_key("start"))
+        self.btn_capture_start_key.pack(side="left", padx=(6, 0))
+        self.btn_clear_start_key = ttk.Button(fsk, text="解除", width=6,
+                                              command=self._clear_start_key)
+        self.btn_clear_start_key.pack(side="left", padx=(4, 0))
+        self._refresh_start_key_label()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
@@ -1192,6 +1306,13 @@ class App(tk.Tk):
             key = config.EMERGENCY_STOP_KEY
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
+        # マクロ開始のキーは、不正なら既定値へ倒さずに無効（未設定）にする。
+        # 停止キーと同じキーも無効にする（どちらか一方しか働かないため）
+        start_key = data.get("start_key", config.START_KEY)
+        if not HotKey.is_valid(start_key) or start_key == key:
+            start_key = ""
+        self.v_start_key.set(start_key)
+        self._refresh_start_key_label()
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
@@ -1915,6 +2036,7 @@ class App(tk.Tk):
             "tool_launchers": [p for p in (row.v_path.get().strip()
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
+            "start_key":     self.v_start_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
