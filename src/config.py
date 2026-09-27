@@ -428,6 +428,11 @@ ATRACHED_LOG = "Lets play a game..."
 # Classicの1体構成は常に候補として出現ログを待つ
 GIGABYTES_ID = 314
 GIGABYTES_LOG = "The Gigabytes have come."
+# Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）。
+# 合図の行はまだ実ログで取れていないので、大文字小文字と末尾の句点は問わない
+ARKUS_ID = 61
+GLORBO_ID = 317
+GLORBO_LOG = "the real g has appeared"
 
 # Variantテラー（Classicでもこれなら通常判定に回す）
 VARIANT_TERROR_IDS = frozenset({

@@ -11240,6 +11240,218 @@ class TestAtrachedDetect(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [config.SONIC_ID])
 
 
+class TestGlorboDetect(unittest.TestCase):
+    """Punished の Sewers で、Arkus が低確率で Glorbo に置き換わる。
+
+    IDでは判別できないので合図のログで拾う（Atrached / Gigabytes と同じ形）。
+    この行はまだ実ログで観測できていないので、正規表現を緩く受けている。
+    """
+
+    PREFIX = "2026.09.27 21:05:11 Debug      -  "
+    LINE = PREFIX + "the real g has appeared"
+    PUNISHED_KEY = "Punished/パニッシュ"
+
+    def setUp(self):
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+
+    def _monitor(self, keep_on=None, round_type="Punished"):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor._running = True
+        return monitor
+
+    # ── ログ行 ────────────────────────────────
+    def test_the_line_is_parsed(self):
+        event = LogParser.parse(self.LINE)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, LogParser.EVENT_GLORBO)
+
+    def test_the_case_and_the_full_stop_do_not_matter(self):
+        """実物の行が取れていないので、大文字小文字と句点は問わない"""
+        for body in ("the real g has appeared",
+                     "the real g has appeared.",
+                     "The Real G Has Appeared",
+                     "THE REAL G HAS APPEARED.",
+                     "The real G has appeared."):
+            event = LogParser.parse(self.PREFIX + body)
+            self.assertIsNotNone(event, body)
+            self.assertEqual(event.kind, LogParser.EVENT_GLORBO, body)
+
+    def test_similar_lines_do_not_match(self):
+        for body in ("the real g has appeared now",
+                     "so the real g has appeared",
+                     "the real g has appeared..",
+                     "the real g appeared"):
+            self.assertIsNone(LogParser.parse(self.PREFIX + body), body)
+
+    # ── 差し替え ───────────────────────────────
+    def test_arkus_is_replaced_with_glorbo(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [config.ARKUS_ID]
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertTrue(monitor.st.glorbo)
+        self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
+
+    def test_without_the_line_it_stays_arkus(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [config.ARKUS_ID]
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.PREFIX + "Nothing to see here")
+
+        self.assertFalse(monitor.st.glorbo)
+        self.assertEqual(monitor.st.terror_ids, [config.ARKUS_ID])
+
+    def test_other_round_types_are_ignored(self):
+        """Punished 以外では、同じ合図が来ても差し替えない"""
+        for round_type in ("Classic", "Midnight", "Alternate", "Sabotage"):
+            monitor = self._monitor(round_type=round_type)
+            monitor.st.terror_ids = [config.ARKUS_ID]
+
+            with patch.object(LogMonitor.threading, "Thread"):
+                monitor._process(self.LINE)
+
+            self.assertFalse(monitor.st.glorbo, round_type)
+            self.assertEqual(monitor.st.terror_ids, [config.ARKUS_ID], round_type)
+
+    def test_a_line_up_without_arkus_is_left_alone(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [42, 43]
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [42, 43])
+
+    def test_only_arkus_is_replaced_in_a_group(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [42, config.ARKUS_ID]
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+
+        self.assertEqual(monitor.st.terror_ids, [42, config.GLORBO_ID])
+
+    def test_the_line_before_the_killers_still_applies(self):
+        """合図が Killers 行より先に来ても、後から来たIDに効くこと"""
+        monitor = self._monitor()
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            monitor._process(self.LINE)
+            monitor._on_killers([config.ARKUS_ID], "Punished", revealed=False)
+
+        self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
+
+    def test_the_handler_logs_once(self):
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, logs.append,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Punished"
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound") as play:
+            monitor._process(self.LINE)
+
+        self.assertEqual(len([m for m in logs if "Glorbo 出現" in m]), 1, logs)
+        play.assert_not_called()      # 専用の音声は作らない
+
+    # ── 続行・自爆（既存の _plan 経由）─────────────
+    def _plan(self, keep_on, ids):
+        monitor = self._monitor(keep_on)
+        monitor.st.terror_ids = list(ids)
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.LINE)
+        return monitor, monitor._plan("Punished", monitor.st.terror_ids, False)
+
+    def test_glorbo_on_the_list_continues(self):
+        monitor, plan = self._plan({self.PUNISHED_KEY: {config.GLORBO_ID}},
+                                   [config.ARKUS_ID])
+
+        self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
+        self.assertEqual(plan, ("list", True, False), "続行")
+
+    def test_glorbo_off_the_list_skips(self):
+        """Arkus が続行指定でも、Glorbo になったら自爆する"""
+        monitor, plan = self._plan({self.PUNISHED_KEY: {config.ARKUS_ID}},
+                                   [config.ARKUS_ID])
+
+        self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
+        self.assertEqual(plan, ("list", False, False), "自爆")
+
+    def test_arkus_on_the_list_continues_without_the_line(self):
+        monitor = self._monitor({self.PUNISHED_KEY: {config.ARKUS_ID}})
+        monitor.st.terror_ids = [config.ARKUS_ID]
+
+        plan = monitor._plan("Punished", monitor.st.terror_ids, False)
+
+        self.assertEqual(plan, ("list", True, False), "Arkus のままなら続行")
+
+    def test_it_waits_for_the_line_when_that_changes_the_decision(self):
+        """合図を待たずに判定すると、差し替えが間に合わない（117dc82 の 0.3 秒）"""
+        monitor = self._monitor({self.PUNISHED_KEY: {config.ARKUS_ID}})
+
+        with patch.object(LogMonitor.threading, "Thread") as thread,              patch.object(PlaySound, "play_sound"):
+            monitor._on_killers([config.ARKUS_ID], "Punished", revealed=False)
+
+        started = [c.kwargs["target"].__func__.__name__
+                   for c in thread.call_args_list if "target" in c.kwargs]
+        self.assertIn("_delayed_decision", started, started)
+
+    # ── 表と後始末 ──────────────────────────────
+    def test_the_flag_is_cleared_when_a_round_starts(self):
+        monitor = self._monitor()
+        monitor.st.glorbo = True
+
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.PREFIX + "This round is taking place at "
+                                           "Sewers(20) and the round type is Punished")
+
+        self.assertFalse(monitor.st.glorbo)
+
+    def test_the_row_is_in_the_table(self):
+        rows = TerrorReplacement.rows_for_flag("glorbo")
+
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual((row.source, row.target_id()),
+                         (config.ARKUS_ID, config.GLORBO_ID))
+        self.assertEqual(row.rounds, frozenset({"Punished"}))
+        self.assertTrue(row.enabled)
+        self.assertIn("glorbo", TerrorReplacement.flags())
+
+    def test_it_comes_before_the_gigabytes(self):
+        """Gigabytes は構成ごと差し替えるので最後のまま"""
+        flags = [row.flag for row in TerrorReplacement.TABLE]
+
+        self.assertLess(flags.index("glorbo"), flags.index("gigabytes"))
+
+    def test_glorbo_is_a_classic_terror_not_an_alternate(self):
+        """置き換え元の Arkus と同じカテゴリに置く。punished カテゴリは無い"""
+        self.assertEqual(ReadJson.terror_name(config.ARKUS_ID, config.TERRORS),
+                         "Arkus", "置き換え元のIDが Arkus を指していること")
+        self.assertEqual(ReadJson.terror_name(config.GLORBO_ID, config.TERRORS),
+                         "Glorbo")
+        self.assertFalse(ReadJson.is_alternate_terror(config.GLORBO_ID,
+                                                      config.TERRORS))
+        self.assertNotIn(config.GLORBO_ID, config.VARIANT_TERROR_IDS)
+
+
 class TestVerifiedStrafe(unittest.TestCase):
     """横移動は本物の Verified（自分の Begin が通った）で、private のときだけ。
 

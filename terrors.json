@@ -137,7 +137,8 @@
     {"id": 190, "name": "Hungry Home Invader", "terrors": ["Hungry Home Invader"], "objects": []},
     {"id": 191, "name": "Atrached", "terrors": ["Atrached"], "objects": []},
     {"id": 192, "name": "Wild Yet Bloodthirsty Creature", "terrors": ["Wild Yet Bloodthirsty Creature"], "objects": []},
-    {"id": 314, "name": "The Gigabytes", "terrors": ["The Gigabytes"], "objects": []}
+    {"id": 314, "name": "The Gigabytes", "terrors": ["The Gigabytes"], "objects": []},
+    {"id": 317, "name": "Glorbo", "terrors": ["Glorbo"], "objects": []}
   ],
 
   "alternate": [

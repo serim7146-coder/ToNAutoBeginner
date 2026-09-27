@@ -87,6 +87,11 @@ TABLE: tuple[Replacement, ...] = (
     # 入れて neo_pilot を立てるようにしてから wired=True にする
     Replacement("Neo Pilot", config.FUSION_PILOT_ID, None, None, "neo_pilot",
                 wired=False, target_name="Neo Pilot"),
+    # Punished の Sewers で、Arkus が低確率で Glorbo になる。マップは条件に
+    # 入れない（表に map の欄が無く、合図が来た時点で確定する）。ほかのマップの
+    # Punished + Arkus では 0.3 秒の変種待ちが入るだけ
+    Replacement("Glorbo", config.ARKUS_ID, config.GLORBO_ID,
+                frozenset({"Punished"}), "glorbo"),
     Replacement("The Gigabytes", None, config.GIGABYTES_ID, CLASSIC,
                 "gigabytes"),
 )

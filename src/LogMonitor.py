@@ -953,6 +953,12 @@ class LogMonitor:
             self._mark_replacement("gigabytes")
             return
 
+        if event.kind == LogParser.EVENT_GLORBO:
+            # Punished の Arkus の置き換え
+            self._log("🫠 Glorbo 出現（ArkusのVariant）")
+            self._mark_replacement("glorbo")
+            return
+
         if event.kind == LogParser.EVENT_ATRACHED:
             # SonicのVariant
             self._log("🎮 Atrached 出現（SonicのVariant）")

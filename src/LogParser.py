@@ -25,6 +25,7 @@ EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
 EVENT_STRING_DOWNLOAD = "string_download"
 EVENT_GIGABYTES = "gigabytes"
+EVENT_GLORBO = "glorbo"
 EVENT_ATRACHED = "atrached"
 EVENT_MASTER_SWITCHED = "master_switched"
 EVENT_ENRAGE = "enrage"
@@ -53,6 +54,10 @@ RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!
 # The Gigabytes はテラーIDでは判別できない（実測6件でIDが毎回異なる）。
 # この行だけが固有の手がかり。Killers have been set と同じ秒に出る。
 RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
+# Punished の Arkus → Glorbo。この行はまだ実ログで観測できていない（低確率で、
+# 手元のログ22本には0件）。正確な大文字小文字と句点が分からないので緩く受ける。
+# 実物が取れたら締める（RE_FOXY も同じ理由で IGNORECASE）
+RE_GLORBO = re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE)
 # Sonic(classic 40)のVariant。同IDで稀に差し替わるためIDでは判別できない。
 RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
 RE_STRING_DOWNLOAD = re.compile(
@@ -194,6 +199,9 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_GIGABYTES.match(line):
         return LogEvent(EVENT_GIGABYTES)
+
+    if RE_GLORBO.match(line):
+        return LogEvent(EVENT_GLORBO)
 
     if RE_ATRACHED.match(line):
         return LogEvent(EVENT_ATRACHED)
