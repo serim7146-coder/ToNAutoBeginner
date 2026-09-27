@@ -8829,6 +8829,179 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestContinueFreezeReleaseOnRoundOver(unittest.TestCase):
+    """続行ラウンドを生き残ったときも、猶予のあとフリーズを解除する。
+
+    2026-09-27 23:26 の実機の不具合: 解除の予約が `You died.` のときだけで、
+    生き残った場合は入らなかった。そのため通常経路で解除されず
+    `Verified Round End` の保険まで残り、他窓が RoundOver から13〜14秒も
+    余計に止まっていた。続行ラウンドは遊んでいる＝生き残ることが多いので、
+    ほぼ毎回これに当たっていた。
+    """
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+
+    def _monitor(self, auto_begin=False):
+        cfg = WindowConfig(hwnd=9, do_skip=True, auto_begin=auto_begin,
+                           voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor._running = True
+        return monitor
+
+    def _continuing(self):
+        """この窓が続行フリーズを張っている状態"""
+        monitor = self._monitor()
+        monitor.st.is_continue_round = True
+        SharedState.continue_round_start(monitor.st)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        return monitor
+
+    @staticmethod
+    def _booked(monitor, line):
+        """その行で立つデーモンの名前を返す"""
+        with patch.object(LogMonitor.threading, "Thread") as thread, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process(line)
+        return [c.kwargs["target"].__func__.__name__
+                for c in thread.call_args_list if "target" in c.kwargs]
+
+    ROUND_OVER = "2026.09.27 23:26:17 Debug      -  RoundOver"
+    LIVED = "2026.09.27 23:26:17 Debug      -  Lived in round."
+    DIED = "2026.09.27 23:26:12 Debug      -  You died."
+
+    # ── 1. 今回の不具合 ──────────────────────
+    def test_surviving_books_the_release_at_round_over(self):
+        monitor = self._continuing()
+
+        started = self._booked(monitor, self.ROUND_OVER)
+
+        self.assertIn("_release_continue_freeze_after_delay", started, started)
+
+    def test_the_release_actually_lifts_the_freeze(self):
+        """予約が走ると、Verified Round End を待たずに解除される"""
+        monitor = self._continuing()
+
+        with patch.object(LogMonitor.time, "sleep") as sleep:
+            monitor._release_continue_freeze_after_delay(monitor.st.round_seq)
+
+        sleep.assert_called_once_with(config.CONTINUE_FREEZE_RELEASE_DELAY_SEC)
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_the_lived_line_is_not_needed(self):
+        """RoundOver を起点にしたので、Lived in round. が無くても効く"""
+        monitor = self._continuing()
+
+        started = self._booked(monitor, self.ROUND_OVER)
+
+        self.assertIn("_release_continue_freeze_after_delay", started)
+        self.assertFalse(monitor.st.lived_this_round, "生存の行は来ていない")
+
+    # ── 2. 死亡のときはこれまでどおり ───────────────────
+    def test_dying_still_books_from_the_death(self):
+        monitor = self._continuing()
+
+        started = self._booked(monitor, self.DIED)
+
+        self.assertIn("_release_continue_freeze_after_delay", started, started)
+
+    def test_a_double_booking_releases_only_once(self):
+        """死亡と RoundOver の両方で予約されても、解除は1回きり"""
+        monitor = self._continuing()
+        other = WindowState()
+        SharedState.continue_round_start(other)     # 別の窓も張っている
+        self.assertEqual(SharedState.get_continue_round_count(), 2)
+
+        with patch.object(LogMonitor.time, "sleep"):
+            monitor._release_continue_freeze_after_delay(monitor.st.round_seq)
+            monitor._release_continue_freeze_after_delay(monitor.st.round_seq)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1,
+                         "自分のぶんだけ引く")
+        self.assertFalse(SharedState.CONTINUE_ROUND_EVENT.is_set(),
+                         "他窓のフリーズは残る")
+
+    # ── 3. DTM/Waldo は予約しない ───────────────────
+    def test_a_dtm_window_books_nothing(self):
+        monitor = self._monitor()
+        monitor.st.is_continue_round = True        # 張らずに続行ラウンド
+
+        started = self._booked(monitor, self.ROUND_OVER)
+
+        self.assertNotIn("_release_continue_freeze_after_delay", started, started)
+
+    def test_a_plain_round_books_nothing(self):
+        monitor = self._monitor()
+
+        started = self._booked(monitor, self.ROUND_OVER)
+
+        self.assertNotIn("_release_continue_freeze_after_delay", started, started)
+
+    # ── 4. 猶予中に次のラウンドが始まったら ─────────────────
+    def test_a_new_round_during_the_delay_cancels_it(self):
+        monitor = self._continuing()
+
+        def bump(_sec):
+            monitor.st.round_seq += 1
+
+        with patch.object(LogMonitor.time, "sleep", side_effect=bump):
+            monitor._release_continue_freeze_after_delay(monitor.st.round_seq)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1, "解除しない")
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_a_stop_during_the_delay_cancels_it(self):
+        monitor = self._continuing()
+
+        def stop(_sec):
+            monitor._running = False
+
+        with patch.object(LogMonitor.time, "sleep", side_effect=stop):
+            monitor._release_continue_freeze_after_delay(monitor.st.round_seq)
+
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+
+    # ── 5. 保険は残っている ────────────────────
+    def test_the_verified_round_end_safety_net_remains(self):
+        """通常経路が両方とも取りこぼしたときの最後の砦"""
+        monitor = self._continuing()
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process("2026.09.27 23:26:17 Debug      -  RoundOver")
+            monitor._process("2026.09.27 23:26:31 Debug      -  Verified Round End")
+
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
+        self.assertTrue(any("保険" in m for m in logs), logs)
+
+    def test_the_booking_looks_at_the_hold_not_the_round(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+        over = src[src.index("if event.kind == LogParser.EVENT_ROUND_OVER:"):]
+        over = over[:over.index("\n        if event.kind", 10)]
+
+        self.assertIn("if st.continue_freeze_held:", over)
+        self.assertIn("_release_continue_freeze_after_delay", over)
+
+
 class TestContinueFreezeIsPerWindow(unittest.TestCase):
     """続行フリーズは窓ごとの保持。足していない窓が引かないこと。
 

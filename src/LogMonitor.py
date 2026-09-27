@@ -1144,6 +1144,15 @@ class LogMonitor:
             # Begin待ちの起点。実処理は Verified Round End 側で走るが、
             # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
             st.round_over_time = time.time()
+            # 続行フリーズの解除を予約する。死亡側だけだと、生き残ったときに
+            # 予約が入らず Verified Round End の保険まで残り、他窓が
+            # RoundOver から13〜14秒も余計に止まっていた。RoundOver は
+            # 死亡・生存のどちらでも来るので、ここなら取りこぼさない。
+            # 死亡は RoundOver より先に来るので、死亡から数える動きは保たれる
+            # （解除は冪等なので二重予約は無害）
+            if st.continue_freeze_held:
+                self._start_daemon(self._release_continue_freeze_after_delay,
+                                   st.round_seq)
             if self._waiting_for_terror_replacement():
                 self._send_round_statistics_once()
             announce_on_round_over = (
