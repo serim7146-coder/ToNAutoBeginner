@@ -242,6 +242,21 @@ class LogMonitor:
             self._log(f"ラウンド突入フリーズ解除（死亡から"
                       f"{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒）")
 
+    def _release_speed_freeze_after_delay(self, round_seq: int):
+        """8 Pages でスキャナーを取れたあと、猶予を置いてフリーズを解除する。
+
+        待つ長さはアイテムロストの装備解除と同じ定数（依頼者の「同様にして」）。
+        片方を変えれば両方変わるので、別の定数は作らない。
+        待っている間に次のラウンドが始まっていたら何もしない
+        （ROUND_START の無条件解除が済ませている）
+        """
+        time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
+        if not self._running or self.st.round_seq != round_seq:
+            return
+        SharedState.speed_freeze_end(self.st)
+        self._log("✅ アイテム取得 → 速度検知フリーズ解除"
+                  f"（{config.EQUIP_RELEASE_DELAY_SEC}秒後）")
+
     def _release_equip_wait_after_delay(self):
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
         SharedState.equip_freeze_end(self.st)
@@ -1289,10 +1304,13 @@ class LogMonitor:
             self._track_randomizer_item_change(event)
             st.item_id = event.item_id
             if st.speed_freeze_kind == "8pages":
-                # 8 Pages はスキャナーを取れたら再開してよい
+                # 8 Pages はスキャナーを取れたら再開してよい。ただし即座に
+                # 解除すると間が短すぎる（依頼者の指摘）。アイテムロスト側の
+                # 装備解除と同じ猶予を置く。種別はその場で消す——2回
+                # Equipping が来ても予約を二重にしないため
                 st.speed_freeze_kind = ""
-                SharedState.speed_freeze_end(st)
-                self._log("✅ アイテム取得 → 速度検知フリーズ解除")
+                self._start_daemon(self._release_speed_freeze_after_delay,
+                                   st.round_seq)
             if st.died_this_round and st.item_id:
                 st.item_equipped_after_death = True
             self._log(f"✅ アイテム装備 (id={st.item_id})")

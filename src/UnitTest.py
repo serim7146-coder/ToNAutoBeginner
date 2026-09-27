@@ -8829,6 +8829,153 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestEightPagesReleaseDelay(unittest.TestCase):
+    """8 Pages でスキャナーを取ったあとの解除に、猶予を入れる。
+
+    即座に解除すると間が短すぎる（依頼者の指摘）。アイテムロストの装備解除と
+    同じ定数を使う（片方を変えれば両方変わる形にしておく）。
+    """
+
+    def setUp(self):
+        SharedState.speed_freeze_reset()
+        SharedState.set_hands_free(False)
+        self.addCleanup(SharedState.speed_freeze_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+
+    def _monitor(self, kind="8pages"):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=5), {},
+                                       lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "8 Pages"
+        monitor._running = True
+        monitor.st.speed_freeze_kind = kind
+        SharedState.speed_freeze_start(monitor.st)
+        return monitor
+
+    @staticmethod
+    def _equip(monitor, line="Equipping 42."):
+        with patch.object(LogMonitor.threading, "Thread") as thread:
+            monitor._process(line)
+        return [c.kwargs["target"].__func__.__name__
+                for c in thread.call_args_list if "target" in c.kwargs]
+
+    # ── 1. すぐには解除しない ────────────────────
+    def test_taking_the_scanner_does_not_release_at_once(self):
+        monitor = self._monitor()
+
+        started = self._equip(monitor)
+
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertTrue(monitor.st.speed_freeze_held, "まだ張っている")
+        self.assertIn("_release_speed_freeze_after_delay", started, started)
+
+    def test_it_releases_after_the_same_delay_as_the_equip_wait(self):
+        monitor = self._monitor()
+        self._equip(monitor)
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(LogMonitor.time, "sleep") as sleep:
+            monitor._release_speed_freeze_after_delay(monitor.st.round_seq)
+
+        sleep.assert_called_once_with(config.EQUIP_RELEASE_DELAY_SEC)
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertFalse(monitor.st.speed_freeze_held)
+        self.assertTrue(any(str(config.EQUIP_RELEASE_DELAY_SEC) in m
+                            for m in logs), logs)
+
+    def test_it_uses_the_equip_release_constant(self):
+        """別の定数を作らない（片方を変えれば両方変わる形にしておく）"""
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def _release_speed_freeze_after_delay"):]
+        body = body[:body.index("\n    def ", 10)]
+
+        self.assertIn("time.sleep(config.EQUIP_RELEASE_DELAY_SEC)", body,
+                      "待つ長さが同じ定数であること")
+
+    # ── 2. 種別はその場で消える ───────────────────
+    def test_the_kind_is_cleared_at_once(self):
+        monitor = self._monitor()
+
+        self._equip(monitor)
+
+        self.assertEqual(monitor.st.speed_freeze_kind, "")
+
+    def test_a_second_equip_books_nothing(self):
+        monitor = self._monitor()
+        self._equip(monitor)
+
+        started = self._equip(monitor, "Equipping 43.")
+
+        self.assertNotIn("_release_speed_freeze_after_delay", started, started)
+
+    # ── 3. 猶予中に次のラウンドが始まったら ─────────────
+    def test_a_new_round_during_the_delay_cancels_it(self):
+        monitor = self._monitor()
+        self._equip(monitor)
+        seq = monitor.st.round_seq
+
+        def bump(_sec):
+            monitor.st.round_seq += 1
+
+        with patch.object(LogMonitor.time, "sleep", side_effect=bump):
+            monitor._release_speed_freeze_after_delay(seq)
+
+        self.assertTrue(monitor.st.speed_freeze_held, "解除しない")
+
+    def test_a_stop_during_the_delay_cancels_it(self):
+        monitor = self._monitor()
+        self._equip(monitor)
+
+        def stop(_sec):
+            monitor._running = False
+
+        with patch.object(LogMonitor.time, "sleep", side_effect=stop):
+            monitor._release_speed_freeze_after_delay(monitor.st.round_seq)
+
+        self.assertTrue(monitor.st.speed_freeze_held)
+
+    # ── 4. ラウンド開始の無条件解除は残す ────────────────
+    def test_a_round_start_still_releases_unconditionally(self):
+        """スキャナーを取らないままラウンドが始まっても止まりっぱなしにしない"""
+        monitor = self._monitor()
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Classic")
+
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertFalse(monitor.st.speed_freeze_held)
+
+    def test_a_late_release_after_a_round_start_is_harmless(self):
+        monitor = self._monitor()
+        self._equip(monitor)
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+            monitor._process("This round is taking place at Facility (12) "
+                             "and the round type is Classic")
+
+        with patch.object(LogMonitor.time, "sleep"):
+            monitor._release_speed_freeze_after_delay(monitor.st.round_seq)
+
+        self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertEqual(SharedState.get_speed_freeze_count(), 0)
+
+    # ── 5. Punished は変えない ────────────────────
+    def test_the_punish_freeze_is_untouched(self):
+        monitor = self._monitor(kind="punish")
+
+        started = self._equip(monitor)
+
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set())
+        self.assertEqual(monitor.st.speed_freeze_kind, "punish")
+        self.assertNotIn("_release_speed_freeze_after_delay", started, started)
+
+
 class TestContinueFreezeReleaseOnRoundOver(unittest.TestCase):
     """続行ラウンドを生き残ったときも、猶予のあとフリーズを解除する。
 
@@ -12532,12 +12679,21 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertTrue(st.speed_freeze_held, "フリーズ自体は張ること")
 
     def test_item_equip_releases_eight_pages_freeze(self):
+        """猶予を置いてから解除する（アイテムロストの装備解除と同じ間）"""
         monitor = self._monitor()
+        monitor._running = True
         monitor.st.speed_freeze_kind = "8pages"
         SharedState.speed_freeze_start(monitor.st)
 
-        monitor._process("Equipping 42.")
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("Equipping 42.")
+        self.assertFalse(SharedState.SPEED_FREEZE_EVENT.is_set(),
+                         "取った瞬間には解除しない")
 
+        with patch.object(LogMonitor.time, "sleep") as sleep:
+            monitor._release_speed_freeze_after_delay(monitor.st.round_seq)
+
+        sleep.assert_called_once_with(config.EQUIP_RELEASE_DELAY_SEC)
         self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
 
     def test_item_equip_does_not_release_punish_freeze(self):
