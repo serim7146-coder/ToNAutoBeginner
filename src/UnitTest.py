@@ -10560,23 +10560,40 @@ class TestCursorGiveUpReasons(unittest.TestCase):
         self.assertTrue(over)
         self.assertEqual(reasons, [])
 
-    # ── 6〜7. 別の窓に覆われている ─────────────────
-    def test_a_covered_point_is_not_touched(self):
+    # ── 6〜7. 覆われていても差し込む（2026-09-27 に判定を撤回）─────────
+    def test_a_covered_point_is_still_used(self):
+        """覆われていても Begin は押せる。判定を入れてはいけない。
+
+        VS Code が全画面で6窓すべてを覆っていても動いていた実例があり、
+        2026-09-25 の実測（別の窓が上に重なっていても押せる）とも一致する。
+        判定を入れると、当ツールの GUI 自身が差し込み点を覆っている窓
+        （実測で窓1と窓4）が毎ラウンド前面化＋クリックへ落ちる
+        """
         user32 = FakeUser32()
 
         over, reasons = self._over(user32=user32, at_point=999,
                                    title="notes.txt - メモ帳")
 
-        self.assertFalse(over)
-        self.assertEqual(user32.moves, [], "カーソルを動かさない")
-        self.assertEqual(len(reasons), 1, reasons)
-        self.assertIn("覆われています", reasons[0])
-        self.assertIn("notes.txt - メモ帳", reasons[0], "どければ直ると分かるように")
+        self.assertTrue(over, "覆われていても差し込む")
+        self.assertEqual(user32.moves, [(550, 500), (500, 500)],
+                         "置いて戻す")
+        self.assertEqual(reasons, [], "覆いを理由に見送らない")
 
-    def test_a_covering_window_without_a_title_shows_its_hwnd(self):
-        _over, reasons = self._over(at_point=999, title="")
+    def test_nothing_says_the_point_is_covered(self):
+        for at_point in (999, 0, self.HWND):
+            _over, reasons = self._over(at_point=at_point, title="何かの窓")
 
-        self.assertIn("hwnd=", reasons[0])
+            self.assertFalse(any("覆われ" in r for r in reasons),
+                             (at_point, reasons))
+
+    def test_the_source_does_not_test_for_a_covering_window(self):
+        """将来また同じ判定を入れないための見張り"""
+        src = Path(WindowOperator.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def cursor_over_window"):]
+        body = body[:body.index("\ndef ", 10)]
+
+        self.assertNotIn("window_at_point", body)
+        self.assertNotIn("window_title", body)
 
     def test_an_uncovered_point_still_dips(self):
         over, reasons = self._over(at_point=self.HWND)
@@ -10585,7 +10602,6 @@ class TestCursorGiveUpReasons(unittest.TestCase):
         self.assertEqual(reasons, [])
 
     def test_an_unknown_window_at_the_point_does_not_block_it(self):
-        """WindowFromPoint が取れない環境では、これまでどおり差し込む"""
         over, _reasons = self._over(at_point=0)
 
         self.assertTrue(over)
@@ -11202,6 +11218,85 @@ class TestBeginByCursor(unittest.TestCase):
 
         press.assert_not_called()
         thread.assert_called_once()
+
+    def test_the_spam_pauses_while_another_window_is_frozen(self):
+        """押す見込みが無い間は送らない。飛んでいる UseRight は、利用者の
+        カーソルがその窓へ来た瞬間に Begin を押してしまう"""
+        executor, st = self._executor()
+        st.round_over_time = time.time() - 60      # 送り始める時刻は過ぎている
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+        waits = []
+
+        with patch.object(OSCClient.OSCClient, "press") as press:
+            executor._spam_use_right(self.CountingStop(limit=3, waits=waits),
+                                     st.round_seq)
+
+        press.assert_not_called()
+        self.assertTrue(waits, "休みながら待つ（スレッドは生きている）")
+
+    def test_the_spam_resumes_once_the_freeze_lifts(self):
+        executor, st = self._executor()
+        st.round_over_time = time.time() - 60
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+        stop = self.CountingStop(limit=4)
+        lifted = []
+
+        def wait(_sec):
+            if not lifted:
+                lifted.append(True)
+                SharedState.continue_round_end(other)   # 解ける
+
+        stop.wait = wait
+
+        with patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            executor._spam_use_right(stop, st.round_seq)
+
+        self.assertTrue(press.called, "解けたら送り始める")
+
+    def test_the_spam_does_not_pause_for_its_own_equip_wait(self):
+        """自分のフリーズで休むと、アイテムロスト窓が押せなくなる"""
+        executor, st = self._executor()
+        st.round_over_time = time.time() - 60
+        st.waiting_for_equip = True
+        SharedState.equip_freeze_start(st)
+        self.addCleanup(SharedState.equip_freeze_reset)
+
+        with patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            executor._spam_use_right(self.CountingStop(limit=1), st.round_seq)
+
+        press.assert_called_once_with("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
+
+    def test_the_pause_is_logged_once_a_round(self):
+        executor, st = self._executor()
+        logs = []
+        executor._log = logs.append
+        st.round_over_time = time.time() - 60
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+
+        with patch.object(OSCClient.OSCClient, "press"):
+            executor._spam_use_right(self.CountingStop(limit=5), st.round_seq)
+
+        self.assertEqual(len([m for m in logs if "連打を止めています" in m]), 1, logs)
+
+    def test_the_next_round_says_it_again(self):
+        executor, st = self._executor()
+        logs = []
+        executor._log = logs.append
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+
+        executor._log_spam_paused()
+        st.round_seq += 1
+        executor._log_spam_paused()
+
+        self.assertEqual(len(logs), 2, logs)
 
     def test_the_spam_stops_when_begin_is_accepted(self):
         executor, st = self._executor()

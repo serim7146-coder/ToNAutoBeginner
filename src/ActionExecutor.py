@@ -50,6 +50,7 @@ class ActionExecutor:
         # カーソル方式を見送った理由は、同じラウンドで同じものを出さない
         self._cursor_reason_round = -1
         self._cursor_reasons: set = set()
+        self._spam_paused_round = -1      # 連打の休止を告げたラウンド
         # 受信の準備（bind）が済んだことを横移動側へ伝える。
         # VRChatは値が変わったときしか送らないので、bind前に動き出すと
         # 立ち上がりのサンプルを永久に取りこぼす。
@@ -338,6 +339,14 @@ class ActionExecutor:
             if time.time() < start:
                 stop.wait(0.1)
                 continue
+            if not all(self._freezes_ok()):
+                # 押す見込みが無い間は送らない。飛んでいる UseRight は、利用者の
+                # カーソルがその窓へ来た瞬間に Begin を押してしまう（固定が
+                # 外れる状態が実在する）。通数も毎秒60通×窓数あるので止める。
+                # スレッドは終わらせない——解ければそのまま送り始める
+                self._log_spam_paused()
+                stop.wait(config.BEGIN_USE_PULSE_SEC)
+                continue
             self._osc.press("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
             stop.wait(config.BEGIN_USE_PULSE_SEC)
 
@@ -368,6 +377,14 @@ class ActionExecutor:
                     time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
         # 押せていなければ False。呼び出し側が従来方式（前面化＋クリック）へ落とす
         return bool(dipped and st.begin_done)
+
+    def _log_spam_paused(self):
+        """連打を休めていることを1ラウンド1回だけ出す（0.05秒ごとに出すと埋まる）"""
+        st = self._st
+        if self._spam_paused_round == st.round_seq:
+            return
+        self._spam_paused_round = st.round_seq
+        self._log("Begin: 他窓のフリーズ中なので連打を止めています")
 
     def _log_cursor_reason(self, reason: str):
         """カーソル方式を見送った理由を出す。同じラウンドで同じ理由は1回だけ"""

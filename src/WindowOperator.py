@@ -271,7 +271,14 @@ GA_ROOT = 2
 def window_at_point(point: tuple) -> int:
     """その点にある窓（トップレベル）の hwnd。取れなければ 0。
 
-    子ウィンドウが返るので GetAncestor(GA_ROOT) で親まで辿る
+    子ウィンドウが返るので GetAncestor(GA_ROOT) で親まで辿る。
+
+    **差し込み先が覆われているかの判定には使わないこと**（2026-09-27 に撤回）。
+    覆われていても Begin は押せる。VS Code が全画面で6窓すべてを覆っていても
+    動いていた実例があり、2026-09-25 の実測（別の窓が上に重なっていても押せる）
+    とも一致する。判定に使うと、当ツールの GUI 自身が差し込み点を覆っている窓
+    （実測で窓1と窓4）が毎ラウンド前面化＋クリックへ落ちる。
+    調査のために残してある。
     """
     try:
         child = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
@@ -338,14 +345,6 @@ def cursor_over_window(hwnd: int, on_reason=None):
     point, reason = cursor_target(hwnd)
     if point is None:
         _say(on_reason, reason)
-        yield False
-        return
-    covering = window_at_point(point)
-    if covering and covering != hwnd:
-        # 覆っている窓へ差し込むと、その窓が反応してしまう。題名を出して
-        # 「どければ直る」と分かるようにする
-        name = window_title(covering) or f"hwnd={covering:#010x}"
-        _say(on_reason, f"差し込む点が別の窓に覆われています（{name}）")
         yield False
         return
     before = cursor_position()
