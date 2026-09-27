@@ -234,7 +234,7 @@ BEGIN_CURSOR_OFFSET    = (0, 0)
 # UseRight の連打は RoundOver から数えて始める。実測（521ラウンド）で
 # RoundOver → Verified Round End は13〜14秒、Verified Round End → Begin が
 # 押せるまでは 0 秒だった。カーソルは連打中は動かさない
-BEGIN_USE_SPAM_START_SEC = 12.5
+BEGIN_USE_SPAM_START_SEC = 12.9
 # UseRight を押している時間。離している時間も同じなので、押し下がる瞬間は
 # この2倍ごと（0.05秒ごと）に来る。差し込みの滞在（BEGIN_CURSOR_DWELL_SEC）が
 # 0.05秒なので、ひと差しの間に押し下がる瞬間が必ず1回入る。
@@ -250,6 +250,13 @@ BEGIN_CURSOR_GAP_SEC   = 0.3        # 2回以上にしたときの、ひと差�
 # 置いた一瞬に利用者がマウスを動かして窓に乗っ取られる機会も減る
 BEGIN_CURSOR_DIPS      = 1
 BEGIN_CURSOR_LIMIT_SEC = 4.0        # ひと差しを続ける上限（実測13〜14秒に収まる）
+# 差し込んだあと、受理（Verified）が来るのを待つ上限。往復1回は0.05秒で終わるので、
+# 待たずに判定すると押せていても必ず「押せなかった」ことになる。
+# 測るのは「こちらが押してから Verified が来るまで」で、Verified Round End 起点では
+# ない。実測 2026-09-27 22:35 は 05.139 に押して 05.297 に Connecting ＝ 0.2 秒ほど。
+# 以前「Verified Round End → Verified が3〜4秒」としていたのは誤りで、フォールバックが
+# 毎ラウンド起きていた時期のログを測り、その遅れを Verified の遅れと読んでいた
+BEGIN_PRESS_WAIT_SEC   = 0.5
 BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
 # 主催リストが取れない状態がこれだけ続いたら tnl へ切り替える。プロセスの
 # 見え方・host_save の差し替え・参加者の入れ替えは一瞬だけ起きうる

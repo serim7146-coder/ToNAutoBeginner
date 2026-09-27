@@ -10454,6 +10454,262 @@ class TestCursorOverWindow(unittest.TestCase):
         raise_.assert_not_called()
 
 
+class TestWaitForTheAcceptance(unittest.TestCase):
+    """押せているのに前面化＋クリックするのをやめる。
+
+    実機のログ: 「カーソルを一瞬合わせる」→「✅ Connecting」→ なのに
+    「フォーカス切替」「Beginクリック」。差し込みは往復1回＝0.05秒で終わるのに
+    受理はその後に来るので、待たずに判定すると押せていても必ず
+    「押せなかった」ことになっていた。
+    """
+
+    RECT = (100, 200, 1000, 800)
+    HWND = 246
+
+    def setUp(self):
+        SharedState.clear_window_hwnds()
+        for name in ("EQUIP_WAIT_EVENT", "CONTINUE_ROUND_EVENT",
+                     "SPEED_FREEZE_EVENT", "ROUND_FREEZE_EVENT"):
+            getattr(SharedState, name).set()
+        self.addCleanup(SharedState.clear_window_hwnds)
+
+    def _executor(self, logs=None):
+        cfg = WindowConfig(hwnd=self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0,
+                         round_seq=7)
+        return ActionExecutor.ActionExecutor(
+            cfg, st, lambda: True,
+            logs.append if logs is not None else (lambda _m: None)), st
+
+    def _press(self, executor, on_sleep=None, lock_hook=None, press_wait=None):
+        """実際の _press_begin を流す。戻り値と focus/click の呼ばれ方を見る"""
+        user32 = FakeUser32()
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, 900, 600)))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(100, 200)))
+            enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
+            enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+            if press_wait is not None:
+                enter(patch.object(config, "BEGIN_PRESS_WAIT_SEC", press_wait))
+            # time モジュールは ActionExecutor と WindowOperator で同じものなので、
+            # patch は1つだけにする（2つ当てると後の方が side_effect を潰す）
+            enter(patch.object(ActionExecutor.time, "sleep",
+                               side_effect=on_sleep))
+            focus = enter(patch.object(WindowOperator, "focus_window",
+                                       return_value=True))
+            click = enter(patch.object(WindowOperator, "click"))
+            if lock_hook is not None:
+                enter(patch.object(SharedState, "_GLOBAL_ACTION_LOCK", lock_hook))
+            ok = executor._press_begin()
+        return ok, focus, click, user32
+
+    # ── 1・6. 待てば押せている ────────────────────
+    def test_an_acceptance_soon_after_the_dip_takes_no_focus(self):
+        logs = []
+        executor, st = self._executor(logs)
+        slept = []
+
+        def accept(sec):
+            slept.append(sec)
+            if len(slept) >= 4:            # 0.05 × 4 = 0.2 秒ほどで届く
+                st.begin_done = True
+
+        ok, focus, click, _u = self._press(executor, on_sleep=accept)
+
+        self.assertTrue(ok, "受理扱い")
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertFalse(any("Beginクリック" in m for m in logs), logs)
+
+    def test_an_immediate_acceptance_takes_no_focus(self):
+        executor, st = self._executor()
+
+        def accept(_sec):
+            st.begin_done = True
+
+        ok, focus, click, _u = self._press(executor, on_sleep=accept)
+
+        self.assertTrue(ok)
+        focus.assert_not_called()
+        click.assert_not_called()
+
+    # ── 2. 来なければフォールバック ──────────────────
+    def test_no_acceptance_falls_back_to_the_click(self):
+        executor, _st = self._executor()
+        started = time.time()
+
+        ok, focus, click, user32 = self._press(executor, on_sleep=None,
+                                              press_wait=0.2)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        self.assertTrue(user32.moves, "差し込みはしている")
+        self.assertLess(time.time() - started, 5.0)
+
+    # ── 3. 途中で抜ける ──────────────────────
+    def test_a_started_round_stops_the_wait(self):
+        executor, st = self._executor()
+        slept = []
+
+        def start_round(sec):
+            slept.append(sec)
+            st.in_round = True
+
+        ok, focus, click, _u = self._press(executor, on_sleep=start_round)
+
+        self.assertFalse(ok, "ラウンドが始まったら押さない")
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertLessEqual(len(slept), 3, "すぐ抜けること")
+
+    def test_a_new_round_seq_stops_the_wait(self):
+        """別のラウンドになったら、上限を待たずに抜けること"""
+        executor, st = self._executor()
+        started = time.time()
+
+        def bump(_sec):
+            st.round_seq += 1
+
+        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 1.0), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=bump):
+            self.assertFalse(executor._wait_begin_accepted(st.round_seq))
+
+        self.assertLess(time.time() - started, 0.5, "上限まで待たないこと")
+
+    def test_a_started_round_stops_the_wait_promptly(self):
+        executor, st = self._executor()
+        started = time.time()
+
+        def start_round(_sec):
+            st.in_round = True
+
+        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 1.0), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=start_round):
+            self.assertFalse(executor._wait_begin_accepted(st.round_seq))
+
+        self.assertLess(time.time() - started, 0.5)
+
+    def test_a_stop_ends_the_wait(self):
+        executor, st = self._executor()
+        running = [True, True, True]
+        executor._is_running = lambda: bool(running) and running.pop()
+
+        ok, focus, click, _u = self._press(executor)
+
+        self.assertFalse(ok)
+        focus.assert_not_called()
+        click.assert_not_called()
+
+    # ── 4. ロック待ちの間に受理された ──────────────────
+    def _fallback(self, executor, lock, logs=None):
+        """差し込みを見送らせて（最小化）、フォールバックの入口だけを通す"""
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=True))
+            enter(patch.object(WindowOperator, "user32", FakeUser32()))
+            enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
+            focus = enter(patch.object(WindowOperator, "focus_window",
+                                       return_value=True))
+            click = enter(patch.object(WindowOperator, "click"))
+            enter(patch.object(SharedState, "_GLOBAL_ACTION_LOCK", lock))
+            enter(patch.object(ActionExecutor.time, "sleep"))
+            if logs is not None:
+                executor._log = logs.append
+            ok = executor._press_begin()
+        return ok, focus, click
+
+    def test_an_acceptance_while_waiting_for_the_lock_cancels_the_click(self):
+        """6窓では他窓のクリックを待つ間に受理が届く。そこで気づくこと。
+
+        差し込みもロックを取るので、受理が届くのは2回目に入ったとき＝
+        フォールバックがロックを取ったときにする
+        """
+        logs = []
+        executor, st = self._executor()
+        entered = []
+
+        class LockThatAcceptsOnTheSecondEntry:
+            def __enter__(self_inner):
+                entered.append(1)
+                if len(entered) >= 2:
+                    st.begin_done = True
+                return self_inner
+
+            def __exit__(self_inner, *_a):
+                return False
+
+        ok, focus, click = self._fallback(
+            executor, LockThatAcceptsOnTheSecondEntry(), logs)
+
+        self.assertTrue(ok)
+        self.assertEqual(len(entered), 2, "差し込みとフォールバックで1回ずつ")
+        focus.assert_not_called()
+        click.assert_not_called()
+        self.assertTrue(any("受理されたので前面化しません" in m for m in logs), logs)
+
+    def test_an_acceptance_before_the_lock_skips_it_entirely(self):
+        """差し込みを見送った直後に受理が届いたら、ロック待ちに入らない。
+
+        入ると、6窓では他窓のクリックを待つ間ずっと止まる
+        """
+        logs = []
+        executor, st = self._executor()
+        entered = []
+
+        class WatchedLock:
+            def __enter__(self_inner):
+                entered.append(1)
+                return self_inner
+
+            def __exit__(self_inner, *_a):
+                return False
+
+        def log(message):
+            logs.append(message)
+            if "最小化" in message:
+                st.begin_done = True     # 見送った直後に受理が届いた
+
+        executor._log = log
+        ok, focus, click = self._fallback(executor, WatchedLock())
+
+        self.assertTrue(ok)
+        self.assertEqual(len(entered), 1, "差し込みの1回だけ。もう取らない")
+        focus.assert_not_called()
+        click.assert_not_called()
+
+    # ── 5. 待ちは上限で止まる ─────────────────────
+    def test_the_wait_does_not_exceed_the_limit(self):
+        executor, st = self._executor()
+        started = time.time()
+
+        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 0.3):
+            self.assertFalse(executor._wait_begin_accepted(st.round_seq))
+
+        elapsed = time.time() - started
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 1.5, "上限を大きく超えないこと")
+
+    def test_the_limit_is_half_a_second(self):
+        self.assertEqual(config.BEGIN_PRESS_WAIT_SEC, 0.5)
+
+    def test_an_already_accepted_begin_returns_true_at_once(self):
+        executor, st = self._executor()
+        st.begin_done = True
+        started = time.time()
+
+        self.assertTrue(executor._wait_begin_accepted(st.round_seq))
+
+        self.assertLess(time.time() - started, 0.2, "待たない")
+
+
 class TestCursorGiveUpReasons(unittest.TestCase):
     """カーソル方式を見送ったら、必ず理由を1行出す。
 
@@ -11134,7 +11390,8 @@ class TestBeginByCursor(unittest.TestCase):
 
     def test_it_gives_up_at_the_time_limit(self):
         executor, _st = self._executor()
-        clock = iter([0.0, 0.0, 99.0, 99.0, 99.0])
+        # 差し込みは1回、そのあとの受理待ちも時間切れで抜ける（時刻は進める）
+        clock = iter([0.0, 0.0, 99.0] + [200.0 + i for i in range(50)])
 
         with patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ActionExecutor.time, "time", side_effect=lambda: next(clock)):

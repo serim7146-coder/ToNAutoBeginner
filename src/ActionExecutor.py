@@ -354,9 +354,14 @@ class ActionExecutor:
         """カーソルをその窓へ一瞬だけ置く。押せたら True。
 
         置けない窓（最小化など）は False を返し、呼び出し側が従来方式へ落とす。
-        連打は _start_use_spam() のスレッドが送り続けている
+        連打は _start_use_spam() のスレッドが送り続けている。
+
+        差し込めたら、答え（Verified）が来るまで待つ。往復は0.05秒で終わるのに
+        受理はその後に来るので、待たずに判定すると押せていても必ず
+        「押せなかった」ことになり、毎ラウンド前面を奪っていた。
         """
         st = self._st
+        round_seq = st.round_seq
         deadline = time.time() + config.BEGIN_CURSOR_LIMIT_SEC
         dipped = False
         for dip in range(config.BEGIN_CURSOR_DIPS):
@@ -375,8 +380,23 @@ class ActionExecutor:
                         self._log(f"Begin: カーソルを一瞬合わせる{tail}")
                         dipped = True
                     time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
-        # 押せていなければ False。呼び出し側が従来方式（前面化＋クリック）へ落とす
-        return bool(dipped and st.begin_done)
+        if not dipped:
+            return False
+        return self._wait_begin_accepted(round_seq)
+
+    def _wait_begin_accepted(self, round_seq: int) -> bool:
+        """受理（Verified）を BEGIN_PRESS_WAIT_SEC まで待つ。来なければ False。
+
+        来なければ呼び出し側が従来方式（前面化＋クリック）へ落とす
+        """
+        st = self._st
+        deadline = time.time() + config.BEGIN_PRESS_WAIT_SEC
+        while not st.begin_done:
+            if (time.time() >= deadline or not self._is_running()
+                    or st.in_round or st.round_seq != round_seq):
+                return False
+            time.sleep(0.05)
+        return True
 
     def _log_spam_paused(self):
         """連打を休めていることを1ラウンド1回だけ出す（0.05秒ごとに出すと埋まる）"""
@@ -420,7 +440,16 @@ class ActionExecutor:
             finally:
                 if stop is not None:
                     stop.set()
+        if st.begin_done:
+            # 差し込みで押せていた。ロック待ちにも入らない
+            self._log("Begin: 受理されたので前面化しません")
+            return True
         with SharedState._GLOBAL_ACTION_LOCK:
+            if st.begin_done:
+                # 6窓では他窓のクリックを待つ間に受理が届く。ここで気づかないと
+                # 受理済みの Begin をもう一度押して前面を奪う
+                self._log("Begin: 受理されたので前面化しません")
+                return True
             if not self._is_running() or st.in_round:
                 return False
             if not self.focus():
