@@ -231,24 +231,22 @@ SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN = 76, 77
 SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 78, 79
 
 
-def window_cursor_point(hwnd: int) -> tuple | None:
-    """その窓の Begin ボタンの上に当たる点。置けないなら None。
+def cursor_target(hwnd: int) -> tuple:
+    """(点, 置けない理由) を返す。置けるなら理由は空文字。
 
-    Begin は照準の位置にあり、照準はクライアント領域の中央にある。矩形の中
-    ならどこでもよいわけではない（実測 2026-09-27。窓の隅では押せなかった）。
-    タイトルバーや枠を含めないよう、窓矩形ではなくクライアント領域を使う。
-
-    置けないのは、最小化されている窓と、矩形が画面（全モニタ）の外にある窓。
-    呼び出し側は None のとき従来の前面化＋クリックへ落とす。
+    点の決め方は window_cursor_point() の docstring を参照（クライアント領域の
+    中央＝照準の位置）。理由も返すのは、見送りが無言だと原因を絞れないため。
+    実機で「カーソルも動かさず前面化＋クリックしている」が起きたとき、候補
+    （最小化・クライアント領域が0・画面外）を切り分けられなかった。
     """
     if not hwnd:
-        return None
+        return None, "カーソルを置けません（窓がありません）"
     try:
         if win32gui.IsIconic(hwnd):
-            return None
+            return None, "カーソルを置けません（最小化）"
         _cl, _ct, cw, ch = win32gui.GetClientRect(hwnd)
         if cw <= 0 or ch <= 0:
-            return None
+            return None, "カーソルを置けません（クライアント領域が0）"
         left, top = win32gui.ClientToScreen(hwnd, (0, 0))
         right, bottom = left + cw, top + ch
         dx, dy = config.BEGIN_CURSOR_OFFSET
@@ -259,10 +257,50 @@ def window_cursor_point(hwnd: int) -> tuple | None:
         vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
         vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
         if not (vx <= x < vx + vw and vy <= y < vy + vh):
-            return None        # 画面の外（別モニタを外した後など）
+            # 画面の外（別モニタを外した後など）
+            return None, (f"カーソルを置けません（画面外: 点 ({x},{y}) "
+                          f"画面 ({vx},{vy})-({vx + vw},{vy + vh})）")
+    except Exception as e:
+        return None, f"カーソルを置けません（窓の位置が取れません: {e}）"
+    return (x, y), ""
+
+
+GA_ROOT = 2
+
+
+def window_at_point(point: tuple) -> int:
+    """その点にある窓（トップレベル）の hwnd。取れなければ 0。
+
+    子ウィンドウが返るので GetAncestor(GA_ROOT) で親まで辿る
+    """
+    try:
+        child = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
+        if not child:
+            return 0
+        return int(user32.GetAncestor(child, GA_ROOT) or child)
     except Exception:
-        return None
-    return (x, y)
+        return 0
+
+
+def window_title(hwnd: int) -> str:
+    try:
+        return win32gui.GetWindowText(hwnd) or ""
+    except Exception:
+        return ""
+
+
+def window_cursor_point(hwnd: int) -> tuple | None:
+    """その窓の Begin ボタンの上に当たる点。置けないなら None。
+
+    Begin は照準の位置にあり、照準はクライアント領域の中央にある。矩形の中
+    ならどこでもよいわけではない（実測 2026-09-27。窓の隅では押せなかった）。
+    タイトルバーや枠を含めないよう、窓矩形ではなくクライアント領域を使う。
+
+    置けないのは、最小化されている窓と、矩形が画面（全モニタ）の外にある窓。
+    呼び出し側は None のとき従来の前面化＋クリックへ落とす。理由まで要るときは
+    cursor_target() を使う。
+    """
+    return cursor_target(hwnd)[0]
 
 
 def foreground_hwnd() -> int:
@@ -287,25 +325,49 @@ def cursor_position() -> tuple | None:
 
 
 @contextlib.contextmanager
-def cursor_over_window(hwnd: int):
+def cursor_over_window(hwnd: int, on_reason=None):
     """カーソルをその窓の Begin ボタンの上へ置き、抜けるときに必ず元へ戻す。
 
     置けたかを yield する。置けなければ何も動かさずに False を返すので、
     呼び出し側は従来の前面化＋クリックへ落とせる。前面化は一切しない。
+
+    見送るときは on_reason(理由) を1回だけ呼ぶ。無言で落ちると、実機で
+    「カーソルも動かさずに前面化＋クリックしている」が起きたときに原因を
+    絞れない（点が出せない／SetCursorPos 失敗／読み返し不一致のどれか）。
     """
-    point = window_cursor_point(hwnd)
+    point, reason = cursor_target(hwnd)
     if point is None:
+        _say(on_reason, reason)
+        yield False
+        return
+    covering = window_at_point(point)
+    if covering and covering != hwnd:
+        # 覆っている窓へ差し込むと、その窓が反応してしまう。題名を出して
+        # 「どければ直る」と分かるようにする
+        name = window_title(covering) or f"hwnd={covering:#010x}"
+        _say(on_reason, f"差し込む点が別の窓に覆われています（{name}）")
         yield False
         return
     before = cursor_position()
     moved = landed = False
     try:
+        ctypes.set_last_error(0)
         moved = bool(user32.SetCursorPos(*point))
-        if moved:
-            time.sleep(config.OPERATOR_WAIT_SEC)
-            # 置けたかは読み返して確かめる。動かし**に行った**かどうかとは
-            # 別に持つ——ずれていても、動かしに行ったなら必ず元へ戻す
+        if not moved:
+            _say(on_reason, "カーソルを動かせません"
+                            f"（SetCursorPos 失敗 err={ctypes.get_last_error()}）")
+        else:
+            # 読み返しは待つ前に行う。待ってから読むと、その 0.05 秒の間に
+            # 利用者が自分の手でマウスを動かしたときに「置けなかった」と
+            # 誤判定する。見たいのは SetCursorPos が効いたかどうかだけ。
+            # 動かし**に行った**か（moved）とは別に持つ——ずれていても、
+            # 動かしに行ったなら finally で必ず元へ戻す
             landed = _cursor_landed(point)
+            if landed:
+                time.sleep(config.OPERATOR_WAIT_SEC)
+            else:
+                _say(on_reason, "カーソルが置けていません"
+                                f"（頼んだ点 {point} → 実際 {cursor_position()}）")
         yield landed
     finally:
         if moved and before is not None:
@@ -313,6 +375,11 @@ def cursor_over_window(hwnd: int):
                 user32.SetCursorPos(*before)      # 例外が出ても必ず戻す
             except Exception:
                 pass
+
+
+def _say(on_reason, reason: str):
+    if on_reason is not None and reason:
+        on_reason(reason)
 
 
 CURSOR_LANDED_SLACK_PX = 2

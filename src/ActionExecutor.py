@@ -47,6 +47,9 @@ class ActionExecutor:
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
         self._speed_recv_warned = False   # 速度未受信の警告を出したか
+        # カーソル方式を見送った理由は、同じラウンドで同じものを出さない
+        self._cursor_reason_round = -1
+        self._cursor_reasons: set = set()
         # 受信の準備（bind）が済んだことを横移動側へ伝える。
         # VRChatは値が変わったときしか送らないので、bind前に動き出すと
         # 立ち上がりのサンプルを永久に取りこぼす。
@@ -355,7 +358,8 @@ class ActionExecutor:
             if dip:
                 time.sleep(config.BEGIN_CURSOR_GAP_SEC)
             with SharedState._GLOBAL_ACTION_LOCK:
-                with WindowOperator.cursor_over_window(self._cfg.hwnd) as over:
+                with WindowOperator.cursor_over_window(
+                        self._cfg.hwnd, self._log_cursor_reason) as over:
                     if not over:
                         return False
                     if not dipped:
@@ -364,6 +368,17 @@ class ActionExecutor:
                     time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
         # 押せていなければ False。呼び出し側が従来方式（前面化＋クリック）へ落とす
         return bool(dipped and st.begin_done)
+
+    def _log_cursor_reason(self, reason: str):
+        """カーソル方式を見送った理由を出す。同じラウンドで同じ理由は1回だけ"""
+        st = self._st
+        if self._cursor_reason_round != st.round_seq:
+            self._cursor_reason_round = st.round_seq
+            self._cursor_reasons = set()
+        if reason in self._cursor_reasons:
+            return
+        self._cursor_reasons.add(reason)
+        self._log(f"Begin: {reason}")
 
     def _press_begin(self, again: bool = False) -> bool:
         """Begin を押す。押せたら True。

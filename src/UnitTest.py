@@ -10081,6 +10081,305 @@ class TestCursorOverWindow(unittest.TestCase):
         raise_.assert_not_called()
 
 
+class TestCursorGiveUpReasons(unittest.TestCase):
+    """カーソル方式を見送ったら、必ず理由を1行出す。
+
+    無言で落ちると原因を絞れない。実機で「カーソルも動かさず前面化＋クリック
+    している」が起きたとき、候補3つ（点が出せない／SetCursorPos 失敗／
+    読み返し不一致）のどれかを切り分けられなかった。
+    """
+
+    HWND = 123
+    RECT = (100, 200, 1000, 800)
+    CENTRE = (550, 500)
+
+    def _over(self, user32=None, iconic=False, client=None, screen=None,
+              at_point=None, title=""):
+        """cursor_over_window を回して (置けたか, 出た理由) を返す"""
+        user32 = user32 or FakeUser32()
+        reasons = []
+        client = client if client is not None else (
+            0, 0, self.RECT[2] - self.RECT[0], self.RECT[3] - self.RECT[1])
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=iconic))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=client))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=screen or (self.RECT[0], self.RECT[1])))
+            enter(patch.object(WindowOperator, "window_at_point",
+                               return_value=at_point if at_point is not None
+                               else self.HWND))
+            enter(patch.object(WindowOperator, "window_title", return_value=title))
+            enter(patch.object(WindowOperator.time, "sleep"))
+            with WindowOperator.cursor_over_window(self.HWND,
+                                                   reasons.append) as over:
+                pass
+        return over, reasons
+
+    # ── 4. 3つの見送りに固有のログ ───────────────────
+    def test_a_minimized_window_says_so(self):
+        over, reasons = self._over(iconic=True)
+
+        self.assertFalse(over)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("最小化", reasons[0])
+
+    def test_a_zero_client_area_says_so(self):
+        over, reasons = self._over(client=(0, 0, 0, 0))
+
+        self.assertFalse(over)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("クライアント領域が0", reasons[0])
+
+    def test_an_off_screen_window_says_where(self):
+        over, reasons = self._over(screen=(9000, 9000))
+
+        self.assertFalse(over)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("画面外", reasons[0])
+        self.assertIn("9450", reasons[0], "頼んだ点を添える")
+        self.assertIn("2560", reasons[0], "画面の範囲も添える")
+
+    def test_a_failed_setcursorpos_says_so_with_the_error(self):
+        over, reasons = self._over(user32=FakeUser32(set_ok=False))
+
+        self.assertFalse(over)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("SetCursorPos 失敗", reasons[0])
+        self.assertIn("err=", reasons[0])
+
+    def test_a_cursor_that_did_not_land_says_both_points(self):
+        user32 = FakeUser32()
+        real = user32.SetCursorPos
+
+        def stuck(x, y):
+            real(x, y)
+            user32.cursor = (7, 9)
+            return 1
+
+        user32.SetCursorPos = stuck
+
+        over, reasons = self._over(user32=user32)
+
+        self.assertFalse(over)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("置けていません", reasons[0])
+        self.assertIn("(550, 500)", reasons[0], "頼んだ点")
+        self.assertIn("(7, 9)", reasons[0], "実際の位置")
+
+    def test_the_reasons_are_all_different(self):
+        """どの経路で落ちたか、文面で見分けられること"""
+        seen = set()
+        for kwargs in ({"iconic": True}, {"client": (0, 0, 0, 0)},
+                       {"screen": (9000, 9000)},
+                       {"user32": FakeUser32(set_ok=False)}):
+            _over, reasons = self._over(**kwargs)
+            seen.add(reasons[0])
+
+        self.assertEqual(len(seen), 4, seen)
+
+    def test_a_good_placement_says_nothing(self):
+        over, reasons = self._over()
+
+        self.assertTrue(over)
+        self.assertEqual(reasons, [])
+
+    # ── 6〜7. 別の窓に覆われている ─────────────────
+    def test_a_covered_point_is_not_touched(self):
+        user32 = FakeUser32()
+
+        over, reasons = self._over(user32=user32, at_point=999,
+                                   title="notes.txt - メモ帳")
+
+        self.assertFalse(over)
+        self.assertEqual(user32.moves, [], "カーソルを動かさない")
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertIn("覆われています", reasons[0])
+        self.assertIn("notes.txt - メモ帳", reasons[0], "どければ直ると分かるように")
+
+    def test_a_covering_window_without_a_title_shows_its_hwnd(self):
+        _over, reasons = self._over(at_point=999, title="")
+
+        self.assertIn("hwnd=", reasons[0])
+
+    def test_an_uncovered_point_still_dips(self):
+        over, reasons = self._over(at_point=self.HWND)
+
+        self.assertTrue(over)
+        self.assertEqual(reasons, [])
+
+    def test_an_unknown_window_at_the_point_does_not_block_it(self):
+        """WindowFromPoint が取れない環境では、これまでどおり差し込む"""
+        over, _reasons = self._over(at_point=0)
+
+        self.assertTrue(over)
+
+    # ── 1〜2. 読み返しの順番 ─────────────────────
+    def test_the_readback_comes_before_the_dwell(self):
+        """待ってから読むと、その間に手でマウスを動かされて誤判定する"""
+        order = []
+        user32 = FakeUser32()
+        real_set, real_get = user32.SetCursorPos, user32.GetCursorPos
+        user32.SetCursorPos = lambda x, y: (order.append("set"),
+                                            real_set(x, y))[1]
+        user32.GetCursorPos = lambda ref: (order.append("get"),
+                                           real_get(ref))[1]
+
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, 900, 600)))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(100, 200)))
+            enter(patch.object(WindowOperator, "window_at_point",
+                               return_value=self.HWND))
+            enter(patch.object(WindowOperator.time, "sleep",
+                               side_effect=lambda _s: order.append("sleep")))
+            with WindowOperator.cursor_over_window(self.HWND):
+                pass
+
+        # before の読み取り → 置く → 読み返す → 滞在 → 戻す
+        self.assertEqual(order, ["get", "set", "get", "sleep", "set"], order)
+
+    def test_a_missed_placement_does_not_dwell(self):
+        order = []
+        user32 = FakeUser32()
+        real = user32.SetCursorPos
+
+        def stuck(x, y):
+            real(x, y)
+            user32.cursor = (7, 9)
+            order.append("set")
+            return 1
+
+        user32.SetCursorPos = stuck
+
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, 900, 600)))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(100, 200)))
+            enter(patch.object(WindowOperator, "window_at_point",
+                               return_value=self.HWND))
+            enter(patch.object(WindowOperator.time, "sleep",
+                               side_effect=lambda _s: order.append("sleep")))
+            with WindowOperator.cursor_over_window(self.HWND) as over:
+                self.assertFalse(over)
+
+        self.assertNotIn("sleep", order, "置けていないなら滞在しない")
+
+    # ── 5. 同じ理由を繰り返さない ───────────────────
+    def _executor(self, logs):
+        cfg = WindowConfig(hwnd=self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True,
+                                             logs.append), st
+
+    def test_the_same_reason_is_logged_once_a_round(self):
+        logs = []
+        ex, st = self._executor(logs)
+
+        for _ in range(5):
+            ex._log_cursor_reason("カーソルを置けません（最小化）")
+
+        self.assertEqual(len([m for m in logs if "最小化" in m]), 1, logs)
+
+    def test_a_different_reason_is_still_logged(self):
+        logs = []
+        ex, _st = self._executor(logs)
+
+        ex._log_cursor_reason("カーソルを置けません（最小化）")
+        ex._log_cursor_reason("カーソルを動かせません（SetCursorPos 失敗 err=5）")
+
+        self.assertEqual(len(logs), 2, logs)
+
+    def test_the_next_round_says_it_again(self):
+        logs = []
+        ex, st = self._executor(logs)
+
+        ex._log_cursor_reason("カーソルを置けません（最小化）")
+        st.round_seq += 1
+        ex._log_cursor_reason("カーソルを置けません（最小化）")
+
+        self.assertEqual(len(logs), 2, logs)
+
+    def test_the_reason_is_prefixed(self):
+        logs = []
+        ex, _st = self._executor(logs)
+
+        ex._log_cursor_reason("カーソルを置けません（最小化）")
+
+        self.assertTrue(logs[0].startswith("Begin: "), logs)
+
+    def test_the_dip_logs_the_reason_before_falling_back(self):
+        """無言で前面化＋クリックへ落ちないこと"""
+        logs = []
+        ex, _st = self._executor(logs)
+
+        with patch.object(WindowOperator.win32gui, "IsIconic",
+                          return_value=True), \
+             patch.object(WindowOperator, "user32", FakeUser32()), \
+             patch.object(ActionExecutor.time, "sleep"):
+            self.assertFalse(ex._dip_cursor_for_begin(""))
+
+        self.assertTrue(any("最小化" in m for m in logs), logs)
+
+
+class TestOneDipOnly(unittest.TestCase):
+    """差し込みの往復は1回。連打が0.05秒周期なので繰り返す理由が無い"""
+
+    RECT = (100, 200, 1000, 800)
+
+    def test_the_default_is_one_dip(self):
+        self.assertEqual(config.BEGIN_CURSOR_DIPS, 1)
+
+    def test_it_goes_there_and_back_once(self):
+        cfg = WindowConfig(hwnd=123, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+        user32 = FakeUser32()
+
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, 900, 600)))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(100, 200)))
+            enter(patch.object(WindowOperator, "window_at_point",
+                               return_value=123))
+            enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
+            enter(patch.object(WindowOperator, "focus_window", return_value=True))
+            enter(patch.object(WindowOperator, "click"))
+            enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+            enter(patch.object(ActionExecutor.time, "sleep"))
+            ex._press_begin()
+
+        self.assertEqual(user32.moves, [(550, 500), (500, 500)],
+                         "置いて戻すの1往復だけ")
+
+    def test_the_return_move_is_still_there(self):
+        """1回にしても、元の位置へ戻す作りは消さない（依頼者の指示）"""
+        src = Path(WindowOperator.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def cursor_over_window"):]
+        body = body[:body.index("\ndef ", 10)]
+
+        self.assertIn("user32.SetCursorPos(*before)", body)
+        self.assertIn("finally:", body)
+
+
 class TestVRChatInFrontFallback(unittest.TestCase):
     """VRChat の窓が前面なら、カーソルを触らずフォールバックする。
 
