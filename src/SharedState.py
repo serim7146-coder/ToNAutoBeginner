@@ -302,3 +302,15 @@ def continue_round_reset():
 def get_continue_round_count() -> int:
     with _CONTINUE_ROUND_LOCK:
         return _CONTINUE_ROUND_COUNT
+
+
+def nothing_frozen() -> bool:
+    """どのフリーズも張られていないか。
+
+    前面化してよいかの判断に使う。フリーズが張られている間、前面はそれを
+    張った窓のものなので、種別を問わず譲る。見るのは
+    ActionExecutor._wait_other_windows() と同じ4つ（あちらは待ち続ける作りで
+    形が違うので、共有しない）。
+    """
+    return (EQUIP_WAIT_EVENT.is_set() and CONTINUE_ROUND_EVENT.is_set()
+            and SPEED_FREEZE_EVENT.is_set() and ROUND_FREEZE_EVENT.is_set())

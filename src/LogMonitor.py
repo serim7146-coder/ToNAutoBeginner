@@ -122,6 +122,34 @@ class LogMonitor:
         thread.start()
         return thread
 
+    def _focus_for_continue_round(self):
+        """続行になった窓を前面化する。どの窓を操作すればよいか分かるように。
+
+        速度検知フリーズ（ActionExecutor._focus_for_speed_freeze）と同じ扱い。
+        付随機能なので、取れなくてもアナウンス・フリーズ・録画は続ける。
+
+        呼び出し側は `continue_round_start()` を呼ぶ**前**に呼ぶこと。後だと
+        自分のフリーズを数えてしまい、常に前面化しなくなる。
+        """
+        if self._hands_free():
+            # 人が見ていないので意味が無く、ほかの窓のカーソル方式 Begin の
+            # 邪魔になる。アナウンスと録画と同じ扱い
+            return
+        if not SharedState.nothing_frozen():
+            # フリーズを張った窓を操作している最中に前面を奪わない。種別は
+            # 問わない（8 Pages の速度検知フリーズ中に奪う例が実機で出た）。
+            # 自分が続行中のときも、自分の続行フリーズで False になる
+            self._log("ほかの窓がフリーズ中なので前面化しません")
+            return
+        self._start_daemon(self._focus_this_window_for_continue)
+
+    def _focus_this_window_for_continue(self):
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if WindowOperator.focus_window(self.cfg.hwnd):
+                self._log("この窓を前面化しました（続行ラウンド）")
+            else:
+                self._log("⚠ 前面化に失敗（続行ラウンドは継続）")
+
     def _release_continue_freeze_after_delay(self, round_seq: int):
         """死亡から一定時間後に続行/霧ラウンドのフリーズを解除する。
 
@@ -667,6 +695,7 @@ class LogMonitor:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
+                self._focus_for_continue_round()     # 数える前に見る
                 SharedState.continue_round_start()
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
@@ -1565,6 +1594,7 @@ class LogMonitor:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
+                self._focus_for_continue_round()     # 数える前に見る
                 SharedState.continue_round_start()
                 # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない

@@ -8829,6 +8829,378 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestNothingFrozen(unittest.TestCase):
+    """前面化してよいかは「どのフリーズも張られていない」で決める。
+
+    フリーズが張られている間、前面はそれを張った窓のもの。種別を問わず譲る
+    （8 Pages の検知でフリーズ中に、続行になった窓が前面を奪う例が実機で出た）。
+    """
+
+    EVENTS = ("EQUIP_WAIT_EVENT", "CONTINUE_ROUND_EVENT",
+              "SPEED_FREEZE_EVENT", "ROUND_FREEZE_EVENT")
+
+    def setUp(self):
+        for name in self.EVENTS:
+            getattr(SharedState, name).set()
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in self.EVENTS])
+
+    def test_all_clear_is_true(self):
+        self.assertTrue(SharedState.nothing_frozen())
+
+    def test_any_one_frozen_is_false(self):
+        for name in self.EVENTS:
+            getattr(SharedState, name).clear()
+            self.assertFalse(SharedState.nothing_frozen(), name)
+            getattr(SharedState, name).set()
+
+    def test_it_looks_at_the_same_four_as_the_wait(self):
+        """_wait_other_windows() と同じ4つを見ていること"""
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        wait = src[src.index("    def _wait_other_windows"):]
+        wait = wait[:wait.index("\n    def ", 10)]
+        for name in self.EVENTS:
+            self.assertIn(name, wait, name)
+
+
+class TestContinueRoundFocus(unittest.TestCase):
+    """続行になった窓を前面化する（速度検知フリーズと同じ扱い）"""
+
+    CLASSIC_KEY = "Classic/クラシック"
+    FOG_KEY = "Fog/霧"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        for name in TestNothingFrozen.EVENTS:
+            getattr(SharedState, name).set()
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in TestNothingFrozen.EVENTS])
+
+    def _monitor(self, keep_on=None, instance_type=config.INSTANCE_PRIVATE):
+        cfg = WindowConfig(hwnd=777, do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
+                                        window_idx=2)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Classic"
+        monitor._running = True
+        return monitor
+
+    def _judge(self, monitor, ids=(42,), round_type="Classic"):
+        """続行判定を通す。前面化のスレッドは同期で走らせて中身を見る"""
+        monitor.st.terror_ids = list(ids)
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._decide_with_keep_on_set(round_type)
+        return focus
+
+    @staticmethod
+    def _run_now(target=None, args=(), daemon=None, **_kw):
+        """立てたスレッドをその場で走らせる（前面化の中身まで見るため）"""
+        if target is not None:
+            target(*args)
+        return MagicMock()
+
+    # ── 1. 前面化する ─────────────────────────
+    def test_a_continue_focuses_this_window(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+
+        focus = self._judge(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        focus.assert_called_once_with(777)
+
+    def test_a_group_wanted_focuses_this_window(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+        monitor.st.terror_ids = [42]
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(monitor, "_group_decision",
+                          return_value=GroupRound.WANTED), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            self.assertTrue(monitor._apply_group_decision("Classic"))
+
+        self.assertTrue(monitor.st.is_continue_round)
+        focus.assert_called_once_with(777)
+
+    # ── 2〜5. 前面化しない ──────────────────────
+    def test_an_ongoing_continue_does_not_focus_again(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.is_continue_round = True
+        SharedState.continue_round_start()
+
+        focus = self._judge(monitor)
+
+        focus.assert_not_called()
+
+    def test_another_windows_continue_freeze_blocks_it(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.continue_round_start()      # ほかの窓が張っている
+
+        focus = self._judge(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round, "続行の判定自体は通る")
+        focus.assert_not_called()
+
+    def test_another_windows_speed_freeze_blocks_it(self):
+        """8 Pages の検知でフリーズしている窓の前面を奪わない（実機で出た経路）"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.SPEED_FREEZE_EVENT.clear()
+
+        focus = self._judge(monitor)
+
+        focus.assert_not_called()
+
+    def test_another_windows_equip_wait_blocks_it(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.EQUIP_WAIT_EVENT.clear()
+
+        focus = self._judge(monitor)
+
+        focus.assert_not_called()
+
+    def test_a_round_freeze_blocks_it(self):
+        """ラウンド突入での全窓停止。霧はこちら側"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.ROUND_FREEZE_EVENT.clear()
+
+        focus = self._judge(monitor)
+
+        focus.assert_not_called()
+
+    # ── 7〜8. 放置モードとスキップ ───────────────────
+    def test_hands_free_does_not_focus(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.set_hands_free(True)
+
+        focus = self._judge(monitor)
+
+        focus.assert_not_called()
+
+    def test_a_skip_does_not_focus(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {99}})
+
+        focus = self._judge(monitor, ids=(42,))
+
+        self.assertFalse(monitor.st.is_continue_round)
+        focus.assert_not_called()
+
+    # ── 9. 失敗しても続ける ────────────────────
+    def test_a_failed_focus_keeps_the_freeze_and_the_announce(self):
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.terror_ids = [42]
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=False), \
+             patch.object(PlaySound, "play_sound") as play, \
+             patch.object(Recorder, "on_continue_start") as record, \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._decide_with_keep_on_set("Classic")
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        play.assert_called_once_with("continue.mp3")
+        record.assert_called_once_with(2)
+        self.assertTrue(any("前面化に失敗" in m for m in logs), logs)
+
+    def test_the_focus_runs_off_the_log_thread(self):
+        """ログの読み込みを止めないよう別スレッドで前面化する"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.terror_ids = [42]
+
+        with patch.object(WindowOperator, "focus_window", return_value=True), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread") as thread:
+            monitor._decide_with_keep_on_set("Classic")
+
+        started = [c.kwargs["target"].__func__.__name__
+                   for c in thread.call_args_list if "target" in c.kwargs]
+        self.assertIn("_focus_this_window_for_continue", started, started)
+
+    def test_the_count_is_read_before_it_freezes(self):
+        """自分のフリーズを数えると必ず前面化しなくなる"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.terror_ids = [42]
+        seen = []
+
+        def focus(hwnd):
+            seen.append(SharedState.get_continue_round_count())
+            return True
+
+        with patch.object(WindowOperator, "focus_window", side_effect=focus), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._decide_with_keep_on_set("Classic")
+
+        self.assertEqual(seen, [0], "数える前に見ていること")
+
+
+class TestEquipWaitFocus(unittest.TestCase):
+    """アイテムロストの窓は、Begin を押したあとに前面化する。
+
+    前面化すると VRChat がアクティブになり、カーソルを他の窓へ動かせなくなる
+    （実測）。押す前に前面化すると、その窓のカーソル方式 Begin が壊れる。
+    """
+
+    def setUp(self):
+        SharedState.set_hands_free(False)
+        SharedState.set_item_begin_mode(False)
+        SharedState.equip_freeze_reset()
+        for name in TestNothingFrozen.EVENTS:
+            getattr(SharedState, name).set()
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.set_item_begin_mode, False)
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in TestNothingFrozen.EVENTS])
+
+    def _executor(self, logs=None):
+        cfg = WindowConfig(hwnd=555, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE,
+                         round_end_seen=True, item_id=0, round_seq=1)
+        st.waiting_for_equip = True
+        return ActionExecutor.ActionExecutor(
+            cfg, st, lambda: True, (logs.append if logs is not None
+                                    else (lambda _m: None))), st
+
+    def test_it_focuses_when_the_equip_wait_starts(self):
+        ex, _st = self._executor()
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus:
+            ex._focus_for_equip_wait()
+
+        focus.assert_called_once_with(555)
+
+    def test_hands_free_does_not_focus(self):
+        ex, _st = self._executor()
+        SharedState.set_hands_free(True)
+
+        with patch.object(WindowOperator, "focus_window") as focus:
+            ex._focus_for_equip_wait()
+
+        focus.assert_not_called()
+
+    def test_the_item_begin_mode_does_not_focus_twice(self):
+        """あちらは Verified Round End で前面化している"""
+        ex, _st = self._executor()
+        SharedState.set_item_begin_mode(True)
+
+        with patch.object(WindowOperator, "focus_window") as focus:
+            ex._focus_for_equip_wait()
+
+        focus.assert_not_called()
+
+    def test_another_windows_freeze_blocks_it(self):
+        for name in ("CONTINUE_ROUND_EVENT", "SPEED_FREEZE_EVENT",
+                     "ROUND_FREEZE_EVENT"):
+            ex, _st = self._executor()
+            getattr(SharedState, name).clear()
+
+            with patch.object(WindowOperator, "focus_window") as focus:
+                ex._focus_for_equip_wait()
+
+            self.assertFalse(focus.called, name)
+            getattr(SharedState, name).set()
+
+    def test_its_own_equip_wait_does_not_block_it(self):
+        """自分で張ったフリーズで自分が前面化できないのはおかしい"""
+        ex, st = self._executor()
+        SharedState.equip_freeze_start(st)
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus:
+            ex._focus_for_equip_wait()
+
+        focus.assert_called_once_with(555)
+
+    def test_another_windows_equip_wait_blocks_it(self):
+        ex, st = self._executor()
+        SharedState.equip_freeze_start(st)
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        other.waiting_for_equip = True
+        SharedState.equip_freeze_start(other)      # 2窓目
+
+        with patch.object(WindowOperator, "focus_window") as focus:
+            ex._focus_for_equip_wait()
+
+        focus.assert_not_called()
+
+    def test_a_failed_focus_only_logs(self):
+        logs = []
+        ex, _st = self._executor(logs)
+
+        with patch.object(WindowOperator, "focus_window", return_value=False):
+            ex._focus_for_equip_wait()
+
+        self.assertTrue(any("前面化に失敗" in m for m in logs), logs)
+
+    # ── 押す順番（実機で壊れた経路） ──────────────────
+    def test_it_focuses_after_the_begin_not_before(self):
+        cfg = WindowConfig(hwnd=555, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE,
+                         round_end_seen=True, item_id=0, round_seq=1)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        order = []
+
+        def press(*_a, **_kw):
+            order.append("press")
+            st.waiting_for_equip = True     # ロストの窓は押したあと装備待ちへ
+            return True
+
+        def focus(_hwnd):
+            order.append("focus")
+            return True
+
+        def release(_sec):
+            st.waiting_for_equip = False    # 待ちループを抜ける
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=release), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(WindowOperator, "focus_window", side_effect=focus):
+            ex.do_after_round()
+
+        self.assertEqual(order, ["press", "focus"], "押してから前面化する")
+
+    def test_the_source_focuses_after_the_press(self):
+        """フェーズ2（装備待ち）の中で呼ぶこと。押す前に出さない"""
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        flow = src[src.index("    def do_after_round"):]
+        flow = flow[:flow.index("\n    def ", 10)]
+
+        self.assertLess(flow.index("self._press_begin("),
+                        flow.index("self._focus_for_equip_wait()"))
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -12853,6 +13225,19 @@ class TestLegacySettings(unittest.TestCase):
             WindowConfig(hoshiimo_skip=True)
 
 
+def _decision_threads(mock_thread):
+    """立ったデーモンのうち、判定に関わるものだけを返す。
+
+    続行ラウンドの前面化（_focus_this_window_for_continue）は判定と無関係な
+    付随機能なので、判定を見るテストからは除く
+    """
+    return [c.kwargs["target"].__func__.__name__
+            for c in mock_thread.call_args_list
+            if "target" in c.kwargs
+            and c.kwargs["target"].__func__.__name__
+            != "_focus_this_window_for_continue"]
+
+
 class TestSkipRoundsByType(unittest.TestCase):
     """privateのラウンド指定自爆（続行リストより優先、3クラ解放は例外）"""
 
@@ -12895,14 +13280,11 @@ class TestSkipRoundsByType(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
             monitor._on_killers(list(ids), round_type, revealed=False)
-            started = [c.kwargs["target"].__func__.__name__
-                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            started = _decision_threads(mock_thread)
             if settle and "_delayed_decision" in started:
                 mock_thread.reset_mock()
                 monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
-                started += [c.kwargs["target"].__func__.__name__
-                            for c in mock_thread.call_args_list
-                            if "target" in c.kwargs]
+                started += _decision_threads(mock_thread)
         return started
 
     # ── 基本 ────────────────────────────────
@@ -12954,8 +13336,7 @@ class TestSkipRoundsByType(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
             monitor._delayed_decision("Classic", 0.0, monitor.st.round_seq)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return _decision_threads(mock_thread)
 
     # ── Variant例外（常に効く。切り替えは廃止） ───────────
     def test_the_variant_exemption_falls_through(self):
@@ -16324,9 +16705,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
             monitor._on_killers([3], "Fog (Alternate)", revealed=True)
 
         self.assertTrue(monitor.st.is_continue_round)
-        self.assertEqual([c.kwargs["target"].__func__.__name__
-                          for c in mock_thread.call_args_list
-                          if "target" in c.kwargs], [])
+        self.assertEqual(_decision_threads(mock_thread), [], "自爆しない")
 
     def test_yakiimo_fog_revealed_as_alternate_but_unwanted_is_skipped(self):
         monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
@@ -16495,8 +16874,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
              patch.object(PlaySound, "play_sound"):
             monitor._delayed_decision(killers_round_type, wait_sec,
                                       monitor.st.round_seq)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return _decision_threads(mock_thread)
 
     def test_the_wait_length_is_one_value(self):
         """待つのは Classic だけになったので、ラウンド種別で変えない"""
@@ -17131,9 +17509,15 @@ class TestLogMonitorFogRound(unittest.TestCase):
         SharedState.set_list_source("host")   # グループ判定は主催リストが前提
         self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
         self._stats_patcher.start()
+        # 続行になると前面化のスレッドが立つ。本物を走らせると、偽の hwnd で
+        # 全窓共通ロックを掴んだまま待つので、ほかのテストの時間を狂わせる
+        self._focus_patcher = patch.object(WindowOperator, "focus_window",
+                                           return_value=True)
+        self._focus_patcher.start()
 
     def tearDown(self):
         self._stats_patcher.stop()
+        self._focus_patcher.stop()
         SharedState.set_list_source(None)
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()

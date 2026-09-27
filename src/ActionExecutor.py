@@ -583,6 +583,7 @@ class ActionExecutor:
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない
         # （フリーズ解除はBEGIN_DONEイベント側で行う）
         if st.waiting_for_equip and not st.item_id:
+            self._focus_for_equip_wait()
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
                 time.sleep(0.3)
@@ -744,6 +745,44 @@ class ActionExecutor:
         self._log(message)
         if first:
             self._focus_for_speed_freeze()
+
+    def _focus_for_equip_wait(self):
+        """装備待ちで止まる窓を前面化する。**Begin を押したあとに呼ぶこと。**
+
+        前面化すると VRChat がアクティブになり、カーソルを他の窓へ動かせなく
+        なる（実測）。押す前に呼ぶと、この窓のカーソル方式 Begin が壊れる。
+
+        アイテムBeginモードは Verified Round End の時点でもう前面化している
+        ので、ここでは何もしない（二重に奪わない）。
+        """
+        if self._hands_free():
+            return
+        if SharedState.get_item_begin_mode():
+            return          # アナウンスが早く出る経路。もう前面化している
+        if not self._nothing_frozen_but_mine():
+            self._log("ほかの窓がフリーズ中なので前面化しません")
+            return
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if WindowOperator.focus_window(self._cfg.hwnd):
+                self._log("この窓を前面化しました（アイテム装備待ち）")
+            else:
+                self._log("⚠ 前面化に失敗（装備待ちは継続）")
+
+    def _nothing_frozen_but_mine(self) -> bool:
+        """自分が張った装備待ちを除いて、どのフリーズも張られていないか。
+
+        自分でフリーズを張ってから押しに行っているので、そのまま
+        nothing_frozen() を見ると必ず False になる
+        """
+        if not (SharedState.CONTINUE_ROUND_EVENT.is_set()
+                and SharedState.SPEED_FREEZE_EVENT.is_set()
+                and SharedState.ROUND_FREEZE_EVENT.is_set()):
+            return False
+        if SharedState.EQUIP_WAIT_EVENT.is_set():
+            return True
+        # 装備待ちが張られている。自分の1件だけなら譲る相手が居ない
+        return (self._st.waiting_for_equip
+                and SharedState.get_equip_freeze_count() == 1)
 
     def _focus_for_speed_freeze(self):
         """どの窓を操作すればよいか分かるように前面化する。
