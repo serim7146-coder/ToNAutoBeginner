@@ -8829,6 +8829,185 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestRoundFreezeFocus(unittest.TestCase):
+    """ラウンド突入で全窓を止めた窓も前面化する（続行ラウンドと同じ作法）"""
+
+    EVENTS = ("EQUIP_WAIT_EVENT", "CONTINUE_ROUND_EVENT",
+              "SPEED_FREEZE_EVENT", "ROUND_FREEZE_EVENT")
+    HWND = 888
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        SharedState.round_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.speed_freeze_reset()
+        SharedState.equip_freeze_reset()
+        for name in self.EVENTS:
+            getattr(SharedState, name).set()
+        self._rounds = patch.object(SharedState, "get_freeze_rounds",
+                                   return_value={"Midnight"})
+        self._rounds.start()
+        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats.start()
+        self.addCleanup(self._stats.stop)
+        self.addCleanup(self._rounds.stop)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.round_freeze_reset)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.speed_freeze_reset)
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in self.EVENTS])
+
+    def _monitor(self):
+        cfg = WindowConfig(hwnd=self.HWND, do_skip=True)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        return monitor
+
+    @staticmethod
+    def _run_now(target=None, args=(), daemon=None, **_kw):
+        if target is not None:
+            target(*args)
+        return MagicMock()
+
+    def _enter(self, monitor, round_type="Midnight"):
+        """そのラウンドへ突入する。前面化のスレッドは同期で走らせる"""
+        line = ("2026.09.28 00:10:00 Debug      -  This round is taking place "
+                f"at Facility (12) and the round type is {round_type}")
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._process(line)
+        return focus
+
+    # ── 1. 前面化する ─────────────────────────
+    def test_entering_a_freeze_round_focuses_this_window(self):
+        monitor = self._monitor()
+
+        focus = self._enter(monitor)
+
+        self.assertTrue(monitor.st.round_freeze_held, "フリーズは張る")
+        focus.assert_called_once_with(self.HWND)
+
+    def test_the_log_says_which_freeze(self):
+        monitor = self._monitor()
+        logs = []
+        monitor.logger = logs.append
+
+        self._enter(monitor)
+
+        self.assertTrue(any("この窓を前面化しました（ラウンド突入フリーズ）" in m
+                            for m in logs), logs)
+
+    # ── 2. ほかの窓がフリーズ中なら前面化しない ────────────
+    def test_another_windows_freeze_blocks_it(self):
+        for name in self.EVENTS:
+            monitor = self._monitor()
+            getattr(SharedState, name).clear()
+
+            focus = self._enter(monitor)
+
+            self.assertFalse(focus.called, name)
+            self.assertTrue(monitor.st.round_freeze_held, f"{name}: 張るのは張る")
+            getattr(SharedState, name).set()
+            SharedState.round_freeze_reset()
+            monitor.st.round_freeze_held = False
+
+    # ── 3. 放置モード ────────────────────────
+    def test_hands_free_does_not_focus(self):
+        monitor = self._monitor()
+        SharedState.set_hands_free(True)
+
+        focus = self._enter(monitor)
+
+        self.assertFalse(focus.called)
+        self.assertFalse(monitor.st.round_freeze_held, "放置中はフリーズも張らない")
+
+    # ── 4. 対象外の種別では前面化しない ──────────────────
+    def test_a_round_that_is_not_frozen_does_not_focus(self):
+        """フリーズを張らないラウンドで前面を奪うと迷惑なだけ"""
+        monitor = self._monitor()
+
+        focus = self._enter(monitor, round_type="Classic")
+
+        self.assertFalse(monitor.st.round_freeze_held)
+        self.assertFalse(focus.called)
+
+    # ── 5. 失敗してもフリーズは続く ──────────────────
+    def test_a_failed_focus_keeps_the_freeze(self):
+        monitor = self._monitor()
+        logs = []
+        monitor.logger = logs.append
+        line = ("2026.09.28 00:10:00 Debug      -  This round is taking place "
+                "at Facility (12) and the round type is Midnight")
+
+        with patch.object(WindowOperator, "focus_window", return_value=False), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._process(line)
+
+        self.assertTrue(monitor.st.round_freeze_held)
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertTrue(any("⚠ 前面化に失敗（ラウンド突入フリーズは継続）" in m
+                            for m in logs), logs)
+
+    # ── 6. 数えるのは張る前 ────────────────────
+    def test_the_count_is_read_before_it_freezes(self):
+        monitor = self._monitor()
+        seen = []
+
+        def focus(hwnd):
+            seen.append(SharedState.get_round_freeze_count())
+            return True
+
+        line = ("2026.09.28 00:10:00 Debug      -  This round is taking place "
+                "at Facility (12) and the round type is Midnight")
+        with patch.object(WindowOperator, "focus_window", side_effect=focus), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._process(line)
+
+        self.assertEqual(seen, [0], "数える前に見ていること")
+
+    def test_the_source_focuses_before_it_freezes(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+        block = src[src.index("if st.round_type in SharedState.get_freeze_rounds()"):]
+        block = block[:block.index("\n            # ", 10)]
+
+        self.assertLess(block.index('_focus_for_freeze("ラウンド突入フリーズ")'),
+                        block.index("SharedState.round_freeze_start(st)"))
+
+    # ── 7. 共通化しても続行側は壊れていない ─────────────────
+    def test_the_two_labels_use_the_same_helper(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+
+        self.assertEqual(src.count('_focus_for_freeze("続行ラウンド")'), 2,
+                         "続行判定の2か所")
+        self.assertEqual(src.count('_focus_for_freeze("ラウンド突入フリーズ")'), 1)
+        self.assertIn('self._log(f"この窓を前面化しました（{label}）")', src)
+
+    def test_the_continue_label_is_unchanged(self):
+        monitor = self._monitor()
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(WindowOperator, "focus_window", return_value=True):
+            monitor._focus_this_window_for("続行ラウンド")
+
+        self.assertTrue(any("この窓を前面化しました（続行ラウンド）" in m
+                            for m in logs), logs)   # 窓番号の接頭辞が付く
+
+
 class TestEightPagesReleaseDelay(unittest.TestCase):
     """8 Pages でスキャナーを取ったあとの解除に、猶予を入れる。
 
@@ -9730,7 +9909,7 @@ class TestContinueRoundFocus(unittest.TestCase):
 
         started = [c.kwargs["target"].__func__.__name__
                    for c in thread.call_args_list if "target" in c.kwargs]
-        self.assertIn("_focus_this_window_for_continue", started, started)
+        self.assertIn("_focus_this_window_for", started, started)
 
     def test_the_count_is_read_before_it_freezes(self):
         """自分のフリーズを数えると必ず前面化しなくなる"""
@@ -14871,14 +15050,14 @@ def _freeze_other_continue():
 def _decision_threads(mock_thread):
     """立ったデーモンのうち、判定に関わるものだけを返す。
 
-    続行ラウンドの前面化（_focus_this_window_for_continue）は判定と無関係な
+    続行ラウンドの前面化（_focus_this_window_for）は判定と無関係な
     付随機能なので、判定を見るテストからは除く
     """
     return [c.kwargs["target"].__func__.__name__
             for c in mock_thread.call_args_list
             if "target" in c.kwargs
             and c.kwargs["target"].__func__.__name__
-            != "_focus_this_window_for_continue"]
+            != "_focus_this_window_for"]
 
 
 class TestSkipRoundsByType(unittest.TestCase):

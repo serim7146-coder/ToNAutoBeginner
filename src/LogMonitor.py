@@ -122,14 +122,15 @@ class LogMonitor:
         thread.start()
         return thread
 
-    def _focus_for_continue_round(self):
-        """続行になった窓を前面化する。どの窓を操作すればよいか分かるように。
+    def _focus_for_freeze(self, label: str):
+        """フリーズを張る窓を前面化する。どの窓を操作すればよいか分かるように。
 
         速度検知フリーズ（ActionExecutor._focus_for_speed_freeze）と同じ扱い。
         付随機能なので、取れなくてもアナウンス・フリーズ・録画は続ける。
+        label はログに出す名前（`続行ラウンド` / `ラウンド突入フリーズ`）。
 
-        呼び出し側は `continue_round_start(st)` を呼ぶ**前**に呼ぶこと。後だと
-        自分のフリーズを数えてしまい、常に前面化しなくなる。
+        呼び出し側は自分がフリーズを張る**前**に呼ぶこと。後だと自分の分を
+        数えてしまい、常に前面化しなくなる。
         """
         if self._hands_free():
             # 人が見ていないので意味が無く、ほかの窓のカーソル方式 Begin の
@@ -138,17 +139,17 @@ class LogMonitor:
         if not SharedState.nothing_frozen():
             # フリーズを張った窓を操作している最中に前面を奪わない。種別は
             # 問わない（依頼者の指摘。続行フリーズだけ見ると 8 Pages の最中に奪う）。
-            # 自分が続行中のときも、自分の続行フリーズで False になる
+            # 自分が張っているときも、自分の分で False になる
             self._log("ほかの窓がフリーズ中なので前面化しません")
             return
-        self._start_daemon(self._focus_this_window_for_continue)
+        self._start_daemon(self._focus_this_window_for, label)
 
-    def _focus_this_window_for_continue(self):
+    def _focus_this_window_for(self, label: str):
         with SharedState._GLOBAL_ACTION_LOCK:
             if WindowOperator.focus_window(self.cfg.hwnd):
-                self._log("この窓を前面化しました（続行ラウンド）")
+                self._log(f"この窓を前面化しました（{label}）")
             else:
-                self._log("⚠ 前面化に失敗（続行ラウンドは継続）")
+                self._log(f"⚠ 前面化に失敗（{label}は継続）")
 
     def _release_continue_freeze_after_delay(self, round_seq: int):
         """死亡から一定時間後に続行ラウンドのフリーズを解除する。
@@ -710,7 +711,7 @@ class LogMonitor:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
-                self._focus_for_continue_round()     # 数える前に見る
+                self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
@@ -1086,6 +1087,7 @@ class LogMonitor:
             # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
             # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
             if st.round_type in SharedState.get_freeze_rounds() and not self._hands_free():
+                self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
                 SharedState.round_freeze_start(st)
                 self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
                           f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
@@ -1621,7 +1623,7 @@ class LogMonitor:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue)
                     self._log("🎙 続行アナウンス再生")
-                self._focus_for_continue_round()     # 数える前に見る
+                self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)
                 # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
