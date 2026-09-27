@@ -10081,6 +10081,286 @@ class TestCursorOverWindow(unittest.TestCase):
         raise_.assert_not_called()
 
 
+class TestVRChatInFrontFallback(unittest.TestCase):
+    """VRChat の窓が前面なら、カーソルを触らずフォールバックする。
+
+    前面の VRChat はマウスを掴んでいるので、こちらの SetCursorPos がその窓から
+    見て「マウスを動かされた」＝カメラが回ることがある。操作中の窓の照準が
+    Begin から外れかねないので、触る前に判定して避ける。
+    """
+
+    RECT = (100, 200, 1000, 800)
+    HWND = 123
+    OTHER = 456
+
+    def setUp(self):
+        SharedState.clear_window_hwnds()
+        self.addCleanup(SharedState.clear_window_hwnds)
+
+    def _executor(self, hwnd=None):
+        cfg = WindowConfig(hwnd=hwnd or self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True,
+                                             lambda _m: None), st
+
+    def _press(self, executor, front=0, user32=None, logs=None):
+        user32 = user32 or FakeUser32()
+        if logs is not None:
+            executor._log = logs.append
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, self.RECT[2] - self.RECT[0],
+                                             self.RECT[3] - self.RECT[1])))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(self.RECT[0], self.RECT[1])))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator, "foreground_hwnd",
+                               return_value=front))
+            focus = enter(patch.object(WindowOperator, "focus_window",
+                                       return_value=True))
+            click = enter(patch.object(WindowOperator, "click"))
+            enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+            enter(patch.object(ActionExecutor.time, "sleep"))
+            ok = executor._press_begin()
+        return ok, user32, focus, click
+
+    # ── 1〜3. 前面が管理下の窓 ─────────────────────
+    def test_a_managed_window_in_front_never_touches_the_cursor(self):
+        SharedState.register_window_hwnd(self.OTHER)
+        executor, _st = self._executor()
+
+        _ok, user32, _focus, _click = self._press(executor, front=self.OTHER)
+
+        self.assertEqual(user32.moves, [], "カーソルを1度も動かさない")
+
+    def test_a_managed_window_in_front_falls_back_to_the_click(self):
+        SharedState.register_window_hwnd(self.OTHER)
+        executor, _st = self._executor()
+        logs = []
+
+        ok, _u, focus, click = self._press(executor, front=self.OTHER, logs=logs)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+        self.assertTrue(any("VRChatが前面" in m for m in logs), logs)
+
+    def test_this_window_in_front_is_treated_the_same(self):
+        """「前面なら連打だけで押せるはず」は確かめられていないので前提にしない"""
+        SharedState.register_window_hwnd(self.HWND)
+        executor, _st = self._executor()
+
+        ok, user32, focus, click = self._press(executor, front=self.HWND)
+
+        self.assertTrue(ok)
+        self.assertEqual(user32.moves, [])
+        focus.assert_called_once()
+        click.assert_called_once()
+
+    # ── 4. 前面が管理外 ───────────────────────
+    def test_an_unmanaged_window_in_front_still_dips(self):
+        SharedState.register_window_hwnd(self.HWND)
+        executor, _st = self._executor()
+
+        _ok, user32, _focus, _click = self._press(executor, front=9999)
+
+        self.assertTrue(user32.moves, "メモ帳などが前面なら、これまでどおり差す")
+
+    def test_no_foreground_still_dips(self):
+        SharedState.register_window_hwnd(self.HWND)
+        executor, _st = self._executor()
+
+        _ok, user32, _focus, _click = self._press(executor, front=0)
+
+        self.assertTrue(user32.moves)
+
+    def test_nothing_registered_still_dips(self):
+        """マクロを止めたあと（記録が空）は判定が効かない"""
+        executor, _st = self._executor()
+
+        _ok, user32, _focus, _click = self._press(executor, front=self.HWND)
+
+        self.assertTrue(user32.moves)
+
+    # ── 5〜6. 置けたかの読み返し ──────────────────
+    def test_a_cursor_that_did_not_move_falls_back(self):
+        """SetCursorPos が成功を返しても実際には動かないことがある"""
+        executor, _st = self._executor()
+        user32 = FakeUser32()
+        real_set = user32.SetCursorPos
+
+        def stuck(x, y):
+            real_set(x, y)
+            user32.cursor = (500, 500)      # 実際には動いていない
+            return 1
+
+        user32.SetCursorPos = stuck
+
+        ok, _u, focus, click = self._press(executor, front=9999, user32=user32)
+
+        self.assertTrue(ok)
+        focus.assert_called_once()
+        click.assert_called_once()
+
+    def test_a_cursor_that_landed_keeps_dipping(self):
+        executor, _st = self._executor()
+
+        _ok, user32, focus, click = self._press(executor, front=9999)
+
+        self.assertEqual(user32.moves.count((550, 500)),
+                         config.BEGIN_CURSOR_DIPS, "差し続ける")
+        focus.assert_called_once()   # 押せないままなので最後は従来方式
+        click.assert_called_once()
+
+    def test_a_small_rounding_error_is_allowed(self):
+        """DPI スケーリングなどの端数は許す"""
+        executor, _st = self._executor()
+        user32 = FakeUser32()
+        real_set = user32.SetCursorPos
+
+        def off_by_one(x, y):
+            real_set(x, y)
+            user32.cursor = (x + 1, y - 1)
+            return 1
+
+        user32.SetCursorPos = off_by_one
+
+        with patch.object(WindowOperator, "user32", user32), \
+             patch.object(WindowOperator.win32gui, "GetClientRect",
+                          return_value=(0, 0, 900, 600)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen",
+                          return_value=(100, 200)), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+             patch.object(WindowOperator.time, "sleep"):
+            with WindowOperator.cursor_over_window(self.HWND) as over:
+                self.assertTrue(over, "±2px までは置けたものとして扱う")
+
+    def test_a_big_miss_is_not_allowed(self):
+        user32 = FakeUser32()
+        real_set = user32.SetCursorPos
+
+        def way_off(x, y):
+            real_set(x, y)
+            user32.cursor = (x + config.BEGIN_CURSOR_DIPS + 20, y)
+            return 1
+
+        user32.SetCursorPos = way_off
+
+        with patch.object(WindowOperator, "user32", user32), \
+             patch.object(WindowOperator.win32gui, "GetClientRect",
+                          return_value=(0, 0, 900, 600)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen",
+                          return_value=(100, 200)), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+             patch.object(WindowOperator.time, "sleep"):
+            with WindowOperator.cursor_over_window(self.HWND) as over:
+                self.assertFalse(over)
+
+    def test_the_cursor_still_comes_back_after_a_miss(self):
+        user32 = FakeUser32(cursor=(42, 43))
+
+        def stuck(x, y):
+            user32.moves.append((x, y))
+            return 1                        # cursor は動かないまま
+
+        user32.SetCursorPos = stuck
+
+        with patch.object(WindowOperator, "user32", user32), \
+             patch.object(WindowOperator.win32gui, "GetClientRect",
+                          return_value=(0, 0, 900, 600)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen",
+                          return_value=(100, 200)), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+             patch.object(WindowOperator.time, "sleep"):
+            with WindowOperator.cursor_over_window(self.HWND) as over:
+                self.assertFalse(over)
+
+        self.assertEqual(user32.moves[-1], (42, 43), "元の位置へ戻す")
+
+    def test_an_unreadable_cursor_is_not_a_success(self):
+        """GetCursorPos が失敗したら、置けたか分からない。置けた扱いにしない"""
+        class Blind(FakeUser32):
+            def GetCursorPos(self, ref):
+                return 0
+
+        user32 = Blind()
+        with patch.object(WindowOperator, "user32", user32),              patch.object(WindowOperator.win32gui, "GetClientRect",
+                          return_value=(0, 0, 900, 600)),              patch.object(WindowOperator.win32gui, "ClientToScreen",
+                          return_value=(100, 200)),              patch.object(WindowOperator.win32gui, "IsIconic", return_value=False),              patch.object(WindowOperator.time, "sleep"):
+            with WindowOperator.cursor_over_window(self.HWND) as over:
+                self.assertFalse(over)
+
+    # ── 7. 記録の出入り ───────────────────────
+    def test_registering_and_clearing(self):
+        self.assertEqual(SharedState.managed_hwnds(), frozenset())
+
+        SharedState.register_window_hwnd(11)
+        SharedState.register_window_hwnd(22)
+        SharedState.register_window_hwnd(11)        # 重複は増えない
+
+        self.assertEqual(SharedState.managed_hwnds(), frozenset({11, 22}))
+
+        SharedState.clear_window_hwnds()
+        self.assertEqual(SharedState.managed_hwnds(), frozenset())
+
+    def test_a_zero_hwnd_is_not_registered(self):
+        SharedState.register_window_hwnd(0)
+
+        self.assertEqual(SharedState.managed_hwnds(), frozenset())
+
+    def test_the_result_is_a_snapshot(self):
+        SharedState.register_window_hwnd(11)
+        snapshot = SharedState.managed_hwnds()
+
+        SharedState.register_window_hwnd(22)
+
+        self.assertEqual(snapshot, frozenset({11}), "後から増えない")
+
+    def test_start_registers_and_stop_clears(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        start = src[src.index("    def _start(self)"):]
+        start = start[:start.index("\n    def ", 10)]
+        stop = src[src.index("    def _stop(self)"):]
+        stop = stop[:stop.index("\n    def ", 10)]
+
+        self.assertIn("SharedState.register_window_hwnd(cfg.hwnd)", start)
+        self.assertIn("SharedState.clear_window_hwnds()", stop)
+
+    # ── 触る前に見ていること ─────────────────────
+    def test_the_front_is_checked_before_the_cursor_moves(self):
+        """判定が後だと、見る前にカメラを回してしまう"""
+        SharedState.register_window_hwnd(self.OTHER)
+        executor, _st = self._executor()
+        order = []
+        user32 = FakeUser32()
+        real_set = user32.SetCursorPos
+        user32.SetCursorPos = lambda x, y: (order.append("cursor"),
+                                            real_set(x, y))[1]
+
+        with contextlib.ExitStack() as stack:
+            enter = stack.enter_context
+            enter(patch.object(WindowOperator, "user32", user32))
+            enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                               return_value=(0, 0, 900, 600)))
+            enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                               return_value=(100, 200)))
+            enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                               return_value=False))
+            enter(patch.object(WindowOperator, "foreground_hwnd",
+                               side_effect=lambda: (order.append("front"),
+                                                    self.OTHER)[1]))
+            enter(patch.object(WindowOperator, "focus_window", return_value=True))
+            enter(patch.object(WindowOperator, "click"))
+            enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+            enter(patch.object(ActionExecutor.time, "sleep"))
+            executor._press_begin()
+
+        self.assertEqual(order, ["front"], "見るだけで、カーソルは触らない")
+
+
 class TestBeginByCursor(unittest.TestCase):
     """OSCが使える窓の Begin は、カーソルを置いて UseRight を送る（前面化しない）"""
 

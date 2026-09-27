@@ -304,6 +304,30 @@ def get_continue_round_count() -> int:
         return _CONTINUE_ROUND_COUNT
 
 
+# ── このツールが掴んでいる窓 ───────────────────
+# 前面が VRChat の窓かを見るために使う。クラス名では判定しないので、当ツールが
+# 把握していない VRChat の窓は拾えない（依頼者の判断で割り切る）
+_WINDOW_HWNDS: set = set()
+_WINDOW_HWND_LOCK = threading.Lock()
+
+
+def register_window_hwnd(hwnd: int):
+    if not hwnd:
+        return
+    with _WINDOW_HWND_LOCK:
+        _WINDOW_HWNDS.add(int(hwnd))
+
+
+def clear_window_hwnds():
+    with _WINDOW_HWND_LOCK:
+        _WINDOW_HWNDS.clear()
+
+
+def managed_hwnds() -> frozenset:
+    with _WINDOW_HWND_LOCK:
+        return frozenset(_WINDOW_HWNDS)
+
+
 def nothing_frozen() -> bool:
     """どのフリーズも張られていないか。
 

@@ -274,6 +274,24 @@ class ActionExecutor:
             return False
         return self._press_begin(again=True)
 
+    def _vrchat_is_in_front(self) -> bool:
+        """VRChat の窓が前面か。前面ならカーソルを触らずフォールバックする。
+
+        速さのためだけではない。前面の VRChat はマウスを掴んでいるので、こちらの
+        SetCursorPos がその窓から見て「マウスを動かされた」＝カメラが回ることが
+        ある。操作中の窓の照準が Begin から外れかねないので、**触る前に**判定して
+        避ける。前面のときは、そもそもほかの窓へカーソルを持って行けない（実測）。
+
+        その窓自身が前面のときも同じ扱いにする。「前面なら連打だけで押せるはず」は
+        確かめられていないので前提にしない。フォールバックの focus() は既に前面なら
+        何もしないので、クリックだけが走る。
+        """
+        front = WindowOperator.foreground_hwnd()
+        if front and front in SharedState.managed_hwnds():
+            self._log("Begin: VRChatが前面なのでカーソルを使いません")
+            return True
+        return False
+
     def _begin_by_cursor(self) -> bool:
         """カーソルを使う新方式を使ってよい窓か。OSCが使えるなら使う。
 
@@ -362,7 +380,7 @@ class ActionExecutor:
         """
         st = self._st
         tail = "（押し直し）" if again else ""
-        if self._begin_by_cursor():
+        if self._begin_by_cursor() and not self._vrchat_is_in_front():
             stop = self._start_use_spam(st.round_seq) if again else None
             try:
                 if self._dip_cursor_for_begin(tail):

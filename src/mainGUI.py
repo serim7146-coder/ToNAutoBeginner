@@ -1571,6 +1571,8 @@ class App(tk.Tk):
             cfg.voice_foxy          = self.v_voice_foxy.get().strip()
             cfg.voice_list_lost     = self.v_voice_list_lost.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
+            # 前面が VRChat の窓かを見るために覚えておく（Begin のカーソル判定）
+            SharedState.register_window_hwnd(cfg.hwnd)
             mon = LogMonitor.LogMonitor(
                 cfg, self.keepOn_set, self._log,
                 window_idx=tab.idx + 1,
@@ -1594,6 +1596,7 @@ class App(tk.Tk):
 
     def _stop(self):
         self._entry_stop.set()                   # 入室時自動操作も中断する
+        SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
         SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
         SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
         SharedState.speed_freeze_reset()         # 速度検知フリーズも解除

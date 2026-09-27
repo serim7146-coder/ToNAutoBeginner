@@ -265,6 +265,17 @@ def window_cursor_point(hwnd: int) -> tuple | None:
     return (x, y)
 
 
+def foreground_hwnd() -> int:
+    """いま前面にある窓の hwnd。取れなければ 0。
+
+    テストで差し替えられるように関数にしてある
+    """
+    try:
+        return int(win32gui.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
 def cursor_position() -> tuple | None:
     point = wintypes.POINT()
     try:
@@ -287,18 +298,39 @@ def cursor_over_window(hwnd: int):
         yield False
         return
     before = cursor_position()
-    moved = False
+    moved = landed = False
     try:
         moved = bool(user32.SetCursorPos(*point))
         if moved:
             time.sleep(config.OPERATOR_WAIT_SEC)
-        yield moved
+            # 置けたかは読み返して確かめる。動かし**に行った**かどうかとは
+            # 別に持つ——ずれていても、動かしに行ったなら必ず元へ戻す
+            landed = _cursor_landed(point)
+        yield landed
     finally:
         if moved and before is not None:
             try:
                 user32.SetCursorPos(*before)      # 例外が出ても必ず戻す
             except Exception:
                 pass
+
+
+CURSOR_LANDED_SLACK_PX = 2
+
+
+def _cursor_landed(point: tuple) -> bool:
+    """頼んだ点に本当に置けたか、読み返して確かめる。
+
+    SetCursorPos が成功を返しても、ほかのアプリがマウスを掴んでいると実際には
+    動かない（前面の VRChat がその代表）。置けていないまま UseRight を送っても
+    Begin は押されないので、呼び出し側をフォールバックへ落とす。
+    ±CURSOR_LANDED_SLACK_PX は端数の丸め（DPI スケーリングなど）の余裕
+    """
+    now = cursor_position()
+    if now is None:
+        return False
+    return (abs(now[0] - point[0]) <= CURSOR_LANDED_SLACK_PX
+            and abs(now[1] - point[1]) <= CURSOR_LANDED_SLACK_PX)
 
 
 def click():
