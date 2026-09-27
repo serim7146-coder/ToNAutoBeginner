@@ -165,7 +165,7 @@
     {"id": 154, "name": "Glaggle Gang", "terrors": ["Specialized Giggler", "Joyful Cloaker", "Dapper Enphoso", "Pyromatic Em"], "objects": ["Glaggleland Spec", "Glaggleland Enphoso", "Glaggleland Cloaker", "GlaggleLand Pro", "GlaggleLand Fixer", "Glaggleland Enphoso2", "GlaggleLand Guardian", "GlaggleLand Bomber", "GlaggleLand King"]},
     {"id": 155, "name": "Try Not to Touch Me", "terrors": ["Try Not to Touch Me"], "objects": ["Don't Touch Me Mobile"]},
     {"id": 156, "name": "Ambush", "terrors": ["Ambush"], "objects": ["Ambush"]},
-    {"id": 157, "name": "Teuthida", "terrors": ["Teuthida"], "objects": []},
+    {"id": 157, "name": "Teuthida", "terrors": ["Teuthida"], "objects": ["Starved Squidward"]},
     {"id": 158, "name": "Eggman's Announcement", "terrors": ["Eggman's Announcement"], "objects": ["Eggman's Announcement"]},
     {"id": 159, "name": "S.T.G.M", "terrors": ["S.T.G.M", "S.T.G.M. Missile"], "objects": ["S.T.G.M", "STMGMissle"]},
     {"id": 160, "name": "Army in Black", "terrors": ["Army in Black"], "objects": []},
