@@ -429,7 +429,7 @@ class ActionExecutor:
             if not eq_ok:
                 self._log("他窓の装備待ち中 → フリーズ")
             if not con_ok:
-                self._log("他窓の続行/霧ラウンド中 → フリーズ")
+                self._log("他窓の続行ラウンド中 → フリーズ")
             if not spd_ok:
                 self._log("他窓の速度検知フリーズ中 → フリーズ")
             if not rnd_ok:

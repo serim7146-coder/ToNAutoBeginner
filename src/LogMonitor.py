@@ -137,7 +137,7 @@ class LogMonitor:
             return
         if not SharedState.nothing_frozen():
             # フリーズを張った窓を操作している最中に前面を奪わない。種別は
-            # 問わない（8 Pages の速度検知フリーズ中に奪う例が実機で出た）。
+            # 問わない（依頼者の指摘。続行フリーズだけ見ると 8 Pages の最中に奪う）。
             # 自分が続行中のときも、自分の続行フリーズで False になる
             self._log("ほかの窓がフリーズ中なので前面化しません")
             return
@@ -151,7 +151,7 @@ class LogMonitor:
                 self._log("⚠ 前面化に失敗（続行ラウンドは継続）")
 
     def _release_continue_freeze_after_delay(self, round_seq: int):
-        """死亡から一定時間後に続行/霧ラウンドのフリーズを解除する。
+        """死亡から一定時間後に続行ラウンドのフリーズを解除する。
 
         猶予を置くのは、解除前に手動操作を挟む余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
@@ -168,7 +168,7 @@ class LogMonitor:
         if st.is_continue_round:
             st.is_continue_round = False
             SharedState.continue_round_end()
-            self._log(f"続行/霧ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
+            self._log(f"続行ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
 
     def _start_speed_probe(self):
         """次のラウンドの種別を速度で見始める（Verified Round End から）。
@@ -699,7 +699,7 @@ class LogMonitor:
                 SharedState.continue_round_start()
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
-                self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
+                self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
             return True
         if decision == GroupRound.CONTINUE:
             # 「全続行」は自爆しないだけ。続行アナウンスも他窓フリーズもしない。
@@ -1118,7 +1118,7 @@ class LogMonitor:
             st.died_this_round = True
             st.item_equipped_after_death = False
             st.is_open_special_round_round = False
-            # 続行/霧ラウンドのフリーズは死亡から少し置いて解除する。
+            # 続行ラウンドのフリーズは死亡から少し置いて解除する。
             # 猶予中に手動で視点調整などを挟めるようにするため。
             if st.is_continue_round:
                 self._start_daemon(self._release_continue_freeze_after_delay,
@@ -1177,7 +1177,7 @@ class LogMonitor:
                 # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
                 st.is_continue_round = False
                 SharedState.continue_round_end()
-                self._log("続行/霧ラウンド終了 → 他窓フリーズ解除（保険）")
+                self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
             round_lost_item = self._round_lost_item()
             round_item_warning = self._round_item_warning()
             if not self._hands_free():
@@ -1600,7 +1600,7 @@ class LogMonitor:
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
                 if not self._hands_free():
                     Recorder.on_continue_start(self.window_idx)
-                self._log("⏸ 続行/霧ラウンド中 → 他窓フリーズ開始")
+                self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
             if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 st.is_open_special_round_round = True
                 self._log(f"3クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}）")
