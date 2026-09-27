@@ -9017,6 +9017,191 @@ class TestContinueFreezeIsPerWindow(unittest.TestCase):
         self.assertIn("SharedState.continue_round_reset()", src)
 
 
+class TestOnlyOwnFreezeIsExempt(unittest.TestCase):
+    """免除するのは自分が張ったフリーズだけ。
+
+    以前は「自分が何か1つ張っていれば他窓の分も全部無視」だったので、
+    アイテムロストした窓が他窓の続行ラウンド中でも Begin を押しに行き、
+    （その窓を遊んでいて VRChat がアクティブなので）前面化＋クリックへ落ちて
+    前面を奪っていた。
+    """
+
+    EVENTS = ("EQUIP_WAIT_EVENT", "CONTINUE_ROUND_EVENT",
+              "SPEED_FREEZE_EVENT", "ROUND_FREEZE_EVENT")
+
+    def setUp(self):
+        for name in self.EVENTS:
+            getattr(SharedState, name).set()
+        SharedState.equip_freeze_reset()
+        SharedState.continue_round_reset()
+        SharedState.speed_freeze_reset()
+        SharedState.round_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.speed_freeze_reset)
+        self.addCleanup(SharedState.round_freeze_reset)
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in self.EVENTS])
+
+    def _executor(self, logs=None):
+        cfg = WindowConfig(hwnd=321, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE,
+                         round_end_seen=True, item_id=0)
+        return ActionExecutor.ActionExecutor(
+            cfg, st, lambda: True,
+            logs.append if logs is not None else (lambda _m: None)), st
+
+    @staticmethod
+    def _other_window():
+        return WindowState(instance_type=config.INSTANCE_PRIVATE)
+
+    @staticmethod
+    def _lose_item(st):
+        """実機のロストと同じ形にする。waiting_for_equip も立つ。
+
+        ここを立てないと、昔の一括免除（waiting_for_equip を見ていた）に
+        戻す変異を検出できない
+        """
+        st.waiting_for_equip = True
+        SharedState.equip_freeze_start(st)
+
+    # ── 1. 今回の症状 ────────────────────────
+    def test_a_lost_item_window_waits_for_another_windows_continue(self):
+        ex, st = self._executor()
+        self._lose_item(st)          # 自分はロストで張っている
+        SharedState.continue_round_start(self._other_window())   # 他窓が続行
+
+        eq_ok, con_ok, _spd, _rnd = ex._freezes_ok()
+
+        self.assertTrue(eq_ok, "自分の装備待ちは免除")
+        self.assertFalse(con_ok, "他窓の続行は待つ")
+
+    def test_that_window_does_not_press(self):
+        """待ちに入るので、フォーカスもカーソルも取らない"""
+        ex, st = self._executor()
+        self._lose_item(st)
+        SharedState.continue_round_start(self._other_window())
+        running = [True]
+        ex._is_running = lambda: running.pop() if running else False
+
+        with patch.object(WindowOperator, "focus_window") as focus, \
+             patch.object(WindowOperator, "user32", FakeUser32()) as user32, \
+             patch.object(SharedState.CONTINUE_ROUND_EVENT, "wait"):
+            self.assertFalse(ex._wait_other_windows())
+
+        focus.assert_not_called()
+        self.assertEqual(user32.moves, [])
+
+    def test_it_presses_once_the_continue_ends(self):
+        ex, st = self._executor()
+        self._lose_item(st)
+        other = self._other_window()
+        SharedState.continue_round_start(other)
+        self.assertFalse(ex._freezes_ok()[1])
+
+        SharedState.continue_round_end(other)
+
+        self.assertTrue(all(ex._freezes_ok()))
+        self.assertTrue(ex._wait_other_windows())
+
+    # ── 3〜4. 装備待ちは無条件で免除 ───────────────────
+    def test_its_own_equip_wait_alone_still_presses(self):
+        ex, st = self._executor()
+        self._lose_item(st)
+
+        self.assertTrue(ex._wait_other_windows())
+
+    def test_two_windows_both_waiting_to_equip_can_both_press(self):
+        """複数窓が同時にロストしても互いに待たない（デッドロック回避）"""
+        ex_a, st_a = self._executor()
+        ex_b, st_b = self._executor()
+        self._lose_item(st_a)
+        self._lose_item(st_b)
+
+        self.assertEqual(SharedState.get_equip_freeze_count(), 2)
+        self.assertTrue(ex_a._wait_other_windows())
+        self.assertTrue(ex_b._wait_other_windows())
+
+    def test_another_windows_equip_wait_alone_is_waited_for(self):
+        ex, _st = self._executor()
+        SharedState.equip_freeze_start(self._other_window())
+
+        self.assertFalse(ex._freezes_ok()[0], "自分は張っていないので待つ")
+
+    # ── 5〜6. 続行・速度検知・突入は「自分だけなら免除」 ─────────
+    def _sole_case(self, start, end, index, held_attr):
+        ex, st = self._executor()
+        start(st)
+        self.assertTrue(ex._freezes_ok()[index], "自分だけなら進む")
+        self.assertTrue(getattr(st, held_attr))
+
+        start(self._other_window())
+        self.assertFalse(ex._freezes_ok()[index], "他窓も張っていれば待つ")
+
+        end(st)
+
+    def test_the_continue_freeze_is_sole_only(self):
+        self._sole_case(SharedState.continue_round_start,
+                        SharedState.continue_round_end, 1, "continue_freeze_held")
+
+    def test_the_speed_freeze_is_sole_only(self):
+        self._sole_case(SharedState.speed_freeze_start,
+                        SharedState.speed_freeze_end, 2, "speed_freeze_held")
+
+    def test_the_round_freeze_is_sole_only(self):
+        self._sole_case(SharedState.round_freeze_start,
+                        SharedState.round_freeze_end, 3, "round_freeze_held")
+
+    def test_nothing_held_and_nothing_frozen_is_fine(self):
+        ex, _st = self._executor()
+
+        self.assertTrue(all(ex._freezes_ok()))
+
+    def test_the_rule_itself(self):
+        ok = ActionExecutor.ActionExecutor._freeze_ok
+        clear, frozen = threading.Event(), threading.Event()
+        clear.set()
+
+        self.assertTrue(ok(clear, False, 0, True), "誰も張っていない")
+        self.assertFalse(ok(frozen, False, 1, True), "他窓の分は待つ")
+        self.assertTrue(ok(frozen, True, 1, True), "自分だけなら進む")
+        self.assertFalse(ok(frozen, True, 2, True), "他窓も居れば待つ")
+        self.assertTrue(ok(frozen, True, 2, False), "装備待ちは他窓が居ても進む")
+
+    # ── 7. _begin_precheck も同じ規則 ──────────────
+    def test_the_precheck_stops_for_another_windows_equip_wait(self):
+        """以前は装備待ちを見ていなかった"""
+        logs = []
+        ex, _st = self._executor(logs)
+        SharedState.equip_freeze_start(self._other_window())
+
+        self.assertFalse(ex._begin_precheck())
+        self.assertTrue(any("他窓の装備待ち" in m for m in logs), logs)
+
+    def test_the_precheck_stops_for_another_windows_continue(self):
+        logs = []
+        ex, st = self._executor(logs)
+        self._lose_item(st)      # 自分はロスト中でも
+        SharedState.continue_round_start(self._other_window())
+
+        self.assertFalse(ex._begin_precheck())
+        self.assertTrue(any("他窓のフリーズ" in m for m in logs), logs)
+
+    def test_the_precheck_passes_when_only_this_window_holds(self):
+        ex, st = self._executor()
+        self._lose_item(st)
+        SharedState.continue_round_start(st)
+
+        self.assertTrue(ex._begin_precheck())
+
+    def test_the_precheck_skips_the_freezes_when_asked(self):
+        """移動の前は確認を省く（移動はフリーズ中でも行う）"""
+        ex, _st = self._executor()
+        SharedState.continue_round_start(self._other_window())
+
+        self.assertTrue(ex._begin_precheck(check_freeze=False))
+
+
 class TestNothingFrozen(unittest.TestCase):
     """前面化してよいかは「どのフリーズも張られていない」で決める。
 

@@ -426,37 +426,72 @@ class ActionExecutor:
                 self._log("ラウンド開始によりフリーズ解除 → 装備待ちへ")
             elif not st.waiting_for_equip:
                 return False
-        if check_freeze and not st.waiting_for_equip and not st.is_continue_round:
-            if not SharedState.CONTINUE_ROUND_EVENT.is_set():
+        if check_freeze:
+            # 免除は自分が張った分だけ（_wait_other_windows と同じ規則）。
+            # 装備待ちも見る——以前は見ておらず、他窓のロスト中でも押しに行った
+            eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
+            if not eq_ok:
+                self._log("Begin キャンセル（他窓の装備待ちを検出）")
+                return False
+            if not con_ok:
                 self._log("Begin キャンセル（他窓のフリーズを検出）")
                 return False
-            if not st.speed_freeze_held and not SharedState.SPEED_FREEZE_EVENT.is_set():
+            if not spd_ok:
                 self._log("Begin キャンセル（速度検知フリーズを検出）")
                 return False
-            if not st.round_freeze_held and not SharedState.ROUND_FREEZE_EVENT.is_set():
+            if not rnd_ok:
                 self._log("Begin キャンセル（ラウンド突入フリーズを検出）")
                 return False
         return True
 
-    def _wait_other_windows(self) -> bool:
-        """他窓のフリーズ（装備待ち・続行ラウンド）解除を待つ。続行可ならTrue。
+    @staticmethod
+    def _freeze_ok(event, held: bool, count: int, sole_only: bool) -> bool:
+        """このフリーズを無視して進んでよいか。
 
-        自窓が続行ラウンド中／アイテムロスト中はフリーズの発生源が自分なので
-        待たない（自分の張ったフリーズを自分で待つデッドロックになる）。
+        免除するのは「自分が張った分」だけ。以前は「自分が何か1つ張っていれば
+        他窓の分も全部無視」で、アイテムロスト窓が他窓の続行ラウンド中でも
+        押しに行き、前面を奪っていた。
+
+        sole_only=False は「自分が張っていれば、他窓が張っていても進む」。
+        装備待ちだけがこれ。解除条件が `waiting_for_equip and begin_done` で、
+        押さないと解けないので、複数窓が同時にロストすると互いに待って
+        デッドロックする。他の3つは押下に依存せず解けるので待てる。
+        """
+        if event.is_set():
+            return True             # 誰も張っていない
+        if not held:
+            return False            # 他窓の分。待つ
+        return count <= 1 if sole_only else True
+
+    def _freezes_ok(self) -> tuple:
+        """4種別それぞれ、進んでよいかを返す（装備待ち・続行・速度検知・突入）"""
+        st = self._st
+        return (
+            # 「張っているか」は登録の有無（equip_freeze_held）で見る。
+            # waiting_for_equip は「ロストした」で、登録より先に立つ
+            self._freeze_ok(SharedState.EQUIP_WAIT_EVENT, st.equip_freeze_held,
+                            SharedState.get_equip_freeze_count(), False),
+            self._freeze_ok(SharedState.CONTINUE_ROUND_EVENT,
+                            st.continue_freeze_held,
+                            SharedState.get_continue_round_count(), True),
+            self._freeze_ok(SharedState.SPEED_FREEZE_EVENT, st.speed_freeze_held,
+                            SharedState.get_speed_freeze_count(), True),
+            self._freeze_ok(SharedState.ROUND_FREEZE_EVENT, st.round_freeze_held,
+                            SharedState.get_round_freeze_count(), True),
+        )
+
+    def _wait_other_windows(self) -> bool:
+        """他窓のフリーズ解除を待つ。続行可ならTrue。
+
+        免除するのは自分が張った分だけ（_freeze_ok 参照）。自分の張った
+        フリーズを自分で待つデッドロックは避けつつ、他窓が張った分は待つ。
 
         OSC移動はこの待ちの対象外。フォーカスを奪わず他窓を妨げないため、
         フリーズ中でも移動は進めてよい。呼ぶのはフォーカスを要する操作
         （クリック・キー入力）の直前だけにすること。
         """
-        st = self._st
-        if (st.is_continue_round or st.waiting_for_equip
-                or st.speed_freeze_held or st.round_freeze_held):
-            return self._is_running()
         while self._is_running():
-            eq_ok  = SharedState.EQUIP_WAIT_EVENT.is_set()
-            con_ok = SharedState.CONTINUE_ROUND_EVENT.is_set()
-            spd_ok = SharedState.SPEED_FREEZE_EVENT.is_set()
-            rnd_ok = SharedState.ROUND_FREEZE_EVENT.is_set()
+            eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
             if eq_ok and con_ok and spd_ok and rnd_ok:
                 return True
             if not eq_ok:
@@ -467,10 +502,14 @@ class ActionExecutor:
                 self._log("他窓の速度検知フリーズ中 → フリーズ")
             if not rnd_ok:
                 self._log("他窓のラウンド突入フリーズ中 → フリーズ")
-            SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
-            SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
-            SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0)
-            SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0)
+            # 待つのは通っていないものだけ。自分が張っているイベントは
+            # clear のままなので、待つと無駄に1秒止まる
+            for ok, event in ((eq_ok, SharedState.EQUIP_WAIT_EVENT),
+                              (con_ok, SharedState.CONTINUE_ROUND_EVENT),
+                              (spd_ok, SharedState.SPEED_FREEZE_EVENT),
+                              (rnd_ok, SharedState.ROUND_FREEZE_EVENT)):
+                if not ok:
+                    event.wait(timeout=1.0)
         return False
 
     def _handle_item_lost(self) -> bool:
