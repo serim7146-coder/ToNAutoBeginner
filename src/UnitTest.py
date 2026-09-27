@@ -13602,6 +13602,38 @@ class TestStartKeyGui(unittest.TestCase):
 
         self.assertNotIn(self.app._start, started)
 
+    def test_it_says_why_nothing_happened(self):
+        """黙って無視すると「キーが効かない」と見える"""
+        self.app.v_start_key.set("f9")
+        self.app.btn_start.config(state="disabled")
+        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+
+        _called, started = self._poll()
+
+        self.assertEqual([m for m in self.app.logs if "いま押せません" in m],
+                         ["[マクロ開始] いま押せません（動作中か起動中）"],
+                         self.app.logs)
+        self.assertNotIn(self.app._start, started)
+
+    def test_holding_it_says_so_only_once(self):
+        self.app.v_start_key.set("f9")
+        self.app.btn_start.config(state="disabled")
+        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+
+        for _ in range(3):
+            self._poll()
+
+        self.assertEqual(len([m for m in self.app.logs if "いま押せません" in m]), 1,
+                         self.app.logs)
+
+    def test_it_says_nothing_when_it_can_be_pressed(self):
+        self.app.v_start_key.set("f9")
+
+        self._poll()
+
+        self.assertFalse(any("いま押せません" in m for m in self.app.logs),
+                         self.app.logs)
+
     def test_a_broken_key_at_poll_time_is_disabled(self):
         """既定値へ倒さない。勝手に動き出す方が危ない"""
         self.app.v_start_key.set("zzz")

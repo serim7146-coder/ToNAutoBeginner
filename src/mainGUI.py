@@ -558,9 +558,14 @@ class App(tk.Tk):
             self._refresh_start_key_label()
             self._log(f"[マクロ開始] ⚠ {key!r} は使えないキーです。解除しました")
             return
-        if now and not self._start_key_pressed and not self._start_button_disabled():
-            self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
-            self.after(0, self._start)
+        if now and not self._start_key_pressed:
+            if self._start_button_disabled():
+                # 黙って無視すると「キーが効かない」と見える。押された瞬間だけ
+                # 出すので、押し続けても増えない
+                self._log("[マクロ開始] いま押せません（動作中か起動中）")
+            else:
+                self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
+                self.after(0, self._start)
         self._start_key_pressed = now
 
     def _start_button_disabled(self) -> bool:
