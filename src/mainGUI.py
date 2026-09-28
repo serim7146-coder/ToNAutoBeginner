@@ -327,6 +327,28 @@ class WindowTab(ttk.Frame):
 
 
 # ── ログオーバーレイ ──────────────────────────────
+def _remember_own_window(widget):
+    """当ツールの窓を覚える。録画中はここに入っている窓を隠す。
+
+    VRChat の窓（SharedState.managed_hwnds）とは別の入れ物に入れること。
+    混ぜると _vrchat_is_in_front() が誤判定して Begin が毎回フォールバックする
+    """
+    hwnd = WindowOperator.own_window_hwnd(widget)
+    if not hwnd:
+        return
+    SharedState.register_own_window(hwnd)
+
+    def forget(event, _hwnd=hwnd, _widget=widget):
+        if event.widget is _widget:      # 子ウィジェットの Destroy は無視
+            SharedState.unregister_own_window(_hwnd)
+            WindowOperator.set_capture_excluded(_hwnd, False)
+
+    try:
+        widget.bind("<Destroy>", forget, add="+")
+    except tk.TclError:
+        pass
+
+
 class LogOverlay(tk.Toplevel):
     """半透明の最前面ログオーバーレイウィンドウ"""
     MAX_LINES = config.GUI_OVERLAY_LOG_MAX_LINES
@@ -342,6 +364,7 @@ class LogOverlay(tk.Toplevel):
         self._lines: list[str] = []
         self._drag_x = 0
         self._drag_y = 0
+        _remember_own_window(self)
 
         # ヘッダ（ドラッグ用）
         hf = tk.Frame(self, bg="#1e1e2e", cursor="fleur")
@@ -481,6 +504,7 @@ class App(tk.Tk):
         self.host_tabs: dict = {"version": 0, "tabs": {}}
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
+        self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
@@ -503,6 +527,8 @@ class App(tk.Tk):
         AutoUpdate.cleanup_old_exe()
         self._start_update_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        _remember_own_window(self)       # 録画中だけキャプチャから外すため
+        Recorder.set_window_hider(self._set_own_windows_hidden)
         self._start_emergency_stop_polling()
         self._start_host_save_polling()
         self._start_tool_poll()
@@ -1610,6 +1636,7 @@ class App(tk.Tk):
         # 終了時はワーカーごと消えるので、送り終えるまで少しだけ待つ
         Recorder.stop_all(wait_sec=config.OBS_TIMEOUT_SEC * 2)
         self.monitors.clear()
+        self._show_own_windows_again()
         self._running = False
         self.btn_start.config(state="normal")
         self.btn_stop.config(state="disabled")
@@ -2125,10 +2152,32 @@ class App(tk.Tk):
         finally:
             self.log_text.config(state="disabled")
 
+    def _set_own_windows_hidden(self, hidden: bool):
+        """当ツールの窓を画面キャプチャから外す／戻す。
+
+        Recorder のワーカースレッドから呼ばれるので Tk には触らない
+        （hwnd は窓を作ったときに控えた値）。取れない環境では1度だけ知らせて、
+        録画はそのまま続ける
+        """
+        for hwnd in SharedState.own_windows():
+            if WindowOperator.set_capture_excluded(hwnd, hidden):
+                continue
+            if not self._capture_warned:
+                self._capture_warned = True
+                self._log("⚠ 録画からツールの窓を隠せませんでした"
+                          "（Windows 10 2004 以降が必要です）。録画は続けます")
+            return
+
+    def _show_own_windows_again(self):
+        """録画中に隠したままにしない。止めたら必ず戻す"""
+        for hwnd in SharedState.own_windows():
+            WindowOperator.set_capture_excluded(hwnd, False)
+
     def _on_close(self):
         # VRChat を起動しないまま閉じても設定が残るように。destroy() の後は
         # Tk 変数を読めないので必ず先に、停止が長引いても保存は済ませたいので
         # _stop() より前に書く
         self._save_settings_now()
         self._stop()
+        self._show_own_windows_again()
         self.destroy()

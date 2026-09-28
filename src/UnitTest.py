@@ -8829,6 +8829,243 @@ class TestBeginRetry(unittest.TestCase):
         confirm.assert_not_called()
 
 
+class TestHideOwnWindowsWhileRecording(unittest.TestCase):
+    """録画中だけ、当ツールの窓を画面キャプチャから外す。
+
+    物理モニタには見えたまま・操作もできて、録画とスクリーンショットからだけ
+    消える（SetWindowDisplayAffinity の WDA_EXCLUDEFROMCAPTURE）。
+    """
+
+    def setUp(self):
+        for hwnd in SharedState.own_windows():
+            SharedState.unregister_own_window(hwnd)
+        self.addCleanup(lambda: [SharedState.unregister_own_window(h)
+                                 for h in SharedState.own_windows()])
+
+    def _plan(self, calls):
+        """録画の段取り。隠す関数は差し込む（Recorder は窓を触らない）"""
+        client = MagicMock()
+        client.connect.return_value = (True, "")
+        client.request.return_value = (True, {"outputActive": False}, "")
+        return Recorder.RecordPlan(lambda: client, lambda _m: None,
+                                   clock=lambda: 0.0,
+                                   hide_windows=calls.append)
+
+    # ── 1〜2. 開始で隠し、停止で戻す ───────────────────
+    def test_recording_hides_and_stopping_restores(self):
+        calls = []
+        plan = self._plan(calls)
+
+        plan.continue_start(1)
+        self.assertEqual(calls, [True], "開始で隠す")
+
+        plan.stop_all()
+        self.assertEqual(calls, [True, False], "停止で戻す")
+
+    def test_a_recording_we_did_not_start_changes_nothing(self):
+        """手動の録画には触らない（隠しもしない）"""
+        calls = []
+        client = MagicMock()
+        client.connect.return_value = (True, "")
+        client.request.return_value = (True, {"outputActive": True}, "")
+        plan = Recorder.RecordPlan(lambda: client, lambda _m: None,
+                                   clock=lambda: 0.0, hide_windows=calls.append)
+
+        plan.continue_start(1)
+
+        self.assertEqual(calls, [])
+
+    # ── 3. 設定で切れる ────────────────────────
+    def test_the_switch_turns_it_off(self):
+        calls = []
+        plan = self._plan(calls)
+
+        with patch.object(config, "HIDE_OWN_WINDOWS_WHILE_RECORDING", False):
+            plan.continue_start(1)
+            plan.stop_all()
+
+        self.assertEqual(calls, [])
+
+    # ── 4. 失敗しても録画は続く ────────────────────
+    def test_a_failure_does_not_stop_the_recording(self):
+        def boom(_hidden):
+            raise OSError("古い Windows")
+
+        client = MagicMock()
+        client.connect.return_value = (True, "")
+        client.request.return_value = (True, {"outputActive": False}, "")
+        plan = Recorder.RecordPlan(lambda: client, lambda _m: None,
+                                   clock=lambda: 0.0, hide_windows=boom)
+
+        plan.continue_start(1)
+
+        self.assertTrue(plan.we_started, "録画は始まっている")
+
+    def test_the_warning_is_logged_once(self):
+        logs = []
+        app = type("FakeApp", (), {})()
+        app._log = logs.append
+        app._capture_warned = False
+        SharedState.register_own_window(11)
+        SharedState.register_own_window(22)
+
+        with patch.object(WindowOperator, "set_capture_excluded",
+                          return_value=False):
+            mainGUI.App._set_own_windows_hidden(app, True)
+            mainGUI.App._set_own_windows_hidden(app, True)
+
+        self.assertEqual(len([m for m in logs if "隠せませんでした" in m]), 1, logs)
+
+    # ── 5. 開け閉めで登録が出入りする ──────────────────
+    def test_registering_and_unregistering(self):
+        SharedState.register_own_window(31)
+        SharedState.register_own_window(32)
+        self.assertEqual(SharedState.own_windows(), frozenset({31, 32}))
+
+        SharedState.unregister_own_window(31)
+
+        self.assertEqual(SharedState.own_windows(), frozenset({32}))
+
+    def test_a_zero_hwnd_is_not_registered(self):
+        SharedState.register_own_window(0)
+
+        self.assertEqual(SharedState.own_windows(), frozenset())
+
+    def test_the_windows_unregister_themselves_when_destroyed(self):
+        """オーバーレイと統計窓は開け閉めする。閉じたら外れること"""
+        for name in ("mainGUI.py", "StatisticsGUI.py"):
+            src = Path(name).read_text(encoding="utf-8")
+            self.assertIn("SharedState.unregister_own_window", src, name)
+            self.assertIn('bind("<Destroy>"', src, name)
+            self.assertIn("event.widget is", src, name)
+
+    # ── 6. VRChat の窓とは混ぜない ───────────────────
+    def test_our_windows_never_land_in_the_vrchat_set(self):
+        """混ぜると _vrchat_is_in_front() が誤判定して Begin が毎回フォールバックする"""
+        SharedState.clear_window_hwnds()
+        self.addCleanup(SharedState.clear_window_hwnds)
+        SharedState.register_own_window(41)
+
+        self.assertEqual(SharedState.managed_hwnds(), frozenset())
+        self.assertNotIn(41, SharedState.managed_hwnds())
+
+        SharedState.register_window_hwnd(42)          # VRChat の窓
+
+        self.assertEqual(SharedState.own_windows(), frozenset({41}))
+        self.assertEqual(SharedState.managed_hwnds(), frozenset({42}))
+
+    def test_clearing_the_vrchat_set_keeps_our_windows(self):
+        SharedState.register_own_window(51)
+        SharedState.register_window_hwnd(52)
+
+        SharedState.clear_window_hwnds()              # マクロ停止
+
+        self.assertEqual(SharedState.own_windows(), frozenset({51}),
+                         "GUI は開いたままなので残す")
+        self.assertEqual(SharedState.managed_hwnds(), frozenset())
+
+    def test_our_window_in_front_does_not_look_like_vrchat(self):
+        cfg = WindowConfig(hwnd=61, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+        SharedState.clear_window_hwnds()
+        self.addCleanup(SharedState.clear_window_hwnds)
+        SharedState.register_own_window(99)           # 当ツールの窓が前面
+
+        with patch.object(WindowOperator, "foreground_hwnd", return_value=99):
+            self.assertFalse(ex._vrchat_is_in_front())
+
+    # ── 7. 停止・終了で戻す ────────────────────
+    def test_stopping_restores_every_window(self):
+        app = type("FakeApp", (), {})()
+        app.logs = []
+        app._log = app.logs.append
+        SharedState.register_own_window(71)
+        SharedState.register_own_window(72)
+
+        with patch.object(WindowOperator, "set_capture_excluded",
+                          return_value=True) as excluded:
+            mainGUI.App._show_own_windows_again(app)
+
+        self.assertEqual(sorted(c.args for c in excluded.call_args_list),
+                         [(71, False), (72, False)])
+
+    def test_the_stop_and_the_close_both_restore(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        stop = src[src.index("    def _stop(self):"):
+                   src.index("    def _log(self, msg: str):")]
+        close = src[src.index("    def _on_close(self):"):]
+        close = close[:close.index("\n    def ", 10)] if "\n    def " in close else close
+
+        self.assertIn("_show_own_windows_again()", stop)
+        self.assertIn("_show_own_windows_again()", close)
+
+    def test_the_app_gives_the_recorder_its_hider(self):
+        """差し込まないと、録画中に隠す相手が居ない"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        init = src[src.index("        self._build_ui()"):
+                   src.index("    def _start_emergency_stop_polling(self):")]
+
+        self.assertIn("Recorder.set_window_hider(self._set_own_windows_hidden)",
+                      init)
+
+    # ── Win32 の呼び方 ──────────────────────
+    def test_the_affinity_values(self):
+        self.assertEqual(WindowOperator.WDA_EXCLUDEFROMCAPTURE, 0x11)
+        self.assertEqual(WindowOperator.WDA_NONE, 0)
+
+    def test_it_asks_windows_to_exclude_the_window(self):
+        user32 = MagicMock()
+        user32.SetWindowDisplayAffinity.return_value = 1
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertTrue(WindowOperator.set_capture_excluded(123, True))
+            self.assertTrue(WindowOperator.set_capture_excluded(123, False))
+
+        self.assertEqual([c.args for c in
+                          user32.SetWindowDisplayAffinity.call_args_list],
+                         [(123, 0x11), (123, 0)])
+
+    def test_an_old_windows_returns_false(self):
+        user32 = MagicMock()
+        user32.SetWindowDisplayAffinity.side_effect = OSError("未対応")
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertFalse(WindowOperator.set_capture_excluded(123, True))
+
+    def test_no_hwnd_is_false(self):
+        self.assertFalse(WindowOperator.set_capture_excluded(0, True))
+
+    def test_the_toplevel_hwnd_climbs_to_the_parent(self):
+        """Tk の winfo_id() は子ウィンドウ。そのままでは窓全体に効かない"""
+        user32 = MagicMock()
+        user32.GetParent.side_effect = [200, 300, 0]
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertEqual(WindowOperator.toplevel_hwnd(100), 300)
+
+    def test_a_toplevel_without_a_parent_is_itself(self):
+        user32 = MagicMock()
+        user32.GetParent.return_value = 0
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertEqual(WindowOperator.toplevel_hwnd(100), 100)
+
+    def test_a_broken_getparent_falls_back_to_the_child(self):
+        user32 = MagicMock()
+        user32.GetParent.side_effect = OSError("取れない")
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertEqual(WindowOperator.toplevel_hwnd(100), 100)
+
+    def test_the_recorder_keeps_its_dependencies(self):
+        """窓の操作は Recorder に持ち込まない（標準ライブラリ＋OBSClient だけ）"""
+        src = Path(Recorder.__file__).read_text(encoding="utf-8")
+
+        self.assertNotIn("import WindowOperator", src)
+        self.assertNotIn("import SharedState", src)
+
+
 class TestRoundFreezeFocus(unittest.TestCase):
     """ラウンド突入で全窓を止めた窓も前面化する（続行ラウンドと同じ作法）"""
 
@@ -10447,6 +10684,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         app._log = app.logs.append
         app._release_suicide_keys = \
             lambda hs: mainGUI.App._release_suicide_keys(app, hs)
+        app._show_own_windows_again = lambda: None
         return app
 
     def _released(self, app):
@@ -11196,8 +11434,13 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.3)
         self.assertLess(elapsed, 1.5, "上限を大きく超えないこと")
 
-    def test_the_limit_is_half_a_second(self):
-        self.assertEqual(config.BEGIN_PRESS_WAIT_SEC, 0.5)
+    def test_the_limit_leaves_room_for_the_answer(self):
+        """押してから Verified までは実測 0.2 秒ほど。余裕を見た長さであること。
+
+        値そのものは調整の余地があるので固定しない（短くしすぎると、押せて
+        いるのに前面化へ落ちる元の不具合に戻る）
+        """
+        self.assertGreaterEqual(config.BEGIN_PRESS_WAIT_SEC, 0.5)
 
     def test_an_already_accepted_begin_returns_true_at_once(self):
         executor, st = self._executor()
@@ -16477,6 +16720,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._log = app.logs.append
         app._save_launch_settings = save or MagicMock()
         app._save_settings_now = lambda: mainGUI.App._save_settings_now(app)
+        app._show_own_windows_again = lambda: None
         return app
 
     # ── 終了時 ──────────────────────────────

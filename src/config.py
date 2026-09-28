@@ -51,6 +51,12 @@ EMERGENCY_KEY_CAPTURE_SEC = 5.0   # 「キーを押して設定」で待つ時�
 # 別のキーへは倒さない。ポーリングと捕捉の秒数は停止キーと共用する
 START_KEY = ""
 
+# 録画中だけ、当ツールの窓を画面キャプチャから外す。物理モニタには見えたままで、
+# 操作もできる。消えるのは録画・スクリーンショット・画面共有の中だけ。
+# SetWindowDisplayAffinity が要るので Windows 10 2004（build 19041）以降。
+# 使えない環境では1度だけログに出して、録画はそのまま続ける
+HIDE_OWN_WINDOWS_WHILE_RECORDING = True
+
 GUI_BG  = "#1e1e2e"
 GUI_FG  = "#cdd6f4"
 GUI_ACC = "#89b4fa"

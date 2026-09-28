@@ -25,7 +25,8 @@ class RecordPlan:
     def __init__(self, client_factory: Callable, log: Callable[[str], None],
                  clock: Callable[[], float] = time.monotonic,
                  tail_sec: float = config.OBS_RECORD_TAIL_SEC,
-                 max_sec: float = config.OBS_RECORD_MAX_SEC):
+                 max_sec: float = config.OBS_RECORD_MAX_SEC,
+                 hide_windows: Callable[[bool], None] = None):
         self._client_factory = client_factory
         self._log = log
         self._clock = clock
@@ -36,6 +37,8 @@ class RecordPlan:
         self.we_started = False                  # このツールが録画を始めたか
         self.started_at: Optional[float] = None
         self._warned = ""                        # 最後に出した警告（同じものを連打しない）
+        # 録画中に当ツールの窓を隠す関数（窓の操作はこのファイルでは行わない）
+        self._hide_windows = hide_windows
 
     # ── 窓からの知らせ ─────────────────────────
     def continue_start(self, window: int):
@@ -58,6 +61,7 @@ class RecordPlan:
         self.we_started = True
         self.started_at = self._clock()
         self._warned = ""
+        self._hide_own_windows(True)
         self._log(f"[窓{window}] 🎥 OBS録画を開始しました（続行ラウンド）")
 
     def round_over(self, window: int):
@@ -97,11 +101,28 @@ class RecordPlan:
             return                  # 手動の録画・始められなかった録画は止めない
         self.we_started = False
         self.started_at = None
+        self._hide_own_windows(False)
         ok, _data, reason = self._call("StopRecord")
         if ok:
             self._log(f"🎥 OBS録画を停止しました（{why}）")
         else:
             self._log(f"⚠ OBS録画を停止できませんでした: {reason}")
+
+    def _hide_own_windows(self, hidden: bool):
+        """当ツールの窓を、録画の間だけ画面キャプチャから外す。
+
+        実際に隠すのは外から渡された関数（このファイルは標準ライブラリと
+        OBSClient だけで書く決まりなので、窓の操作は持ち込まない）。
+        渡されていなければ何もしない
+        """
+        if not config.HIDE_OWN_WINDOWS_WHILE_RECORDING:
+            return
+        if self._hide_windows is None:
+            return
+        try:
+            self._hide_windows(hidden)
+        except Exception:
+            pass                # 付随機能なので、失敗しても録画は続ける
 
     def _call(self, request_type: str):
         try:
@@ -146,10 +167,23 @@ class Recorder:
         self._thread: Optional[threading.Thread] = None
         self._enabled = False
         self._log: Callable[[str], None] = lambda _m: None
-        self._plan = RecordPlan(self._make_client, self._emit, clock)
+        self._hide_windows: Optional[Callable[[bool], None]] = None
+        self._plan = RecordPlan(self._make_client, self._emit, clock,
+                                hide_windows=self._call_hide_windows)
         self._host = config.OBS_DEFAULT_HOST
         self._port = config.OBS_DEFAULT_PORT
         self._password = ""
+
+    def set_window_hider(self, hide_windows: Callable[[bool], None]):
+        """録画中に当ツールの窓を隠す関数を差し込む（GUI 側が用意する）"""
+        with self._lock:
+            self._hide_windows = hide_windows
+
+    def _call_hide_windows(self, hidden: bool):
+        with self._lock:
+            hider = self._hide_windows
+        if hider is not None:
+            hider(hidden)
 
     def configure(self, enabled: bool, host: str = config.OBS_DEFAULT_HOST,
                   port: int = config.OBS_DEFAULT_PORT, password: str = "",
@@ -244,6 +278,7 @@ configure = _default.configure
 on_continue_start = _default.on_continue_start
 on_round_over = _default.on_round_over
 stop_all = _default.stop_all
+set_window_hider = _default.set_window_hider
 
 
 def is_enabled() -> bool:

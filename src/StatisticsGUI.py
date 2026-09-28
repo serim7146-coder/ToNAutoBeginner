@@ -6,7 +6,9 @@ from datetime import datetime
 from tkinter import ttk, messagebox
 
 import config
+import SharedState
 import UIFont
+import WindowOperator
 import ConnectDB
 import Statistics
 
@@ -139,8 +141,26 @@ class StatisticsWindow(tk.Toplevel):
         self._loaded_deferred_rounds: set[str] = set()
         self._loading_deferred_rounds: set[str] = set()
         self.v_status = tk.StringVar(value="統計データ未読み込み")
+        self._remember_own_window()      # 録画中だけキャプチャから外すため
         self._build_ui()
         self._load_rows_async()
+
+    def _remember_own_window(self):
+        """当ツールの窓として覚える。VRChat の窓とは別の入れ物（前面判定を汚さない）"""
+        hwnd = WindowOperator.own_window_hwnd(self)
+        if not hwnd:
+            return
+        SharedState.register_own_window(hwnd)
+
+        def forget(event, _hwnd=hwnd):
+            if event.widget is self:     # 子ウィジェットの Destroy は無視
+                SharedState.unregister_own_window(_hwnd)
+                WindowOperator.set_capture_excluded(_hwnd, False)
+
+        try:
+            self.bind("<Destroy>", forget, add="+")
+        except tk.TclError:
+            pass
 
     def _build_ui(self):
         controls = ttk.LabelFrame(self, text="集計条件", padding=8)

@@ -339,6 +339,31 @@ def managed_hwnds() -> frozenset:
         return frozenset(_WINDOW_HWNDS)
 
 
+# ── 当ツール自身の窓 ─────────────────────────
+# 録画中だけキャプチャから外すために覚える。**VRChat の窓（_WINDOW_HWNDS）とは
+# 別に持つこと。** 混ぜると _vrchat_is_in_front() が当ツールの窓を VRChat と
+# 誤認して、Begin が毎回フォールバックする
+_OWN_WINDOWS: set = set()
+_OWN_WINDOW_LOCK = threading.Lock()
+
+
+def register_own_window(hwnd: int):
+    if not hwnd:
+        return
+    with _OWN_WINDOW_LOCK:
+        _OWN_WINDOWS.add(int(hwnd))
+
+
+def unregister_own_window(hwnd: int):
+    with _OWN_WINDOW_LOCK:
+        _OWN_WINDOWS.discard(int(hwnd or 0))
+
+
+def own_windows() -> frozenset:
+    with _OWN_WINDOW_LOCK:
+        return frozenset(_OWN_WINDOWS)
+
+
 def nothing_frozen() -> bool:
     """どのフリーズも張られていないか。
 

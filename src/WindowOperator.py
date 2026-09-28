@@ -310,6 +310,59 @@ def window_cursor_point(hwnd: int) -> tuple | None:
     return cursor_target(hwnd)[0]
 
 
+WDA_NONE = 0x00000000
+WDA_EXCLUDEFROMCAPTURE = 0x00000011
+
+
+def set_capture_excluded(hwnd: int, excluded: bool) -> bool:
+    """その窓を画面キャプチャから外す（戻すなら excluded=False）。
+
+    WDA_EXCLUDEFROMCAPTURE は「物理モニタにだけ出す」指定。画面には普通に
+    見えて操作もできるが、録画・スクリーンショット・画面共有からは、そこだけ
+    無かったように抜ける（黒い四角も残らない）。
+    Windows 10 2004（build 19041）以降。古い環境では False を返す
+    """
+    if not hwnd:
+        return False
+    try:
+        affinity = WDA_EXCLUDEFROMCAPTURE if excluded else WDA_NONE
+        return bool(user32.SetWindowDisplayAffinity(int(hwnd), affinity))
+    except Exception:
+        return False
+
+
+def own_window_hwnd(widget) -> int:
+    """Tk の窓の、トップレベルの hwnd。取れなければ 0。
+
+    呼ぶのは update_idletasks() のあと（描画前だと id が確定しない）
+    """
+    try:
+        widget.update_idletasks()
+        return toplevel_hwnd(widget.winfo_id())
+    except Exception:
+        return 0
+
+
+def toplevel_hwnd(hwnd: int) -> int:
+    """Tk の winfo_id() から、本当のトップレベル窓の hwnd を得る。
+
+    winfo_id() が返すのは Tk の子ウィンドウなので、そのまま
+    SetWindowDisplayAffinity に渡しても窓全体には効かない。親まで上げる
+    """
+    if not hwnd:
+        return 0
+    current = int(hwnd)
+    try:
+        for _ in range(16):         # 念のため上限を置く（輪を作らない）
+            parent = user32.GetParent(current)
+            if not parent:
+                break
+            current = int(parent)
+    except Exception:
+        return int(hwnd)
+    return current
+
+
 def foreground_hwnd() -> int:
     """いま前面にある窓の hwnd。取れなければ 0。
 
