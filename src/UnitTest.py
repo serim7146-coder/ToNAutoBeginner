@@ -2517,7 +2517,7 @@ FOG_EARLY_READ_ROUNDS = [
 
 
 def line_after(line, sec, body="."):
-    """line のログ時刻から sec 秒後の行（看破の保留を時刻で明けさせる）"""
+    """line のログ時刻から sec 秒後の行"""
     at = datetime.fromtimestamp(LogParser.log_time(line) + sec)
     return at.strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  " + body
 
@@ -2754,7 +2754,8 @@ class TestFogEarlyReadUse(unittest.TestCase):
     FOG_KEY = "Fog/霧"
     SNAIL = 101
     SNAIL_LINE = FOG_EARLY_READ_ROUNDS[3][1][0]
-    AFTER_HOLD = line_after(SNAIL_LINE, FogEarlyRead.HOLD_SEC + 1)   # 保留が明ける最初の時刻
+    # 同じ名前がもう一度（1秒後）。看破は最初の名前で決まっているので、二重に判定しない
+    SNAIL_AGAIN = line_after(SNAIL_LINE, 1, SNAIL_LINE.split(" -  ", 1)[1])
     SNAIL_REVEAL = FOG_EARLY_READ_ROUNDS[3][2]
     # objects に無い名前（表示名）の行。看破では決まらない
     UNDECIDED_LINE = ("2026.09.21 08:43:40 Debug      -  [NetworkProcessing] serim01 would "
@@ -2816,8 +2817,8 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor = self._monitor()
 
         monitor._process(self.SNAIL_LINE)
-        self.assertEqual(self._skipped(), 0, "保留中はまだ使わない")
-        monitor._process(self.AFTER_HOLD)
+        self.assertEqual(self._skipped(), 1, "最初の名前でその場で使う")
+        monitor._process(self.SNAIL_AGAIN)
 
         self.assertEqual(self._skipped(), 1)
         self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
@@ -2827,7 +2828,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor = self._monitor(keep={self.FOG_KEY: {self.SNAIL}})
 
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
 
         self.assertTrue(monitor.st.is_continue_round)
         self.play.assert_called_once_with("continue.mp3")
@@ -2846,7 +2847,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
     def test_an_enrage_after_the_early_read_is_not_used_again(self):
         monitor = self._monitor()
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
         self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
 
         monitor._on_enrage("Black Sun")                 # Enrage 系が後から来ても
@@ -2905,7 +2906,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             before = list(monitor.logs)
 
             monitor._process(self.SNAIL_LINE)
-            monitor._process(self.AFTER_HOLD)
+            monitor._process(self.SNAIL_AGAIN)
 
             self.assertEqual(self._judged(monitor), allowed, access)
             self.assertEqual(any("🔎 テラー判明(看破)" in m for m in monitor.logs), allowed, access)
@@ -2919,7 +2920,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
                                 keep={self.FOG_KEY: {self.SNAIL}})
 
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
 
         self.assertFalse(self._judged(monitor), "自爆・アナウンス・フリーズ・録画のどれもしない")
         self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
@@ -2970,7 +2971,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor = self._monitor(access="group_plus")
 
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
         monitor._on_enrage("Immortal Snail")
         monitor._process(self.SNAIL_REVEAL)
 
@@ -2980,7 +2981,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         """看破は黙って DB に送るだけ。後から来た Enrage でその場で判定し、公開で二重にしない"""
         monitor = self._monitor(access="unknown")
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
         self.assertEqual(self._skipped(), 0, "看破では判定しない")
         self.assertFalse(any("🔎" in m for m in monitor.logs), monitor.logs)
         self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
@@ -3017,7 +3018,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor = self._monitor()
 
         monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
 
         self.assertTrue(self.send.call_args.kwargs["quiet"])
         self.assertFalse(any("Supabase" in m or "送信" in m for m in monitor.logs))
@@ -3031,28 +3032,45 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
         self.assertFalse(self.send.call_args.kwargs["quiet"])
 
-    # ── 最初の名前の保留（大量の名前への対策） ──────────────
+    # ── 最初の名前ですぐ決める（保留しない） ──────────────
     def _object_line(self, sec, name):
         return line_after(self.SNAIL_LINE, sec, "[NetworkProcessing] Ignoring TrySetOwner "
                           f"attempt on [3] {name} because x already owner")
 
-    def test_the_first_name_is_used_only_after_the_hold(self):
+    def test_the_first_name_is_used_at_once(self):
+        """時間を進めず、次の行も待たずに、最初の名前の行で判定が出る"""
         monitor = self._monitor()
-        monitor._process(self.SNAIL_LINE)
-        monitor._process(line_after(self.SNAIL_LINE, FogEarlyRead.HOLD_SEC))   # +2 はまだ保留の中
-
-        self.assertEqual(self._skipped(), 0)
-        self.send.assert_not_called()
-        self.assertTrue(monitor.st.early_read_holding)
-
-        monitor._process(self.AFTER_HOLD)
+        with patch.object(LogMonitor.time, "time", side_effect=AssertionError("時計を見ない")):
+            monitor._process(self.SNAIL_LINE)
 
         self.assertEqual(self._skipped(), 1)
         self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
-        self.assertFalse(monitor.st.early_read_holding)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.assertEqual(sum("🔎 テラー判明(看破)" in m for m in monitor.logs), 1, monitor.logs)
 
-    def test_a_flood_of_names_in_the_hold_voids_the_round(self):
-        """2秒以内に3種類 → 何も使わない（判定しない・DB にも送らない）"""
+    def test_the_same_terror_again_is_not_judged_twice(self):
+        """OK の窓も、DB に送るだけの窓（テラーは不明のまま）も、看破は1回だけ"""
+        for access, skips in (("invite", 1), ("public", 0)):
+            self.thread.reset_mock()
+            self.send.reset_mock()
+            monitor = self._monitor(access=access)
+            with patch.object(monitor, "_identify_fog_terror",
+                              wraps=monitor._identify_fog_terror) as identify:
+                monitor._process(self.SNAIL_LINE)
+                for sec in (0, 1, 2, 3, 10):
+                    monitor._process(line_after(self.SNAIL_LINE, sec,
+                                                self.SNAIL_LINE.split(" -  ", 1)[1]))
+                monitor._process(self._object_line(4, "Immortal Snail"))
+
+            self.assertEqual(identify.call_count, 1, access)
+            self.assertEqual(self._skipped(), skips, access)
+            self.assertEqual(self.send.call_count, 1, access)
+            self.assertEqual(sum("🔎" in m for m in monitor.logs), skips, monitor.logs)
+            self.assertFalse(monitor.st.early_read_void, access)
+
+    def test_another_terror_after_the_first_voids_but_does_not_undo(self):
+        """別のテラーの名前が後から来たら void にしてログを出す。決めた判定は取り消さない。
+        以後の名前も使わない"""
         for access in ("public", "invite"):
             self.thread.reset_mock()
             self.send.reset_mock()
@@ -3060,108 +3078,124 @@ class TestFogEarlyReadUse(unittest.TestCase):
             before = list(monitor.logs)
 
             monitor._process(self.SNAIL_LINE)
+            judged = self._judged(monitor)
             monitor._process(self._object_line(1, "Paradise Bird"))
             monitor._process(self._object_line(2, "THE SUN"))
-            monitor._process(self.AFTER_HOLD)
             monitor._process(line_after(self.SNAIL_LINE, 20))
 
             self.assertTrue(monitor.st.early_read_void, access)
-            self.assertIsNone(monitor.st.early_read_tid, access)
-            self.assertFalse(self._judged(monitor), access)
-            self.send.assert_not_called()
-            self.assertFalse(any("🔎" in m for m in monitor.logs), access)
+            self.assertEqual(monitor.st.early_read_tid, self.SNAIL, access)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+            self.assertEqual(self._judged(monitor), judged, access)
+            voided = [m for m in monitor.logs if "別々のテラー名が見えました" in m]
             if access == "public":
+                self.assertFalse(judged, "NG は判定しない")
                 self.assertEqual(monitor.logs, before, "NG では何も出さない")
+            else:
+                self.assertTrue(judged)
+                self.assertEqual(self._skipped(), 1, "取り消さない・二重にしない")
+                self.assertEqual(len(voided), 1, monitor.logs)
 
-    def test_a_second_name_of_the_same_terror_in_the_hold_is_fine(self):
-        """同じテラーの別の名前は void にしない。保留も延ばさない（最初の名前から数える）"""
+    def test_a_second_name_of_the_same_terror_is_fine(self):
+        """同じテラーの別の名前は void にしない。二重にも看破しない
+        （DB に送るだけの窓ではテラーが不明のままなので、決めたことを覚えていないと二重になる）"""
+        for access in ("invite", "public"):
+            self.send.reset_mock()
+            monitor = self._monitor(access=access)
+            with patch.object(monitor, "_identify_fog_terror",
+                              wraps=monitor._identify_fog_terror) as identify:
+                monitor._process(self._object_line(0, "WALPURGISNACHT"))
+                self.assertEqual(monitor.st.early_read_tid, 167, "最初の名前で決まる")
+                monitor._process(self._object_line(1, "witchling (15)"))
+                monitor._process(line_after(self.SNAIL_LINE, 3))
+
+            self.assertEqual(identify.call_count, 1, access)
+            self.assertEqual(monitor.st.early_read_tid, 167, access)
+            self.assertFalse(monitor.st.early_read_void, access)
+            self.assertEqual(self.send.call_count, 1, access)
+
+    def test_a_master_switch_before_the_first_name_voids_the_round(self):
+        """切り替えの後は全オブジェクトの同期が走ることがある。保留しないので、
+        その最初の名前で決めないよう、まだ決めていなければ void にする"""
         monitor = self._monitor()
-        monitor._process(self._object_line(0, "WALPURGISNACHT"))
-        monitor._process(self._object_line(1, "witchling (15)"))
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(line_after(self.SNAIL_LINE, -1, "[Behaviour] OnMasterClientSwitched"))
+        monitor._process(self.SNAIL_LINE)
+        monitor._process(self.SNAIL_AGAIN)
 
-        self.assertEqual(monitor.st.early_read_tid, 167)
-        self.assertFalse(monitor.st.early_read_void)
+        self.assertTrue(monitor.st.early_read_void)
+        self.assertIsNone(monitor.st.early_read_tid)
+        self.assertEqual(self._skipped(), 0)
+        self.send.assert_not_called()
+        self.assertEqual(sum("マスターが切り替わりました" in m for m in monitor.logs), 1,
+                         monitor.logs)
 
-    def test_a_master_switch_in_the_hold_voids_the_round(self):
+    def test_a_master_switch_after_the_early_read_changes_nothing(self):
+        """決めた後の切り替えでは何も変えない（判定は取り消せない）"""
         monitor = self._monitor()
         monitor._process(self.SNAIL_LINE)
 
         monitor._process(line_after(self.SNAIL_LINE, 1, "[Behaviour] OnMasterClientSwitched"))
-        monitor._process(self.AFTER_HOLD)
-
-        self.assertTrue(monitor.st.early_read_void)
-        self.assertEqual(self._skipped(), 0)
-        self.send.assert_not_called()
-
-    def test_a_master_switch_outside_the_hold_changes_nothing(self):
-        monitor = self._monitor()
-        monitor._process(line_after(self.SNAIL_LINE, -1, "[Behaviour] OnMasterClientSwitched"))
-        monitor._process(self.SNAIL_LINE)
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
 
         self.assertFalse(monitor.st.early_read_void)
+        self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
         self.assertEqual(self._skipped(), 1)
+        self.assertFalse(any("マスターが切り替わりました" in m for m in monitor.logs),
+                         monitor.logs)
 
-    def test_an_enrage_in_the_hold_wins(self):
+    def test_a_master_switch_outside_the_fog_changes_nothing(self):
+        monitor = self._monitor()
+        monitor._process(line_after(self.SNAIL_LINE, 1, "Killers have been revealed - 101 0 0 "
+                                                        "// Round type is Fog"))
+        monitor._process(line_after(self.SNAIL_LINE, 2, "[Behaviour] OnMasterClientSwitched"))
+
+        self.assertFalse(monitor.st.early_read_void)
+
+    def test_an_enrage_right_after_the_early_read_does_not_judge_again(self):
         monitor = self._monitor()
         monitor._process(self.SNAIL_LINE)
 
         monitor._on_enrage("Black Sun")                  # 6
-        monitor._process(self.AFTER_HOLD)
+        monitor._process(self.SNAIL_AGAIN)
 
-        self.assertEqual(monitor.st.enrage_identified, 6)
-        self.assertIsNone(monitor.st.early_read_tid, "看破は使わない")
+        self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
         self.assertEqual(self._skipped(), 1)
-        self.assertEqual(self.send.call_args.args[1], [6])
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_args.args[1], [self.SNAIL])
         self.assertEqual([m for m in monitor.logs if "🔎" in m],
-                         [m for m in monitor.logs if "🔎 テラー判明(Enrage)" in m])
+                         [m for m in monitor.logs if "🔎 テラー判明(看破)" in m])
 
-    def test_the_reveal_or_round_over_in_the_hold_drops_it(self):
-        for end in (line_after(self.SNAIL_LINE, 1, "Killers have been revealed - 101 0 0 "
-                                                   "// Round type is Fog"),
-                    line_after(self.SNAIL_LINE, 1, "RoundOver")):
+    def test_a_name_after_the_reveal_or_round_over_is_not_read(self):
+        for end in (line_after(self.SNAIL_LINE, -1, "Killers have been revealed - 101 0 0 "
+                                                    "// Round type is Fog"),
+                    line_after(self.SNAIL_LINE, -1, "RoundOver")):
             self.thread.reset_mock()
+            self.send.reset_mock()
             monitor = self._monitor()
-            monitor._process(self.SNAIL_LINE)
 
             monitor._process(end)
-            monitor._process(self.AFTER_HOLD)
-            with patch.object(LogMonitor.time, "time",
-                              return_value=monitor.st.early_read_hold_wall + 60):
-                monitor._tick_early_read()
+            monitor._process(self.SNAIL_LINE)
 
-            self.assertFalse(monitor.st.early_read_holding, end)
             self.assertIsNone(monitor.st.early_read_tid, end)
-            self.assertFalse(any("🔎" in m for m in monitor.logs), end)
+            self.assertFalse(any("🔎 テラー判明(看破)" in m for m in monitor.logs), end)
 
-    def test_the_tick_settles_it_without_new_lines(self):
-        monitor = self._monitor()
-        monitor._process(self.SNAIL_LINE)
-        start = monitor.st.early_read_hold_wall
-        wait = FogEarlyRead.HOLD_SEC + FogEarlyRead.HOLD_TICK_MARGIN_SEC
-
-        with patch.object(LogMonitor.time, "time", return_value=start + wait - 0.1):
-            monitor._tick_early_read()
-        self.assertEqual(self._skipped(), 0, "まだ待つ")
-
-        with patch.object(LogMonitor.time, "time", return_value=start + wait):
-            monitor._tick_early_read()
-        self.assertEqual(self._skipped(), 1)
-        self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
-
-    def test_the_tick_runs_in_the_watch_loop(self):
-        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
-        loop = src[src.index("    def _run(self):"):src.index("    def _mark_sabotage_murder")]
-        self.assertIn("self._tick_early_read()", loop)
+    def test_nothing_about_the_hold_is_left(self):
+        """保留の仕組み（定数・状態・tick）は残っていない"""
+        import State
+        for module in (LogMonitor, FogEarlyRead, State):
+            src = Path(module.__file__).read_text(encoding="utf-8")
+            for word in (r"(?<![A-Z_])HOLD_SEC", r"HOLD_TICK_MARGIN_SEC", r"early_read_hold",
+                         r"_tick_early_read", r"_settle_early_read"):
+                self.assertIsNone(re.search(word, src), (module.__name__, word))
+        self.assertFalse(hasattr(FogEarlyRead, "HOLD_SEC"))
+        self.assertFalse(hasattr(WindowState(), "early_read_holding"))
 
     # ── 同じラウンドで2種類 ─────────────────────────
     def test_two_different_ids_void_the_round(self):
-        """保留が明けて決めた後に別のIDが見えたら、以後このラウンドの看破は使わない"""
+        """決めた後に別のIDが見えたら、以後このラウンドの看破は使わない"""
         monitor = self._monitor(access="public")         # DB だけの窓で見る
         sun = FOG_EARLY_READ_ROUNDS[0][1][0]
         monitor._process(sun)                             # THE SUN → 6
-        monitor._process(line_after(sun, FogEarlyRead.HOLD_SEC + 1))
 
         monitor._process(line_after(sun, 10, self.SNAIL_LINE.split(" -  ", 1)[1]))   # 101
 
@@ -3248,7 +3282,7 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         monitor = self._monitor()
         for where, lines, reveal, public, _expected in FOG_EARLY_READ_ROUNDS:
             self._round(monitor, lines, reveal)
-            self.assertEqual(monitor.st.early_read_tid, public, f"{where}: 保留ありでも公開の前に決まる")
+            self.assertEqual(monitor.st.early_read_tid, public, f"{where}: 公開の前に決まる")
 
         data = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual({k: v.get("mismatch", 0) for k, v in data.items()},
@@ -3291,7 +3325,7 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         self.send.reset_mock()
         ok = self._monitor()
         self._round(ok, snail, None)
-        ok._process(line_after(snail[0], FogEarlyRead.HOLD_SEC + 1))   # 保留が明けても
+        ok._process(line_after(snail[0], 1, snail[0].split(" -  ", 1)[1]))   # もう一度見えても
         self.send.assert_not_called()                  # DB にも使わない
         self.assertIsNone(ok.st.early_read_tid, "判定にも使わない")
 

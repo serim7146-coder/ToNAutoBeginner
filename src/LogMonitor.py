@@ -548,7 +548,6 @@ class LogMonitor:
                     except Exception as e:
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
-                    self._tick_early_read()
                     try:
                         self._check_group_list_state()
                     except Exception as e:
@@ -921,14 +920,12 @@ class LogMonitor:
         at = LogParser.log_time(line)
         if at is not None:
             st.log_now = at         # 判定はすべてこのログの時刻で行う
-        if st.early_read_holding:
-            self._settle_early_read_by_line(line)
         event = LogParser.parse(line)
         if not event:
             return
 
         if event.kind == LogParser.EVENT_NETWORK_OBJECT:
-            self._on_network_object(event.player_name, LogParser.log_time(line))
+            self._on_network_object(event.player_name)
             return
 
         if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
@@ -956,10 +953,11 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_MASTER_SWITCHED:
             # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
             self.sequence.on_master_switched()
-            if st.early_read_holding:
-                # マスターの切り替えで全オブジェクトの同期が走ることがある
-                st.early_read_holding = False
-                if not st.early_read_void and self._may_show_fog_info():
+            if (st.fog_reading and st.early_read_tid is None
+                    and not st.early_read_void):
+                # マスターの切り替えで全オブジェクトの同期が走ることがある。
+                # 保留しないので、その最初の名前でその場で決めてしまわないように
+                if self._may_show_fog_info():
                     self._log("看破: マスターが切り替わりました → このラウンドの看破は使いません")
                 st.early_read_void = True
             return
@@ -1070,7 +1068,6 @@ class LogMonitor:
             st.early_read_hits             = {}
             st.early_read_tid              = None
             st.early_read_void             = False
-            st.early_read_holding          = False
             st.eight_pages_unknown_logged  = False
             st.fog                         = False
             st.begin_done                  = False
@@ -1716,12 +1713,12 @@ class LogMonitor:
         ConnectDB.send_ToNRoundStatistics(
             st.round_type, [tid], st.map_id, st.transformed_uid, quiet=True)
 
-    def _on_network_object(self, name: str, at: Optional[float] = None):
+    def _on_network_object(self, name: str):
         """看破: 霧の間に [NetworkProcessing] に出たオブジェクト名を照合する。
 
-        最初に当たった名前はすぐには使わず、FogEarlyRead.HOLD_SEC のあいだ保留する。
-        そのあいだに当たった ID が1種類だけなら使い、2種類以上なら void にする。
-        at はその行のログ時刻（無ければ tick で確定させる）
+        最初に当たった名前で、その場で看破する（保留しない。理由と残るリスクは
+        FogEarlyRead の冒頭）。その後に別のテラーの名前が見えたら void にし、
+        そのラウンドの看破はそれ以上使わない（決めた判定は取り消さない）
         """
         st = self.st
         if not st.fog_reading:
@@ -1739,39 +1736,10 @@ class LogMonitor:
                 self._log("看破: 別々のテラー名が見えました → このラウンドの看破は使いません")
             st.early_read_void = True
             return
-        if st.early_read_tid is not None or st.early_read_void or st.early_read_holding:
-            return
+        if st.early_read_tid is not None or st.early_read_void:
+            return          # もう決めた・void（二重に判定しない）
         if not self._fog_terror_unknown():
             return          # Enrage 系で先に決まった（二重に判定しない）
-        st.early_read_holding = True
-        st.early_read_hold_log_t = at
-        st.early_read_hold_wall = time.time()
-
-    def _settle_early_read_by_line(self, line: str):
-        """保留の開始から HOLD_SEC を過ぎた時刻の行が来たら、その行より先に確定させる"""
-        start = self.st.early_read_hold_log_t
-        at = LogParser.log_time(line)
-        if start is not None and at is not None and at - start > FogEarlyRead.HOLD_SEC:
-            self._settle_early_read()
-
-    def _tick_early_read(self):
-        """行が来ないまま時間が過ぎたときも、保留を確定させる（監視ループから呼ぶ）"""
-        st = self.st
-        wait = FogEarlyRead.HOLD_SEC + FogEarlyRead.HOLD_TICK_MARGIN_SEC
-        if st.early_read_holding and time.time() - st.early_read_hold_wall >= wait:
-            self._settle_early_read()
-
-    def _settle_early_read(self):
-        """保留を終える。そのあいだの ID が1種類だけ（void でない）なら、それで看破する。
-
-        保留を捨てる条件はここにまとめる: 2種類目の ID・マスター切り替え（void）、
-        公開・RoundOver（fog_reading が落ちる）、Enrage 系で先に判明（テラー不明でない）
-        """
-        st = self.st
-        st.early_read_holding = False
-        if st.early_read_void or not st.fog_reading or not self._fog_terror_unknown():
-            return
-        tid, name = next(iter(st.early_read_hits.values()))
         st.early_read_tid = tid
         self._identify_fog_terror(tid, "看破", name, early_read=True)
 
