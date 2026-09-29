@@ -145,14 +145,14 @@
     {"id": 134, "name": "Decayed Sponge", "terrors": ["Decayed Sponge"], "objects": ["Corrupted Spongebob"]},
     {"id": 135, "name": "Whiteface", "terrors": ["Whiteface"], "objects": ["WHITEFACE"]},
     {"id": 136, "name": "Sanic", "terrors": ["Sanic"], "objects": ["SANIC"]},
-    {"id": 137, "name": "Parhelion", "terrors": ["Parhelion"], "objects": []},
-    {"id": 138, "name": "Distorted Yan", "terrors": ["Distorted Yan"], "objects": []},
-    {"id": 139, "name": "Chomper", "terrors": ["Chomper"], "objects": []},
+    {"id": 137, "name": "Parhelion", "terrors": ["Parhelion"], "objects": ["Parhelion"]},
+    {"id": 138, "name": "Distorted Yan", "terrors": ["Distorted Yan"], "objects": ["DistortedYan"]},
+    {"id": 139, "name": "Chomper", "terrors": ["Chomper"], "objects": ["Chomper"]},
     {"id": 140, "name": "The Knight of Toren", "terrors": ["The Knight Of Toren"], "objects": ["Kuro GuidingStar"]},
-    {"id": 141, "name": "Tragedy", "terrors": ["Tragedy", "Deal"], "objects": []},
+    {"id": 141, "name": "Tragedy", "terrors": ["Tragedy", "Deal"], "objects": ["Tragedy"]},
     {"id": 142, "name": "Smile Walker", "terrors": ["Smile Walker"], "objects": ["SmileyWalker"]},
     {"id": 143, "name": "Mr. Mega", "terrors": ["Mr. Mega"], "objects": ["MR MEGA"]},
-    {"id": 144, "name": "SM64.Z64", "terrors": ["SM64.Z64"], "objects": []},
+    {"id": 144, "name": "SM64.Z64", "terrors": ["SM64.Z64"], "objects": ["sm64.z64"]},
     {"id": 145, "name": "Convict Squad", "terrors": ["Convict Etrigan", "Convict Little Witch", "Convict Squibbs", "Convict Nugget"], "objects": []},
     {"id": 146, "name": "Paradise Bird", "terrors": ["Paradise Bird"], "objects": ["Paradise Bird"]},
     {"id": 147, "name": "Angry Munci", "terrors": ["Angry Munci"], "objects": ["Munchi)"]},
@@ -168,7 +168,7 @@
     {"id": 157, "name": "Teuthida", "terrors": ["Teuthida"], "objects": ["Starved Squidward"]},
     {"id": 158, "name": "Eggman's Announcement", "terrors": ["Eggman's Announcement"], "objects": ["Eggman's Announcement"]},
     {"id": 159, "name": "S.T.G.M", "terrors": ["S.T.G.M", "S.T.G.M. Missile"], "objects": ["S.T.G.M", "STMGMissle"]},
-    {"id": 160, "name": "Army in Black", "terrors": ["Army in Black"], "objects": []},
+    {"id": 160, "name": "Army in Black", "terrors": ["Army in Black"], "objects": ["ArmyInBlack"]},
     {"id": 161, "name": "Bliss", "terrors": ["Bliss", "Umbra"], "objects": ["Bliss"]},
     {"id": 162, "name": "Roblander", "terrors": ["Roblander"], "objects": ["Roblander"]},
     {"id": 163, "name": "Fusion Pilot", "terrors": ["Fusion Pilot", "Meteor"], "objects": ["FusioinPiulot"]},
@@ -293,6 +293,7 @@
     {"id": 21, "name": "With Many Voices", "terrors": ["With Many Voices"], "objects": [], "list_id": 25},
     {"id": 48, "name": "Clockey", "terrors": ["Clockey"], "objects": [], "list_id": 132},
     {"id": 40, "name": "Tinky Winky", "terrors": ["Tinky Winky"], "objects": ["Tinky Winky"], "list_id": 89},
-    {"id": 23, "name": "Big Bird", "terrors": ["Big Bird"], "objects": ["Big Bird"], "list_id": null}
+    {"id": 23, "name": "Big Bird", "terrors": ["Big Bird"], "objects": ["Big Bird"], "list_id": null}, 
+    {"id": 10, "name": "MX", "terrors": ["MX"], "objects": ["MX"], "list_id": null}
   ]
 }
