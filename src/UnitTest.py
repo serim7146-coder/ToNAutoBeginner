@@ -11998,7 +11998,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
             enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
             enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
             if press_wait is not None:
-                enter(patch.object(config, "BEGIN_PRESS_WAIT_SEC", press_wait))
+                enter(patch.object(config, "BEGIN_RETRY_WAIT_SEC", press_wait))
             # time モジュールは ActionExecutor と WindowOperator で同じものなので、
             # patch は1つだけにする（2つ当てると後の方が side_effect を潰す）
             enter(patch.object(ActionExecutor.time, "sleep",
@@ -12079,7 +12079,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         def bump(_sec):
             st.round_seq += 1
 
-        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 1.0), \
+        with patch.object(config, "BEGIN_RETRY_WAIT_SEC", 1.0), \
              patch.object(ActionExecutor.time, "sleep", side_effect=bump):
             self.assertFalse(executor._wait_begin_accepted(st.round_seq))
 
@@ -12092,7 +12092,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         def start_round(_sec):
             st.in_round = True
 
-        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 1.0), \
+        with patch.object(config, "BEGIN_RETRY_WAIT_SEC", 1.0), \
              patch.object(ActionExecutor.time, "sleep", side_effect=start_round):
             self.assertFalse(executor._wait_begin_accepted(st.round_seq))
 
@@ -12192,7 +12192,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         executor, st = self._executor()
         started = time.time()
 
-        with patch.object(config, "BEGIN_PRESS_WAIT_SEC", 0.3):
+        with patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0.3):
             self.assertFalse(executor._wait_begin_accepted(st.round_seq))
 
         elapsed = time.time() - started
@@ -12205,7 +12205,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         値そのものは調整の余地があるので固定しない（短くしすぎると、押せて
         いるのに前面化へ落ちる元の不具合に戻る）
         """
-        self.assertGreaterEqual(config.BEGIN_PRESS_WAIT_SEC, 0.5)
+        self.assertGreaterEqual(config.BEGIN_RETRY_WAIT_SEC, 0.5)
 
     def test_an_already_accepted_begin_returns_true_at_once(self):
         executor, st = self._executor()

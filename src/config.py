@@ -26,15 +26,15 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 # いることがあり、SQLite が一瞬無いだけで何日も前のリストで判定してしまうため
 HOST_STATE_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "ToN ListTool", "host_state.sqlite3")
+# 主催者自身の続行リスト。host_save の participants には入らないため別に読む
+USER_SAVE_PATH = os.path.join(
+    os.environ.get("APPDATA", ""), "ToN ListTool", "user_save.json")
 HOST_SAVE_POLL_SEC = 3.0
 # 外部ツール起動ボタンの「起動中」表示を見直す間隔。
 # 続行リストの供給元判定とは別のループで回す（片方の失敗を巻き込まないため）
 TOOL_LAUNCH_POLL_SEC = 3.0
 # 外部ツールのパスは手打ちもできるので、1文字ごとに書かずまとめて保存する
 SETTINGS_SAVE_DEBOUNCE_MS = 500
-# 主催者自身の続行リスト。host_save の participants には入らないため別に読む
-USER_SAVE_PATH = os.path.join(
-    os.environ.get("APPDATA", ""), "ToN ListTool", "user_save.json")
 # ToN ListTool のプロセス名。動いていなければ host_save は古いものとして捨てる
 # （ツールを閉じてもファイルはディスクに残るため）
 TON_LISTTOOL_PROCESS = "ton_listtool.exe"
@@ -255,14 +255,15 @@ BEGIN_CURSOR_GAP_SEC   = 0.3        # 2回以上にしたときの、ひと差�
 # 置いた一瞬に利用者がマウスを動かして窓に乗っ取られる機会も減る
 BEGIN_CURSOR_DIPS      = 1
 BEGIN_CURSOR_LIMIT_SEC = 4.0        # ひと差しを続ける上限（実測13〜14秒に収まる）
-# 差し込んだあと、受理（Verified）が来るのを待つ上限。往復1回は0.05秒で終わるので、
-# 待たずに判定すると押せていても必ず「押せなかった」ことになる。
-# 測るのは「こちらが押してから Verified が来るまで」で、Verified Round End 起点では
-# ない。実測 2026-09-27 22:35 は 05.139 に押して 05.297 に Connecting ＝ 0.2 秒ほど。
-# 以前「Verified Round End → Verified が3〜4秒」としていたのは誤りで、フォールバックが
-# 毎ラウンド起きていた時期のログを測り、その遅れを Verified の遅れと読んでいた
-BEGIN_PRESS_WAIT_SEC   = 0.5
-BEGIN_RETRY_WAIT_SEC  = 5.0   # 押してから受理を待つ時間
+# 押してから受理（Verified）を待つ上限。差し込み後の待ち（_wait_begin_accepted）と、
+# 前面化＋クリック後の押し直し前の待ち（_begin_accepted）で共用する（依頼者の判断）。
+# 押せた回は実測 0.2 秒ほどで受理が来るので、待たずに抜ける（2026-09-27 22:35 は
+# 05.139 に押して 05.297 に Connecting）。押せなかった回はこの秒数だけ待ってから次へ
+# 進む（差し込み→フォールバック→押し直しで最大2回ぶん）。測るのは「こちらが押して
+# から」で、Verified Round End 起点ではない。以前「Verified Round End → Verified が
+# 3〜4秒」としていたのは誤りで、フォールバックが毎ラウンド起きていた時期のログを測り、
+# その遅れを Verified の遅れと読んでいた
+BEGIN_RETRY_WAIT_SEC  = 5.0
 # 主催リストが取れない状態がこれだけ続いたら tnl へ切り替える。プロセスの
 # 見え方・host_save の差し替え・参加者の入れ替えは一瞬だけ起きうる
 HOST_LIST_LOSS_GRACE_SEC = 10.0

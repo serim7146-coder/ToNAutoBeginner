@@ -431,12 +431,12 @@ class ActionExecutor:
         return self._wait_begin_accepted(round_seq)
 
     def _wait_begin_accepted(self, round_seq: int) -> bool:
-        """受理（Verified）を BEGIN_PRESS_WAIT_SEC まで待つ。来なければ False。
+        """受理（Verified）を BEGIN_RETRY_WAIT_SEC まで待つ。来なければ False。
 
         来なければ呼び出し側が従来方式（前面化＋クリック）へ落とす
         """
         st = self._st
-        deadline = time.time() + config.BEGIN_PRESS_WAIT_SEC
+        deadline = time.time() + config.BEGIN_RETRY_WAIT_SEC
         while not st.begin_done:
             if (time.time() >= deadline or not self._is_running()
                     or st.in_round or st.round_seq != round_seq):
