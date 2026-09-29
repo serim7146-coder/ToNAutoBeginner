@@ -38,11 +38,15 @@ class ActionExecutor:
         st: WindowState,
         is_running: Callable[[], bool],
         log: Callable[[str], None],
+        auto_begin_active: Callable[[], bool] = None,
     ):
         self._cfg = cfg
         self._st = st
         self._is_running = is_running
         self._log = log
+        # ツールが Begin を押している窓か。判定は LogMonitor が持つ（書き写さない）。
+        # 渡されなければ「機能していない」＝速度検知の音声は鳴らす側
+        self._auto_begin_active = auto_begin_active or (lambda: False)
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
@@ -840,7 +844,21 @@ class ActionExecutor:
         self._freeze_for_speed_kind(kind)
         if kind == "normal" or self._hands_free():
             return
+        if self._auto_begin_active() and not self._freeze_enabled_for(kind):
+            # ツールが回している窓で、フリーズしない種別なら知らせる必要が無い
+            # （アイテムを取りに行く時間を作らない＝人が動く場面ではない）。
+            # 人が遊んでいる窓では、フリーズ設定に関わらず鳴らす
+            return
         PlaySound.play_sound(self._speed_voice(kind))
+
+    @staticmethod
+    def _freeze_enabled_for(kind: str) -> bool:
+        """その種別でフリーズする設定か。音声とフリーズで同じものを見るための1か所"""
+        if kind == "8pages":
+            return SharedState.get_freeze_on_8pages()
+        if kind == "punish":
+            return SharedState.get_freeze_on_punish()
+        return False
 
     def _freeze_for_speed_kind(self, kind: str):
         """設定がONの種別なら全窓を止め、アイテムを取りに行く時間を作る。
@@ -849,12 +867,12 @@ class ActionExecutor:
         どちらで張ったかを覚えておく。平常では止めない。
         """
         st = self._st
-        if kind == "8pages" and SharedState.get_freeze_on_8pages():
-            message = "⏸ 8 Pages 検知 → 全窓フリーズ（アイテム取得で解除）"
-        elif kind == "punish" and SharedState.get_freeze_on_punish():
-            message = "⏸ Punished 検知 → 全窓フリーズ（ラウンド開始で解除）"
-        else:
+        if not self._freeze_enabled_for(kind):
             return
+        if kind == "8pages":
+            message = "⏸ 8 Pages 検知 → 全窓フリーズ（アイテム取得で解除）"
+        else:
+            message = "⏸ Punished 検知 → 全窓フリーズ（ラウンド開始で解除）"
         st.speed_freeze_kind = kind
         # 前面化するのは最初に張った窓だけ。後から張った窓が奪うと、
         # プレイヤーが操作している最中の窓を横取りしてしまう。

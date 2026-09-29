@@ -77,7 +77,17 @@ class LogMonitor:
             st=self.st,
             is_running=lambda: self._running,
             log=self._log,
+            auto_begin_active=self._auto_begin_active,
         )
+
+    def _auto_begin_active(self) -> bool:
+        """ツールが Begin を押している窓か（自動 Begin が ON で private）。
+
+        RoundOver のアイテムロスト通知の切り分けと、速度検知の音声の出し分けが
+        同じ判定を使う。1か所に置き、ActionExecutor には関数として渡す
+        """
+        return bool(self.cfg.auto_begin
+                    and self.st.instance_type == config.INSTANCE_PRIVATE)
 
     def start(self):
         self._running = True
@@ -1172,10 +1182,7 @@ class LogMonitor:
                                    st.round_seq)
             if self._waiting_for_terror_replacement():
                 self._send_round_statistics_once()
-            announce_on_round_over = (
-                not self.cfg.auto_begin
-                or st.instance_type != config.INSTANCE_PRIVATE
-            )
+            announce_on_round_over = not self._auto_begin_active()
             if announce_on_round_over and not self._hands_free():
                 round_lost_item = self._round_lost_item()
                 if self._round_item_warning():

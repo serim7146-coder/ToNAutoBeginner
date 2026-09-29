@@ -9563,6 +9563,163 @@ class TestRoundFreezeFocus(unittest.TestCase):
                             for m in logs), logs)   # 窓番号の接頭辞が付く
 
 
+class TestSpeedVoiceFollowsAutoBegin(unittest.TestCase):
+    """8 Pages / Punished の音声は、自動 Begin が機能しているかで出し分ける。
+
+    ツールが回している窓（自動 Begin が ON で private）では、フリーズしない種別は
+    知らせない。人が遊んでいる窓では、フリーズ設定に関わらず鳴らす。
+    """
+
+    def setUp(self):
+        self._saved = (SharedState.get_freeze_on_8pages(),
+                       SharedState.get_freeze_on_punish())
+        SharedState.set_hands_free(False)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        SharedState.set_freeze_on_8pages(self._saved[0])
+        SharedState.set_freeze_on_punish(self._saved[1])
+        SharedState.set_hands_free(False)
+
+    def _announce(self, kind, active, freeze_8pages=False, freeze_punish=False):
+        """鳴ったかを返す。フリーズそのものは別に見るので止めておく"""
+        SharedState.set_freeze_on_8pages(freeze_8pages)
+        SharedState.set_freeze_on_punish(freeze_punish)
+        cfg = WindowConfig(voice_8pages="8pages.mp3", voice_punish="punish.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None,
+                                           auto_begin_active=lambda: active)
+        with patch.object(ex, "_freeze_for_speed_kind"), \
+             patch.object(PlaySound, "play_sound") as play:
+            ex._announce_speed_kind(kind, 3.0)
+        return [c.args[0] for c in play.call_args_list]
+
+    # ── 1〜4. 4マス ─────────────────────────
+    def test_a_played_window_with_the_freeze_on_plays(self):
+        self.assertEqual(self._announce("8pages", active=False, freeze_8pages=True),
+                         ["8pages.mp3"])
+
+    def test_a_played_window_with_the_freeze_off_still_plays(self):
+        """人が遊んでいる窓は、フリーズ設定に関わらず鳴らす"""
+        self.assertEqual(self._announce("8pages", active=False, freeze_8pages=False),
+                         ["8pages.mp3"])
+
+    def test_a_tool_run_window_with_the_freeze_on_plays(self):
+        self.assertEqual(self._announce("8pages", active=True, freeze_8pages=True),
+                         ["8pages.mp3"])
+
+    def test_a_tool_run_window_with_the_freeze_off_is_silent(self):
+        """変わったのはこの1マスだけ"""
+        self.assertEqual(self._announce("8pages", active=True, freeze_8pages=False), [])
+
+    def test_the_same_four_cases_for_punished(self):
+        for active, freeze, expected in ((False, True, ["punish.mp3"]),
+                                         (False, False, ["punish.mp3"]),
+                                         (True, True, ["punish.mp3"]),
+                                         (True, False, [])):
+            self.assertEqual(self._announce("punish", active=active,
+                                            freeze_punish=freeze),
+                             expected, (active, freeze))
+
+    # ── 5. 自分の種別の設定を見る ─────────────────────
+    def test_eight_pages_does_not_look_at_the_punish_setting(self):
+        """種別の取り違え。8 Pages が OFF・Punished が ON なら 8 Pages は鳴らない"""
+        self.assertEqual(self._announce("8pages", active=True,
+                                        freeze_8pages=False, freeze_punish=True), [])
+        self.assertEqual(self._announce("8pages", active=True,
+                                        freeze_8pages=True, freeze_punish=False),
+                         ["8pages.mp3"])
+
+    def test_punished_does_not_look_at_the_eight_pages_setting(self):
+        self.assertEqual(self._announce("punish", active=True,
+                                        freeze_8pages=True, freeze_punish=False), [])
+        self.assertEqual(self._announce("punish", active=True,
+                                        freeze_8pages=False, freeze_punish=True),
+                         ["punish.mp3"])
+
+    def test_the_voice_and_the_freeze_read_the_same_setting(self):
+        """音声とフリーズが別々に設定を読むと、いつか食い違う"""
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        for name in ("_announce_speed_kind", "_freeze_for_speed_kind"):
+            body = src[src.index(f"    def {name}("):]
+            body = body[:body.index("\n    def ", 10)]
+            self.assertIn("self._freeze_enabled_for(kind)", body, name)
+            self.assertNotIn("get_freeze_on_", body, name)
+
+    # ── 6. 両方の条件が要る ───────────────────────
+    def _monitor(self, auto_begin, instance_type):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        return monitor
+
+    def test_auto_begin_is_active_only_when_on_and_private(self):
+        cases = ((True, config.INSTANCE_PRIVATE, True),
+                 (False, config.INSTANCE_PRIVATE, False),
+                 (True, config.INSTANCE_PUBLIC, False),
+                 (True, config.INSTANCE_YAKIIMO, False),
+                 (True, config.INSTANCE_HOSHIIMO, False))
+        for auto_begin, itype, expected in cases:
+            self.assertEqual(self._monitor(auto_begin, itype)._auto_begin_active(),
+                             expected, (auto_begin, itype))
+
+    def test_the_executor_asks_the_monitor(self):
+        """判定は LogMonitor の1か所。ActionExecutor には関数で渡す"""
+        monitor = self._monitor(True, config.INSTANCE_PRIVATE)
+
+        self.assertTrue(monitor._action._auto_begin_active())
+        monitor.st.instance_type = config.INSTANCE_PUBLIC
+        self.assertFalse(monitor._action._auto_begin_active(), "その時々の値を見る")
+
+    def test_without_a_callable_it_counts_as_not_active(self):
+        """渡されなければ「機能していない」＝鳴らす側"""
+        SharedState.set_freeze_on_8pages(False)
+        cfg = WindowConfig(voice_8pages="8pages.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+        with patch.object(ex, "_freeze_for_speed_kind"), \
+             patch.object(PlaySound, "play_sound") as play:
+            ex._announce_speed_kind("8pages", 3.0)
+
+        play.assert_called_once_with("8pages.mp3")
+
+    def test_the_round_over_split_uses_the_same_rule(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("announce_on_round_over = not self._auto_begin_active()", src)
+
+    # ── 7. 放置モードと平常 ───────────────────────
+    def test_hands_free_plays_nothing(self):
+        SharedState.set_hands_free(True)
+        for active in (False, True):
+            for kind in ("8pages", "punish"):
+                self.assertEqual(self._announce(kind, active=active,
+                                                freeze_8pages=True, freeze_punish=True),
+                                 [], (active, kind))
+
+    def test_normal_plays_nothing(self):
+        for active in (False, True):
+            self.assertEqual(self._announce("normal", active=active,
+                                            freeze_8pages=True, freeze_punish=True),
+                             [], active)
+
+    def test_silence_adds_no_log(self):
+        """鳴らさなかったことはログに足さない（依頼者はログが増えるのを嫌う）"""
+        SharedState.set_freeze_on_8pages(False)
+        logs = []
+        cfg = WindowConfig(voice_8pages="8pages.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append,
+                                           auto_begin_active=lambda: True)
+
+        with patch.object(ex, "_freeze_for_speed_kind"), \
+             patch.object(PlaySound, "play_sound"):
+            ex._announce_speed_kind("8pages", 3.0)
+
+        self.assertEqual(len(logs), 1, "速度の1行だけ")
+
+
 class TestEightPagesReleaseDelay(unittest.TestCase):
     """8 Pages でスキャナーを取ったあとの解除に、猶予を入れる。
 
