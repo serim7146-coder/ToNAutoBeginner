@@ -11066,8 +11066,8 @@ class TestAttendToItemLoss(unittest.TestCase):
 
 class TestItemLossAtRoundOver(unittest.TestCase):
     """アイテム取得→Begin モード（B）は RoundOver で出す。Verified Round End では
-    もう前面化しない（そこにあった素の focus_window は、ほかの窓の続行中でも
-    前面を奪っていた）"""
+    前面化・フリーズ・音声を一切しない（そこにあった素の focus_window は、ほかの窓の
+    続行中でも前面を奪っていた）。モードは自動 Begin が機能している窓でだけ効く"""
 
     def setUp(self):
         SharedState.set_hands_free(False)
@@ -11169,8 +11169,9 @@ class TestItemLossAtRoundOver(unittest.TestCase):
 
         self.assertEqual(seen, [])
 
-    def test_b_is_caught_at_verified_round_end_if_round_over_missed_it(self):
-        """RoundOver の時点で判定できなかったときだけ、同じ処理で拾う（素の前面化はしない）"""
+    def test_b_is_not_caught_at_verified_round_end(self):
+        """RoundOver の時点で判定できなかったときも、Verified Round End では拾わない
+        （依頼者: Verified Round End の前面化はいらない）。フリーズも音声も出さない"""
         SharedState.set_item_begin_mode(True)
         monitor = self._monitor()
         self._feed(monitor, "RoundOver")               # まだ失っていない
@@ -11178,9 +11179,57 @@ class TestItemLossAtRoundOver(unittest.TestCase):
 
         seen = self._feed(monitor, "Verified Round End")
 
-        self.assertEqual(seen, [("focus", "Verified Round End"),
-                                ("sound", "Verified Round End")])
-        self.assertTrue(monitor.st.equip_freeze_held)
+        self.assertEqual(seen, [])
+        self.assertFalse(monitor.st.equip_freeze_held)
+
+    def test_no_window_focuses_at_verified_round_end(self):
+        """アイテム取得→Begin モードで、自動 Begin が機能している窓・していない窓の両方"""
+        SharedState.set_item_begin_mode(True)
+        for auto_begin, itype in ((True, None), (True, config.INSTANCE_PUBLIC),
+                                  (False, None)):
+            SharedState.equip_freeze_reset()
+            monitor = self._monitor(auto_begin=auto_begin, itype=itype)
+            self._lose(monitor)
+            started = []
+            with patch.object(WindowOperator, "focus_window") as focus,                  patch.object(monitor, "_start_daemon",
+                              side_effect=lambda target, *a: started.append(target)):
+                monitor.st.in_round = False
+                self._feed(monitor, "Verified Round End")
+                focus.assert_not_called()
+            # _feed が focus_window を自前の偽物に差し替えるので、名前で見る
+            names = [getattr(t, "__name__", getattr(t, "_mock_name", "")) for t in started]
+            self.assertNotIn("focus_window", names, "素の前面化を裏で撃たない")
+            self.assertEqual(started.count(monitor._action._attend_to_item_loss), 0)
+            self.assertFalse(monitor.st.equip_freeze_held, (auto_begin, itype))
+
+    def _run_without_auto_begin(self, mode, auto_begin, itype):
+        SharedState.set_item_begin_mode(mode)
+        SharedState.equip_freeze_reset()
+        monitor = self._monitor(auto_begin=auto_begin, itype=itype)
+        logs = []
+        monitor.logger = logs.append
+        self._lose(monitor)
+        seen = self._feed(monitor, "RoundOver", "Verified Round End")
+        st = monitor.st
+        return (seen, logs, st.waiting_for_equip, st.equip_freeze_held,
+                SharedState.get_equip_freeze_count(), SharedState.EQUIP_WAIT_EVENT.is_set())
+
+    def test_windows_without_auto_begin_ignore_the_mode(self):
+        """自動 Begin が機能していない窓は、モードが ON でも OFF と同じ動き
+        （フリーズ・前面化・音声・ログのすべて）"""
+        for auto_begin, itype in ((False, None), (True, config.INSTANCE_PUBLIC),
+                                  (False, config.INSTANCE_PUBLIC)):
+            off = self._run_without_auto_begin(False, auto_begin, itype)
+            on = self._run_without_auto_begin(True, auto_begin, itype)
+            self.assertEqual(on, off, (auto_begin, itype))
+
+    def test_the_mode_is_decided_in_one_place(self):
+        """LogMonitor はモードを _item_begin_mode_active() だけで見る"""
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+        self.assertEqual(src.count("SharedState.get_item_begin_mode()"), 1)
+        body = src[src.index("    def _item_begin_mode_active(self)"):]
+        self.assertIn("SharedState.get_item_begin_mode() and self._auto_begin_active()",
+                      body[:body.index("\n    def ", 10)])
 
     # ── A: 据え置き ─────────────────────────────
     def test_a_still_speaks_at_round_over(self):
@@ -11199,6 +11248,190 @@ class TestItemLossAtRoundOver(unittest.TestCase):
         seen = self._feed(monitor, "RoundOver", "Verified Round End")
 
         self.assertEqual(seen, [], "C は Begin を押した後に出す")
+
+
+class TestEquipQueue(unittest.TestCase):
+    """アイテムロストの前面化＋音声は、装備待ちを張った順に1窓ずつ。
+
+    2窓が同じ瞬間に RoundOver を受けて両方が張ると、数で見ていた頃は両方が
+    「ほかの窓の装備待ちがある」と見て、どちらも出さなかった。Begin を押す判定は
+    順番待ちにしない（装備待ちの解除条件のせいでデッドロックする）
+    """
+
+    def setUp(self):
+        SharedState.set_hands_free(False)
+        SharedState.set_item_begin_mode(False)
+        SharedState.equip_freeze_reset()
+        for name in TestNothingFrozen.EVENTS:
+            getattr(SharedState, name).set()
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.set_item_begin_mode, False)
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.addCleanup(lambda: [getattr(SharedState, n).set()
+                                 for n in TestNothingFrozen.EVENTS])
+        self.shown = []          # (前面化 or 音声, 窓)
+
+    def _executor(self, hwnd):
+        cfg = WindowConfig(hwnd=hwnd, osc_port=9000, voice_item_lost=f"lost{hwnd}.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE,
+                         round_end_seen=True, item_id=0, round_seq=1)
+        st.waiting_for_equip = True
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+
+    def _patches(self):
+        return (patch.object(WindowOperator, "focus_window",
+                             side_effect=lambda h: self.shown.append(("focus", h)) or True),
+                patch.object(PlaySound, "play_sound",
+                             side_effect=lambda p: self.shown.append(
+                                 ("sound", int(p[4:-4])))))
+
+    def _attend(self, ex):
+        """_attend_to_item_loss を回す。見張りは立てずに、あとで回せるよう返す"""
+        focus, sound = self._patches()
+        with focus, sound, patch.object(ActionExecutor.threading, "Thread") as thread:
+            ex._attend_to_item_loss()
+        if not thread.called:
+            return None
+        kwargs = thread.call_args.kwargs
+        return lambda: kwargs["target"](*kwargs["args"])
+
+    def _watch(self, watcher, on_sleep):
+        """見張りを回す。待つたびに on_sleep() を呼ぶ（前の窓が装備を終える、など）。
+        いつまでも出さない不具合で止まらないよう、20回待ったら落とす"""
+        waits = []
+
+        def sleep(_s):
+            waits.append(1)
+            if len(waits) > 20:
+                raise AssertionError("見張りが出さないまま待ち続けている")
+            on_sleep()
+
+        focus, sound = self._patches()
+        with focus, sound, patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            watcher()
+
+    # ── 1. 同じ瞬間に2窓 → ちょうど1窓だけ ──────────────
+    def test_two_windows_at_the_same_moment_show_exactly_one(self):
+        x, xst = self._executor(0x10)
+        y, yst = self._executor(0x20)
+        SharedState.equip_freeze_start(xst)    # 両方が張ってから判定する（同じ瞬間）
+        SharedState.equip_freeze_start(yst)
+
+        watch_x = self._attend(x)
+        watch_y = self._attend(y)
+
+        self.assertEqual(self.shown, [("focus", 0x10), ("sound", 0x10)])
+        self.assertIsNone(watch_x, "先頭はその場で出す")
+        self.assertIsNotNone(watch_y, "2番目は見張りに回る")
+
+    def test_the_order_does_not_depend_on_who_checks_first(self):
+        """列は張った順。先に判定した窓が勝つのではない"""
+        x, xst = self._executor(0x10)
+        y, yst = self._executor(0x20)
+        SharedState.equip_freeze_start(xst)
+        SharedState.equip_freeze_start(yst)
+
+        self._attend(y)
+        self._attend(x)
+
+        self.assertEqual(self.shown, [("focus", 0x10), ("sound", 0x10)])
+
+    # ── 2. 先頭が装備を終えたら2番目 ──────────────────
+    def test_the_second_window_shows_when_the_first_is_done(self):
+        x, xst = self._executor(0x10)
+        y, yst = self._executor(0x20)
+        self._attend(x)
+        watch_y = self._attend(y)
+        self.shown.clear()
+
+        def x_equips():
+            self.assertEqual(self.shown, [], "前の窓が装備するまでは出さない")
+            xst.item_id = 3
+            xst.waiting_for_equip = False
+            SharedState.equip_freeze_end(xst)
+
+        self._watch(watch_y, x_equips)
+
+        self.assertEqual(self.shown, [("focus", 0x20), ("sound", 0x20)])
+
+    # ── 3. 3窓でも1窓ずつ ────────────────────────
+    def test_three_windows_show_one_at_a_time_in_order(self):
+        windows = [self._executor(h) for h in (0x10, 0x20, 0x30)]
+        watchers = [self._attend(ex) for ex, _st in windows]
+        self.assertEqual(self.shown, [("focus", 0x10), ("sound", 0x10)])
+        self.assertIsNone(watchers[0])
+
+        for done, (nxt, later) in ((0, (1, 2)), (1, (2, None))):
+            self.shown.clear()
+            _ex, st = windows[done]
+
+            def equips(st=st):
+                st.item_id = 3
+                SharedState.equip_freeze_end(st)
+
+            self._watch(watchers[nxt], equips)
+            hwnd = windows[nxt][0]._cfg.hwnd
+            self.assertEqual(self.shown, [("focus", hwnd), ("sound", hwnd)])
+            if later is not None:
+                self.assertFalse(SharedState.is_first_in_equip_queue(windows[later][1]))
+
+    # ── 4. 列への追加は冪等 ───────────────────────
+    def test_joining_the_queue_twice_counts_once(self):
+        _x, xst = self._executor(0x10)
+        _y, yst = self._executor(0x20)
+        SharedState.equip_freeze_start(xst)
+        SharedState.equip_freeze_start(xst)
+        SharedState.equip_freeze_start(yst)
+        SharedState.equip_freeze_start(xst)
+
+        self.assertEqual([w is xst for w in SharedState._EQUIP_QUEUE], [True, False],
+                         "列に2回入らない")
+        SharedState.equip_freeze_end(xst)
+
+        self.assertTrue(SharedState.is_first_in_equip_queue(yst), "x は1回で列から外れる")
+        self.assertFalse(SharedState.is_first_in_equip_queue(xst))
+        SharedState.equip_freeze_end(yst)
+        self.assertFalse(SharedState.is_first_in_equip_queue(yst))
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set())
+
+    # ── 5. 停止で列を空にする ──────────────────────
+    def test_a_reset_empties_the_queue(self):
+        _x, xst = self._executor(0x10)
+        SharedState.equip_freeze_start(xst)
+
+        SharedState.equip_freeze_reset()
+
+        self.assertFalse(SharedState.is_first_in_equip_queue(xst))
+        _y, yst = self._executor(0x20)
+        SharedState.equip_freeze_start(yst)
+        self.assertTrue(SharedState.is_first_in_equip_queue(yst), "前の窓が列に残っていない")
+
+    # ── 6. Begin は順番待ちにしない ──────────────────
+    def test_begin_is_not_queued(self):
+        x, xst = self._executor(0x10)
+        y, yst = self._executor(0x20)
+        SharedState.equip_freeze_start(xst)
+        SharedState.equip_freeze_start(yst)
+
+        self.assertFalse(SharedState.is_first_in_equip_queue(yst))
+        self.assertEqual(y._freezes_ok(), (True, True, True, True),
+                         "2番目の窓も Begin は押しに行く")
+        self.assertEqual(x._freezes_ok(), (True, True, True, True))
+
+    # ── 7. 先頭でも、ほかの窓の続行フリーズは待つ ───────────
+    def test_the_head_still_waits_for_another_windows_continue_freeze(self):
+        other = WindowState(instance_type=config.INSTANCE_PRIVATE)
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+        x, xst = self._executor(0x10)
+
+        watch_x = self._attend(x)
+
+        self.assertTrue(SharedState.is_first_in_equip_queue(xst))
+        self.assertEqual(self.shown, [])
+        self.assertIsNotNone(watch_x)
+        self._watch(watch_x, lambda: SharedState.continue_round_end(other))
+        self.assertEqual(self.shown, [("focus", 0x10), ("sound", 0x10)])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

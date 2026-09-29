@@ -149,6 +149,11 @@ EQUIP_WAIT_EVENT = threading.Event()
 EQUIP_WAIT_EVENT.set()  # 初期値は通常動作可能
 _EQUIP_FREEZE_COUNT = 0
 _EQUIP_FREEZE_LOCK = threading.Lock()
+# 装備待ちを張った順。アイテムロストの前面化＋音声は先頭の窓だけが出す
+# （利用者が一度に操作できるのは1窓なので、1窓ずつ案内する）。
+# 足す・外す・読むは _EQUIP_FREEZE_LOCK の中で行う。同じ瞬間に2窓が張っても
+# 鍵の順に並ぶので、順番は必ず決まる
+_EQUIP_QUEUE: list = []
 
 def equip_freeze_start(st):
     """窓stを装備待ちフリーズ保持者として登録（登録済みなら何もしない）"""
@@ -158,6 +163,7 @@ def equip_freeze_start(st):
             return
         st.equip_freeze_held = True
         _EQUIP_FREEZE_COUNT += 1
+        _EQUIP_QUEUE.append(st)
         EQUIP_WAIT_EVENT.clear()
 
 def equip_freeze_end(st):
@@ -168,6 +174,9 @@ def equip_freeze_end(st):
             return
         st.equip_freeze_held = False
         _EQUIP_FREEZE_COUNT = max(0, _EQUIP_FREEZE_COUNT - 1)
+        # 同一性で外す。WindowState は dataclass なので == は中身の比較
+        # （いまは直前に落とした equip_freeze_held で区別がつくが、それに頼らない）
+        _EQUIP_QUEUE[:] = [w for w in _EQUIP_QUEUE if w is not st]
         if _EQUIP_FREEZE_COUNT == 0:
             EQUIP_WAIT_EVENT.set()
 
@@ -176,7 +185,13 @@ def equip_freeze_reset():
     global _EQUIP_FREEZE_COUNT
     with _EQUIP_FREEZE_LOCK:
         _EQUIP_FREEZE_COUNT = 0
+        _EQUIP_QUEUE.clear()
         EQUIP_WAIT_EVENT.set()
+
+def is_first_in_equip_queue(st) -> bool:
+    """窓stが装備待ちの列の先頭か（張っていなければ False）"""
+    with _EQUIP_FREEZE_LOCK:
+        return bool(_EQUIP_QUEUE) and _EQUIP_QUEUE[0] is st
 
 def get_equip_freeze_count() -> int:
     with _EQUIP_FREEZE_LOCK:

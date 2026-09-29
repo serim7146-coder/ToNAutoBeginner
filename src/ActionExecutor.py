@@ -143,6 +143,7 @@ class ActionExecutor:
         装備待ちフリーズは**待たずにすぐ張る**。前面化と音声だけが、ほかの窓の
         フリーズが解けるのを待つ。3つとも一緒に待つと、続行ラウンドのフリーズが
         解けてからこの窓が張るまでに隙間ができ、ほかの窓がそこで Begin へ走る。
+        装備待ちどうしは張った順に1窓ずつ出す（_nothing_frozen_but_mine()）。
 
         前面化と音声は必ず一緒に出す（別々の場所で出すと片方だけ止まる場面が
         生まれる）。音声はここからしか鳴らさない。
@@ -939,10 +940,12 @@ class ActionExecutor:
             self._focus_for_speed_freeze()
 
     def _nothing_frozen_but_mine(self) -> bool:
-        """自分が張った装備待ちを除いて、どのフリーズも張られていないか。
+        """アイテムロストの前面化＋音声を出してよいか（Begin の判定には使わない）。
 
-        自分でフリーズを張ってから押しに行っているので、そのまま
-        nothing_frozen() を見ると必ず False になる
+        続行・速度検知・突入のフリーズは、ほかの窓が張っているあいだ待つ。
+        装備待ちは張った順に1窓ずつ: 自分が列の先頭なら出してよい。数で見ると、
+        2窓が同じ瞬間に張ったとき両方が「ほかにもいる」と見て、どちらも出さなかった。
+        自分でフリーズを張ってから見ているので、nothing_frozen() は使えない
         """
         if not (SharedState.CONTINUE_ROUND_EVENT.is_set()
                 and SharedState.SPEED_FREEZE_EVENT.is_set()
@@ -950,9 +953,7 @@ class ActionExecutor:
             return False
         if SharedState.EQUIP_WAIT_EVENT.is_set():
             return True
-        # 装備待ちが張られている。自分の1件だけなら譲る相手が居ない
-        return (self._st.waiting_for_equip
-                and SharedState.get_equip_freeze_count() == 1)
+        return SharedState.is_first_in_equip_queue(self._st)
 
     def _focus_for_speed_freeze(self):
         """どの窓を操作すればよいか分かるように前面化する。
