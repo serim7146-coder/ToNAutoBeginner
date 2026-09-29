@@ -31,6 +31,11 @@ def classify_speed(value: float) -> str:
 #  自爆・Begin自動操作・AFK防止ループを担当する。
 #  LogMonitor からロジック（判定）と操作（アクション）を分離するために存在する。
 # ═══════════════════════════════════════════════
+# アイテムロストの窓が、ほかの窓のフリーズが解けるのを見張る間隔。解けた瞬間に
+# 前面化＋音声を出すので、短い方が「続行が終わった直後」に近くなる
+ITEM_LOSS_WATCH_SEC = 0.2
+
+
 class ActionExecutor:
     def __init__(
         self,
@@ -47,6 +52,8 @@ class ActionExecutor:
         # ツールが Begin を押している窓か。判定は LogMonitor が持つ（書き写さない）。
         # 渡されなければ「機能していない」＝速度検知の音声は鳴らす側
         self._auto_begin_active = auto_begin_active or (lambda: False)
+        # アイテムロストの前面化＋音声を見張っているラウンド（二重に立てない）
+        self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
@@ -130,18 +137,53 @@ class ActionExecutor:
         self._st.item_lost_announced = True
         PlaySound.play_sound(self._cfg.voice_item_lost)
 
-    def announce_item_lost_if_needed(self):
-        """アイテムを失っていればロストを伝える（Beginクリックの直前で呼ぶ）。
+    def _attend_to_item_loss(self):
+        """アイテムロストの窓で、フリーズ・前面化・音声をまとめて出す。
 
-        ラウンド終了時ではなくクリックの瞬間に鳴らす。終了直後は移動や
-        他窓のフリーズ解除待ちが残っていて、鳴らしても手を打てないため。
-        判定条件は LogMonitor._round_item_warning() と揃えてある。
+        装備待ちフリーズは**待たずにすぐ張る**。前面化と音声だけが、ほかの窓の
+        フリーズが解けるのを待つ。3つとも一緒に待つと、続行ラウンドのフリーズが
+        解けてからこの窓が張るまでに隙間ができ、ほかの窓がそこで Begin へ走る。
+
+        前面化と音声は必ず一緒に出す（別々の場所で出すと片方だけ止まる場面が
+        生まれる）。音声はここからしか鳴らさない。
+        ほかの窓がフリーズ中なら別スレッドで見張り、解けた瞬間に出す。装備できた・
+        ラウンドが始まった・止めた、で見張りをやめる。待ち始めたことはログに
+        出さない（ログを増やさない）
         """
         st = self._st
-        if (st.waiting_for_equip
-                or (st.item_lost_this_round and not st.item_id)
-                or st.randomizer_item_changed):
-            self.announce_item_lost_once()
+        if self._hands_free():
+            return
+        SharedState.equip_freeze_start(st)          # 待たずに張る
+        if self._nothing_frozen_but_mine():
+            self._show_item_loss()
+            return
+        if self._item_loss_watch_seq == st.round_seq:
+            return                                  # もう見張っている
+        self._item_loss_watch_seq = st.round_seq
+        threading.Thread(target=self._watch_item_loss, args=(st.round_seq,),
+                         daemon=True).start()
+
+    def _watch_item_loss(self, round_seq: int):
+        """ほかの窓のフリーズが解けるのを待って、前面化＋音声を出す"""
+        st = self._st
+        while self._is_running():
+            if st.item_id or not st.waiting_for_equip:
+                return                              # 装備できた
+            if st.in_round or st.round_seq != round_seq:
+                return                              # ラウンドが始まった
+            if self._nothing_frozen_but_mine():
+                self._show_item_loss()
+                return
+            time.sleep(ITEM_LOSS_WATCH_SEC)
+
+    def _show_item_loss(self):
+        """この窓を前面化し、同時に音声を鳴らす"""
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if WindowOperator.focus_window(self._cfg.hwnd):
+                self._log("この窓を前面化しました（アイテム装備待ち）")
+            else:
+                self._log("⚠ 前面化に失敗（装備待ちは継続）")
+        self.announce_item_lost_once()
 
     def focus(self) -> bool:
         """この窓にフォーカスを当てる。失敗したら False を返す。
@@ -578,8 +620,9 @@ class ActionExecutor:
             # フリーズ発生源は自窓なので他窓の解除待ちはせず、
             # 装備確認 → Begin の順で進む。ここで他窓解除待ちをすると
             # 自分が張ったフリーズを自分で待つデッドロックになる。
+            # フリーズ・前面化・音声は RoundOver の _attend_to_item_loss() で
+            # 済ませている（張るのは冪等なので念のため残す）
             SharedState.equip_freeze_start(st)
-            self.announce_item_lost_once()
             self._log("⚠ アイテムロスト → 全窓フリーズ（装備するとBeginへ進みます）")
             while self._is_running() and not st.item_id and not st.in_round:
                 time.sleep(0.3)
@@ -693,7 +736,6 @@ class ActionExecutor:
                 return
             time.sleep(0.1)
             if not st.in_round:
-                self.announce_item_lost_if_needed()
                 clicked = self._press_begin()
 
         if clicked:
@@ -705,7 +747,11 @@ class ActionExecutor:
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない
         # （フリーズ解除はBEGIN_DONEイベント側で行う）
         if st.waiting_for_equip and not st.item_id:
-            self._focus_for_equip_wait()
+            # 押した後に出す。押す前に前面化すると VRChat がアクティブになり、
+            # カーソルを他の窓へ動かせなくなる（この窓のカーソル方式 Begin が
+            # 壊れる）。受理されなかったラウンドでは出さない（依頼者了承済み）
+            if st.begin_done:
+                self._attend_to_item_loss()
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
                 time.sleep(0.3)
@@ -881,28 +927,6 @@ class ActionExecutor:
         self._log(message)
         if first:
             self._focus_for_speed_freeze()
-
-    def _focus_for_equip_wait(self):
-        """装備待ちで止まる窓を前面化する。**Begin を押したあとに呼ぶこと。**
-
-        前面化すると VRChat がアクティブになり、カーソルを他の窓へ動かせなく
-        なる（実測）。押す前に呼ぶと、この窓のカーソル方式 Begin が壊れる。
-
-        アイテムBeginモードは Verified Round End の時点でもう前面化している
-        ので、ここでは何もしない（二重に奪わない）。
-        """
-        if self._hands_free():
-            return
-        if SharedState.get_item_begin_mode():
-            return          # アナウンスが早く出る経路。もう前面化している
-        if not self._nothing_frozen_but_mine():
-            self._log("ほかの窓がフリーズ中なので前面化しません")
-            return
-        with SharedState._GLOBAL_ACTION_LOCK:
-            if WindowOperator.focus_window(self._cfg.hwnd):
-                self._log("この窓を前面化しました（アイテム装備待ち）")
-            else:
-                self._log("⚠ 前面化に失敗（装備待ちは継続）")
 
     def _nothing_frozen_but_mine(self) -> bool:
         """自分が張った装備待ちを除いて、どのフリーズも張られていないか。

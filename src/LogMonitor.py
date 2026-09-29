@@ -1193,6 +1193,15 @@ class LogMonitor:
                     st.waiting_for_equip = True
             if st.waiting_for_equip and announce_on_round_over:
                 self._action.announce_item_lost_once()
+            if (self._auto_begin_active() and SharedState.get_item_begin_mode()
+                    and self._round_item_warning() and not self._hands_free()):
+                # アイテム取得→Begin モード。RoundOver の時点でもう分かっている
+                # （ロストは死亡などラウンド中に立つ）ので、ここで済ませる
+                if self._round_lost_item():
+                    st.item_id = 0
+                st.waiting_for_equip = True
+                self._action._attend_to_item_loss()
+                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
             # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
             # Verified Round End を待ってから行う（RoundOver時点だと
             # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
@@ -1219,6 +1228,15 @@ class LogMonitor:
                         st.item_id = 0
                     if not self.cfg.auto_begin and not st.waiting_for_equip:
                         self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
+                    elif (SharedState.get_item_begin_mode()
+                          and self._auto_begin_active()):
+                        # RoundOver の _attend_to_item_loss() で済ませている。
+                        # ここで素の focus_window を撃つと、ほかの窓の続行中でも
+                        # 前面を奪っていた。取りこぼしていたときだけ、同じ処理で拾う
+                        if not st.waiting_for_equip:
+                            st.waiting_for_equip = True
+                            self._action._attend_to_item_loss()
+                        self._log("ラウンド終了 【⚠ アイテムロスト → 全窓フリーズ中】")
                     elif SharedState.get_item_begin_mode():
                         st.waiting_for_equip = True
                         SharedState.equip_freeze_start(st)
