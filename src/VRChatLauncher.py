@@ -118,7 +118,7 @@ def latest_user_id(log_dir) -> Optional[str]:
     try:
         import VRChatDiscovery
         logs = VRChatDiscovery.find_latest_logs(Path(log_dir), 3)
-        for path in reversed(logs):
+        for path in logs:               # 新しい順
             text = Path(path).read_text(encoding="utf-8", errors="replace")
             m = RE_USER_AUTH.search(text)
             if m:

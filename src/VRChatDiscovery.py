@@ -148,7 +148,8 @@ def match_windows_to_logs(
 ) -> list[Optional[Path]]:
     """窓とログを起動時刻で1対1に対応付ける。
     差が小さい組から貪欲に確定し、対応が付かなかった窓には
-    未使用ログを新しい順に取って古い順で割り当てる（従来方式のフォールバック）。"""
+    未使用ログを新しい順に取って古い順で割り当てる（従来方式のフォールバック）。
+    candidate_logs は新しい順（find_latest_logs() の並び）で渡す。"""
     log_times = [(p, parse_log_start_time(p)) for p in candidate_logs]
     matched = time_matched_pairs(windows, log_times, tolerance_sec)
 
@@ -161,7 +162,8 @@ def match_windows_to_logs(
     unmatched = [wi for wi in range(len(windows)) if result[wi] is None]
     if unmatched:
         leftover = [p for i, (p, _t) in enumerate(log_times) if i not in used_logs]
-        leftover = leftover[-len(unmatched):]  # 新しい方から必要数だけ取り、古い順のまま使う
+        # 新しい方から必要数だけ取り、古い順に直して組む（起動の古い窓 ↔ 古い方のログ）
+        leftover = list(reversed(leftover[:len(unmatched)]))
         for wi, path in zip(unmatched, leftover):
             result[wi] = path
     return result
@@ -233,7 +235,8 @@ def match_windows_to_logs_by_osc(
 
     # (優先順位, 値, 窓, ログ)。同じ受信ポートを名乗るログが複数あるとき
     # （手動起動を繰り返すと9000が並ぶ）は起動時刻の差が小さい方を採り、
-    # 起動時刻が取れない窓なら新しいログを採る
+    # 起動時刻が取れない窓なら新しいログを採る。同点なら新しいログ
+    # （candidate_logs は新しい順なので、並びの先の方が勝つ）
     pairs: list[tuple[int, float, int, int]] = []
     for wi, (hwnd, wtime) in enumerate(windows):
         held = window_udp_ports(hwnd, ports_by_pid)
@@ -329,6 +332,7 @@ def assign_windows(
 
 
 def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
+    """新しい順に最大 count 本のログを返す（先頭がいちばん新しい）"""
     pattern = str(base_dir / "output_log_*.txt")
     files = glob.glob(pattern)
 
@@ -340,5 +344,4 @@ def find_latest_logs(base_dir: Path, count: int = 4) -> list[Path]:
             return ""
 
     sorted_desc = sorted(files, key=log_datetime, reverse=True)
-    latest = sorted_desc[:count]
-    return [Path(f) for f in sorted(latest, key=log_datetime, reverse=False)]
+    return [Path(f) for f in sorted_desc[:count]]

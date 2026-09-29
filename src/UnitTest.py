@@ -347,6 +347,18 @@ class TestPerWindowInstance(unittest.TestCase):
                 VRChatLauncher.latest_user_id(d),
                 "usr_0e01408a-ac26-4b08-be43-4ee6db08c6c3")
 
+    def test_latest_user_id_reads_the_newest_log_first(self):
+        """別アカウントで入り直したら、新しいログのユーザーIDを使う"""
+        with tempfile.TemporaryDirectory() as d:
+            for stamp, user in (("2026-08-20_09-00-00", "usr_00000000-0000-0000-0000-00000000000a"),
+                                ("2026-08-20_11-00-00", "usr_00000000-0000-0000-0000-00000000000c"),
+                                ("2026-08-20_10-00-00", "usr_00000000-0000-0000-0000-00000000000b")):
+                (Path(d) / f"output_log_{stamp}.txt").write_text(
+                    f"2026.08.20 10:00:00 Log - User Authenticated: a ({user})",
+                    encoding="utf-8")
+            self.assertEqual(VRChatLauncher.latest_user_id(d),
+                             "usr_00000000-0000-0000-0000-00000000000c")
+
 
 class TestToNEntry(unittest.TestCase):
     """入室時の自動操作（移動はOSC・クリックはマウス）"""
@@ -782,7 +794,8 @@ class TestVRChatLauncher(unittest.TestCase):
 
 
 class TestVRChatDiscovery(unittest.TestCase):
-    def test_find_latest_logs_returns_latest_in_oldest_to_newest_order(self):
+    def test_find_latest_logs_returns_latest_in_newest_to_oldest_order(self):
+        """ログファイルは新しいものから見る。本数の上限も効く"""
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             for name in [
@@ -797,8 +810,8 @@ class TestVRChatDiscovery(unittest.TestCase):
         self.assertEqual(
             [path.name for path in logs],
             [
-                "output_log_2026-05-22_10-00-00.txt",
                 "output_log_2026-05-23_10-00-00.txt",
+                "output_log_2026-05-22_10-00-00.txt",
             ],
         )
 
@@ -878,6 +891,27 @@ class TestWindowLogMatching(unittest.TestCase):
         matched = VRChatDiscovery.match_windows_to_logs(windows, logs, 120.0)
         self.assertEqual(matched[0].name, "output_log_2026-08-05_12-00-00.txt")
         self.assertEqual(matched[1].name, "output_log_2026-08-05_09-00-00.txt")
+
+    def test_the_fallback_takes_the_newest_logs(self):
+        """候補は新しい順で来る。起動時刻で決まらない窓には新しい方から必要数を取る"""
+        logs = [self._log("2026-08-05_12-00-00"), self._log("2026-08-05_11-00-00"),
+                self._log("2026-08-05_10-00-00")]              # 新しい順
+        windows = [(0xAAA, None), (0xBBB, None)]
+        matched = VRChatDiscovery.match_windows_to_logs(windows, logs, 120.0)
+        self.assertEqual({p.name for p in matched},
+                         {"output_log_2026-08-05_12-00-00.txt",
+                          "output_log_2026-08-05_11-00-00.txt"},
+                         "いちばん古いログは使わない")
+
+    def test_the_fallback_pairs_as_before(self):
+        """組み合わせはこれまでと同じ: 起動の古い窓 ↔ 選んだ中で古いログ"""
+        logs = [self._log("2026-08-05_12-00-00"), self._log("2026-08-05_11-00-00"),
+                self._log("2026-08-05_10-00-00")]              # 新しい順
+        windows = [(0xAAA, None), (0xBBB, None)]               # 起動の古い順
+        matched = VRChatDiscovery.match_windows_to_logs(windows, logs, 120.0)
+        self.assertEqual([p.name for p in matched],
+                         ["output_log_2026-08-05_11-00-00.txt",
+                          "output_log_2026-08-05_12-00-00.txt"])
 
     def test_stale_log_outside_tolerance_is_not_matched_directly(self):
         """古すぎるログは時刻一致では選ばれない（フォールバックでのみ使われる）"""
@@ -1050,6 +1084,38 @@ class TestOSCLogBinding(unittest.TestCase):
         assigned = self._assign(windows, [old, new], {10: {9000}})
 
         self.assertEqual(self._names(assigned), [(old.name, 9000)])
+
+    def test_the_newer_log_wins_a_tie_on_the_same_port(self):
+        """起動時刻の差が同じ2本が同じ受信ポートを名乗るなら、新しいログを採る"""
+        old = self._log("2026-08-05_11-59-50")
+        new = self._log("2026-08-05_12-00-10")
+        windows = [self._window(0xA, "2026-08-05_12-00-00", pid=10)]
+        logs = VRChatDiscovery.find_latest_logs(Path(self._dir.name), 20)
+
+        assigned = self._assign(windows, logs, {10: {9000}})
+
+        self.assertEqual(self._names(assigned), [(new.name, 9000)], old.name)
+
+    def test_the_tab_order_does_not_follow_the_log_order(self):
+        """ログを新しい順に見ても、窓1・窓2…の並びは受信ポート昇順 → 起動の古い順のまま"""
+        self._log("2026-08-05_12-00-00", 9010)
+        self._log("2026-08-05_12-00-10", 9000)
+        self._log("2026-08-05_09-00-00")
+        self._log("2026-08-05_10-00-00")
+        windows = [self._window(0xC, "2026-08-05_09-00-01", pid=30),
+                   self._window(0xD, pid=40),
+                   self._window(0xA, "2026-08-05_12-00-01", pid=10),
+                   self._window(0xB, "2026-08-05_12-00-11", pid=20)]
+        logs = VRChatDiscovery.find_latest_logs(Path(self._dir.name), 20)
+
+        assigned = self._assign(windows, logs, {10: {9010}, 20: {9000}})
+
+        self.assertEqual([a.hwnd for a in assigned], [0xB, 0xA, 0xC, 0xD])
+        self.assertEqual(self._names(assigned),
+                         [("output_log_2026-08-05_12-00-10.txt", 9000),
+                          ("output_log_2026-08-05_12-00-00.txt", 9010),
+                          ("output_log_2026-08-05_09-00-00.txt", 0),
+                          ("output_log_2026-08-05_10-00-00.txt", 0)])
 
     def test_the_newest_log_wins_when_the_launch_time_is_unknown(self):
         """管理者権限のVRChatなどで起動時刻が取れない窓"""
@@ -1259,6 +1325,21 @@ class TestLiveLogCandidates(unittest.TestCase):
         app._live_candidates([live, dead, away])
 
         self.assertEqual(len(app.logs), 3, "顔ぶれが変わったら出す")
+
+    def test_the_dropped_logs_are_listed_newest_first(self):
+        app = self._app()
+        self._log("output_log_2026-09-26_12-00-00.txt")
+        self._log("output_log_2026-09-26_09-00-00.txt",
+                  quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+        self._log("output_log_2026-09-26_11-00-00.txt",
+                  quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+
+        app._live_candidates(VRChatDiscovery.find_latest_logs(Path(self._dir.name), 20))
+
+        self.assertEqual(app.logs, [
+            "[割り当て] 候補から除外: output_log_2026-09-26_11-00-00.txt（更新が止まっています）",
+            "[割り当て] 候補から除外: output_log_2026-09-26_09-00-00.txt（更新が止まっています）",
+        ])
 
     def test_nothing_dropped_says_nothing(self):
         app = self._app()

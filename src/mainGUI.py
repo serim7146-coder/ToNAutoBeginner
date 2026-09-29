@@ -1483,7 +1483,7 @@ class App(tk.Tk):
         """終わったログ・ToN を離れたログを候補から外す。
 
         全部外れたら絞り込む前の一覧を使う（割り当て不能にしない）。
-        外した顔ぶれが変わったときだけログを出す
+        外した顔ぶれが変わったときだけログを出す（受け取った順＝新しい順に出す）
         """
         kept, dropped = VRChatDiscovery.live_ton_logs(candidates)
         reasons = tuple(sorted((Path(p).name, why) for p, why in dropped))
@@ -1494,8 +1494,8 @@ class App(tk.Tk):
             return candidates
         if reasons != self._dropped_logs:
             self._dropped_logs = reasons
-            for name, why in reasons:
-                self._log(f"[割り当て] 候補から除外: {name}（{why}）")
+            for path, why in dropped:
+                self._log(f"[割り当て] 候補から除外: {Path(path).name}（{why}）")
         return kept
 
     def _resolve_windows(self, windows: list) -> list:
