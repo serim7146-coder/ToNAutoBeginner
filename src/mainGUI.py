@@ -1254,17 +1254,20 @@ class App(tk.Tk):
         ツールを閉じても保存ファイルはディスクに残るので、鮮度は
         mtime ではなくプロセスの生死で見る（古いファイルを掴まないため）。
 
-        新しい ToN ListTool は host_state.sqlite3 に書く。あればそちらを読み、
-        無ければ古い host_save.json.gz を読む。
+        ToN ListTool 2.13 以降の host_state.sqlite3 だけを読む。無ければ
+        取れないものとして扱う（猶予のあと .tnl へ）。古い host_save.json.gz へは
+        切り替えない——ディスクに何日も前のものが残っていることがあり、
+        SQLite が一瞬無いだけで古い参加者と古い続行リストで判定してしまう。
         """
         if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
             self._host_list_lost("ToN ListTool が起動していません")
             return
 
         path, load = config.HOST_STATE_PATH, MatchTNL.load_host_state
-        if not os.path.exists(path):
-            path, load = config.HOST_SAVE_PATH, MatchTNL.load_host_save
         name = os.path.basename(path)
+        if not os.path.exists(path):
+            self._host_list_lost(f"{name} がありません")
+            return
         try:
             stat = os.stat(path)
         except OSError as e:

@@ -21,10 +21,9 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 # ── ToN ListTool の主催リスト追従 ──
 # ToN ListTool が %APPDATA% に書いている統合リストを読んで続行判定に使う。
 # 参加者の続行希望が変わると数秒で追従する。
-HOST_SAVE_PATH = os.path.join(
-    os.environ.get("APPDATA", ""), "ToN ListTool", "host_save.json.gz")
-# ToN ListTool は保存先を SQLite に変えた。こちらがあれば優先して読む
-# （古い ListTool を使っている人のために host_save.json.gz も残す）
+# ToN ListTool 2.13 以降の保存先（SQLite）。これだけを読む。
+# 2.13 より前の host_save.json.gz には対応しない——ディスクに古いものが残って
+# いることがあり、SQLite が一瞬無いだけで何日も前のリストで判定してしまうため
 HOST_STATE_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "ToN ListTool", "host_state.sqlite3")
 HOST_SAVE_POLL_SEC = 3.0

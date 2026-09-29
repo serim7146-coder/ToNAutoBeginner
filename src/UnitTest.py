@@ -5522,10 +5522,10 @@ class TestSpecialMoonKey(unittest.TestCase):
 
     def test_the_real_list_now_covers_atrached(self):
         """現物で再現していた不具合。Classic/クラシックは空、191はSpecial/Moon"""
-        if not Path(config.HOST_SAVE_PATH).exists():
-            self.skipTest("host_save.json.gz が無い")
-        keep_on, _meta, _wishes = MatchTNL.load_host_save(
-            config.HOST_SAVE_PATH, config.USER_SAVE_PATH)
+        if not Path(config.HOST_STATE_PATH).exists():
+            self.skipTest("host_state.sqlite3 が無い")
+        keep_on, _meta, _wishes = MatchTNL.load_host_state(
+            config.HOST_STATE_PATH, config.USER_SAVE_PATH)
         if config.ATRACHED_ID not in keep_on.get(self.SPECIAL, set()):
             self.skipTest("現物の Special/Moon に191が無い")
 
@@ -6296,9 +6296,9 @@ class TestHostSaveWishes(unittest.TestCase):
         self._dir.cleanup()
 
     def _write(self, raw):
-        path = Path(self._dir.name) / "host_save.json.gz"
-        with gzip.open(str(path), "wb") as f:
-            f.write(json.dumps(raw).encode("utf-8"))
+        """以前の JSON 版と同じ中身を、いまの SQLite 版で作る"""
+        path = Path(self._dir.name) / "host_state.sqlite3"
+        write_host_state_like_json(path, raw)
         return str(path)
 
     def _member(self, name, data):
@@ -6309,7 +6309,7 @@ class TestHostSaveWishes(unittest.TestCase):
             self._member("ソノア7", {self.CLASSIC: {"1": 1}}),
             self._member("ユウナ2858", {self.MURDER: {"5": 1}})]}]})
 
-        keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+        keep_on, _meta, wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(wishes["ソノア7"], {self.CLASSIC: {1}})
         self.assertEqual(wishes["ユウナ2858"], {self.MURDER: {5}})
@@ -6323,7 +6323,7 @@ class TestHostSaveWishes(unittest.TestCase):
             "participants": [self._member("ソノア7", {self.CLASSIC: {"1": 1}})],
             "waiting": [self._member("まちびと", {self.CLASSIC: {"9": 1}})]}]})
 
-        keep_on, meta, wishes = MatchTNL.load_host_save(path)
+        keep_on, meta, wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(set(wishes), {"ソノア7", "まちびと"})
         self.assertEqual(wishes["まちびと"], {self.CLASSIC: {9}})
@@ -6335,7 +6335,7 @@ class TestHostSaveWishes(unittest.TestCase):
             {"participants": [self._member("ソノア7", {self.CLASSIC: {"1": 1}})]},
             {"participants": [self._member("ソノア7", {self.CLASSIC: {"2": 1}})]}]})
 
-        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+        _keep_on, _meta, wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(wishes["ソノア7"], {self.CLASSIC: {1, 2}})
 
@@ -6345,7 +6345,7 @@ class TestHostSaveWishes(unittest.TestCase):
         path = self._write({"version": 5, "tabs": [{"participants": [
             self._member(n, {self.CLASSIC: {"1": 1}}) for n in names]}]})
 
-        _keep_on, _meta, wishes = MatchTNL.load_host_save(path)
+        _keep_on, _meta, wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(sorted(wishes), sorted(names))
 
@@ -6372,9 +6372,9 @@ class TestLoadHostSave(unittest.TestCase):
                 "data": data, "memo": "", "created_at": "", "is_visible": False}
 
     def _write(self, raw):
-        path = Path(self._dir.name) / "host_save.json.gz"
-        with gzip.open(str(path), "wb") as f:
-            f.write(json.dumps(raw).encode("utf-8"))
+        """以前の JSON 版と同じ中身を、いまの SQLite 版で作る"""
+        path = Path(self._dir.name) / "host_state.sqlite3"
+        write_host_state_like_json(path, raw)
         return str(path)
 
     def setUp(self):
@@ -6388,7 +6388,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 1, "2": 0}}),
                              self._member({self.CLASSIC: {"3": 1}})]}]})
 
-        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1, 3}})
         self.assertEqual(meta["participants"], 2)
@@ -6399,7 +6399,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 1}})],
             "waiting": [self._member({self.CLASSIC: {"99": 1}})]}]})
 
-        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1}})
         self.assertEqual(meta["participants"], 1, "waiting は人数にも数えない")
@@ -6410,7 +6410,7 @@ class TestLoadHostSave(unittest.TestCase):
             {"participants": [self._member({self.CLASSIC: {"2": 1}})]},
             {"participants": [self._member({self.FOG: {"7": 1}})]}]})
 
-        keep_on, meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1, 2}, self.FOG: {7}})
         self.assertEqual((meta["participants"], meta["tabs"]), (3, 3))
@@ -6420,7 +6420,7 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.CLASSIC: {"1": 0, "2": 0},
                                            self.FOG: {"5": 2}})]}]})
 
-        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.FOG: {5}}, "全部0のラウンドキーは残さない")
 
@@ -6430,38 +6430,42 @@ class TestLoadHostSave(unittest.TestCase):
             "participants": [self._member({self.FOG_ALT: {"1": 1},
                                            self.CLASSIC: {"2": 1}})]}]})
 
-        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {2}})
         self.assertNotIn(1, keep_on.get(self.FOG, set()), "通常Fogへ畳まないこと")
 
-    def test_broken_gzip_raises(self):
+    def test_a_broken_file_raises(self):
         """呼び出し側が握って前の値を保持する。ここでは握り潰さない"""
-        path = Path(self._dir.name) / "broken.json.gz"
-        path.write_bytes(b"not a gzip file at all")
+        path = Path(self._dir.name) / "host_state.sqlite3"
+        path.write_bytes(b"not a sqlite file at all")
 
         with self.assertRaises(Exception):
-            MatchTNL.load_host_save(str(path))
+            MatchTNL.load_host_state(str(path))
 
     def test_missing_tabs_gives_an_empty_set(self):
         for raw in ({"version": 5},
                     {"version": 5, "tabs": []},
                     {"version": 5, "tabs": [{"participants": []}]}):
-            keep_on, meta, _wishes = MatchTNL.load_host_save(self._write(raw))
+            keep_on, meta, _wishes = MatchTNL.load_host_state(self._write(raw))
 
             self.assertEqual(keep_on, {}, raw)
             self.assertEqual(meta["participants"], 0, raw)
 
     def test_unknown_version_is_still_read(self):
         """あちらのバージョンが上がっても、読める形なら読む"""
-        path = self._write({"version": 99, "tabs": [{
+        path = self._write({"version": 5, "tabs": [{
             "participants": [self._member({self.CLASSIC: {"1": 1}})]}]})
+        con = sqlite3.connect(path)
+        try:
+            con.execute("update meta set value = '99' where key = 'version'")
+            con.commit()
+        finally:
+            con.close()
 
-        keep_on, _meta, _wishes = MatchTNL.load_host_save(path)
+        keep_on, _meta, _wishes = MatchTNL.load_host_state(path)
 
         self.assertEqual(keep_on, {self.CLASSIC: {1}})
-
-
 class TestApplyKeepOn(unittest.TestCase):
     """続行リストの差し替えは in-place（LogMonitor が同じ dict を掴んでいる）"""
 
@@ -6838,22 +6842,20 @@ class TestWaitingList(unittest.TestCase):
         self.addCleanup(self._stats.stop)
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
-        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+        self.host = str(Path(self._dir.name) / "host_state.sqlite3")
 
     def _write(self, participants=(), waiting=()):
         def member(name, wanted):
             return {"vrc_name": name, "data": {self.DT: {str(t): 1 for t in wanted}}}
-        with gzip.open(self.host, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [{
-                "participants": [member(n, w) for n, w in participants],
-                "waiting": [member(n, w) for n, w in waiting]}]},
-                ensure_ascii=False).encode("utf-8"))
+        write_host_state_like_json(self.host, {"version": 5, "tabs": [{
+            "participants": [member(n, w) for n, w in participants],
+            "waiting": [member(n, w) for n, w in waiting]}]})
 
     def _everyone_moved_to_waiting(self):
         """干し芋の2人と、別の周回の人。ListTool が全員を待機へ移した後"""
         self._write(participants=(), waiting=(("hoshi_a", {5}), ("hoshi_b", {6}),
                                               ("someone_else", {9})))
-        return MatchTNL.load_host_save(self.host)
+        return MatchTNL.load_host_state(self.host)
 
     def _monitor(self, keep, wishes, *, present=("hoshi_a", "hoshi_b"),
                  me="serim01", itype=config.INSTANCE_HOSHIIMO, known=True,
@@ -6962,7 +6964,7 @@ class TestWaitingList(unittest.TestCase):
             "serim01": {"data": {self.DT: {"1": 1}}}}}), encoding="utf-8")
         self._write(participants=(("hoshi_a", {5}),), waiting=(("w", {9}),))
 
-        _keep, meta, _wishes = MatchTNL.load_host_save(self.host, user)
+        _keep, meta, _wishes = MatchTNL.load_host_state(self.host, user)
 
         self.assertEqual(meta["participant_names"], {"hoshi_a", "serim01"})
 
@@ -6975,12 +6977,10 @@ class TestHostSaveAllAccounts(unittest.TestCase):
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
-        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+        self.host = str(Path(self._dir.name) / "host_state.sqlite3")
         self.user = str(Path(self._dir.name) / "user_save.json")
-        with gzip.open(self.host, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
-                {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 1}}}]}]}
-            ).encode("utf-8"))
+        write_host_state_like_json(self.host, {"version": 5, "tabs": [{"participants": [
+            {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 1}}}]}]})
         Path(self.user).write_text(json.dumps({
             "last_active": "serim01",
             "accounts": {
@@ -6991,7 +6991,7 @@ class TestHostSaveAllAccounts(unittest.TestCase):
             }}, ensure_ascii=False), encoding="utf-8")
 
     def _load(self):
-        return MatchTNL.load_host_save(self.host, self.user)
+        return MatchTNL.load_host_state(self.host, self.user)
 
     def test_every_account_is_in_the_wishes(self):
         _keep, _meta, wishes = self._load()
@@ -7009,10 +7009,8 @@ class TestHostSaveAllAccounts(unittest.TestCase):
 
     def test_a_participant_with_everything_off_is_kept_empty(self):
         """周回の参加者も同じ扱い"""
-        with gzip.open(self.host, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
-                {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 0}}}]}]}
-            ).encode("utf-8"))
+        write_host_state_like_json(self.host, {"version": 5, "tabs": [{"participants": [
+            {"vrc_name": "roundmate", "data": {self.PAGES: {"70": 0}}}]}]})
 
         _keep, meta, wishes = self._load()
 
@@ -7037,7 +7035,7 @@ class TestHostOwnList(unittest.TestCase):
 
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
-        self.host = str(Path(self._dir.name) / "host_save.json.gz")
+        self.host = str(Path(self._dir.name) / "host_state.sqlite3")
         self.user = str(Path(self._dir.name) / "user_save.json")
 
     def tearDown(self):
@@ -7046,9 +7044,8 @@ class TestHostOwnList(unittest.TestCase):
     def _write_host(self, participants=1, name="ひと1"):
         members = [{"vrc_name": f"{name}{n}", "data": {self.CLASSIC: {str(n + 5): 1}}}
                    for n in range(participants)]
-        with gzip.open(self.host, "wb") as f:
-            f.write(json.dumps({"version": 5,
-                                "tabs": [{"participants": members}]}).encode("utf-8"))
+        write_host_state_like_json(self.host, {"version": 5,
+                                               "tabs": [{"participants": members}]})
 
     def _write_user(self, raw):
         Path(self.user).write_text(json.dumps(raw), encoding="utf-8")
@@ -7058,7 +7055,7 @@ class TestHostOwnList(unittest.TestCase):
                 "accounts": {name: {"list_name": f"{name}のリスト", "data": data}}}
 
     def _load(self, with_user=True):
-        return MatchTNL.load_host_save(self.host, self.user if with_user else None)
+        return MatchTNL.load_host_state(self.host, self.user if with_user else None)
 
     # ── 足される ────────────────────────────
     def test_the_host_wishes_are_merged(self):
@@ -7191,10 +7188,9 @@ class TestHostOwnList(unittest.TestCase):
 
     def test_a_duplicate_name_is_merged(self):
         """participants に同名がいても OR されるだけ"""
-        with gzip.open(self.host, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [{"participants": [
-                {"vrc_name": "serim01",
-                 "data": {self.CLASSIC: {"5": 1}}}]}]}).encode("utf-8"))
+        write_host_state_like_json(self.host, {"version": 5, "tabs": [{"participants": [
+            {"vrc_name": "serim01",
+             "data": {self.CLASSIC: {"5": 1}}}]}]})
         self._write_user(self._account({self.CLASSIC: {"9": 1}}))
 
         keep_on, _meta, wishes = self._load()
@@ -7212,6 +7208,44 @@ class TestHostOwnList(unittest.TestCase):
         self.assertIsInstance(name, str)
         self.assertIn(name, raw.get("accounts", {}))
         self.assertIsInstance(raw["accounts"][name].get("data"), dict)
+
+
+class TestOldListToolIsNotRead(unittest.TestCase):
+    """2.13 より前の ToN ListTool（host_save.json.gz）は読まない。
+
+    ディスクに何日も前のものが残っていることがあり（依頼者の PC では新 9/27・
+    旧 9/21）、SQLite が一瞬無いだけで古い参加者と古い続行リストで判定して
+    しまう。将来また旧ファイルへ戻す分岐を足さないための見張り
+    """
+
+    FILES = ("config.py", "mainGUI.py", "MatchTNL.py", "LogMonitor.py",
+             "ActionExecutor.py", "SharedState.py")
+
+    def test_the_old_path_and_reader_are_gone(self):
+        here = Path(MatchTNL.__file__).parent
+        for name in self.FILES:
+            src = (here / name).read_text(encoding="utf-8")
+            self.assertNotIn("HOST_SAVE_PATH", src, name)
+            self.assertNotIn("load_host_save", src, name)
+            self.assertNotIn("host_save.json.gz\")", src, name)
+
+    def test_the_module_no_longer_offers_the_reader(self):
+        self.assertFalse(hasattr(MatchTNL, "load_host_save"))
+        self.assertFalse(hasattr(config, "HOST_SAVE_PATH"))
+
+    def test_the_shared_parts_are_still_there(self):
+        """新旧で共用していた部品は残す（主催者自身のリストが使う）"""
+        for name in ("_fold_wishes", "_wish_ids", "_load_host_own_list",
+                     "HOST_SAVE_IGNORED_KEYS", "load_host_state"):
+            self.assertTrue(hasattr(MatchTNL, name), name)
+        self.assertTrue(hasattr(config, "USER_SAVE_PATH"))
+
+    def test_the_missing_sqlite_file_is_reported_as_lost(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        body = src[src.index("    def _refresh_host_source(self):"):]
+        body = body[:body.index("\n    def ", 10)]
+
+        self.assertIn('self._host_list_lost(f"{name} がありません")', body)
 
 
 class TestHostListGrace(unittest.TestCase):
@@ -7264,17 +7298,15 @@ class TestHostListGrace(unittest.TestCase):
     def _write(self, participants, wanted=7):
         members = [{"vrc_name": f"ひと{n}", "data": {self.CLASSIC: {str(wanted): 1}}}
                    for n in range(participants)]
-        with gzip.open(self.path, "wb") as f:
-            f.write(json.dumps({"version": 5,
-                                "tabs": [{"participants": members}]}).encode("utf-8"))
+        write_host_state_like_json(self.db, {"version": 5,
+                                             "tabs": [{"participants": members}]})
 
     def _tick(self, after=0.0, running=True, stat_fails=False):
         """3秒ごとの確認を1回回す。after 秒たってから"""
         self.now += after
         stat = patch.object(mainGUI.os, "stat", side_effect=OSError("swapping")) \
             if stat_fails else patch.object(mainGUI.os, "stat", wraps=os.stat)
-        with patch.object(config, "HOST_SAVE_PATH", self.path), \
-             patch.object(config, "HOST_STATE_PATH", self.db), \
+        with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
              patch.object(ProcessCheck, "is_process_running", return_value=running), \
              patch.object(mainGUI.time, "monotonic", side_effect=lambda: self.now), \
@@ -7293,6 +7325,29 @@ class TestHostListGrace(unittest.TestCase):
         return [m for m in self.app.logs if "猶予中" in m]
 
     # ── 一瞬では切り替えない ─────────────────────
+    def test_a_briefly_missing_sqlite_file_is_forgiven(self):
+        """ListTool が作り直している最中などで一瞬無いだけなら、すぐには
+        切り替えない。古い host_save.json.gz にも逃げない"""
+        write_old_host_save(self.path, 3)
+        self._on_host_list()
+        Path(self.db).unlink()
+
+        self._tick(after=self.GRACE / 2)
+
+        self.assertEqual(SharedState.get_list_source(), "host", "猶予の内")
+        self.assertEqual(self.app.keepOn_set, self.host_list, "古い JSON を読まない")
+
+    def test_a_sqlite_file_missing_for_long_goes_to_the_tnl(self):
+        write_old_host_save(self.path, 3)
+        self._on_host_list()
+        Path(self.db).unlink()
+
+        self._tick(after=0.0)
+        self._tick(after=self.GRACE + 1)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertEqual(self.app.keepOn_set, {self.CLASSIC: {1}}, ".tnl の中身")
+
     def test_a_moment_without_the_file_keeps_the_host_list(self):
         self._on_host_list()
 
@@ -7380,6 +7435,44 @@ def wish_bits(ids):
     for tid in ids:
         raw[tid // 8] |= 1 << (tid % 8)
     return bytes(raw)
+
+
+def write_host_state_like_json(path, raw):
+    """以前の host_save.json.gz と同じ中身を、いまの SQLite 形式で作る。
+
+    旧形式を読むのをやめた（仕様書 AM）ので、旧形式で書いていたテストを
+    同じ意図のまま新形式で確かめるためのもの。読み方は以前の JSON 版と同じ:
+    0 以外の整数が ON。ON が1つも無いラウンドはビット列0で書く（リストは
+    持っている）。data が辞書でない人は wishes を書かない（持っていない）
+    """
+    tabs = []
+    for tab in (raw.get("tabs") or []) if isinstance(raw, dict) else []:
+        members = []
+        for section, key in ((0, "participants"), (1, "waiting")):
+            for member in tab.get(key) or []:
+                data = member.get("data")
+                rounds = None
+                if isinstance(data, dict):
+                    rounds = {}
+                    for round_key, slots in data.items():
+                        if not isinstance(slots, dict):
+                            continue
+                        ids = {int(k) for k, v in slots.items()
+                               if isinstance(v, int) and v != 0}
+                        rounds[round_key] = ids if ids else bytes(40)
+                members.append((section, member.get("vrc_name"), rounds))
+        tabs.append(members)
+    write_host_state(path, tabs)
+
+
+def write_old_host_save(path, participants):
+    """ディスクに残っている古い host_save.json.gz（読まれないことを確かめる用）"""
+    members = [{"vrc_name": f"むかしのひと{n}",
+                "data": {"Classic/クラシック": {str(n + 50): 1}}}
+               for n in range(participants)]
+    with gzip.open(str(path), "wb") as f:
+        f.write(json.dumps({"version": 5, "tabs": [{"participants": members}]},
+                           ensure_ascii=False).encode("utf-8"))
 
 
 def write_host_state(path, tabs):
@@ -7576,28 +7669,30 @@ class TestHostStateSqlite(unittest.TestCase):
             self.assertEqual(meta["listed"], 1, "行があればリストは持っている")
 
     # ── 古い JSON と同じ結果になること ──────────────
-    def test_it_matches_the_json_reader(self):
+    def test_it_reads_the_same_thing_the_json_reader_did(self):
+        """以前は JSON 版と結果を突き合わせていた。JSON 版を消したので、同じ入力に
+        対して JSON 版が返していた値を直接書いて確かめる"""
         people = [(0, "さんかしゃA", {self.CLASSIC: {1, 300}, self.FOG: {9}}),
                   (0, "さんかしゃB", {self.CLASSIC: {2}}),
                   (1, "たいきC", {self.FOG: {4, 5}})]
-        json_path = Path(self._dir.name) / "host_save.json.gz"
-        members = {"participants": [], "waiting": []}
-        for section, name, rounds in people:
-            key = "participants" if section == 0 else "waiting"
-            members[key].append({"vrc_name": name, "data": {
-                r: {str(i): 1 for i in ids} for r, ids in rounds.items()}})
-        with gzip.open(json_path, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [members]}).encode("utf-8"))
 
-        keep_db, meta_db, wishes_db = self._load([people])
-        keep_json, meta_json, wishes_json = MatchTNL.load_host_save(str(json_path))
+        keep_on, meta, wishes = self._load([people])
 
-        tabs_data = meta_db.pop("tabs_data")     # タブの内訳は SQLite 版だけが持つ
-        self.assertEqual((keep_db, meta_db, wishes_db),
-                         (keep_json, meta_json, wishes_json))
-        self.assertEqual(set(tabs_data), {0}, "1タブぶん")
-        self.assertEqual(tabs_data[0]["participants"], {"さんかしゃA", "さんかしゃB"})
-        self.assertEqual(tabs_data[0]["waiting"], {"たいきC"})
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 2, 300}},
+                         "参加者だけを畳む。Fog (Alternate) は無視する")
+        self.assertEqual(wishes, {"さんかしゃA": {self.CLASSIC: {1, 300}},
+                                  "さんかしゃB": {self.CLASSIC: {2}},
+                                  "たいきC": {}},
+                         "待機も名前では引ける。無視するキーは名前ごとにも入らない")
+        self.assertEqual(meta["participants"], 2)
+        self.assertEqual(meta["participant_names"], {"さんかしゃA", "さんかしゃB"})
+        self.assertEqual(meta["listed"], 3)
+        self.assertEqual(meta["tabs"], 1)
+        self.assertIsNone(meta["host_self"])
+        self.assertEqual(set(meta["tabs_data"]), {0}, "1タブぶん")
+        self.assertEqual(meta["tabs_data"][0]["participants"],
+                         {"さんかしゃA", "さんかしゃB"})
+        self.assertEqual(meta["tabs_data"][0]["waiting"], {"たいきC"})
 
     # ── 主催者自身 ──────────────────────────
     def test_the_host_own_list_is_added(self):
@@ -7898,14 +7993,12 @@ class TestHostListSource(unittest.TestCase):
     def _write(self, participants):
         members = [{"vrc_name": f"ひと{n}", "data": {self.CLASSIC: {str(n + 5): 1}}}
                    for n in range(participants)]
-        with gzip.open(self.path, "wb") as f:
-            f.write(json.dumps({"version": 5,
-                                "tabs": [{"participants": members}]}).encode("utf-8"))
+        write_host_state_like_json(self.db, {"version": 5,
+                                             "tabs": [{"participants": members}]})
 
     def _refresh(self, app, running=True):
         # 主催者自身のリストは既定では使わない（実ファイルに引きずられないため）
-        with patch.object(config, "HOST_SAVE_PATH", self.path), \
-             patch.object(config, "HOST_STATE_PATH", self.db), \
+        with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
              patch.object(ProcessCheck, "is_process_running", return_value=running), \
              patch.object(mainGUI, "save_settings"), \
@@ -7919,10 +8012,9 @@ class TestHostListSource(unittest.TestCase):
     def _write_lists(self, participants, waiting):
         members = lambda n: [{"vrc_name": f"ひと{i}", "data": {self.CLASSIC: {"5": 1}}}
                              for i in range(n)]
-        with gzip.open(self.path, "wb") as f:
-            f.write(json.dumps({"version": 5, "tabs": [{
-                "participants": members(participants),
-                "waiting": members(waiting)}]}).encode("utf-8"))
+        write_host_state_like_json(self.db, {"version": 5, "tabs": [{
+            "participants": members(participants),
+            "waiting": members(waiting)}]})
 
     def test_only_waiting_keeps_the_host_list(self):
         app = self._app()
@@ -7949,7 +8041,7 @@ class TestHostListSource(unittest.TestCase):
 
     # ── 新しい保存先（SQLite）を優先する ─────────────
     def test_the_sqlite_file_wins_over_the_json(self):
-        self._write(3)                       # 古い JSON には3人
+        write_old_host_save(self.path, 3)    # 古い JSON が残っていても
         write_host_state(self.db, [[(0, "いまのひと", {self.CLASSIC: {9}})]])
         app = self._app()
 
@@ -7958,14 +8050,40 @@ class TestHostListSource(unittest.TestCase):
         self.assertEqual(SharedState.get_list_source(), "host")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {9}}, "sqlite の中身を使う")
 
-    def test_without_the_sqlite_file_the_json_is_used(self):
-        self._write(2)
+    def test_the_host_own_list_is_still_read(self):
+        """user_save.json は 2.13 でも現役。主催者自身の希望はここにしか無い"""
+        write_host_state(self.db, [[(0, "さんかしゃ", {self.CLASSIC: {5}})]])
+        Path(self.user_save).write_text(json.dumps({
+            "last_active": "ぬし",
+            "accounts": {"ぬし": {"data": {self.CLASSIC: {"42": 1}}}}}),
+            encoding="utf-8")
         app = self._app()
 
         self._refresh(app)
 
         self.assertEqual(SharedState.get_list_source(), "host")
-        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6}})
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 42}}, "自分の希望も入る")
+        self.assertEqual(app.host_wishes["ぬし"], {self.CLASSIC: {42}})
+
+    def test_without_the_sqlite_file_the_old_json_is_not_read(self):
+        """SQLite が一瞬無いだけで、何日も前の古いリストを黙って読まないこと。
+
+        依頼者の PC には 9/21 の host_save.json.gz が残っていた（新は 9/27）。
+        古い参加者と古い続行リストで判定すると、他人の周回を誤って自爆させる
+        """
+        write_old_host_save(self.path, 3)    # 古い JSON だけがある
+        app = self._app()
+
+        with patch.object(MatchTNL, "load_host_state") as load:
+            self._refresh(app)
+
+        load.assert_not_called()
+        self.assertEqual(SharedState.get_list_source(), "tnl", "猶予0なので .tnl へ")
+        self.assertEqual(app.keepOn_set, {self.CLASSIC: {1}}, ".tnl の中身")
+        self.assertNotIn(53, app.keepOn_set.get(self.CLASSIC, set()),
+                         "古い JSON の中身は入らない")
+        self.assertTrue(any("host_state.sqlite3 がありません" in m for m in app.logs),
+                        app.logs)
 
     def test_a_wal_only_change_is_picked_up(self):
         """SQLite は本体を触らずに -wal だけ伸びることがある"""
@@ -7984,7 +8102,7 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
 
-        with patch.object(MatchTNL, "load_host_save") as mock_load:
+        with patch.object(MatchTNL, "load_host_state") as mock_load:
             self._refresh(app, running=False)
 
         mock_load.assert_not_called()
@@ -8091,7 +8209,7 @@ class TestHostListSource(unittest.TestCase):
         app = self._app()
         self._refresh(app)
 
-        Path(self.path).write_bytes(b"half written garbage")
+        Path(self.db).write_bytes(b"half written garbage")
         self._refresh(app)
 
         self.assertEqual(SharedState.get_list_source(), "host", "供給元を変えないこと")
@@ -8101,7 +8219,7 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
         self._refresh(app)
-        Path(self.path).write_bytes(b"half written garbage")
+        Path(self.db).write_bytes(b"half written garbage")
 
         for _ in range(3):
             self._refresh(app)
@@ -8118,7 +8236,7 @@ class TestHostListSource(unittest.TestCase):
         Path(self.user_save).write_text(
             json.dumps({"last_active": "serim01",
                         "accounts": {"serim01": {"data": {}}}}), encoding="utf-8")
-        with patch.object(MatchTNL, "load_host_save",
+        with patch.object(MatchTNL, "load_host_state",
                           return_value=({"x": {1}}, {"participants": 1, "listed": 1, "tabs": 1,
                                                      "host_self": None},
                                         {})) as mock_load:
@@ -8130,7 +8248,7 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
 
-        with patch.object(MatchTNL, "load_host_save",
+        with patch.object(MatchTNL, "load_host_state",
                           return_value=({"x": {1}},
                                         {"participants": 3, "listed": 3, "tabs": 1,
                                          "host_self": "serim01"}, {})):
@@ -8153,7 +8271,7 @@ class TestHostListSource(unittest.TestCase):
         app = self._app()
         self._refresh(app)
 
-        with patch.object(MatchTNL, "load_host_save") as mock_load:
+        with patch.object(MatchTNL, "load_host_state") as mock_load:
             self._refresh(app)
 
         mock_load.assert_not_called()
@@ -8179,7 +8297,7 @@ class TestHostListSource(unittest.TestCase):
 
         # サイズは同じで mtime だけ違う（同じ秒内の書き換え相当）
         app._host_save_stamp = (mtime - 1, size, user, wal)
-        with patch.object(MatchTNL, "load_host_save",
+        with patch.object(MatchTNL, "load_host_state",
                           return_value=({"x": {1}}, {"participants": 1, "listed": 1, "tabs": 1},
                                         {})) as mock_load:
             self._refresh(app)
@@ -8187,7 +8305,7 @@ class TestHostListSource(unittest.TestCase):
 
         # mtime は同じでサイズだけ違う
         app._host_save_stamp = (app._host_save_stamp[0], size - 1, user)
-        with patch.object(MatchTNL, "load_host_save",
+        with patch.object(MatchTNL, "load_host_state",
                           return_value=({"y": {2}}, {"participants": 1, "listed": 1, "tabs": 1},
                                         {})) as mock_load:
             self._refresh(app)
@@ -8199,12 +8317,12 @@ class TestHostListSource(unittest.TestCase):
         app = self._app()
         self._refresh(app)
 
-        Path(self.path).write_bytes(b"half written garbage")
+        Path(self.db).write_bytes(b"half written garbage")
         self._refresh(app)
         self._refresh(app)
         self._write(4)
         self._refresh(app)                      # 復帰
-        Path(self.path).write_bytes(b"broken again")
+        Path(self.db).write_bytes(b"broken again")
         self._refresh(app)
 
         hits = [m for m in app.logs if "読み込み失敗" in m]
@@ -8218,7 +8336,7 @@ class TestHostListSource(unittest.TestCase):
         app._poll_host_save = lambda: None
         app._refresh_host_source = lambda: mainGUI.App._refresh_host_source(app)
 
-        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+        with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(ProcessCheck, "is_process_running", return_value=True), \
              patch.object(mainGUI.os, "stat", side_effect=RuntimeError("boom")):
             mainGUI.App._poll_host_save(app)
@@ -8231,7 +8349,7 @@ class TestHostListSource(unittest.TestCase):
         app = self._app()
         self._refresh(app)
 
-        with patch.object(config, "HOST_SAVE_PATH", self.path), \
+        with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(ProcessCheck, "is_process_running", return_value=True), \
              patch.object(mainGUI.os, "stat", side_effect=OSError("gone")), \
              patch.object(mainGUI, "save_settings"), \

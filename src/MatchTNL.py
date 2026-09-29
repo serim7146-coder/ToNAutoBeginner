@@ -1,4 +1,3 @@
-import gzip
 import json
 import shutil
 import sqlite3
@@ -128,10 +127,10 @@ def _wish_ids(bits) -> set:
 def load_host_state(path: str,
                     user_save_path: str | None = None
                     ) -> tuple[dict[str, set[int]], dict, dict]:
-    """ToN ListTool の主催リスト（SQLite 版）を load_host_save と同じ形で読む。
+    """ToN ListTool の主催リスト（SQLite 版）を keepOn_set の形で読む。
 
     section は 0 が参加者・1 が待機。畳んだ keepOn_set には参加者だけを足し、
-    待機は名前ごとの wishes にだけ入れる（load_host_save と同じ方針）。
+    待機は名前ごとの wishes にだけ入れる（以前の JSON 版と同じ方針）。
 
     ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
     タブごとに続行リストの中身が違う。畳んだものだけだと別の窓の希望が混ざる
@@ -140,7 +139,7 @@ def load_host_state(path: str,
 
     ListTool が書いている最中を掴まないよう、本体と -wal / -shm を一時フォルダへ
     写してから読む。ListTool のフォルダには一切書かない。壊れている・途中だった
-    場合は例外を投げる（呼び出し側の再試行に任せる。load_host_save と同じ）。
+    場合は例外を投げる（呼び出し側の再試行に任せる。以前の JSON 版と同じ）。
     """
     with tempfile.TemporaryDirectory() as work:
         copy = Path(work) / "host_state.sqlite3"
@@ -182,7 +181,7 @@ def load_host_state(path: str,
         if section is None:
             continue
         # 行が1つでもあれば「リストを持っている人」。全部OFFでも {} で残すのは
-        # load_host_save と同じ（「続行したいものが無い」と「リストが無い」を分ける）
+        # 以前の JSON 版と同じ（「続行したいものが無い」と「リストが無い」を分ける）
         listed_ids.add(pid)
         mine = (wishes.setdefault(name, {})
                 if isinstance(name, str) and name else None)
@@ -288,89 +287,11 @@ def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None
         target = keepOn_set if name == active else {}
         # 全部 OFF でも {} で残す。「リストがあって続行したいものが無い」
         # （＝全部自爆）と「リストが無い」（＝分からないので止める）を分けるため。
-        # 周回の参加者も同じ扱い（load_host_save）
+        # 周回の参加者も同じ扱い（load_host_state）
         _fold_wishes(data, target, wishes.setdefault(name, {}))
         loaded.add(name)
     return active if active in loaded else None
 
-
-def load_host_save(path: str,
-                   user_save_path: str | None = None
-                   ) -> tuple[dict[str, set[int]], dict, dict]:
-    """ToN ListTool の主催リストを keepOn_set の形で読む。
-
-    全タブの participants の続行希望を OR で畳む。waiting（待機列）は
-    含めない——その場にいない人のために生き残ってしまうため。
-    active_tab は見ない（UIの選択状態で判定が変わらないように）。
-
-    3つ目に参加者別の希望 `{vrc_name: {round_key: set(ids)}}` も返す。
-    畳んだ `keepOn_set` では「誰の希望か」が消えるため、Sabotage の
-    マーダー判定には使えないため。
-
-    `user_save_path` を渡すと主催者自身の希望も足す（participants には
-    入らないため）。ただし **`meta["participants"]` には数えない**——
-    そこが0人かどうかで .tnl へのフォールバックと、グループの窓を止めるか
-    が決まるので、自分を数えると「開いているだけで1人」になってしまう。
-
-    ToN ListTool の内部ファイルで公開仕様ではないので、想定外の形は
-    黙って読み飛ばす。gzip/JSON として壊れている場合だけ例外を投げる
-    （書き込み中を掴んだ可能性があるので、呼び出し側で握って再試行する）。
-    """
-    with gzip.open(path, "rb") as f:
-        raw = json.loads(f.read().decode("utf-8"))
-
-    keepOn_set: dict[str, set[int]] = {}
-    wishes: dict[str, dict[str, set[int]]] = {}
-    tabs = raw.get("tabs") if isinstance(raw, dict) else None
-    tabs = tabs if isinstance(tabs, list) else []
-    participants = 0
-    listed = 0              # 続行リストを持っている人（参加者＋待機）
-    participant_names: set = set()
-    for tab in tabs:
-        if not isinstance(tab, dict):
-            continue
-        # 待機も名前ごとの希望には畳む。ToN ListTool は VRChat のログを読んで
-        # その場にいる人を参加者・いない人を待機に振り分けるが、複窓だと
-        # ソロの窓のログを読んで干し芋の全員を待機へ移すことがある（実測:
-        # 参加者18・待機251 → 参加者0・待機269）。誰がいるかは窓ごとに
-        # こちらで分かるので、ListTool の振り分けには頼らない。
-        # 共有リスト（keepOn_set）には従来どおり参加者だけを足す
-        for key in ("participants", "waiting"):
-            members = tab.get(key)
-            if not isinstance(members, list):
-                continue
-            for member in members:
-                if not isinstance(member, dict):
-                    continue
-                if key == "participants":
-                    participants += 1
-                    name = member.get("vrc_name")
-                    if isinstance(name, str) and name:
-                        participant_names.add(name)
-                data = member.get("data")
-                if not isinstance(data, dict):
-                    continue
-                listed += 1
-                name = member.get("vrc_name")
-                mine = (wishes.setdefault(name, {})
-                        if isinstance(name, str) and name else None)
-                target = keepOn_set if key == "participants" else {}
-                _fold_wishes(data, target, mine)
-
-    host_self = None
-    if user_save_path:
-        host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
-
-    if host_self:
-        participant_names.add(host_self)
-    meta = {"participants": participants,   # 自分は数えない
-            "listed": listed,               # 参加者＋待機のうちリストを持つ人
-            # 参加者（＋自分）の名前。誰がいるか分からない窓は、待機を除いた
-            # この人たちの希望で Sabotage を判定する（従来どおり）
-            "participant_names": participant_names,
-            "tabs": len(tabs),
-            "host_self": host_self}
-    return keepOn_set, meta, wishes
 
 def should_continue(keepOn_set: dict, tnl_key: str, terror_ids: list[int]) -> bool:
     if tnl_key not in keepOn_set:
