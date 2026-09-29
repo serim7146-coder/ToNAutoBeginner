@@ -64,6 +64,11 @@ RE_STRING_DOWNLOAD = re.compile(
     r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
+# 前絞りの印（*_MARK）。ログを末尾から遡る処理は、20万行を全部 parse() にかけると
+# 1本1秒以上かかる。探す行は必ずこの文字列を含むので、含まない行は parse() に
+# かけずに飛ばす。正規表現を直したら一緒に直すこと（グループを開く ( を除いた正規表現に
+# 含まれていることをテストが見張っている）
+USER_AUTH_MARK = "User Authenticated: "
 # 入退室。`[PlayerLog] OnPlayerJoined: 名前 (VR=False)` という別形式も出るが
 # usr_ID が無いので [Behaviour] の方だけを使う（両方拾うと二重に数える）。
 # 名前に括弧が入りうるので、末尾の (usr_...) で区切る。
@@ -72,12 +77,15 @@ RE_PLAYER_JOINED = re.compile(
     r"^\[Behaviour\] OnPlayerJoined (.+) \((usr_[0-9a-f-]+)\)$")
 RE_PLAYER_LEFT = re.compile(
     r"^\[Behaviour\] OnPlayerLeft (.+) \((usr_[0-9a-f-]+)\)$")
+PLAYER_JOINED_MARK = "OnPlayerJoined "
+PLAYER_LEFT_MARK = "OnPlayerLeft "
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_CREATURE_BLOODTHIRSTY = re.compile(r"^The creature is bloodthirsty today[.][.][.]$")
 RE_HUNGRY_HOME_INVADER = re.compile(r"^I hear strange sounds coming from the kitchen[.]$")
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
+JOINING_MARK = "Joining wrld_"
 RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
 # 名前と triggered の間に空白が無い。Enrage / Enrage2 / Enrage3 は
 # 段階が違うだけで名前は同じなので、まとめて扱う

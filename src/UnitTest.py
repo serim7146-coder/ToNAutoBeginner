@@ -6894,7 +6894,8 @@ class TestWishesPerWindow(unittest.TestCase):
                                         host_wishes=dict(self.WISHES))
         monitor.logger = lambda _m: None
 
-        with patch.object(ConnectDB, "send_Users", return_value=1):
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
             monitor._detect_instance_from_log()
 
         self.assertEqual(monitor._present_names(), {"serim01", "roundmate"})
@@ -18592,6 +18593,168 @@ class TestHostListNeedsOthers(unittest.TestCase):
                                  f"{case} / {src}")
 
 
+class TestStartScanPrefilter(unittest.TestCase):
+    """ログを末尾から遡る2つの処理は、印の文字列を含む行だけを parse() にかける。
+
+    20万行のログを全部 parse() にかけると1本1秒以上かかり、起動（GUIスレッド）と
+    マクロ開始が固まっていた。読む方向・止まる条件・結果は変えない
+    """
+
+    ME = "usr_0e01408a"
+    PREFIX = "2026.09.18 16:56:57 Debug      -  "
+    LINES = [
+        "[Behaviour] Joining wrld_old:1~private(usr_me)~region(jp)",
+        f"User Authenticated: serim01 ({ME})",
+        "[Behaviour] OnPlayerJoined ghost (usr_9057)",
+        "[Behaviour] Joining or Creating Room: Terrors of Nowhere",
+        "[Behaviour] Joining wrld_now:2~group(grp_x)~groupAccessType(plus)~region(jp)",
+        "Killers have been set - 1 3 0 // Round type is Classic",
+        "[Behaviour] OnPlayerJoined a (usr_a)",
+        "[PlayerLog] OnPlayerJoined: a (VR=False)",
+        "[Behaviour] OnPlayerJoinComplete a",
+        "[Behaviour] OnPlayerJoined b (usr_b)",
+        "Verified Round End",
+        f"[Behaviour] OnPlayerJoined serim01 ({ME})",
+        "[Behaviour] OnPlayerLeft b (usr_b)",
+        "[Behaviour] OnPlayerLeftRoom",
+        "Equipping 3.",
+        "The Gigabytes have come.",
+    ]
+
+    def _log_file(self, lines):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                          encoding="utf-8")
+        tmp.write("\n".join(self.PREFIX + line for line in lines) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return Path(tmp.name)
+
+    def _monitor(self, path):
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _start_scan(self, path, marks=None):
+        monitor = self._monitor(path)
+        with patch.object(ConnectDB, "send_Users", return_value=7), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
+            if marks is None:
+                monitor._detect_instance_from_log()
+            else:
+                with patch.object(LogMonitor.LogMonitor, "_START_SCAN_MARKS", marks):
+                    monitor._detect_instance_from_log()
+        st = monitor.st
+        return (st.local_user_id, st.local_player_name, st.transformed_uid,
+                st.instance_type, st.instance_access, st.players_known,
+                st.players, st.player_names, monitor.logs)
+
+    # ── 1. 印は正規表現の一部そのもの ─────────────
+    def test_each_mark_is_part_of_its_regex(self):
+        """正規表現を直して前絞りが取りこぼすようになったら、ここで落ちる。
+        RE_JOINING は Joining と wrld_ の間に捕獲グループの ( があるので、
+        グループを開く ( を除いた形で比べる"""
+        def literal(pattern):
+            return re.sub(r"(?<!\\)\((?:\?:)?", "", pattern)
+
+        for mark, rx in ((LogParser.JOINING_MARK, LogParser.RE_JOINING),
+                         (LogParser.USER_AUTH_MARK, LogParser.RE_USER_AUTH),
+                         (LogParser.PLAYER_JOINED_MARK, LogParser.RE_PLAYER_JOINED),
+                         (LogParser.PLAYER_LEFT_MARK, LogParser.RE_PLAYER_LEFT)):
+            self.assertIn(mark, literal(rx.pattern), rx.pattern)
+
+    def test_every_line_the_scans_look_for_carries_its_mark(self):
+        """parse() がその種類を返した行は、必ず印を含む"""
+        kinds = {LogParser.EVENT_JOINING: LogParser.JOINING_MARK,
+                 LogParser.EVENT_USER_AUTH: LogParser.USER_AUTH_MARK,
+                 LogParser.EVENT_PLAYER_JOINED: LogParser.PLAYER_JOINED_MARK,
+                 LogParser.EVENT_PLAYER_LEFT: LogParser.PLAYER_LEFT_MARK}
+        seen = set()
+        for line in self.LINES:
+            event = LogParser.parse(self.PREFIX + line)
+            if event and event.kind in kinds:
+                seen.add(event.kind)
+                self.assertIn(kinds[event.kind], line)
+        self.assertEqual(seen, set(kinds), "4種類とも試せていること")
+
+    # ── 2. 結果は前絞りの前後で同じ ──────────────
+    def test_the_start_scan_gives_the_same_result(self):
+        path = self._log_file(self.LINES)
+        result = self._start_scan(path)
+        self.assertEqual(result, self._start_scan(path, marks=("",)))
+        self.assertEqual(result[0], self.ME)
+        self.assertEqual(result[6], {"usr_a", self.ME})
+
+    def test_the_instance_type_detection_gives_the_same_result(self):
+        for lines in (self.LINES, self.LINES[:3], self.LINES[5:9], []):
+            path = self._log_file(lines)
+            filtered = LogMonitor.LogMonitor.detect_instance_type_from_log(path)
+            with patch.object(LogParser, "JOINING_MARK", ""):
+                full = LogMonitor.LogMonitor.detect_instance_type_from_log(path)
+            self.assertEqual(filtered, full, lines)
+        self.assertIsNotNone(LogMonitor.LogMonitor.detect_instance_type_from_log(
+            self._log_file(self.LINES)))
+
+    # ── 3. 4種類以外の行は parse() にかけない ──────────
+    def test_other_lines_are_not_parsed(self):
+        marks = LogMonitor.LogMonitor._START_SCAN_MARKS
+        # Joining の行が無いので末尾から先頭まで全部遡る
+        path = self._log_file([l for l in self.LINES if "Joining wrld_" not in l])
+        with patch.object(LogParser, "parse", wraps=LogParser.parse) as parse:
+            self._start_scan(path)
+        parsed = [c.args[0] for c in parse.call_args_list]
+        self.assertTrue(parsed)
+        for line in parsed:
+            self.assertTrue(any(m in line for m in marks), line)
+
+        with patch.object(LogParser, "parse", wraps=LogParser.parse) as parse:
+            LogMonitor.LogMonitor.detect_instance_type_from_log(path)
+        self.assertEqual(parse.call_count, 0, "Joining の無いログは1行も parse() しない")
+
+    # ── 4/5. 統計用の通信は待たない ───────────────
+    def test_the_scan_does_not_wait_for_the_statistics_id(self):
+        path = self._log_file(self.LINES)
+        monitor = self._monitor(path)
+        done = threading.Event()
+
+        def slow(_uid):
+            time.sleep(2.0)
+            done.set()
+            return 42
+
+        with patch.object(ConnectDB, "send_Users", side_effect=slow):
+            started = time.monotonic()
+            monitor._detect_instance_from_log()
+            took = time.monotonic() - started
+            self.assertLess(took, 1.0, "通信（2秒）を待たずに返る")
+            self.assertTrue(monitor.st.players_known, "遡りは済んでいる")
+            self.assertIsNone(monitor.st.transformed_uid, "まだ届いていない")
+            self.assertTrue(done.wait(5.0))
+            for _ in range(100):
+                if monitor.st.transformed_uid is not None:
+                    break
+                time.sleep(0.01)
+
+        self.assertEqual(monitor.st.transformed_uid, 42, "届けば入る")
+        self.assertTrue(any("transformed_uid: 42" in m for m in monitor.logs), monitor.logs)
+
+    def test_a_failed_request_leaves_the_id_empty(self):
+        monitor = self._monitor(self._log_file(self.LINES))
+
+        def offline(_uid):
+            raise OSError("offline")    # 毎回作る（使い回すと例外がログを掴んだままになる）
+
+        with patch.object(ConnectDB, "send_Users", side_effect=offline), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
+            monitor._detect_instance_from_log()
+
+        self.assertIsNone(monitor.st.transformed_uid)
+        self.assertTrue(monitor.st.players_known, "遡りは最後まで済む")
+        self.assertTrue(any("transformed_uid の取得に失敗" in m for m in monitor.logs),
+                        monitor.logs)
+
+
 class TestPlayersRestoredOnStart(unittest.TestCase):
     """マクロを途中で始めても、いまのインスタンスの人数が分かること"""
 
@@ -18611,7 +18774,8 @@ class TestPlayersRestoredOnStart(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         monitor.logs = []
         monitor.logger = monitor.logs.append
-        with patch.object(ConnectDB, "send_Users", return_value=1):
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
             monitor._detect_instance_from_log()
         return monitor
 

@@ -318,12 +318,18 @@ class LogMonitor:
                 return None
             lines = cls._iter_log_lines_reversed(path, config.LOG_START_SCAN_CHUNK_BYTES)
             for line in lines:
+                if LogParser.JOINING_MARK not in line:
+                    continue            # 前絞り（parse() は重い）
                 event = LogParser.parse(line)
                 if event and event.kind == LogParser.EVENT_JOINING:
                     return cls._parse_instance_type(event.suffix)
         except Exception:
             return None
         return None
+
+    # 監視開始の遡りで探す4種類の行（ログイン・入室・入ってきた人・出ていった人）
+    _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
+                         LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK)
 
     def _detect_instance_from_log(self):
         if not self.cfg.log_path or not self.cfg.log_path.exists():
@@ -338,6 +344,8 @@ class LogMonitor:
                 config.LOG_START_SCAN_CHUNK_BYTES,
             )
             for line in lines:
+                if not any(mark in line for mark in self._START_SCAN_MARKS):
+                    continue            # 前絞り（parse() は重い）
                 event = LogParser.parse(line)
                 if not event:
                     continue
@@ -351,8 +359,8 @@ class LogMonitor:
                     self._log(f"UserID検出: {event.user_id}")
                     self.st.local_player_name = event.player_name
                     self.st.local_user_id = event.user_id
-                    self.st.transformed_uid = ConnectDB.send_Users(event.user_id)
-                    self._log(f"transformed_uid: {self.st.transformed_uid}")
+                    # 統計用の通信（最大10秒）は待たない
+                    self._start_daemon(self._fetch_transformed_uid, event.user_id)
                     found_user = True
 
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
@@ -373,6 +381,19 @@ class LogMonitor:
                       f"{len(self._other_players())}人")
         else:
             self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
+
+    def _fetch_transformed_uid(self, user_id):
+        """統計用のIDを取りに行く（裏のスレッドで）。
+
+        届く前にラウンドが終われば、その統計は transformed_uid = None で送られる
+        （通信に失敗したときと同じ）
+        """
+        try:
+            self.st.transformed_uid = ConnectDB.send_Users(user_id)
+        except Exception as e:
+            self._log(f"transformed_uid の取得に失敗: {e}")
+            return
+        self._log(f"transformed_uid: {self.st.transformed_uid}")
 
     def _restore_players(self, events):
         """Joining 以降の入退室を古い順に積み上げる"""
