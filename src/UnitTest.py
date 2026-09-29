@@ -187,6 +187,7 @@ class TestActionExecutorFocusFailure(unittest.TestCase):
     """フォーカスを取れない時は操作を送らない"""
 
     def setUp(self):
+        _no_accept_wait(self)
         SharedState.equip_freeze_reset()
         SharedState.CONTINUE_ROUND_EVENT.set()
 
@@ -8676,6 +8677,17 @@ class TestHoldKeyBackground(unittest.TestCase):
         self.assertEqual(last._obj[self.VK], 0)
 
 
+def _no_accept_wait(test):
+    """差し込み後の受理待ちを0秒にする（受理待ちの長さを見ないテスト用）。
+
+    受理が来ないテストで、試すたびに本物の時間（BEGIN_RETRY_WAIT_SEC）を
+    待つとテストが遅くなる。受理待ちそのものは TestDipRetry で見る
+    """
+    patcher = patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0.0)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 def _single_attempt(test):
     """1回目の自爆・Beginクリックだけを見るテスト用。やり直しは止める。
 
@@ -12487,43 +12499,310 @@ class TestCursorGiveUpReasons(unittest.TestCase):
         self.assertTrue(any("最小化" in m for m in logs), logs)
 
 
-class TestOneDipOnly(unittest.TestCase):
-    """差し込みの往復は1回。連打が0.05秒周期なので繰り返す理由が無い"""
+class TestDipRetry(unittest.TestCase):
+    """カーソルの差し込みを1回だけやり直す（1回目＋やり直し1回）。
 
-    RECT = (100, 200, 1000, 800)
+    やり直すのは一時的な失敗だけ: 受理が来ない・SetCursorPos が効かない・読み返しが
+    ずれる。最小化・画面外は何度やっても同じなのでやり直さない。2回目の前に VRChat が
+    前面になっていたら、カーソルに触らない（前面の窓のカメラを回さないため）。
+    """
 
-    def test_the_default_is_one_dip(self):
-        self.assertEqual(config.BEGIN_CURSOR_DIPS, 1)
+    HWND = 321
+    CENTRE = (550, 500)
+    HOME = (500, 500)
 
-    def test_it_goes_there_and_back_once(self):
-        cfg = WindowConfig(hwnd=123, osc_port=9000)
-        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
-        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
-        user32 = FakeUser32()
+    def setUp(self):
+        SharedState.clear_window_hwnds()
+        self.addCleanup(SharedState.clear_window_hwnds)
+
+    def _executor(self, logs=None):
+        cfg = WindowConfig(hwnd=self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0,
+                         round_seq=3)
+        ex = ActionExecutor.ActionExecutor(
+            cfg, st, lambda: True,
+            logs.append if logs is not None else (lambda _m: None))
+        return ex, st
+
+    def _dip(self, ex, user32=None, accept_on=None, iconic=False, front=0,
+             each_wait=None, wait_sec=0.0):
+        """_dip_cursor_for_begin を回す。accept_on 回目の差し込みで受理が来る。
+
+        each_wait(n): n 回目の受理待ちが始まったときに呼ぶ（間に何かを起こす用）
+        """
+        user32 = user32 or FakeUser32()
+        dips = {"n": 0}
+        waits = {"n": 0}
+        real_wait = ex._wait_begin_accepted
+        st = ex._st
+        real_set = user32.SetCursorPos
+
+        def on_press(_addr, _sec):
+            return True
+
+        def set_cursor(x, y):
+            # 差し込みは「中央へ置いた回数」で数える。待ちの秒数で数えると、
+            # WindowOperator 側の待ちも同じ 0.05 秒なので1回を2回に数える
+            ok = real_set(x, y)
+            if (x, y) == self.CENTRE and ok:
+                dips["n"] += 1
+                if accept_on is not None and dips["n"] >= accept_on:
+                    st.begin_done = True
+            return ok
+
+        user32.SetCursorPos = set_cursor
+
+        def wait(round_seq):
+            waits["n"] += 1
+            if each_wait is not None:
+                each_wait(waits["n"])
+            return real_wait(round_seq)
 
         with contextlib.ExitStack() as stack:
             enter = stack.enter_context
             enter(patch.object(WindowOperator, "user32", user32))
             enter(patch.object(WindowOperator.win32gui, "IsIconic",
-                               return_value=False))
+                               return_value=iconic))
             enter(patch.object(WindowOperator.win32gui, "GetClientRect",
                                return_value=(0, 0, 900, 600)))
             enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
                                return_value=(100, 200)))
-            enter(patch.object(WindowOperator, "window_at_point",
-                               return_value=123))
-            enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
-            enter(patch.object(WindowOperator, "focus_window", return_value=True))
-            enter(patch.object(WindowOperator, "click"))
-            enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
-            enter(patch.object(ActionExecutor.time, "sleep"))
-            ex._press_begin()
+            enter(patch.object(WindowOperator, "foreground_hwnd",
+                               side_effect=front if callable(front) else
+                               (lambda: front)))
+            enter(patch.object(OSCClient.OSCClient, "press", side_effect=on_press))
+            enter(patch.object(config, "BEGIN_RETRY_WAIT_SEC", wait_sec))
+            slept = []
+            enter(patch.object(ActionExecutor.time, "sleep", side_effect=slept.append))
+            enter(patch.object(ex, "_wait_begin_accepted", side_effect=wait))
+            ok = ex._dip_cursor_for_begin("")
+        return ok, user32, slept, waits["n"]
 
-        self.assertEqual(user32.moves, [(550, 500), (500, 500)],
-                         "置いて戻すの1往復だけ")
+    # ── 1〜3. 受理 ───────────────────────────
+    def test_accepted_at_once_dips_only_once(self):
+        logs = []
+        ex, _st = self._executor(logs)
+
+        ok, user32, _slept, waits = self._dip(ex, accept_on=1)
+
+        self.assertTrue(ok)
+        self.assertEqual(user32.moves, [self.CENTRE, self.HOME], "1往復だけ")
+        self.assertEqual(waits, 1)
+        self.assertFalse(any("もう一度" in m for m in logs), logs)
+
+    def test_no_acceptance_tries_once_more(self):
+        logs = []
+        ex, _st = self._executor(logs)
+
+        ok, user32, _slept, waits = self._dip(ex, accept_on=2)
+
+        self.assertTrue(ok)
+        self.assertEqual(user32.moves, [self.CENTRE, self.HOME] * 2, "2往復")
+        self.assertEqual(waits, 2)
+        self.assertEqual([m for m in logs if "もう一度" in m],
+                         ["Begin: カーソルをもう一度合わせる"], "やり直しのログは1行")
+
+    def test_two_misses_fall_back_after_exactly_two_dips(self):
+        ex, _st = self._executor()
+
+        ok, user32, _slept, waits = self._dip(ex, accept_on=None)
+
+        self.assertFalse(ok, "フォールバックへ")
+        self.assertEqual(user32.moves.count(self.CENTRE), 2, "差し込みはちょうど2回")
+        self.assertEqual(waits, 2)
+
+    # ── 4. 置けなかった（一時的） ────────────────────
+    def test_a_failed_setcursorpos_waits_the_gap_and_retries(self):
+        ex, _st = self._executor()
+        user32 = FakeUser32()
+        real = user32.SetCursorPos
+        calls = {"n": 0}
+
+        def flaky(x, y):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return 0                      # 1回目だけ効かない
+            return real(x, y)
+
+        user32.SetCursorPos = flaky
+
+        ok, _u, slept, _waits = self._dip(ex, user32=user32, accept_on=1)
+
+        self.assertTrue(ok)
+        self.assertIn(config.BEGIN_CURSOR_GAP_SEC, slept, "少しおいてから")
+
+    def test_a_readback_mismatch_waits_the_gap_and_retries(self):
+        ex, _st = self._executor()
+        user32 = FakeUser32()
+        real = user32.SetCursorPos
+        calls = {"n": 0}
+
+        def moved_by_hand(x, y):
+            calls["n"] += 1
+            real(x, y)
+            if calls["n"] == 1:
+                user32.cursor = (7, 9)        # 置いた瞬間に手でマウスを動かされた
+            return 1
+
+        user32.SetCursorPos = moved_by_hand
+
+        ok, _u, slept, _waits = self._dip(ex, user32=user32, accept_on=1)
+
+        self.assertTrue(ok)
+        self.assertIn(config.BEGIN_CURSOR_GAP_SEC, slept)
+
+    # ── 5. やり直さないもの ───────────────────────
+    def test_a_minimized_window_does_not_retry(self):
+        ex, _st = self._executor()
+
+        ok, user32, slept, waits = self._dip(ex, iconic=True)
+
+        self.assertFalse(ok)
+        self.assertEqual(user32.moves, [], "カーソルに触らない")
+        self.assertNotIn(config.BEGIN_CURSOR_GAP_SEC, slept, "やり直さない")
+        self.assertEqual(waits, 0)
+
+    def test_a_window_off_every_screen_does_not_retry(self):
+        ex, _st = self._executor()
+        user32 = FakeUser32(screen=(0, 0, 100, 100))      # 点 (550,500) は画面外
+
+        ok, _u, slept, waits = self._dip(ex, user32=user32)
+
+        self.assertFalse(ok)
+        self.assertEqual(user32.moves, [])
+        self.assertNotIn(config.BEGIN_CURSOR_GAP_SEC, slept)
+        self.assertEqual(waits, 0)
+
+    # ── 6. 2回目の前に VRChat が前面になっていたら ───────────
+    def test_vrchat_in_front_before_the_retry_leaves_the_cursor_alone(self):
+        ex, _st = self._executor()
+        SharedState.register_window_hwnd(999)             # 管理下の VRChat
+        # _dip_cursor_for_begin の中で前面を見るのは2回目の前だけ（1回目の前は
+        # _press_begin が見る）。そこで VRChat が前面になっている
+        ok, user32, _slept, _waits = self._dip(ex, front=999)
+
+        self.assertFalse(ok)
+        self.assertEqual(user32.moves, [self.CENTRE, self.HOME],
+                         "2回目は SetCursorPos を呼ばない")
+
+    # ── 7. 間に受理されていたら ───────────────────────
+    def test_an_acceptance_between_the_tries_skips_the_second(self):
+        ex, st = self._executor()
+
+        # 1回目の受理待ちでは来ず、その直後（2回目の前）に届く
+        real = ex._wait_begin_accepted
+
+        def wait_then_accept(round_seq):
+            result = real(round_seq)
+            st.begin_done = True
+            return result
+
+        with patch.object(ex, "_wait_begin_accepted", side_effect=wait_then_accept):
+            user32 = FakeUser32()
+            with contextlib.ExitStack() as stack:
+                enter = stack.enter_context
+                enter(patch.object(WindowOperator, "user32", user32))
+                enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                                   return_value=False))
+                enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                                   return_value=(0, 0, 900, 600)))
+                enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                                   return_value=(100, 200)))
+                enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
+                enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+                enter(patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0.0))
+                enter(patch.object(ActionExecutor.time, "sleep"))
+                ok = ex._dip_cursor_for_begin("")
+
+        self.assertTrue(ok)
+        self.assertEqual(user32.moves, [self.CENTRE, self.HOME], "2回目は試さない")
+
+    def test_a_started_round_between_the_tries_stops(self):
+        ex, st = self._executor()
+
+        def start_round(n):
+            if n == 1:
+                st.in_round = True
+
+        ok, user32, _slept, _waits = self._dip(ex, each_wait=start_round)
+
+        self.assertFalse(ok)
+        self.assertEqual(user32.moves.count(self.CENTRE), 1)
+
+    def test_a_new_round_seq_between_the_tries_stops(self):
+        ex, st = self._executor()
+
+        def bump(n):
+            if n == 1:
+                st.round_seq += 1
+
+        ok, user32, _slept, _waits = self._dip(ex, each_wait=bump)
+
+        self.assertFalse(ok)
+        self.assertEqual(user32.moves.count(self.CENTRE), 1)
+
+    # ── 8. 受理待ちは BEGIN_RETRY_WAIT_SEC ─────────────────
+    def test_the_wait_follows_the_shared_setting(self):
+        ex, st = self._executor()
+        started = time.time()
+
+        with patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0.3):
+            self.assertFalse(ex._wait_begin_accepted(st.round_seq))
+
+        elapsed = time.time() - started
+        self.assertGreaterEqual(elapsed, 0.3)
+        self.assertLess(elapsed, 1.5)
+
+    def test_there_is_no_separate_press_wait(self):
+        """受理待ちは押し直し前の待ちと共用する（依頼者の判断）"""
+        here = Path(ActionExecutor.__file__).parent
+        for name in ("config.py", "ActionExecutor.py"):
+            self.assertNotIn("BEGIN_PRESS_WAIT_SEC",
+                             (here / name).read_text(encoding="utf-8"), name)
+
+    # ── 9. 2回目が上限で切り捨てられない ───────────────────
+    def test_a_long_first_wait_does_not_cut_off_the_second_try(self):
+        """以前は BEGIN_CURSOR_LIMIT_SEC（4.0）がループ全体の締め切りで、
+        1回目の受理待ちが5秒あると2回目を切り捨てていた"""
+        ex, _st = self._executor()
+        clock = {"t": 1000.0}
+
+        def slow_wait(round_seq):
+            clock["t"] += 60.0                # 1回目の受理待ちがとても長かった
+            return False
+
+        with patch.object(ex, "_wait_begin_accepted", side_effect=slow_wait):
+            user32 = FakeUser32()
+            with contextlib.ExitStack() as stack:
+                enter = stack.enter_context
+                enter(patch.object(WindowOperator, "user32", user32))
+                enter(patch.object(WindowOperator.win32gui, "IsIconic",
+                                   return_value=False))
+                enter(patch.object(WindowOperator.win32gui, "GetClientRect",
+                                   return_value=(0, 0, 900, 600)))
+                enter(patch.object(WindowOperator.win32gui, "ClientToScreen",
+                                   return_value=(100, 200)))
+                enter(patch.object(WindowOperator, "foreground_hwnd", return_value=0))
+                enter(patch.object(OSCClient.OSCClient, "press", return_value=True))
+                enter(patch.object(ActionExecutor.time, "sleep"))
+                enter(patch.object(ActionExecutor.time, "time",
+                                   side_effect=lambda: clock["t"]))
+                ex._dip_cursor_for_begin("")
+
+        self.assertEqual(user32.moves.count(self.CENTRE), 2, "2回目も試す")
+
+    def test_the_try_count_is_two(self):
+        self.assertEqual(config.BEGIN_CURSOR_DIPS, 2)
+
+    def test_the_old_overall_limit_is_gone(self):
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        body = src[src.index("    def _dip_cursor_for_begin("):]
+        body = body[:body.index("\n    def ", 10)]
+
+        self.assertNotIn("BEGIN_CURSOR_LIMIT_SEC", body)
 
     def test_the_return_move_is_still_there(self):
-        """1回にしても、元の位置へ戻す作りは消さない（依頼者の指示）"""
+        """試すたびに元の位置へ戻す作りは消さない（依頼者の指示）"""
         src = Path(WindowOperator.__file__).read_text(encoding="utf-8")
         body = src[src.index("def cursor_over_window"):]
         body = body[:body.index("\ndef ", 10)]
@@ -12545,6 +12824,7 @@ class TestVRChatInFrontFallback(unittest.TestCase):
     OTHER = 456
 
     def setUp(self):
+        _no_accept_wait(self)
         SharedState.clear_window_hwnds()
         self.addCleanup(SharedState.clear_window_hwnds)
 
@@ -12815,6 +13095,9 @@ class TestVRChatInFrontFallback(unittest.TestCase):
 class TestBeginByCursor(unittest.TestCase):
     """OSCが使える窓の Begin は、カーソルを置いて UseRight を送る（前面化しない）"""
 
+    def setUp(self):
+        _no_accept_wait(self)
+
     RECT = (100, 200, 1000, 800)        # クライアント領域（スクリーン座標）
 
     @staticmethod
@@ -12889,24 +13172,21 @@ class TestBeginByCursor(unittest.TestCase):
         focus.assert_called_once()      # 押せないままなら従来方式へ落とす
         click.assert_called_once()
         self.assertEqual(user32.moves.count((500, 500)), config.BEGIN_CURSOR_DIPS,
-                         "毎回カーソルを戻す")
+                         "試すたびにカーソルを戻す")
         # DWELL は WindowOperator 側の待ちと同じ秒数なので、回数ではなく有無で見る
         self.assertIn(config.BEGIN_CURSOR_DWELL_SEC, slept)
-        self.assertEqual(slept.count(config.BEGIN_CURSOR_GAP_SEC),
-                         config.BEGIN_CURSOR_DIPS - 1, "間隔を空ける")
+        self.assertNotIn(config.BEGIN_CURSOR_GAP_SEC, slept,
+                         "置けたときは間を空けない（受理待ちが間になる）")
 
-    def test_it_gives_up_at_the_time_limit(self):
+    def test_it_gives_up_after_the_tries(self):
+        """ループ全体の時間の上限は無くした。試す回数で終わる"""
         executor, _st = self._executor()
-        # 差し込みは1回、そのあとの受理待ちも時間切れで抜ける（時刻は進める）
-        clock = iter([0.0, 0.0, 99.0] + [200.0 + i for i in range(50)])
 
-        with patch.object(ActionExecutor.time, "sleep"), \
-             patch.object(ActionExecutor.time, "time", side_effect=lambda: next(clock)):
-            ok, user32, focus, click, _press = self._press(executor, sleep=False)
+        ok, user32, focus, click, _press = self._press(executor)
 
         self.assertTrue(ok)
-        self.assertEqual(len(user32.moves), 2, "1回だけ差して打ち切る")
-        focus.assert_called_once()      # 打ち切ったら従来方式へ
+        self.assertEqual(user32.moves.count((500, 500)), config.BEGIN_CURSOR_DIPS)
+        focus.assert_called_once()      # 試し終えたら従来方式へ
         click.assert_called_once()
 
     def test_a_shop_item_still_uses_the_cursor(self):

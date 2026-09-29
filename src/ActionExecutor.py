@@ -397,38 +397,48 @@ class ActionExecutor:
             stop.wait(config.BEGIN_USE_PULSE_SEC)
 
     def _dip_cursor_for_begin(self, tail: str) -> bool:
-        """カーソルをその窓へ一瞬だけ置く。押せたら True。
+        """カーソルをその窓へ一瞬だけ置き、受理を待つ。押せたら True。
 
-        置けない窓（最小化など）は False を返し、呼び出し側が従来方式へ落とす。
-        連打は _start_use_spam() のスレッドが送り続けている。
+        「差し込み → 受理を待つ」を BEGIN_CURSOR_DIPS 回まで試す（1回目＋やり直し）。
+        やり直すのは一時的な失敗だけ: 受理が来なかった・SetCursorPos が効かなかった・
+        読み返しがずれた（利用者の手がちょうどマウスを動かした瞬間など）。
+        最小化・クライアント領域が0・画面外は何度やっても同じなので、その場で
+        False を返し、呼び出し側が従来方式（前面化＋クリック）へ落とす。
 
         差し込めたら、答え（Verified）が来るまで待つ。往復は0.05秒で終わるのに
         受理はその後に来るので、待たずに判定すると押せていても必ず
         「押せなかった」ことになり、毎ラウンド前面を奪っていた。
+        連打は _start_use_spam() のスレッドが送り続けている。
         """
         st = self._st
         round_seq = st.round_seq
-        deadline = time.time() + config.BEGIN_CURSOR_LIMIT_SEC
-        dipped = False
-        for dip in range(config.BEGIN_CURSOR_DIPS):
+        for attempt in range(config.BEGIN_CURSOR_DIPS):
             if st.begin_done:
-                return True
-            if time.time() >= deadline or not self._is_running() or st.in_round:
-                break
-            if dip:
-                time.sleep(config.BEGIN_CURSOR_GAP_SEC)
+                return True             # 間に受理されていた
+            if (not self._is_running() or st.in_round
+                    or st.round_seq != round_seq):
+                return False
+            if attempt:
+                # 1回目との間に VRChat が前面になっていたら、カーソルに触らない
+                # （前面の窓はマウスを掴んでいて、SetCursorPos でカメラが回る）
+                if self._vrchat_is_in_front():
+                    return False
+                self._log(f"Begin: カーソルをもう一度合わせる{tail}")
             with SharedState._GLOBAL_ACTION_LOCK:
                 with WindowOperator.cursor_over_window(
                         self._cfg.hwnd, self._log_cursor_reason) as over:
-                    if not over:
-                        return False
-                    if not dipped:
-                        self._log(f"Begin: カーソルを一瞬合わせる{tail}")
-                        dipped = True
-                    time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
-        if not dipped:
-            return False
-        return self._wait_begin_accepted(round_seq)
+                    if over:
+                        if not attempt:
+                            self._log(f"Begin: カーソルを一瞬合わせる{tail}")
+                        time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
+            if not over:
+                if WindowOperator.cursor_target(self._cfg.hwnd)[0] is None:
+                    return False        # 点が出せない（最小化・画面外など）
+                time.sleep(config.BEGIN_CURSOR_GAP_SEC)
+                continue
+            if self._wait_begin_accepted(round_seq):
+                return True
+        return False
 
     def _wait_begin_accepted(self, round_seq: int) -> bool:
         """受理（Verified）を BEGIN_RETRY_WAIT_SEC まで待つ。来なければ False。
