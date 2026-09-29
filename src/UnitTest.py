@@ -2302,6 +2302,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key",
@@ -8827,6 +8828,205 @@ class TestBeginRetry(unittest.TestCase):
             ex.do_after_round()
 
         confirm.assert_not_called()
+
+
+class TestWindowCountIsRemembered(unittest.TestCase):
+    """窓数を保存する。起動時は 開いている窓の数 → 保存値 → 4 の順で決める。
+
+    保存するのは手で変えた値だけ。自動検出の値を保存すると、3窓だけ開いていた
+    日の次に、VRChat を開かずに起動したとき3が出てしまう。
+    """
+
+    class FakeVar:
+        def __init__(self, value=0):
+            self._v = value
+
+        def get(self):
+            return self._v
+
+        def set(self, value):
+            self._v = value
+
+    def _app(self, pref=None, tabs=4):
+        app = type("FakeApp", (), {})()
+        app.v_win_count = self.FakeVar(tabs)
+        app.tabs = [object()] * tabs
+        app._win_count_pref = pref
+        app._running = False
+        app.logs = []
+        app._log = app.logs.append
+        app.rebuilt = []
+
+        def rebuild(n):
+            app.rebuilt.append(n)
+            app.tabs = [object()] * n
+
+        app._rebuild_tabs = rebuild
+        app._sync_launch_count = lambda: None
+        app._release_suicide_keys = lambda hs: list(hs)
+        app._assign_windows_and_logs = lambda ws: None
+        app.saves = []
+        app._schedule_settings_save = lambda: app.saves.append(1)
+        return app
+
+    @staticmethod
+    def _detect(app, windows):
+        with patch.object(mainGUI.VRChatDiscovery,
+                          "get_vrchat_windows_by_start_time", return_value=windows):
+            mainGUI.App._auto_detect_windows(app)
+
+    # ── 1〜3. 起動時の決め方 ───────────────────
+    def test_open_windows_win_over_the_saved_value(self):
+        app = self._app(pref=6)
+
+        self._detect(app, [(1, 0.0), (2, 0.0), (3, 0.0)])
+
+        self.assertEqual(app.v_win_count.get(), 3, "開いている数を使う")
+        self.assertEqual(app._win_count_pref, 6, "保存値は変えない")
+
+    def test_no_open_windows_uses_the_saved_value(self):
+        app = self._app(pref=6)
+
+        self._detect(app, [])
+
+        self.assertEqual(app.v_win_count.get(), 6)
+        self.assertEqual(app.rebuilt, [6], "タブも作り直す")
+        self.assertTrue(any("前回の窓数6" in m for m in app.logs), app.logs)
+
+    def test_no_saved_value_stays_at_four(self):
+        app = self._app(pref=None)
+
+        self._detect(app, [])
+
+        self.assertEqual(app.v_win_count.get(), 4)
+        self.assertEqual(app.rebuilt, [])
+        self.assertTrue(any("手動で設定" in m for m in app.logs), app.logs)
+
+    def test_the_default_is_four(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("self.v_win_count = tk.IntVar(value=4)", src)
+
+    # ── 4〜5. 何を保存するか ─────────────────────
+    def test_an_auto_detected_count_is_not_remembered(self):
+        app = self._app(pref=None)
+
+        self._detect(app, [(1, 0.0), (2, 0.0), (3, 0.0)])
+
+        self.assertIsNone(app._win_count_pref)
+
+    def test_a_manual_change_is_remembered_and_saved(self):
+        app = self._app(pref=None, tabs=4)
+        app.v_win_count.set(6)
+
+        mainGUI.App._on_win_count_change(app)
+
+        self.assertEqual(app._win_count_pref, 6)
+        self.assertEqual(app.saves, [1], "変えた直後にも保存する")
+
+    def test_leaving_the_spinbox_without_a_change_remembers_nothing(self):
+        """フォーカスが外れただけでも呼ばれる。自動検出の値を覚えないこと"""
+        app = self._app(pref=6, tabs=3)
+        app.v_win_count.set(3)                   # 自動検出で入った値のまま
+
+        mainGUI.App._on_win_count_change(app)
+
+        self.assertEqual(app._win_count_pref, 6)
+        self.assertEqual(app.saves, [])
+
+    def test_the_value_is_clamped_before_it_is_remembered(self):
+        app = self._app(pref=None, tabs=4)
+        app.v_win_count.set(99)
+
+        mainGUI.App._on_win_count_change(app)
+
+        self.assertEqual(app._win_count_pref, config.MAX_WINDOWS)
+
+    def test_nothing_changes_while_running(self):
+        app = self._app(pref=None, tabs=4)
+        app._running = True
+        app.v_win_count.set(6)
+
+        mainGUI.App._on_win_count_change(app)
+
+        self.assertIsNone(app._win_count_pref)
+
+    def test_the_count_is_written_to_the_file(self):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        app.tool_rows = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages",
+                     "v_freeze_punish", "v_emergency_key", "v_start_key",
+                     "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        app._win_count_pref = 6
+        saved = {}
+
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+
+        self.assertEqual(saved["win_count"], 6)
+
+    # ── 6〜7. 読み込みの検証 ────────────────────
+    def test_a_valid_value_is_read(self):
+        for n in (1, 4, config.MAX_WINDOWS):
+            self.assertEqual(mainGUI._valid_win_count(n), n, n)
+
+    def test_broken_values_are_ignored(self):
+        for value in ("6", "abc", 0, -1, config.MAX_WINDOWS + 1, 2.5, None,
+                      True, False, [], {}):
+            self.assertIsNone(mainGUI._valid_win_count(value), repr(value))
+
+    def test_loading_a_broken_value_does_not_stop_the_start(self):
+        app = self._load({"win_count": "abc"})
+
+        self.assertIsNone(app._win_count_pref)
+
+    def test_an_old_settings_file_without_the_key_is_fine(self):
+        app = self._load({"tnl_path": "C:/list/my.tnl"})
+
+        self.assertIsNone(app._win_count_pref)
+
+    def test_loading_a_good_value_only_notes_it(self):
+        """読み込みでは控えるだけ。窓数への反映は自動検出の後"""
+        app = self._load({"win_count": 6})
+
+        self.assertEqual(app._win_count_pref, 6)
+        self.assertEqual(app.v_win_count.get(), "", "ここでは窓数を変えない")
+
+    def _load(self, data):
+        app = type("FakeApp", (), {})()
+        app.tabs = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_instance_link",
+                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
+                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password", "v_win_count"):
+            setattr(app, name, self.FakeVar(""))
+        app.v_freeze_rounds = {}
+        app._add_tool_row = lambda p, save=True: None
+        app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
+        app._apply_freeze_settings = lambda: None
+        app._apply_obs_settings = lambda: None
+        app._apply_saved_window_settings = lambda: None
+        app._load_tnl = lambda show_error=True: None
+        app.logs = []
+        app._log = app.logs.append
+        with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
+             patch.object(mainGUI, "save_settings", lambda _d: None):
+            mainGUI.App._load_saved_settings(app)
+        return app
+
+    def test_load_comes_before_detection(self):
+        """読み込みで控えた値を、自動検出の「未検出」で使う順番であること"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+
+        self.assertLess(src.index("        self._load_saved_settings()\n"),
+                        src.index("        self._auto_detect_windows()\n"))
 
 
 class TestHideOwnWindowsWhileRecording(unittest.TestCase):
@@ -15914,6 +16114,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app = self._app("f9")
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
@@ -16247,6 +16448,7 @@ class TestStartKeySettings(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages",
                      "v_freeze_punish", "v_emergency_key", "v_obs_enabled",
@@ -16648,6 +16850,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_tnl",
@@ -16779,6 +16982,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
@@ -16796,6 +17000,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
+            "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
 
@@ -16803,6 +17008,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = []
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
@@ -16947,6 +17153,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.tabs = []
         app.tool_rows = [self._row(p) for p in paths]
+        app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_freeze_8pages", "v_freeze_punish"):
@@ -18184,6 +18391,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.tool_rows = []
+        app._win_count_pref = None
         app.v_emergency_key = TestSkipRoundsSettings.FakeVar("p")
         app.v_start_key = TestSkipRoundsSettings.FakeVar("")
         saved = {}

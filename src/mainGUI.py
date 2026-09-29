@@ -327,6 +327,19 @@ class WindowTab(ttk.Frame):
 
 
 # ── ログオーバーレイ ──────────────────────────────
+def _valid_win_count(value):
+    """settings.json の win_count を検証する。使えなければ None。
+
+    壊れた値（文字列・0・上限超え・真偽値）で起動が止まらないように、
+    ここで捨てる。None は「保存値なし」＝既定値へ
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if not 1 <= value <= config.MAX_WINDOWS:
+        return None
+    return value
+
+
 def _remember_own_window(widget):
     """当ツールの窓を覚える。録画中はここに入っている窓を隠す。
 
@@ -493,6 +506,10 @@ class App(tk.Tk):
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
         self.v_win_count = tk.IntVar(value=4)
+        # 手で変えた窓数（settings.json の win_count）。自動検出で入った値は
+        # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
+        # 開かずに起動したとき3が出てしまう。無ければ None
+        self._win_count_pref: int | None = None
         # LogMonitor がこの dict をそのまま掴むので、以後は差し替えず中身を入れ替える
         self.keepOn_set: dict = {}
         # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
@@ -1052,7 +1069,11 @@ class App(tk.Tk):
         self.v_win_count.set(n)
         self._sync_launch_count()
         if len(self.tabs) == n:
+            # 変わっていない。スピンボックスからフォーカスが外れただけでも
+            # ここへ来るので、自動検出の値を「手で選んだ値」として覚えない
             return
+        self._win_count_pref = n
+        self._schedule_settings_save()   # 変えた直後に落ちても残るように
         self._rebuild_tabs(n)
 
     def _sync_launch_count(self):
@@ -1328,6 +1349,9 @@ class App(tk.Tk):
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
         self.v_ton_access.set(access)
         self._saved_profiles = data.get("profiles", [])
+        # 窓数は控えるだけ。反映するのは _auto_detect_windows() の「未検出」の
+        # ときだけ（開いている窓があればその数を優先する）
+        self._win_count_pref = _valid_win_count(data.get("win_count"))
         # ラウンド指定（skip_rounds / continue_rounds）は
         # 復元しない。持ち越した自爆設定は、別のインスタンスでは危ない
         # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
@@ -1430,7 +1454,17 @@ class App(tk.Tk):
         起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
         windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         if not windows:
-            self._log("[起動時検出] VRChatウィンドウ未検出（窓数は手動で設定してください）")
+            # 開いている窓が無い → 前回手で選んだ窓数 → 既定値、の順
+            n = self._win_count_pref
+            if n is None:
+                self._log("[起動時検出] VRChatウィンドウ未検出"
+                          "（窓数は手動で設定してください）")
+                return
+            self.v_win_count.set(n)
+            if len(self.tabs) != n:
+                self._rebuild_tabs(n)
+            self._sync_launch_count()
+            self._log(f"[起動時検出] VRChatウィンドウ未検出 → 前回の窓数{n}を使います")
             return
         # 前回このツールが自爆の長押し中に落ちていたら、キーが押されたまま
         # 残っている。見つかった窓すべてで離しておく
@@ -2068,6 +2102,7 @@ class App(tk.Tk):
             "join_world":    self.v_join_world.get(),
             "ton_instance_access": self.v_ton_access.get(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
+            "win_count":     self._win_count_pref,
             "tool_launchers": [p for p in (row.v_path.get().strip()
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
