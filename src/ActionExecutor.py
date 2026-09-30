@@ -367,7 +367,7 @@ class ActionExecutor:
         見えていた）／"not_found": 最初の撮影で BEGIN が無い／"skip": 使えない・
         撮れない・中止。視点は回さない（回した向きが次のラウンドの Begin 前移動に
         残ると、明後日の方向へ歩く）。_GLOBAL_ACTION_LOCK は取らない（撮影も
-        横移動も前面を奪わない。検出は1〜2秒かかる）
+        横移動も前面を奪わない。検出は1回あたり平均1〜2秒・最大4秒ほどかかる）
         """
         if not BeginDetect.available():
             if not ActionExecutor._detector_unavailable_logged:
