@@ -12969,81 +12969,188 @@ class TestChaseMonitor(unittest.TestCase):
 
 
 class TestChaseKeysInTheApp(unittest.TestCase):
-    """押した瞬間に前面の、監視している窓だけ。押しっぱなしでも1回"""
+    """F1/F2 は押した瞬間の通知で拾う（200ms の見張りでは短い押下を取りこぼした）。
+    押しっぱなしの繰り返しは離すまで1回。GUI の処理は after で Tk のスレッドへ"""
 
-    def _app(self, running=True, fronts=(0xB,)):
+    def _app(self, running=True):
         app = type("FakeApp", (), {})()
         app._running = running
+        app._capturing_key = False
+        app.logs = []
+        app._log = app.logs.append
         self.a, self.b = MagicMock(), MagicMock()
         self.a.cfg.hwnd, self.b.cfg.hwnd = 0xA, 0xB
         app.monitors = [self.a, self.b]
+        app.scheduled = []
+        app.after = lambda _ms, fn, *args: app.scheduled.append((fn, args))
         app._on_chase_key = lambda d, k: mainGUI.App._on_chase_key(app, d, k)
+        app._chase_key_down = lambda d, k: mainGUI.App._chase_key_down(app, d, k)
+        self.keyboard = MagicMock()
+        self.handlers = {}
+
+        def hook(kind):
+            def register(key, callback, suppress):
+                self.handlers[(kind, key)] = callback
+                return (kind, key)
+            return register
+
+        self.keyboard.on_press_key.side_effect = hook("down")
+        self.keyboard.on_release_key.side_effect = hook("up")
+        with patch.object(mainGUI, "keyboard", self.keyboard):
+            mainGUI.App._hook_chase_keys(app)
         return app
 
-    def _poll(self, app, pressed, front=0xB):
-        keyboard = MagicMock()
-        keyboard.is_pressed.side_effect = lambda key: key in pressed
-        with patch.object(mainGUI, "keyboard", keyboard), \
-             patch.object(mainGUI.WindowOperator, "foreground_hwnd", return_value=front):
-            mainGUI.App._poll_chase_keys(app)
-        return keyboard
+    def _run_scheduled(self, app, front=0xB):
+        with patch.object(mainGUI.WindowOperator, "foreground_hwnd", return_value=front):
+            while app.scheduled:
+                fn, args = app.scheduled.pop(0)
+                fn(*args)
+
+    def _tap(self, app, key, times=1, repeats=1, front=0xB):
+        """押して離す（押しっぱなしなら押下の通知が repeats 回来る）"""
+        for _ in range(times):
+            for _ in range(repeats):
+                self.handlers[("down", key)](None)
+            self.handlers[("up", key)](None)
+            self._run_scheduled(app, front)
+
+    def test_the_keys_are_hooked_once_without_suppressing(self):
+        self._app()
+        self.assertEqual([c.args[0] for c in self.keyboard.on_press_key.call_args_list],
+                         ["f1", "f2"])
+        self.assertEqual([c.args[0] for c in self.keyboard.on_release_key.call_args_list],
+                         ["f1", "f2"])
+        for call in (self.keyboard.on_press_key.call_args_list
+                     + self.keyboard.on_release_key.call_args_list):
+            self.assertIs(call.kwargs["suppress"], False)
 
     def test_the_front_watched_window_gets_the_key(self):
         app = self._app()
 
-        self._poll(app, {"f1"})
+        self._tap(app, "f1")
 
         self.b.on_chase_key.assert_called_once_with("cw", "F1")
         self.a.on_chase_key.assert_not_called()
 
     def test_f2_is_counter_clockwise(self):
         app = self._app()
-        self._poll(app, {"f2"}, front=0xA)
+        self._tap(app, "f2", front=0xA)
         self.a.on_chase_key.assert_called_once_with("ccw", "F2")
 
-    def test_holding_the_key_reacts_once(self):
+    def test_every_short_press_is_seen(self):
+        """押して 0.05秒で離す短い押下でも、1回ずつ反応する"""
+        app = self._app()
+        for _ in range(3):
+            self.handlers[("down", "f2")](None)
+            time.sleep(0.05)
+            self.handlers[("up", "f2")](None)
+            self._run_scheduled(app)
+        self.assertEqual(self.b.on_chase_key.call_count, 3)
+
+    def test_holding_the_key_reacts_once_until_released(self):
         app = self._app()
 
-        for _ in range(3):
-            self._poll(app, {"f1"})
-        self._poll(app, set())
-        self._poll(app, {"f1"})
+        self._tap(app, "f1", repeats=5)
+        self._tap(app, "f1", repeats=3)
 
         self.assertEqual(self.b.on_chase_key.call_count, 2)
 
+    def test_the_gui_work_goes_through_after(self):
+        app = self._app()
+
+        self.handlers[("down", "f1")](None)
+
+        self.b.on_chase_key.assert_not_called()
+        self.assertEqual(len(app.scheduled), 1, "keyboard のスレッドでは何もしない")
+        self._run_scheduled(app)
+        self.b.on_chase_key.assert_called_once()
+
+    def test_nothing_while_capturing_a_key(self):
+        app = self._app()
+        app._capturing_key = True
+
+        self._tap(app, "f1")
+
+        self.assertEqual(app.scheduled, [])
+        self.b.on_chase_key.assert_not_called()
+
     def test_an_unwatched_front_window_does_nothing(self):
         app = self._app()
-        self._poll(app, {"f1"}, front=0x999)
-        self._poll(app, {"f2"}, front=0)
+        self._tap(app, "f1", front=0x999)
+        self._tap(app, "f2", front=0)
         self.a.on_chase_key.assert_not_called()
         self.b.on_chase_key.assert_not_called()
 
     def test_a_key_while_not_running_is_ignored(self):
         app = self._app(running=False)
-        with patch.object(mainGUI.WindowOperator, "foreground_hwnd", return_value=0xB):
-            mainGUI.App._on_chase_key(app, "cw", "f1")
+        self._tap(app, "f1")
         self.b.on_chase_key.assert_not_called()
 
-    def test_not_running_does_nothing_and_asks_no_keys(self):
-        app = self._app(running=False)
+    def test_without_keyboard_nothing_is_hooked(self):
+        app = type("FakeApp", (), {})()
+        with patch.object(mainGUI, "keyboard", None):
+            mainGUI.App._hook_chase_keys(app)
+        self.assertEqual(app._chase_hooks, [])
 
-        keyboard = self._poll(app, {"f1"})
+    def test_closing_unhooks_the_keys(self):
+        app = self._app()
+        with patch.object(mainGUI, "keyboard", self.keyboard):
+            mainGUI.App._unhook_chase_keys(app)
+        self.assertEqual([c.args[0] for c in self.keyboard.unhook.call_args_list],
+                         [("down", "f1"), ("up", "f1"), ("down", "f2"), ("up", "f2")])
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        close = src[src.index("    def _on_close(self):"):]
+        if "\n    def " in close:              # 最後のメソッドなら末尾まで
+            close = close[:close.index("\n    def ")]
+        self.assertIn("self._unhook_chase_keys()", close)
 
-        keyboard.is_pressed.assert_not_called()
-        self.b.on_chase_key.assert_not_called()
+    def test_the_keys_are_hooked_at_startup_not_polled(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        start = src[src.index("    def _start_emergency_stop_polling(self):"):]
+        start = start[:start.index("\n    def ")]
+        self.assertIn("self._hook_chase_keys()", start)
+        poll = src[src.index("    def _poll_emergency_stop_key(self):"):]
+        poll = poll[:poll.index("\n    def ")]
+        self.assertNotIn("chase", poll, "200ms の見張りでは見ない（二重に反応しない）")
+        self.assertNotIn("_poll_chase_keys", src)
 
     def test_the_keys_are_f1_and_f2(self):
         self.assertEqual((config.CHASE_CW_KEY, config.CHASE_CCW_KEY), ("f1", "f2"))
         self.assertEqual(config.CHASE_RESEND_SEC, 0.2)
 
-    def test_the_poll_runs_in_the_emergency_loop_and_not_while_capturing(self):
-        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        body = src[src.index("    def _poll_emergency_stop_key(self):"):]
-        body = body[:body.index("\n    def ")]
-        self.assertIn("self._poll_chase_keys()", body)
-        capture = body[:body.index("return")]
-        self.assertIn("self._chase_keys_pressed = {}", capture)
-        self.assertNotIn("self._poll_chase_keys()", capture)
+
+class TestChaseKeysEndToEnd(unittest.TestCase):
+    """押下と離上の通知を順に流して、実際の窓（LogMonitor）まで届くこと"""
+
+    def setUp(self):
+        p = patch.object(config, "CHASE_RESEND_SEC", 0.01)
+        p.start()
+        self.addCleanup(p.stop)
+        self.keys = TestChaseKeysInTheApp()
+        self.app = self.keys._app()
+        self.monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0xB, osc_port=9000), {},
+                                             lambda _m: None, window_idx=2)
+        self.logs = []
+        self.monitor.logger = self.logs.append
+        self.monitor._action._osc = _ChaseOsc(self)
+        self.app.monitors = [self.monitor]
+        self.addCleanup(self.monitor._action.chase_stop)
+
+    def test_start_stop_start_with_short_presses(self):
+        self.monitor.st.in_round = True
+
+        self.keys._tap(self.app, "f2", times=3)
+
+        self.assertEqual(self.logs, ["[窓2] チェイス開始（反時計回り・F2）",
+                                     "[窓2] チェイス停止（F2）",
+                                     "[窓2] チェイス開始（反時計回り・F2）"])
+
+    def test_outside_a_round_every_press_says_so(self):
+        self.monitor.st.in_round = False
+
+        self.keys._tap(self.app, "f2", times=2)
+
+        self.assertEqual(self.logs, ["[窓2] チェイスはラウンド中だけ使えます"] * 2)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -13458,6 +13565,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
 
         with self._released(app):
             app._stop_window_volume = lambda: None
+            app._unhook_chase_keys = lambda: None
             mainGUI.App._on_close(app)
 
         kinds = [e[0] for e in app.order]
@@ -19891,6 +19999,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.destroy = MagicMock()
 
         app._stop_window_volume = lambda: None
+        app._unhook_chase_keys = lambda: None
         mainGUI.App._on_close(app)
 
         app._save_launch_settings.assert_called_once()
@@ -19903,6 +20012,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.destroy = lambda: order.append("destroy")
 
         app._stop_window_volume = lambda: None
+        app._unhook_chase_keys = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("destroy"))
@@ -19915,6 +20025,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.destroy = lambda: order.append("destroy")
 
         app._stop_window_volume = lambda: None
+        app._unhook_chase_keys = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("stop"))
@@ -19926,6 +20037,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app.destroy = MagicMock()
 
         app._stop_window_volume = lambda: None
+        app._unhook_chase_keys = lambda: None
         mainGUI.App._on_close(app)
 
         app.destroy.assert_called_once()

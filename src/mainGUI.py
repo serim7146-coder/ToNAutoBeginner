@@ -552,16 +552,58 @@ class App(tk.Tk):
         self._start_tool_poll()
 
     def _start_emergency_stop_polling(self):
+        self._hook_chase_keys()
         if keyboard is None:
             return
         self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
+
+    # ── チェイスのキー（押した瞬間の通知で拾う）──────────────
+    # 200ms ごとの is_pressed() では、短く押した F1/F2（0.1秒前後）が見に行く
+    # 合間に収まって取りこぼす。押した・離した通知で拾う（suppress しない）
+    def _hook_chase_keys(self):
+        """アプリ起動時に1回。keyboard が無ければ何もしない"""
+        self._chase_keys_down = set()
+        self._chase_hooks = []
+        if keyboard is None:
+            return
+        for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
+            try:
+                self._chase_hooks.append(keyboard.on_press_key(
+                    key, lambda _e, d=direction, k=key: self._chase_key_down(d, k),
+                    suppress=False))
+                self._chase_hooks.append(keyboard.on_release_key(
+                    key, lambda _e, k=key: self._chase_keys_down.discard(k),
+                    suppress=False))
+            except Exception as e:
+                self._log(f"[チェイス] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
+
+    def _chase_key_down(self, direction: str, key: str):
+        """keyboard のスレッドから呼ばれる。押しっぱなしの繰り返しは離すまで1回。
+        GUI の処理は Tk のスレッドで行う"""
+        if key in self._chase_keys_down:
+            return
+        self._chase_keys_down.add(key)
+        if self._capturing_key:
+            return                  # キーの設定中は反応しない
+        try:
+            self.after(0, self._on_chase_key, direction, key)
+        except (tk.TclError, RuntimeError):
+            pass                    # 閉じた後に通知が来た
+
+    def _unhook_chase_keys(self):
+        """アプリ終了時に外す"""
+        for hook in getattr(self, "_chase_hooks", []):
+            try:
+                keyboard.unhook(hook)
+            except Exception:
+                pass
+        self._chase_hooks = []
 
     def _poll_emergency_stop_key(self):
         if self._capturing_key:
             # 設定しようとしているキーで停止や開始がかかると困る
             self._emergency_stop_key_pressed = False
             self._start_key_pressed = False
-            self._chase_keys_pressed = {}
             self._reschedule_emergency_poll()
             return
         key = self.v_emergency_key.get()
@@ -578,7 +620,6 @@ class App(tk.Tk):
                 f"[緊急停止] ⚠ {key!r} は使えないキーです")
 
         self._poll_start_key()
-        self._poll_chase_keys()
 
         try:
             self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
@@ -613,24 +654,6 @@ class App(tk.Tk):
                 self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
                 self.after(0, self._start)
         self._start_key_pressed = now
-
-    def _poll_chase_keys(self):
-        """チェイスのキー（F1 = 時計回り、F2 = 反時計回り）。停止キーと同じ200msの
-        ループに乗せる。押された瞬間だけ反応する（押し続けても1回）"""
-        if not getattr(self, "_running", False):
-            self._chase_keys_pressed = {}     # マクロが動いていない。キーも見ない
-            return
-        pressed = getattr(self, "_chase_keys_pressed", None)
-        if pressed is None:
-            pressed = self._chase_keys_pressed = {}
-        for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
-            try:
-                now = bool(keyboard.is_pressed(key))
-            except Exception:
-                now = False
-            if now and not pressed.get(key, False):
-                self._on_chase_key(direction, key)
-            pressed[key] = now
 
     def _on_chase_key(self, direction: str, key: str):
         """押した瞬間に前面の、監視している窓だけを回す。それ以外は何もしない
@@ -2357,5 +2380,6 @@ class App(tk.Tk):
         # _stop() より前に書く
         self._save_settings_now()
         self._stop()
+        self._unhook_chase_keys()
         self._show_own_windows_again()
         self.destroy()
