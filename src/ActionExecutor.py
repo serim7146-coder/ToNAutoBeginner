@@ -49,8 +49,11 @@ class ActionExecutor:
         is_running: Callable[[], bool],
         log: Callable[[str], None],
         auto_begin_active: Callable[[], bool] = None,
+        debug: Callable[[str], None] = None,
     ):
         self._cfg = cfg
+        # デバッグログ（公開ログとは別。LogMonitor._debug）。無ければ書かない
+        self._debug = debug or (lambda _m: None)
         self._st = st
         self._is_running = is_running
         self._log = log
@@ -1026,7 +1029,9 @@ class ActionExecutor:
         # 送信ポートは受信+1とは限らない（ログの --osc= から取れていれば
         # それを使う）。ToNUtilsが立てた窓は 9003/9004 だった
         out_port = self._cfg.osc_out_port or self._cfg.osc_port + 1
-        receiver = OSCReceiver.VelocityReceiver(out_port, self._log)
+        receiver = OSCReceiver.VelocityReceiver(
+            out_port, self._log,
+            on_param=lambda name, value: self._debug(f"OSC {name} = {value}"))
         if not receiver.start():
             self._log("速度受信を開始できないため種別検知を無効化します")
             self._speed_ready.set()

@@ -52,6 +52,7 @@ import Recorder
 import SecretStore
 import FogEarlyRead
 import BeginDetect
+import DebugLog
 import WindowVolume
 import ScreenCapture
 import ToNEntry
@@ -76,8 +77,10 @@ def setUpModule():
     root = Path(_sandbox.name) / "ToNAutoBeginner"
     _real_paths.update(settings=config.SETTINGS_PATH,
                        names=config.FOG_OBJECT_NAMES_PATH,
+                       debug=config.DEBUG_LOG_PATH,
                        trust=FogEarlyRead.trust)
     config.SETTINGS_PATH = root / "settings.json"
+    config.DEBUG_LOG_PATH = root / "debug.log"
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
@@ -86,6 +89,7 @@ def setUpModule():
 def tearDownModule():
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
+    config.DEBUG_LOG_PATH = _real_paths["debug"]
     FogEarlyRead.trust = _real_paths["trust"]
     _sandbox.cleanup()
 
@@ -104,6 +108,9 @@ class TestNoRealSettings(unittest.TestCase):
     def test_the_fog_object_names_path_is_not_the_real_one(self):
         self._assert_not_real(config.FOG_OBJECT_NAMES_PATH)
         self._assert_not_real(FogEarlyRead.trust.path)
+
+    def test_the_debug_log_path_is_not_the_real_one(self):
+        self._assert_not_real(config.DEBUG_LOG_PATH)
 
     def test_saving_settings_does_not_touch_the_real_one(self):
         mainGUI.save_settings({"probe": True})
@@ -17823,7 +17830,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
         return ex, logs
 
     class FakeReceiver:
-        def __init__(self, port, log=None):
+        def __init__(self, port, log=None, on_param=None):
             self.port = port
             self.started = False
             self.stopped = False
@@ -17876,7 +17883,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
         ex, logs = self._executor()
 
         class DeadReceiver:
-            def __init__(self, port, log=None):
+            def __init__(self, port, log=None, on_param=None):
                 pass
 
             def start(self):
@@ -17998,7 +18005,7 @@ class TestSpeedProbeOrder(unittest.TestCase):
         ex, _st, _logs = self._executor()
 
         class FakeReceiver:
-            def __init__(self, port, log=None):
+            def __init__(self, port, log=None, on_param=None):
                 pass
 
             def start(self):
@@ -21129,6 +21136,175 @@ class TestThreeWinsRestored(unittest.TestCase):
         self._live(monitor, "[Behaviour] Joining wrld_next:3~private(usr_me)~region(jp)")
 
         self.assertEqual(self._said(monitor), [])
+
+
+class TestDebugLog(unittest.TestCase):
+    """公開ログとは別のファイルへ、時刻つきで1行ずつ追記する"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = Path(self._dir.name) / "sub" / "debug.log"
+        p = patch.object(config, "DEBUG_LOG_PATH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _lines(self, path=None):
+        return (path or self.path).read_text(encoding="utf-8").splitlines()
+
+    def test_each_line_starts_with_the_time_and_is_appended(self):
+        DebugLog.write("one")
+        DebugLog.write("two")
+
+        lines = self._lines()
+        self.assertEqual(len(lines), 2)
+        for line, text in zip(lines, ("one", "two")):
+            self.assertRegex(line, r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] " + text + "$")
+
+    def test_a_full_file_moves_to_dot_one(self):
+        with patch.object(config, "DEBUG_LOG_MAX_BYTES", 60):
+            DebugLog.write("old " + "x" * 60)
+            DebugLog.write("older1")                     # ここで回る
+            DebugLog.write("y" * 60)
+            DebugLog.write("newest")                     # もう一度回る（前の .1 は消える）
+
+        backup = self.path.with_name("debug.log.1")
+        self.assertEqual([l.split("] ", 1)[1] for l in self._lines(backup)], ["older1", "y" * 60])
+        self.assertEqual([l.split("] ", 1)[1] for l in self._lines()], ["newest"])
+
+    def test_an_unwritable_path_does_not_raise(self):
+        blocker = Path(self._dir.name) / "file"
+        blocker.write_text("x", encoding="utf-8")
+        with patch.object(config, "DEBUG_LOG_PATH", blocker / "debug.log"):
+            DebugLog.write("nowhere")                    # 親がファイル。例外を出さない
+
+    def test_threads_do_not_mix_lines(self):
+        def worker(n):
+            for i in range(100):
+                DebugLog.write(f"t{n}-{i}-" + "z" * 50)
+
+        threads = [threading.Thread(target=worker, args=(n,)) for n in range(6)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        lines = self._lines()
+        self.assertEqual(len(lines), 600)
+        for line in lines:
+            self.assertRegex(line, r"^\[[^\]]+\] t\d-\d+-z{50}$")
+
+    def test_the_real_path_is_under_appdata_next_to_settings(self):
+        self.assertEqual(_real_paths["debug"].name, "debug.log")
+        self.assertEqual(_real_paths["debug"].parent, _real_paths["settings"].parent)
+        self.assertEqual(config.DEBUG_LOG_MAX_BYTES, 5 * 1024 * 1024)
+
+
+class TestRoundTypeObservation(unittest.TestCase):
+    """OSC の ToN_RoundType・ToN_Map とログのラウンド名をデバッグログへ（公開ログには出さない）"""
+
+    def setUp(self):
+        self.written = []
+        p = patch.object(DebugLog, "write", side_effect=self.written.append)
+        p.start()
+        self.addCleanup(p.stop)
+
+    # ── 受信器 ───────────────────────────────
+    def _receiver(self):
+        self.seen = []
+        return OSCReceiver.VelocityReceiver(0, on_param=lambda n, v: self.seen.append((n, v)))
+
+    def test_changes_of_round_type_and_map_are_reported_once(self):
+        r = self._receiver()
+        for address, value in (("/avatar/parameters/ToN_RoundType", 5),
+                               ("/avatar/parameters/ToN_RoundType", 5),
+                               ("/avatar/parameters/ToN_Map", 43),
+                               ("/avatar/parameters/ToN_RoundType", 7),
+                               ("/avatar/parameters/ToN_Map", 43)):
+            r._handle(address, value)
+
+        self.assertEqual(self.seen, [("ToN_RoundType", 5), ("ToN_Map", 43), ("ToN_RoundType", 7)])
+
+    def test_terror_values_are_never_reported(self):
+        r = self._receiver()
+        for name in ("ToN_Terror1", "ToN_Terror2", "ToN_Terror3"):
+            r._handle(f"/avatar/parameters/{name}", 12)
+        self.assertEqual(self.seen, [])
+        self.assertNotIn("/avatar/parameters/ToN_Terror1", OSCReceiver.WATCHED_PARAMS)
+
+    def test_speed_and_grounded_are_as_before(self):
+        r = self._receiver()
+        r._handle(OSCReceiver.VELOCITY_MAGNITUDE, 4.0)
+        r._handle(OSCReceiver.GROUNDED, False)
+        self.assertEqual(r.speed, 4.0)
+        self.assertFalse(r.grounded)
+        self.assertEqual(self.seen, [])
+
+    def test_a_failing_callback_does_not_stop_receiving(self):
+        r = OSCReceiver.VelocityReceiver(0, on_param=MagicMock(side_effect=RuntimeError))
+        r._handle("/avatar/parameters/ToN_RoundType", 1)
+        r._handle(OSCReceiver.VELOCITY_MAGNITUDE, 2.0)
+        self.assertEqual(r.speed, 2.0)
+
+    def test_without_a_callback_nothing_happens(self):
+        OSCReceiver.VelocityReceiver(0)._handle("/avatar/parameters/ToN_RoundType", 1)
+
+    # ── つなぎ ───────────────────────────────
+    def _monitor(self, path=None):
+        monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9000, osc_out_port=9001,
+                                                     log_path=path), {},
+                                        lambda _m: None, window_idx=3)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def test_the_receiver_reports_to_the_debug_log(self):
+        monitor = self._monitor()
+        with patch.object(OSCReceiver, "VelocityReceiver") as receiver:
+            receiver.return_value.start.return_value = True
+            monitor._action.start_velocity_receiver()
+        on_param = receiver.call_args.kwargs["on_param"]
+
+        on_param("ToN_RoundType", 5)
+
+        self.assertEqual(self.written, ["[窓3] OSC ToN_RoundType = 5"])
+        self.assertEqual(monitor.logs, [], "公開ログには出さない")
+
+    def test_a_round_start_is_written_to_the_debug_log_only(self):
+        monitor = self._monitor()
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_start", create=True):
+            monitor._process("2026.09.30 13:00:00 Debug      -  This round is taking place "
+                             "at Facility (12) and the round type is Classic")
+
+        self.assertEqual(self.written, ["[窓3] ログ round type = Classic / map = Facility (12)"])
+        self.assertFalse(any("round type =" in m for m in monitor.logs), monitor.logs)
+
+    def test_debug_never_calls_the_public_logger(self):
+        monitor = self._monitor()
+        monitor.logger = MagicMock()
+
+        monitor._debug("secret")
+
+        monitor.logger.assert_not_called()
+        self.assertEqual(self.written, ["[窓3] secret"])
+
+    def test_the_start_scan_does_not_write(self):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        tmp.write("\n".join("2026.09.30 13:00:00 Debug      -  " + line for line in (
+            "User Authenticated: a (usr_0e01408a)",
+            "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)",
+            "This round is taking place at Facility (12) and the round type is Classic",
+        )) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        monitor = self._monitor(Path(tmp.name))
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log()
+
+        self.assertEqual(self.written, [])
 
 
 class TestPlayersRestoredOnStart(unittest.TestCase):

@@ -17,6 +17,9 @@ UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 
 # ── 設定ファイル（前回のtnlパスなどを保存） ──
 SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "settings.json"
+# デバッグログ（公開ログとは別。DebugLog）。上限を超えたら .1 へ回す
+DEBUG_LOG_PATH = SETTINGS_PATH.parent / "debug.log"
+DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 # ── ToN ListTool の主催リスト追従 ──
 # ToN ListTool が %APPDATA% に書いている統合リストを読んで続行判定に使う。

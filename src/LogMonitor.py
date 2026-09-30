@@ -9,6 +9,7 @@ import SharedState
 import WindowOperator
 import PlaySound
 import ConnectDB
+import DebugLog
 import Recorder
 import FogEarlyRead
 import ReadJson
@@ -78,6 +79,7 @@ class LogMonitor:
             is_running=lambda: self._running,
             log=self._log,
             auto_begin_active=self._auto_begin_active,
+            debug=self._debug,
         )
 
     def _auto_begin_active(self) -> bool:
@@ -133,6 +135,10 @@ class LogMonitor:
 
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
+
+    def _debug(self, msg: str):
+        """デバッグログへ（公開ログ＝logger には出さない）"""
+        DebugLog.write(f"[窓{self.window_idx}] {msg}")
 
     @staticmethod
     def _parse_instance_type(suffix: str) -> str:
@@ -1126,6 +1132,8 @@ class LogMonitor:
                 SharedState.continue_round_end(st)
             st.in_round                    = True
             st.round_seq                  += 1
+            # ラウンドの種類の番号（OSC の ToN_RoundType）との対応づくり（デバッグログだけ）
+            self._debug(f"ログ round type = {event.round_type} / map = {event.raw_map}")
             st.round_end_seen              = False
             st.round_type                  = event.round_type
             # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
