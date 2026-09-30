@@ -9,6 +9,7 @@ import time
 import sys
 import json
 import urllib.request
+import urllib.parse
 import tempfile
 import gzip
 import sqlite3
@@ -24476,6 +24477,158 @@ class TestRegisterRoundKeepsOwnRows(unittest.TestCase):
         with patch.object(RoundStore.RoundStore, "add_own", side_effect=None, return_value=False):
             req, _body = self._send("Fog", [101], 12, -13, round_time=1767225600 + 40)
         self.assertTrue(req.full_url.endswith("rpc/register_round"))
+
+
+class TestFetchRounds(unittest.TestCase):
+    """差分取り: time の昇順・件数でページ送り（offset なし）。自分の行は取らない"""
+
+    def _pages(self, pages):
+        responses = []
+        for page in pages:
+            res = MagicMock()
+            res.__enter__ = MagicMock(return_value=res)
+            res.__exit__ = MagicMock(return_value=False)
+            res.read.return_value = json.dumps(page).encode()
+            responses.append(res)
+        return responses
+
+    def _fetch(self, pages, since, mine, page_size=2):
+        with patch.object(ConnectDB, "_configured", return_value=True), \
+             patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+             patch.object(ConnectDB, "_headers", return_value={}), \
+             patch.object(ConnectDB.urllib.request, "urlopen",
+                          side_effect=self._pages(pages)) as urlopen:
+            rows = ConnectDB.fetch_rounds(since, mine, page_size=page_size)
+        return rows, [urllib.parse.unquote(c.args[0].full_url) for c in urlopen.call_args_list]
+
+    def test_the_first_fetch_takes_everything_in_time_order(self):
+        rows, urls = self._fetch([[{"time": 1}, {"time": 2}], [{"time": 3}]], None, set())
+
+        self.assertEqual([r["time"] for r in rows], [1, 2, 3])
+        self.assertIn("/rest/v1/ToNRounds?select=*&order=time.asc&limit=2", urls[0])
+        self.assertNotIn("time=gte", urls[0])
+        self.assertNotIn("or=(", urls[0], "初回は自分の行も取る")
+        self.assertIn("time=gte.2", urls[1], "次のページは最後の time から")
+        for url in urls:
+            self.assertNotIn("offset", url)
+
+    def test_later_fetches_skip_rows_that_are_only_mine(self):
+        _rows, urls = self._fetch([[{"time": 50}]], 100, {-13, 40})
+
+        self.assertIn("time=gte.100", urls[0])
+        self.assertIn("or=(transformed_uid.not.in.(-13,40),other_uids.not.is.null)", urls[0])
+
+    def test_a_full_page_of_one_second_moves_on(self):
+        _rows, urls = self._fetch([[{"time": 7}, {"time": 7}], [{"time": 8}]], 7, set())
+        self.assertIn("time=gte.8", urls[1], "同じ所を取り続けない")
+
+    def test_not_configured_is_an_error(self):
+        with patch.object(ConnectDB, "_configured", return_value=False):
+            with self.assertRaises(RuntimeError):
+                ConnectDB.fetch_rounds(None, set())
+
+
+class TestRoundStoreSync(unittest.TestCase):
+    """手元へ取り込む: 上書き・重複を消す・通信の失敗でも手元はそのまま"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        self.calls = []
+        self.answer = []
+
+    def _fetch(self, since, mine):
+        self.calls.append((since, set(mine)))
+        return list(self.answer)
+
+    @staticmethod
+    def _row(t, uid, others=None, rnd=1, map_id=12, t1=5):
+        return {"time": t, "round": rnd, "map_id": map_id, "terror1": t1, "terror2": None,
+                "terror3": None, "transformed_uid": uid, "other_uids": others}
+
+    def test_the_first_sync_is_full_then_only_the_difference(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.answer = [self._row(90, 7), self._row(2000, 8)]
+        self.assertTrue(self.store.sync(self._fetch))
+        self.assertTrue(self.store.sync(self._fetch))
+
+        self.assertEqual(self.calls, [(None, set()), (2000 - 900, {-13})])
+        self.assertEqual(self.store.get_meta("synced_to"), "2000")
+
+    def test_a_new_uid_means_a_full_sync_again(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.answer = [self._row(90, 7)]
+        self.store.sync(self._fetch)
+        self.store.sync(self._fetch)
+        self.assertEqual(self.calls[-1], (90 - 900, {-13}), "増えていなければ差分")
+        self.store.add_own(200, 1, 12, 5, None, None, 40)       # 別のアカウント
+
+        self.store.sync(self._fetch)
+
+        self.assertEqual(self.calls[-1], (None, set()))
+
+    def test_an_unfinished_first_sync_starts_from_everything(self):
+        """synced_to が残っていても、初回の全件取得が済んでいなければ全件から"""
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.store.set_meta("synced_to", "5000")
+        self.store.sync(self._fetch)
+        self.assertEqual(self.calls, [(None, set())])
+
+    def test_a_refetched_row_is_overwritten_not_doubled(self):
+        self.answer = [self._row(100, 7)]
+        self.store.sync(self._fetch)
+        self.answer = [self._row(100, 7, [8, 9])]
+        self.store.sync(self._fetch)
+
+        self.assertEqual(self.store.rows(), [(100, 1, 12, 5, None, None, 7, "8,9", "db")])
+
+    def test_one_account_in_two_windows_keeps_both_rows(self):
+        self.answer = [self._row(100, 7, rnd=1), self._row(100, 7, rnd=6),
+                       self._row(100, 7, map_id=34)]
+        self.store.sync(self._fetch)
+        self.assertEqual(self.store.count(), 3)
+
+    def test_an_own_row_seen_as_second_player_is_dropped(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.store.add_own(500, 1, 12, 5, None, None, -13)       # 別のラウンド（残る）
+        self.answer = [self._row(97, 7, [-13])]                 # 3秒前に始まった同じラウンド
+
+        self.store.sync(self._fetch)
+
+        rows = self.store.rows()
+        self.assertEqual([(r[0], r[6], r[8]) for r in rows],
+                         [(97, 7, "db"), (500, -13, "own")])
+
+    def test_a_near_row_that_differs_keeps_the_own_row(self):
+        for differ in ({"rnd": 2}, {"map_id": 34}, {"t1": 9}):
+            store = RoundStore.RoundStore(Path(self._dir.name) / f"s{len(differ)}{list(differ)[0]}.sqlite")
+            store.add_own(100, 1, 12, 5, None, None, -13)
+            self.answer = [self._row(100, 7, [-13], **differ)]
+            store.sync(self._fetch)
+            self.assertEqual(store.count(), 2, differ)
+
+    def test_a_row_more_than_15_seconds_away_keeps_the_own_row(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.answer = [self._row(116, 7, [-13])]
+        self.store.sync(self._fetch)
+        self.assertEqual(self.store.count(), 2)
+
+    def test_the_same_row_sent_first_by_me_becomes_the_db_row(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.answer = [self._row(100, -13)]
+        self.store.sync(self._fetch)
+        self.assertEqual(self.store.rows(), [(100, 1, 12, 5, None, None, -13, None, "db")])
+
+    def test_a_failed_fetch_keeps_what_is_here(self):
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+
+        def broken(_since, _mine):
+            raise OSError("offline")
+
+        self.assertFalse(self.store.sync(broken))
+        self.assertEqual(self.store.count(), 1)
+        self.assertIsNone(self.store.get_meta("initial_done"), "次に開いたときも全件から")
 
 
 class TestLogMonitorDbV1(unittest.TestCase):

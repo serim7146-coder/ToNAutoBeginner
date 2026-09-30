@@ -220,6 +220,38 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     threading.Thread(target=_send, daemon=True).start()
 
 
+def fetch_rounds(since: int | None, my_uids, page_size: int = 1000) -> list[dict]:
+    """"ToNRounds" の行を time の昇順で取る（統計画面 v1 の差分取り）。
+
+    since があれば time >= since。my_uids があれば「1人目が自分でない行」か「1人目が
+    自分でも other_uids がある行」だけ（自分が送った行は手元にあるので取らない）。
+    ページ送りは time の昇順＋件数（offset は途中で行が増えると取りこぼすので使わない）。
+    同じ time の行はページの境目で取り直すことがあるが、手元の一意で上書きするので
+    二重にならない。送らない設定・通信の失敗は例外（呼び出し側が手元の分で表示する）
+    """
+    if not _configured():
+        raise RuntimeError("Supabase設定がありません")
+    uid_filter = ""
+    if my_uids:
+        listed = ",".join(str(int(u)) for u in sorted(my_uids))
+        uid_filter = f"&or=(transformed_uid.not.in.({listed}),other_uids.not.is.null)"
+    rows: list[dict] = []
+    cursor = since
+    while True:
+        time_filter = f"&time=gte.{int(cursor)}" if cursor is not None else ""
+        req = urllib.request.Request(
+            _url(f"ToNRounds?select=*&order=time.asc{time_filter}{uid_filter}&limit={page_size}"),
+            headers=_headers(accept=True))
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
+            data = json.loads(res.read().decode("utf-8"))
+        rows.extend(data)
+        if len(data) < page_size:
+            return rows
+        last = int(data[-1]["time"])
+        # 1ページ全部が同じ time なら先へ進める（同じ所を取り続けない）
+        cursor = last + 1 if cursor is not None and last == int(cursor) else last
+
+
 def round_row(row: dict) -> dict:
     """"ToNRounds" の1行を、統計画面が使う形（round 名・terror_ids・created_at など）に直す。
     other_uids（同じラウンドを見たほかの人）があっても1件"""

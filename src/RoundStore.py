@@ -131,6 +131,59 @@ class RoundStore:
         row = con.execute("select value from meta where key = ?", (key,)).fetchone()
         return row[0] if row else None
 
+    # ── DB との同期 ─────────────────────────────
+    # 直近15分は取り直す（マルチで後から uid が足されるため）
+    RESYNC_BACK_SEC = 900
+    # 自分が2人目以降だった DB の行と、手元の own の行を同じラウンドとみなす開始の差
+    OWN_MATCH_SEC = 15
+
+    def sync(self, fetch) -> bool:
+        """DB から差分を取って手元に入れる。fetch(since, my_uids) は ConnectDB.fetch_rounds。
+
+        初回（または my_uids に新しい uid が増えた）は全件（自分の行も含む）。以降は
+        time >= synced_to − 15分 の、1人目が自分でない行か other_uids のある行だけ。
+        取った行は上書きで入れ、other_uids に自分がいる行と重なる own の行は消す
+        （DB の行が正。自分は2人目以降だった）。通信の失敗は False（手元はそのまま）
+        """
+        mine = self.my_uids()
+        synced_uids = set(uids_list(self.get_meta("synced_uids")))
+        full = self.get_meta("initial_done") != "1" or not mine <= synced_uids
+        synced_to = self.get_meta("synced_to")
+        try:
+            if full or synced_to is None:
+                rows = fetch(None, set())
+            else:
+                rows = fetch(int(synced_to) - self.RESYNC_BACK_SEC, mine)
+        except Exception:
+            return False
+
+        def work(con):
+            newest = None if synced_to is None else int(synced_to)
+            for row in rows:
+                others = [u for u in (row.get("other_uids") or []) if u is not None]
+                values = (int(row["time"]), int(row["round"]), row.get("map_id"),
+                          row.get("terror1"), row.get("terror2"), row.get("terror3"),
+                          row.get("transformed_uid"), uids_text(others), ORIGIN_DB)
+                con.execute(
+                    "insert or replace into rounds(time, round, map_id, terror1, terror2,"
+                    " terror3, transformed_uid, other_uids, origin)"
+                    " values (?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                for uid in set(others) & mine:
+                    con.execute(
+                        "delete from rounds where origin = ? and transformed_uid = ?"
+                        " and abs(time - ?) <= ? and round = ? and map_id is ? and terror1 is ?",
+                        (ORIGIN_OWN, uid, values[0], self.OWN_MATCH_SEC, values[1],
+                         values[2], values[3]))
+                newest = values[0] if newest is None else max(newest, values[0])
+            con.execute("insert or replace into meta(key, value) values ('initial_done', '1')")
+            con.execute("insert or replace into meta(key, value) values ('synced_uids', ?)",
+                        (uids_text(sorted(mine)),))
+            if newest is not None:
+                con.execute("insert or replace into meta(key, value) values ('synced_to', ?)",
+                            (str(newest),))
+            return True
+        return bool(self._run(work, False))
+
     def count(self) -> int:
         return int(self._run(lambda con: con.execute("select count(*) from rounds").fetchone()[0], 0))
 
