@@ -213,6 +213,7 @@ class LogMonitor:
             return
         if st.is_continue_round:
             st.is_continue_round = False
+            st.open_special_continue = False
             SharedState.continue_round_end(st)
             self._log(f"続行ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
 
@@ -775,6 +776,7 @@ class LogMonitor:
         st = self.st
         if st.is_continue_round:
             st.is_continue_round = False
+            st.open_special_continue = False
             SharedState.continue_round_end(st)
 
     def _start_group_skip(self):
@@ -815,6 +817,7 @@ class LogMonitor:
             st = self.st
             was_continue_round = st.is_continue_round
             st.is_continue_round = True
+            st.open_special_continue = False     # グループの WANTED は普通の続行
             self._log(f"グループ判定: {st.round_type} 【プレイ】")
             if not was_continue_round:
                 if not self._hands_free():
@@ -1129,6 +1132,7 @@ class LogMonitor:
             st.pending_verified_time = 0.0
             if st.is_continue_round:
                 st.is_continue_round = False
+                st.open_special_continue = False
                 SharedState.continue_round_end(st)
             st.in_round                    = True
             st.round_seq                  += 1
@@ -1207,6 +1211,7 @@ class LogMonitor:
 
             if st.round_type == "Run":
                 st.is_continue_round = False
+                st.open_special_continue = False
                 self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
                 return
 
@@ -1333,6 +1338,7 @@ class LogMonitor:
             if st.is_continue_round:
                 # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
                 st.is_continue_round = False
+                st.open_special_continue = False
                 SharedState.continue_round_end(st)
                 self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
             round_lost_item = self._round_lost_item()
@@ -1720,6 +1726,7 @@ class LogMonitor:
         if kind == "restricted":
             if st.is_continue_round:
                 st.is_continue_round = False
+                st.open_special_continue = False
                 SharedState.continue_round_end(st)
             self._log(f"インスタンス制限: 操作スキップ ({st.instance_type})")
             return
@@ -1751,6 +1758,8 @@ class LogMonitor:
         # 待つ判断（_plan）と本番が食い違う
         _kind, is_continue, is_open_special_round_target = plan
         st.is_continue_round = is_continue
+        # DTM/Waldo による続行か（音量では通常扱い。WindowVolume.category_of）
+        st.open_special_continue = bool(is_continue and is_open_special_round_target)
 
         if was_continue_round and not st.is_continue_round:
             SharedState.continue_round_end(st)

@@ -74,6 +74,8 @@ class WindowState:
     unmatched_logged: set = field(default_factory=set)
     fog: bool = False
     is_continue_round: bool = False
+    # DTM/Waldo による続行か（is_continue_round と一緒に落とす）。音量では通常扱い
+    open_special_continue: bool = False
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、
     # DTM/Waldo の窓は is_continue_round=True でもこちらは False（他窓を止めない）
     continue_freeze_held: bool = False

@@ -25,10 +25,13 @@ CATEGORY_LABELS = {CONTINUE: "続行", FREEZE: "フリーズ窓", OTHER: "その
 def category_of(st) -> str:
     """窓の分類。重なったら上が勝つ: 続行 ＞ フリーズ窓（フリーズを張った窓）＞ その他。
 
-    続行の窓は続行フリーズも張っているが続行として扱う。DTM/Waldo のように
-    is_continue_round だけ立つ窓も続行
+    続行の窓は続行フリーズも張っているが続行として扱う。Run と DTM/Waldo の続行は
+    通常（その他）として扱う（依頼者 2026-09-30）。Run は突入フリーズを張っていても
+    その他。DTM/Waldo の窓がアイテムロストなどでフリーズを張ったらフリーズ窓
     """
-    if st.is_continue_round:
+    if st.round_type == "Run":
+        return OTHER
+    if st.is_continue_round and not st.open_special_continue:
         return CONTINUE
     if st.equip_freeze_held or st.speed_freeze_held or st.round_freeze_held:
         return FREEZE

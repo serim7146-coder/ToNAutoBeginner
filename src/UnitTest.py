@@ -12310,6 +12310,28 @@ class TestWindowVolumeCategory(unittest.TestCase):
         st.continue_freeze_held = False
         self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
 
+    def test_run_is_other_even_with_the_round_freeze(self):
+        for held in (False, True):
+            st = WindowState(round_type="Run")
+            st.round_freeze_held = held
+            self.assertEqual(WindowVolume.category_of(st), WindowVolume.OTHER, held)
+
+    def test_a_dtm_waldo_continue_is_other(self):
+        st = WindowState(is_continue_round=True)
+        st.open_special_continue = True
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.OTHER)
+
+    def test_a_dtm_waldo_continue_with_an_equip_wait_is_a_freeze_window(self):
+        st = WindowState(is_continue_round=True)
+        st.open_special_continue = True
+        st.equip_freeze_held = True
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.FREEZE)
+
+    def test_a_normal_continue_is_continue(self):
+        st = WindowState(is_continue_round=True, round_type="Classic")
+        st.open_special_continue = False
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
+
     def test_nothing_is_other(self):
         self.assertEqual(WindowVolume.category_of(WindowState()), WindowVolume.OTHER)
         st = WindowState()
@@ -12354,6 +12376,91 @@ class _FakeAudio:
 
     def sets(self):
         return [c for c in self.calls if c[0] == "set"]
+
+
+class TestVolumeTargetsInRounds(unittest.TestCase):
+    """Run と DTM/Waldo の続行は、音量では通常（その他）。本物の行で確かめる"""
+
+    CLASSIC_KEY = "Classic/クラシック"
+    PREFIX = "2026.09.30 13:00:00 Debug      -  "
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        for p in (patch.object(ConnectDB, "send_ToNRoundStatistics"),
+                  patch.object(LogMonitor.threading, "Thread"),
+                  patch.object(PlaySound, "play_sound"),
+                  patch.object(Recorder, "on_continue_start")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+
+    def _monitor(self, keep_on=None):
+        cfg = WindowConfig(do_skip=True, cancel_afk=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None, window_idx=1)
+        monitor.logger = lambda _m: None
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        return monitor
+
+    def _round(self, monitor, round_type, ids):
+        monitor._process(self.PREFIX + "This round is taking place at Facility (12) "
+                         f"and the round type is {round_type}")
+        monitor._process(self.PREFIX + "Killers have been set - "
+                         + " ".join(str(i) for i in (list(ids) + [0, 0])[:3])
+                         + f" // Round type is {round_type}")
+        if not monitor.st.is_continue_round and monitor.st.terror_ids:
+            # 置き換え待ちに入っていれば、合図が来ないまま時間が過ぎたものとして判定まで進める
+            monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
+
+    def test_a_dtm_continue_is_other(self):
+        monitor = self._monitor()
+
+        self._round(monitor, "Classic", [LogMonitor.DTM_TERROR_ID])
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertTrue(monitor.st.open_special_continue)
+        self.assertEqual(WindowVolume.category_of(monitor.st), WindowVolume.OTHER)
+
+    def test_a_normal_continue_is_continue_and_the_next_round_clears_it(self):
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
+
+        self._round(monitor, "Classic", [99])
+
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertFalse(monitor.st.open_special_continue)
+        self.assertEqual(WindowVolume.category_of(monitor.st), WindowVolume.CONTINUE)
+
+    def test_the_dtm_mark_does_not_survive_into_the_next_round(self):
+        monitor = self._monitor()
+        self._round(monitor, "Classic", [LogMonitor.DTM_TERROR_ID])
+        self.assertTrue(monitor.st.open_special_continue)
+
+        monitor._process(self.PREFIX + "This round is taking place at Facility (12) "
+                         "and the round type is Classic")
+
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertFalse(monitor.st.open_special_continue)
+
+    def test_every_place_that_ends_a_continue_also_drops_the_mark(self):
+        """is_continue_round を落とす所では、必ず一緒に落とす（次のラウンドに残さない）"""
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8").split("\n")
+        for i, line in enumerate(src):
+            if line.strip() == "st.is_continue_round = False":
+                self.assertEqual(src[i + 1].strip(), "st.open_special_continue = False",
+                                 f"{i + 1}行目")
+
+    def test_a_group_wanted_is_a_normal_continue(self):
+        monitor = self._monitor()
+        monitor.st.open_special_continue = True       # 前のラウンドの残りがあっても
+        with patch.object(LogMonitor.LogMonitor, "_start_daemon"),              patch.object(monitor, "_group_decision", return_value=LogMonitor.GroupRound.WANTED):
+            self.assertTrue(monitor._apply_group_decision("Classic"))
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertFalse(monitor.st.open_special_continue)
+        self.assertEqual(WindowVolume.category_of(monitor.st), WindowVolume.CONTINUE)
 
 
 class TestWindowVolumeController(unittest.TestCase):
