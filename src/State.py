@@ -76,6 +76,8 @@ class WindowState:
     is_continue_round: bool = False
     # DTM/Waldo による続行か（is_continue_round と一緒に落とす）。音量では通常扱い
     open_special_continue: bool = False
+    instance_id: str = ""                  # 今のインスタンスの ID（DB v1 でまとめる目印の元）
+    round_start_time: Optional[float] = None   # そのラウンドの開始の行の時刻（送る時刻ではない）
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、
     # DTM/Waldo の窓は is_continue_round=True でもこちらは False（他窓を止めない）
     continue_freeze_held: bool = False

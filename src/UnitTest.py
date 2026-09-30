@@ -3,11 +3,12 @@ import hashlib
 import base64
 import struct
 import socket
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, call, ANY
 import threading
 import time
 import sys
 import json
+import urllib.request
 import tempfile
 import gzip
 import sqlite3
@@ -84,9 +85,18 @@ def setUpModule():
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
+    # 本物の DB（.env があると Supabase につながる）へ送らない。差し替え忘れた送信は
+    # オフラインと同じに失敗させる（urlopen を差し替えるテストは、その間それが勝つ）
+    _real_paths["urlopen"] = urllib.request.urlopen
+    urllib.request.urlopen = _refuse_network
+
+
+def _refuse_network(*_args, **_kwargs):
+    raise OSError("テスト中は本物のネットワーク（DB）へ送らない")
 
 
 def tearDownModule():
+    urllib.request.urlopen = _real_paths["urlopen"]
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
     config.DEBUG_LOG_PATH = _real_paths["debug"]
@@ -108,6 +118,15 @@ class TestNoRealSettings(unittest.TestCase):
     def test_the_fog_object_names_path_is_not_the_real_one(self):
         self._assert_not_real(config.FOG_OBJECT_NAMES_PATH)
         self._assert_not_real(FogEarlyRead.trust.path)
+
+    def test_the_network_is_refused(self):
+        """差し替え忘れの送信が本物の DB へ届かない"""
+        with self.assertRaises(OSError):
+            urllib.request.urlopen("https://example.invalid")
+        with patch.object(ConnectDB.threading, "Thread",
+                          TestDbV1.RunNow), patch("builtins.print") as printed:
+            ConnectDB.register_round("Classic", [1], 1, 1)
+        self.assertIn("送信エラー", str(printed.call_args))
 
     def test_the_debug_log_path_is_not_the_real_one(self):
         self._assert_not_real(config.DEBUG_LOG_PATH)
@@ -2102,7 +2121,7 @@ class TestRecordingHooks(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        for p in (patch.object(ConnectDB, "send_ToNRoundStatistics"),
+        for p in (patch.object(ConnectDB, "register_round"),
                   patch.object(LogMonitor.threading, "Thread"),
                   patch.object(PlaySound, "play_sound")):
             p.start()
@@ -2813,7 +2832,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
                   patch.object(config, "FOG_EARLY_READ_ENABLED", True)):
             p.start()
             self.addCleanup(p.stop)
-        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.send = self._start(patch.object(ConnectDB, "register_round"))
         self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
         self.play = self._start(patch.object(PlaySound, "play_sound"))
         self.record = self._start(patch.object(Recorder, "on_continue_start"))
@@ -2856,7 +2875,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
 
         self.assertEqual(self._skipped(), 1)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
         self.assertTrue(any("🔎 テラー判明(看破)" in m for m in monitor.logs), monitor.logs)
 
     def test_ok_capable_judges_by_early_read_and_continues(self):
@@ -2947,7 +2966,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.assertEqual(any("🔎 テラー判明(看破)" in m for m in monitor.logs), allowed, access)
             if not allowed:
                 self.assertEqual(monitor.logs, before, access)
-            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
 
     # ── NG・看破できる ──────────────────────────
     def test_ng_capable_sends_to_the_db_only(self):
@@ -2958,7 +2977,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
 
         self.assertFalse(self._judged(monitor), "自爆・アナウンス・フリーズ・録画のどれもしない")
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
 
     # ── NG・看破できない ────────────────────────
     JOY_LINE = "2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN..."
@@ -3019,7 +3038,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
         self.assertEqual(self._skipped(), 0, "看破では判定しない")
         self.assertFalse(any("🔎" in m for m in monitor.logs), monitor.logs)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
 
         monitor._on_enrage("Immortal Snail")
         self.assertEqual(self._skipped(), 1, "Enrage でその場で自爆する")
@@ -3080,7 +3099,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
         self.assertEqual(self._skipped(), 1)
         self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
         self.assertEqual(sum("🔎 テラー判明(看破)" in m for m in monitor.logs), 1, monitor.logs)
 
     def test_the_same_terror_again_is_not_judged_twice(self):
@@ -3120,7 +3139,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
             self.assertTrue(monitor.st.early_read_void, access)
             self.assertEqual(monitor.st.early_read_tid, self.SNAIL, access)
-            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
             self.assertEqual(self._judged(monitor), judged, access)
             voided = [m for m in monitor.logs if "別々のテラー名が見えました" in m]
             if access == "public":
@@ -3283,13 +3302,13 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         self.trust = FogEarlyRead.NameTrust(self.path)
         for p in (patch.object(config, "TERRORS", fog_early_read_terrors()),
                   patch.object(FogEarlyRead, "trust", self.trust),
-                  patch.object(ConnectDB, "send_ToNRoundStatistics"),
+                  patch.object(ConnectDB, "register_round"),
                   patch.object(LogMonitor.threading, "Thread"),
                   patch.object(PlaySound, "play_sound"),
                   patch.object(Recorder, "on_continue_start")):
             p.start()
             self.addCleanup(p.stop)
-        self.send = ConnectDB.send_ToNRoundStatistics
+        self.send = ConnectDB.register_round
 
     def _monitor(self, access="invite"):
         monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=True), {}, lambda _m: None,
@@ -3429,7 +3448,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         SharedState.set_list_source("host")
         self.addCleanup(SharedState.continue_round_reset)
         self.addCleanup(SharedState.set_list_source, None)
-        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.send = self._start(patch.object(ConnectDB, "register_round"))
         self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
         self.play = self._start(patch.object(PlaySound, "play_sound"))
         self.record = self._start(patch.object(Recorder, "on_continue_start"))
@@ -3552,7 +3571,7 @@ class TestFogStunned(unittest.TestCase):
                   patch.object(Recorder, "on_continue_start")):
             p.start()
             self.addCleanup(p.stop)
-        self.send = self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self.send = self._start(patch.object(ConnectDB, "register_round"))
         self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
         self.play = self._start(patch.object(PlaySound, "play_sound"))
 
@@ -3597,7 +3616,7 @@ class TestFogStunned(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
         self.play.assert_called_once_with("continue.mp3")
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
-        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=False)
+        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_an_unknown_name_is_logged_in_any_instance(self):
         for access in ("invite", "public"):
@@ -3645,7 +3664,7 @@ class TestQuietStatistics(unittest.TestCase):
              patch.object(ConnectDB.urllib.request, "urlopen",
                           side_effect=OSError("offline") if fail else None), \
              patch("builtins.print") as printed:
-            ConnectDB.send_ToNRoundStatistics("Fog", [101], 12, 99, quiet=quiet)
+            ConnectDB.register_round("Fog", [101], 12, 99, quiet=quiet)
         return printed
 
     def test_quiet_prints_nothing(self):
@@ -4112,7 +4131,7 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         with patch.object(config, "TERRORS", self._data()), \
              patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._on_enrage("Corrupted Woody")
 
         self.assertEqual(monitor.st.terror_ids, [1])
@@ -4178,7 +4197,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -4408,7 +4427,7 @@ class TestEnrageIdentify(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -4641,7 +4660,7 @@ class TestEmeraldCityInstance(unittest.TestCase):
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._on_killers([99], "Classic", revealed=False)
         started = [c.kwargs["target"].__func__.__name__
                    for c in mock_thread.call_args_list if "target" in c.kwargs]
@@ -4870,7 +4889,7 @@ class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -5079,7 +5098,7 @@ class TestReplacementWait(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self.sent = self._stats.start()
 
     def tearDown(self):
@@ -5286,7 +5305,7 @@ class TestFogFoxy(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -5408,7 +5427,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -5696,7 +5715,7 @@ class TestSpecialMoonKeyWiring(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -5850,7 +5869,7 @@ class TestGroupMoonSkipWiring(unittest.TestCase):
             monitor.st.in_round = True
             with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
                  patch.object(PlaySound, "play_sound"), \
-                 patch.object(ConnectDB, "send_ToNRoundStatistics"):
+                 patch.object(ConnectDB, "register_round"):
                 monitor._on_killers([7], "Twilight", revealed=False)
             started = [c.kwargs["target"].__func__.__name__
                        for c in mock_thread.call_args_list if "target" in c.kwargs]
@@ -5896,7 +5915,7 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
         self.play = self._start(patch.object(PlaySound, "play_sound"))
         self.record = self._start(patch.object(Recorder, "on_continue_start"))
-        self._start(patch.object(ConnectDB, "send_ToNRoundStatistics"))
+        self._start(patch.object(ConnectDB, "register_round"))
 
     def _start(self, p):
         mock = p.start()
@@ -6320,7 +6339,7 @@ class TestRoundSequenceWiring(unittest.TestCase):
 
     def _round_start(self, monitor, round_type):
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("This round is taking place at Facility (12) "
                              f"and the round type is {round_type}")
 
@@ -6378,7 +6397,7 @@ class TestSusPlayers(unittest.TestCase):
     def _feed(self, monitor, line):
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process(line)
 
     def test_one_murderer_is_collected(self):
@@ -6745,7 +6764,7 @@ class TestWishesPerWindow(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -6989,7 +7008,7 @@ class TestWaitingList(unittest.TestCase):
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
         self.addCleanup(SharedState.set_list_source, None)
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self._dir = tempfile.TemporaryDirectory()
@@ -9569,7 +9588,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
         self._rounds = patch.object(SharedState, "get_freeze_rounds",
                                    return_value={"Midnight"})
         self._rounds.start()
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self.addCleanup(self._rounds.stop)
@@ -9999,7 +10018,7 @@ class TestEightPagesReleaseDelay(unittest.TestCase):
 
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("This round is taking place at Facility (12) "
                              "and the round type is Classic")
 
@@ -10011,7 +10030,7 @@ class TestEightPagesReleaseDelay(unittest.TestCase):
         self._equip(monitor)
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("This round is taking place at Facility (12) "
                              "and the round type is Classic")
 
@@ -10047,7 +10066,7 @@ class TestContinueFreezeReleaseOnRoundOver(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self.addCleanup(SharedState.set_list_source, None)
@@ -10223,7 +10242,7 @@ class TestContinueFreezeIsPerWindow(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self.addCleanup(SharedState.set_list_source, None)
@@ -10625,7 +10644,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         SharedState.set_list_source("host")
         for name in TestNothingFrozen.EVENTS:
             getattr(SharedState, name).set()
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self.addCleanup(SharedState.set_list_source, None)
@@ -11113,7 +11132,7 @@ class TestItemLossAtRoundOver(unittest.TestCase):
         SharedState.continue_round_reset()
         for name in TestNothingFrozen.EVENTS:
             getattr(SharedState, name).set()
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
         self.addCleanup(SharedState.set_hands_free, False)
@@ -12389,7 +12408,7 @@ class TestVolumeTargetsInRounds(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        for p in (patch.object(ConnectDB, "send_ToNRoundStatistics"),
+        for p in (patch.object(ConnectDB, "register_round"),
                   patch.object(LogMonitor.threading, "Thread"),
                   patch.object(PlaySound, "play_sound"),
                   patch.object(Recorder, "on_continue_start")):
@@ -16383,7 +16402,7 @@ class TestSpeedFreeze(unittest.TestCase):
             monitor.st.speed_freeze_kind = kind
             SharedState.speed_freeze_start(monitor.st)
 
-            with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+            with patch.object(ConnectDB, "register_round"), \
              patch.object(LogMonitor.threading, "Thread"):
                 monitor._process("This round is taking place at Facility (12) "
                                  "and the round type is Classic")
@@ -16442,7 +16461,7 @@ class TestRoundFreezeVoice(unittest.TestCase):
         return monitor
 
     def _enter(self, monitor, round_type):
-        with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+        with patch.object(ConnectDB, "register_round"), \
              patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound") as played:
             monitor._process(self.ROUND_LINE % round_type)
@@ -16542,7 +16561,7 @@ class TestRoundFreeze(unittest.TestCase):
         return monitor
 
     def _start_round(self, monitor, round_type):
-        with patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+        with patch.object(ConnectDB, "register_round"), \
              patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"):
             monitor._process(self.ROUND_LINE % round_type)
@@ -16656,7 +16675,7 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
         SharedState.set_hands_free(False)
         SharedState.continue_round_reset()
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -16800,7 +16819,7 @@ class TestGigabytesDetect(unittest.TestCase):
         monitor.st.round_type = "Classic"
         monitor.st.terror_ids = [91]
 
-        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "register_round"):
             monitor._process(self.LINE)
 
         self.assertEqual(monitor.st.terror_ids, [config.GIGABYTES_ID])
@@ -16811,13 +16830,13 @@ class TestGigabytesDetect(unittest.TestCase):
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
 
-        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "register_round") as mock_send:
             monitor._process(self.LINE)
 
         self.assertEqual(monitor.st.terror_ids, [])
         mock_send.assert_not_called()
 
-        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "send_ToNRoundStatistics"):
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(ConnectDB, "register_round"):
             monitor._on_killers([91], "Classic", revealed=False)
 
         self.assertEqual(monitor.st.terror_ids, [config.GIGABYTES_ID])
@@ -16878,7 +16897,7 @@ class TestAtrachedDetect(unittest.TestCase):
         monitor.st.terror_ids = [config.SONIC_ID]
 
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process(self.LINE)
 
         self.assertTrue(monitor.st.atrached_variant)
@@ -16891,12 +16910,12 @@ class TestAtrachedDetect(unittest.TestCase):
         monitor.st.round_type = "Classic"
 
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+             patch.object(ConnectDB, "register_round") as mock_send:
             monitor._process(self.LINE)
         mock_send.assert_not_called()
 
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._on_killers([config.SONIC_ID], "Classic", revealed=False)
 
         self.assertEqual(monitor.st.terror_ids, [config.ATRACHED_ID])
@@ -16930,7 +16949,7 @@ class TestGlorboDetect(unittest.TestCase):
         SharedState.set_list_source("host")
         self.addCleanup(SharedState.set_list_source, None)
         self.addCleanup(SharedState.set_hands_free, False)
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
 
@@ -17206,7 +17225,7 @@ class TestVerifiedStrafe(unittest.TestCase):
         monitor = self._monitor()
         self._started(monitor)
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics"):
+        with patch.object(ConnectDB, "register_round"):
             self._started(monitor, "This round is taking place at Facility (12) "
                                    "and the round type is Classic")
 
@@ -17356,7 +17375,7 @@ class TestEightPagesListId(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as thread, \
              patch.object(PlaySound, "play_sound") as play, \
              patch.object(Recorder, "on_continue_start"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics") as sent:
+             patch.object(ConnectDB, "register_round") as sent:
             monitor._process(line)
         started = [c.kwargs["target"].__func__.__name__
                    for c in thread.call_args_list if "target" in c.kwargs]
@@ -17639,7 +17658,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
         self.assertTrue(monitor.st.speed_probe_done)
 
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("This round is taking place at Facility (12) "
                              "and the round type is Classic")
 
@@ -18235,7 +18254,7 @@ class TestHandsFreePerWindow(unittest.TestCase):
     def _announce_calls(self, instance_type):
         monitor = self._monitor(instance_type)
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(ConnectDB, "register_round"), \
              patch.object(LogMonitor.threading, "Thread"):
             monitor._process("foxy the pirate turned evil!")
             monitor._process("Verified Round End")
@@ -18562,7 +18581,7 @@ class TestSkipRoundsByType(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -20421,7 +20440,7 @@ class TestGroupListStatePolled(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -20688,7 +20707,7 @@ class TestHostListNeedsOthers(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("tnl")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -21308,7 +21327,8 @@ class TestDebugLog(unittest.TestCase):
 
 
 class TestRoundTypeObservation(unittest.TestCase):
-    """OSC の ToN_RoundType・ToN_Map とログのラウンド名をデバッグログへ（公開ログには出さない）"""
+    """BG の観測（ToN_RoundType とラウンド名の対応づくり）は、番号の一覧が取れたので外した。
+    DebugLog と LogMonitor._debug は残す（未知のラウンド名の行で使う）"""
 
     def setUp(self):
         self.written = []
@@ -21316,47 +21336,6 @@ class TestRoundTypeObservation(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    # ── 受信器 ───────────────────────────────
-    def _receiver(self):
-        self.seen = []
-        return OSCReceiver.VelocityReceiver(0, on_param=lambda n, v: self.seen.append((n, v)))
-
-    def test_changes_of_round_type_and_map_are_reported_once(self):
-        r = self._receiver()
-        for address, value in (("/avatar/parameters/ToN_RoundType", 5),
-                               ("/avatar/parameters/ToN_RoundType", 5),
-                               ("/avatar/parameters/ToN_Map", 43),
-                               ("/avatar/parameters/ToN_RoundType", 7),
-                               ("/avatar/parameters/ToN_Map", 43)):
-            r._handle(address, value)
-
-        self.assertEqual(self.seen, [("ToN_RoundType", 5), ("ToN_Map", 43), ("ToN_RoundType", 7)])
-
-    def test_terror_values_are_never_reported(self):
-        r = self._receiver()
-        for name in ("ToN_Terror1", "ToN_Terror2", "ToN_Terror3"):
-            r._handle(f"/avatar/parameters/{name}", 12)
-        self.assertEqual(self.seen, [])
-        self.assertNotIn("/avatar/parameters/ToN_Terror1", OSCReceiver.WATCHED_PARAMS)
-
-    def test_speed_and_grounded_are_as_before(self):
-        r = self._receiver()
-        r._handle(OSCReceiver.VELOCITY_MAGNITUDE, 4.0)
-        r._handle(OSCReceiver.GROUNDED, False)
-        self.assertEqual(r.speed, 4.0)
-        self.assertFalse(r.grounded)
-        self.assertEqual(self.seen, [])
-
-    def test_a_failing_callback_does_not_stop_receiving(self):
-        r = OSCReceiver.VelocityReceiver(0, on_param=MagicMock(side_effect=RuntimeError))
-        r._handle("/avatar/parameters/ToN_RoundType", 1)
-        r._handle(OSCReceiver.VELOCITY_MAGNITUDE, 2.0)
-        self.assertEqual(r.speed, 2.0)
-
-    def test_without_a_callback_nothing_happens(self):
-        OSCReceiver.VelocityReceiver(0)._handle("/avatar/parameters/ToN_RoundType", 1)
-
-    # ── つなぎ ───────────────────────────────
     def _monitor(self, path=None):
         monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9000, osc_out_port=9001,
                                                      log_path=path), {},
@@ -21365,27 +21344,33 @@ class TestRoundTypeObservation(unittest.TestCase):
         monitor.logger = monitor.logs.append
         return monitor
 
-    def test_the_receiver_reports_to_the_debug_log(self):
+    def test_the_receiver_no_longer_watches_round_type(self):
+        self.assertFalse(hasattr(OSCReceiver, "WATCHED_PARAMS"))
+        with self.assertRaises(TypeError):
+            OSCReceiver.VelocityReceiver(0, on_param=lambda n, v: None)
+        r = OSCReceiver.VelocityReceiver(0)
+        r._handle("/avatar/parameters/ToN_RoundType", 5)     # 捨てる（落ちない）
+        r._handle(OSCReceiver.VELOCITY_MAGNITUDE, 4.0)
+        r._handle(OSCReceiver.GROUNDED, False)
+        self.assertEqual(r.speed, 4.0)
+        self.assertFalse(r.grounded)
+        self.assertEqual(self.written, [])
+
+    def test_the_executor_is_not_wired_to_the_debug_log(self):
         monitor = self._monitor()
         with patch.object(OSCReceiver, "VelocityReceiver") as receiver:
             receiver.return_value.start.return_value = True
             monitor._action.start_velocity_receiver()
-        on_param = receiver.call_args.kwargs["on_param"]
+        self.assertNotIn("on_param", receiver.call_args.kwargs)
 
-        on_param("ToN_RoundType", 5)
-
-        self.assertEqual(self.written, ["[窓3] OSC ToN_RoundType = 5"])
-        self.assertEqual(monitor.logs, [], "公開ログには出さない")
-
-    def test_a_round_start_is_written_to_the_debug_log_only(self):
+    def test_a_round_start_writes_nothing(self):
         monitor = self._monitor()
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(PlaySound, "play_sound"), \
-             patch.object(Recorder, "on_round_start", create=True):
+             patch.object(PlaySound, "play_sound"):
             monitor._process("2026.09.30 13:00:00 Debug      -  This round is taking place "
                              "at Facility (12) and the round type is Classic")
 
-        self.assertEqual(self.written, ["[窓3] ログ round type = Classic / map = Facility (12)"])
+        self.assertEqual(self.written, [])
         self.assertFalse(any("round type =" in m for m in monitor.logs), monitor.logs)
 
     def test_debug_never_calls_the_public_logger(self):
@@ -21547,7 +21532,7 @@ class TestSabotageStarAnnounces(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -21713,7 +21698,7 @@ class TestSabotageStarAnnounces(unittest.TestCase):
 
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("This round is taking place at Facility (12) "
                              "and the round type is 8 Pages")
 
@@ -21735,7 +21720,7 @@ class TestGroupNeedsHostList(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -21920,7 +21905,7 @@ class TestContinueRoundsByType(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -22542,7 +22527,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")   # グループ判定は主催リストが前提
-        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher = patch.object(ConnectDB, "register_round")
         self._stats_patcher.start()
 
     def tearDown(self):
@@ -22760,7 +22745,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("foxy the pirate turned evil!")
 
         self.assertEqual(monitor.st.round_type, "Fog",
@@ -22932,7 +22917,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor.st.terror_ids = [99]
         monitor.keepOn_set["Classic/クラシック"] = {config.GIGABYTES_ID}
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("The Gigabytes have come.")
 
         self.assertEqual(self._run_delayed(monitor), [],
@@ -22947,7 +22932,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor.st.terror_ids = [config.SONIC_ID]
         monitor.keepOn_set["Classic/クラシック"] = {config.ATRACHED_ID}
         with patch.object(LogMonitor.threading, "Thread"), \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("Lets play a game...")
         monitor.st.gigabytes = True     # Gigabytes待ちは別。ここでは切り離す
 
@@ -23171,7 +23156,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")   # グループ判定は主催リストが前提
-        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher = patch.object(ConnectDB, "register_round")
         self._stats_patcher.start()
 
     def tearDown(self):
@@ -23196,7 +23181,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor = self._monitor(auto_begin=True)
         monitor.st.round_type = "Run"
 
-        with patch.object(PlaySound, "play_sound") as mock_play,              patch.object(ConnectDB, "send_ToNRoundStatistics"),              patch.object(LogMonitor.threading, "Thread"):
+        with patch.object(PlaySound, "play_sound") as mock_play,              patch.object(ConnectDB, "register_round"),              patch.object(LogMonitor.threading, "Thread"):
             monitor._process("You died.")
             monitor._process("RoundOver")
             monitor._process("Verified Round End")
@@ -23212,7 +23197,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("Verified Round End")
 
         mock_play.assert_not_called()
@@ -23224,7 +23209,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("You died.")
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
@@ -23238,7 +23223,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.item_id = 7
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("Lived in round.")
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
@@ -23436,7 +23421,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"), \
+             patch.object(ConnectDB, "register_round"), \
              patch.object(LogMonitor.threading, "Thread") as mock_thread:
             monitor._process("You died.")
             monitor._process("RoundOver")          # Begin処理はここで起動する
@@ -23456,7 +23441,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.round_type = "Classic"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics"),              patch.object(LogMonitor.threading, "Thread"):
+        with patch.object(ConnectDB, "register_round"),              patch.object(LogMonitor.threading, "Thread"):
             monitor._process("RoundOver")
             self.assertFalse(monitor.st.round_end_seen,
                              "RoundOver時点ではまだクリックできない")
@@ -23474,7 +23459,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.round_type = "Classic"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics"),              patch.object(LogMonitor.threading, "Thread"):
+        with patch.object(ConnectDB, "register_round"),              patch.object(LogMonitor.threading, "Thread"):
             monitor._process("RoundOver")
         self.assertGreater(monitor.st.round_over_time, 0,
                            "RoundOverの時刻を記録すること（Begin待ちの起点）")
@@ -23500,7 +23485,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.round_type = "Run"
 
         with patch.object(PlaySound, "play_sound") as mock_play, \
-             patch.object(ConnectDB, "send_ToNRoundStatistics"):
+             patch.object(ConnectDB, "register_round"):
             monitor._process("You died.")
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
@@ -23536,7 +23521,7 @@ class TestLogMonitorFogRound(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")   # グループ判定は主催リストが前提
-        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher = patch.object(ConnectDB, "register_round")
         self._stats_patcher.start()
         # 続行になると前面化のスレッドが立つ。本物を走らせると、偽の hwnd で
         # 全窓共通ロックを掴んだまま待つので、ほかのテストの時間を狂わせる
@@ -23697,7 +23682,7 @@ class TestFogJoy(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")
-        self._stats = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
 
     def tearDown(self):
@@ -23833,7 +23818,7 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
         SharedState.set_list_source("host")   # グループ判定は主催リストが前提
-        self._stats_patcher = patch.object(ConnectDB, "send_ToNRoundStatistics")
+        self._stats_patcher = patch.object(ConnectDB, "register_round")
         self._stats_patcher.start()
 
     def tearDown(self):
@@ -23857,6 +23842,163 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
         mock_thread.assert_called_once()
 
 
+class TestDbV1(unittest.TestCase):
+    """DB v1: ラウンドを "ToNRounds" へ関数 register_round で送る（通信は差し替え）"""
+
+    class RunNow:
+        def __init__(self, target=None, daemon=None):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def _send(self, *args, **kwargs):
+        sent = []
+
+        def urlopen(req, timeout=None):
+            sent.append(req)
+            res = MagicMock()
+            res.__enter__ = MagicMock(return_value=res)
+            res.__exit__ = MagicMock(return_value=False)
+            res.status = 204
+            return res
+
+        with patch.object(ConnectDB, "_configured", return_value=True), \
+             patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+             patch.object(ConnectDB, "_headers", return_value={}), \
+             patch.object(ConnectDB.threading, "Thread", self.RunNow), \
+             patch.object(ConnectDB.urllib.request, "urlopen", side_effect=urlopen), \
+             patch("builtins.print"):
+            ConnectDB.register_round(*args, **kwargs)
+        self.assertEqual(len(sent), 1)
+        return sent[0], json.loads(sent[0].data.decode())
+
+    # 2026-01-01 00:00:10 UTC
+    START = 1767225600 + 10
+
+    def test_the_payload(self):
+        req, body = self._send("Fog", [101, 7, 3], 12, -13, instance_key=42,
+                               round_time=self.START + 0.9)
+
+        self.assertEqual(req.full_url, "https://example.invalid/rest/v1/rpc/register_round")
+        self.assertEqual(req.get_method(), "POST")
+        self.assertNotIn("ToNRoundStatistics", req.full_url, "旧テーブルへは送らない")
+        self.assertEqual(body, {"p_instance": 42, "p_time": 10, "p_round": 2, "p_map": 12,
+                                "p_t1": 101, "p_t2": 7, "p_t3": 3, "p_uid": -13})
+
+    def test_the_terrors_are_the_first_three(self):
+        _r, one = self._send("Classic", [5], 1, 1, round_time=self.START)
+        _r, four = self._send("Classic", [5, 6, 7, 8], 1, 1, round_time=self.START)
+        _r, none = self._send("Classic", [], 1, 1, round_time=self.START)
+
+        self.assertEqual((one["p_t1"], one["p_t2"], one["p_t3"]), (5, None, None))
+        self.assertEqual((four["p_t1"], four["p_t2"], four["p_t3"]), (5, 6, 7))
+        self.assertEqual((none["p_t1"], none["p_t2"], none["p_t3"]), (None, None, None))
+        self.assertIsNone(one["p_instance"], "ソロ（instance_key なし）は NULL")
+
+    def test_round_numbers(self):
+        for name, number in (("Classic", 1), ("Sabotage", 4), ("Sabotage star", 4),
+                             ("Sabotage murder", 4), ("Bloodbath EX", 8), ("Midnight", 50),
+                             ("Twilight", 102), ("Run", 104), ("8 Pages", 105),
+                             ("Cold Night", 107)):
+            self.assertEqual(ConnectDB.round_type_id(name), number, name)
+
+    def test_an_unknown_round_is_999_and_noted_in_the_debug_log(self):
+        with patch.object(DebugLog, "write") as write:
+            _r, body = self._send("Special", [1], 1, 1, round_time=self.START)
+            _r, japanese = self._send("クラシック", [1], 1, 1, round_time=self.START)
+            self._send("Classic", [1], 1, 1, round_time=self.START)
+
+        self.assertEqual((body["p_round"], japanese["p_round"]), (999, 999))
+        self.assertEqual(write.call_args_list,
+                         [call("未知のラウンド名: 'Special'"), call("未知のラウンド名: 'クラシック'")])
+
+    def test_the_instance_key(self):
+        a = ConnectDB.instance_key("wrld_x:123~private(usr_a)~region(jp)")
+        self.assertEqual(a, ConnectDB.instance_key("wrld_x:123~private(usr_a)~region(jp)"))
+        self.assertNotEqual(a, ConnectDB.instance_key("wrld_x:124~private(usr_a)~region(jp)"))
+        values = [ConnectDB.instance_key(f"wrld_x:{i}") for i in range(200)]
+        self.assertTrue(all(-2 ** 63 <= v < 2 ** 63 for v in values))
+        self.assertTrue(any(v < 0 for v in values), "符号つき")
+        self.assertTrue(any(abs(v) >= 2 ** 40 for v in values), "8バイトを使っている")
+        self.assertIsNone(ConnectDB.instance_key(""))
+
+    def test_db_time(self):
+        self.assertEqual(ConnectDB.db_time(1767225600), 0)
+        self.assertEqual(ConnectDB.db_time(1767225600 + 3600.7), 3600)
+
+    # ── 読む側 ────────────────────────────────
+    def test_a_v1_row_is_turned_into_the_old_shape(self):
+        row = ConnectDB.round_row({"time": 10, "round": 4, "map_id": 12, "terror1": 7,
+                                   "terror2": None, "terror3": 9, "transformed_uid": -13,
+                                   "other_uids": [-14, -15]})
+        self.assertEqual(row, {"created_at": "2026-01-01T00:00:10Z", "round": "Sabotage",
+                               "terror_ids": [7, 9], "map_id": 12, "transformed_uid": -13})
+        self.assertEqual(ConnectDB.round_row({"time": 0, "round": 999})["round"], "999")
+        self.assertEqual(Statistics.row_datetime(row).year, 2026)
+
+
+class TestLogMonitorDbV1(unittest.TestCase):
+    """開始の行の時刻とインスタンスの ID を覚えて送る。ソロなら目印は NULL"""
+
+    PREFIX = "2026.09.30 13:00:05 Debug      -  "
+    JOIN = "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.transformed_uid = 99
+        return monitor
+
+    def test_the_instance_id_comes_from_the_join_line(self):
+        monitor = self._monitor()
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.PREFIX + self.JOIN)
+        self.assertEqual(monitor.st.instance_id, "wrld_now:2~private(usr_me)~region(jp)")
+
+    def test_the_start_scan_also_knows_the_instance(self):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        tmp.write(self.PREFIX + "User Authenticated: a (usr_0e01408a)\n" + self.PREFIX + self.JOIN + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=Path(tmp.name)), {},
+                                        lambda _m: None, window_idx=1)
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log()
+        self.assertEqual(monitor.st.instance_id, "wrld_now:2~private(usr_me)~region(jp)")
+
+    def test_solo_sends_no_instance_and_unknown_players_do(self):
+        monitor = self._monitor()
+        monitor.st.instance_id = "wrld_now:2"
+        monitor.st.local_user_id = "usr_me"
+        key = ConnectDB.instance_key("wrld_now:2")
+
+        monitor.st.players_known = False
+        self.assertEqual(monitor._db_instance_key(), key, "人数が分からないときは送る")
+        monitor.st.players_known = True
+        monitor.st.players = {"usr_me"}
+        self.assertIsNone(monitor._db_instance_key(), "ソロ")
+        monitor.st.players = {"usr_me", "usr_other"}
+        self.assertEqual(monitor._db_instance_key(), key)
+
+    def test_the_round_start_time_is_sent_not_the_send_time(self):
+        monitor = self._monitor()
+        monitor.st.instance_id = "wrld_now:2"
+        monitor.st.players_known = False
+        start = self.PREFIX + ("This round is taking place at Facility (12) "
+                               "and the round type is Bloodbath")
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(ConnectDB, "register_round") as send:
+            monitor._process(start)
+            monitor._process("2026.09.30 13:00:30 Debug      -  Killers have been set - "
+                             "1 2 3 // Round type is Bloodbath")
+
+        send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False,
+                                     instance_key=ConnectDB.instance_key("wrld_now:2"),
+                                     round_time=LogParser.log_time(start))
+
+
 class TestLogMonitorStatisticsRegistration(unittest.TestCase):
     def _monitor(self):
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
@@ -23871,17 +24013,17 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
         self.assertTrue(monitor.st.statistics_sent)
 
     def test_a_single_classic_waits_for_gigabytes(self):
         """元IDが不定なので、Classic の1体構成はどれも Gigabytes の候補"""
         monitor = self._monitor()
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1], "Classic", revealed=False)
 
         mock_send.assert_not_called()
@@ -23891,30 +24033,30 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         monitor = self._monitor()
         monitor.cfg.auto_begin = False
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("Verified Round End")
 
-        mock_send.assert_called_once_with("Classic", [1], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [1], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_gigabytes_sends_the_replaced_id(self):
         monitor = self._monitor()
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("The Gigabytes have come.")
 
-        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_statistics_are_sent_only_once_per_round(self):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
             monitor._on_killers([4], "Bloodbath", revealed=True)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
         self.assertEqual(monitor.st.terror_ids, [1, 2, 3, 4])
 
     def test_round_start_resets_statistics_sent_flag(self):
@@ -23934,87 +24076,87 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         monitor.cfg.auto_begin = False
         monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
             # Classic の1体なので Gigabytes を待つ。送るのは終了時
             mock_send.assert_not_called()
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_bloodthirsty_log_after_killers_updates_delayed_statistics(self):
         monitor = self._monitor()
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
             mock_send.assert_not_called()
 
             monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_bloodthirsty_variant_is_not_limited_to_classic(self):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Bloodbath", revealed=False)
             mock_send.assert_not_called()
             monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_hungry_home_invader_log_after_classic_slender_converts_id(self):
         monitor = self._monitor()
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
             mock_send.assert_not_called()
             monitor._process(config.HUNGRY_HOME_INVADER_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
         monitor = self._monitor()
         monitor.cfg.auto_begin = False
         monitor._process(config.HUNGRY_HOME_INVADER_LOG)
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
             mock_send.assert_not_called()       # Gigabytes 待ち
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_hungry_home_invader_is_ignored_outside_classic(self):
         monitor = self._monitor()
         monitor.st.round_type = "Bloodbath"
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Bloodbath", revealed=False)
             monitor._process(config.HUNGRY_HOME_INVADER_LOG)
 
         self.assertEqual(monitor.st.terror_ids, [config.SLENDER_ID])
         self.assertFalse(monitor.st.hungry_home_invader_variant)
-        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_curious_creature_statistics_send_on_round_end_if_not_bloodthirsty(self):
         monitor = self._monitor()
         monitor.cfg.auto_begin = False
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
             mock_send.assert_not_called()
 
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99, quiet=False)
+        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
 
     def test_verified_end_does_not_send_statistics(self):
         """待つものが無い構成なら、終了時に改めて送らない"""
@@ -24022,7 +24164,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         monitor.st.round_type = "Bloodbath"
         monitor.st.terror_ids = [1, 2, 3]
 
-        with patch.object(ConnectDB, "send_ToNRoundStatistics") as mock_send:
+        with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._process("Verified Round End")
 
         mock_send.assert_not_called()
@@ -24313,30 +24455,29 @@ class TestGetTransformedUid(unittest.TestCase):
             self.assertIsNone(result)
 
     def test_get_ToNRoundStatistics(self):
-        """集計データを取得"""
+        """"ToNRounds" から読み、今の形に直す。絞り込みはラウンドの番号"""
         mock_res = MagicMock()
         mock_res.__enter__ = MagicMock(return_value=mock_res)
         mock_res.__exit__ = MagicMock(return_value=False)
-        expected = [{
-            "created_at": "2026-05-24T12:34:56+00:00",
-            "round": "Unbound",
-            "terror_ids": [1],
-            "map_id": 2,
-            "transformed_uid": 123
-        }]
-        mock_res.read.return_value = json.dumps(expected).encode()
+        v1 = [{"time": 12696896, "round": 10, "map_id": 2, "terror1": 201, "terror2": None,
+               "terror3": None, "transformed_uid": 123, "other_uids": [5, 6]}]
+        expected = [{"created_at": "2026-05-27T22:54:56Z", "round": "Unbound",
+                     "terror_ids": [201], "map_id": 2, "transformed_uid": 123}]
+        mock_res.read.return_value = json.dumps(v1).encode()
         with patch('urllib.request.urlopen', return_value=mock_res) as mock_urlopen:
             result = ConnectDB.get_ToNRoundStatistics()
-            self.assertEqual(result, expected)
+            self.assertEqual(result, expected, "other_uids があっても1件")
             requested_url = mock_urlopen.call_args.args[0].full_url
-            self.assertIn("round=not.in.(Classic,Run)", requested_url)
+            self.assertIn("/rest/v1/ToNRounds?", requested_url)
+            self.assertIn("order=time.desc", requested_url)
+            self.assertIn("round=not.in.(1,104)", requested_url)
 
-        mock_res.read.return_value = json.dumps(expected).encode()
+        mock_res.read.return_value = json.dumps(v1).encode()
         with patch('urllib.request.urlopen', return_value=mock_res) as mock_urlopen:
             result = ConnectDB.get_ToNRoundStatistics(exclude_rounds=None, include_rounds=("Classic", "Run"))
             self.assertEqual(result, expected)
             requested_url = mock_urlopen.call_args.args[0].full_url
-            self.assertIn("round=in.(Classic,Run)", requested_url)
+            self.assertIn("round=in.(1,104)", requested_url)
 
     def test_get_ToNRoundStatistics_fetches_all_pages(self):
         first_page = [

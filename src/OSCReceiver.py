@@ -21,12 +21,6 @@ import config
 # VelocityMagnitude は間引かれる代わりに、きっちり定数値（6.6 等）へ到達する。
 VELOCITY_MAGNITUDE = "/avatar/parameters/VelocityMagnitude"
 GROUNDED = "/avatar/parameters/Grounded"
-# 観測するだけの値（デバッグログへ。ラウンドの種類の番号とログの名前の対応づくり）。
-# ToN_Terror1 などテラーに関係する値はここに足さない
-WATCHED_PARAMS = {
-    "/avatar/parameters/ToN_RoundType": "ToN_RoundType",
-    "/avatar/parameters/ToN_Map": "ToN_Map",
-}
 
 
 def parse_message(data: bytes):
@@ -55,13 +49,10 @@ def parse_message(data: bytes):
 class VelocityReceiver:
     """1つの窓の VelocityMagnitude / Grounded を受け取る"""
 
-    def __init__(self, port: int, log=None, host: str = "127.0.0.1", on_param=None):
+    def __init__(self, port: int, log=None, host: str = "127.0.0.1"):
         self._port = port
         self._host = host
         self._log = log or (lambda _m: None)
-        # WATCHED_PARAMS の値が変わったときだけ on_param(名前, 値) を呼ぶ
-        self._on_param = on_param
-        self._params: dict = {}
         self._sock = None
         self._thread = None
         self._running = False
@@ -131,15 +122,6 @@ class VelocityReceiver:
         elif address == GROUNDED:
             with self._lock:
                 self._grounded = bool(value)
-        elif address in WATCHED_PARAMS:
-            with self._lock:
-                changed = self._params.get(address, object()) != value
-                self._params[address] = value
-            if changed and self._on_param is not None:
-                try:
-                    self._on_param(WATCHED_PARAMS[address], value)
-                except Exception:
-                    pass            # 観測のための呼び出しで受信を止めない
 
     @property
     def speed(self):

@@ -110,6 +110,7 @@ class LogEvent:
     item_id: int = 0
     previous_item_id: int | None = None
     player_name: str = ""
+    instance: str = ""      # 入室の行の wrld_… から後ろ全部（同じインスタンスなら誰でも同じ）
 
 
 RE_LOG_TIME = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
@@ -275,7 +276,8 @@ def parse(line: str) -> LogEvent | None:
 
     m = RE_JOINING.search(line)
     if m:
-        return LogEvent(EVENT_JOINING, suffix=m.group(2))
+        return LogEvent(EVENT_JOINING, suffix=m.group(2),
+                        instance=line[m.start(1):].strip())
 
     m = RE_ITEM_EQUIP.match(line)
     if m:

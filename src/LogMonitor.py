@@ -79,7 +79,6 @@ class LogMonitor:
             is_running=lambda: self._running,
             log=self._log,
             auto_begin_active=self._auto_begin_active,
-            debug=self._debug,
         )
 
     def _auto_begin_active(self) -> bool:
@@ -415,6 +414,7 @@ class LogMonitor:
 
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
                     found_instance = True
+                    self.st.instance_id = event.instance
                     self.st.instance_type = self._parse_instance_type(event.suffix)
                     self.st.instance_access = LogParser.instance_access(event.suffix)
                     self._log(f"インスタンスタイプ検出: {self.st.instance_type}")
@@ -1136,8 +1136,7 @@ class LogMonitor:
                 SharedState.continue_round_end(st)
             st.in_round                    = True
             st.round_seq                  += 1
-            # ラウンドの種類の番号（OSC の ToN_RoundType）との対応づくり（デバッグログだけ）
-            self._debug(f"ログ round type = {event.round_type} / map = {event.raw_map}")
+            st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
             st.round_end_seen              = False
             st.round_type                  = event.round_type
             # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
@@ -1417,6 +1416,7 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_JOINING:
+            st.instance_id = event.instance
             st.instance_type = self._parse_instance_type(event.suffix)
             st.instance_access = LogParser.instance_access(event.suffix)
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
@@ -1798,13 +1798,23 @@ class LogMonitor:
         if st.statistics_sent or not st.terror_ids:
             return
         st.statistics_sent = True
-        ConnectDB.send_ToNRoundStatistics(
+        ConnectDB.register_round(
             st.round_type,
             list(st.terror_ids),
             st.map_id,
             st.transformed_uid,
             quiet=st.statistics_quiet,
+            instance_key=self._db_instance_key(),
+            round_time=st.round_start_time,
         )
+
+    def _db_instance_key(self):
+        """DB v1 でまとめる目印。ソロ（自分以外がいないと分かっている）なら None。
+        人数が分からないときは送る"""
+        st = self.st
+        if st.players_known and not self._other_players():
+            return None
+        return ConnectDB.instance_key(st.instance_id)
 
     # ── 霧の看破 ─────────────────────────────
     def _may_show_fog_info(self) -> bool:
@@ -1817,8 +1827,9 @@ class LogMonitor:
         if st.statistics_sent:
             return
         st.statistics_sent = True
-        ConnectDB.send_ToNRoundStatistics(
-            st.round_type, [tid], st.map_id, st.transformed_uid, quiet=True)
+        ConnectDB.register_round(
+            st.round_type, [tid], st.map_id, st.transformed_uid, quiet=True,
+            instance_key=self._db_instance_key(), round_time=st.round_start_time)
 
     def _on_network_object(self, name: str):
         """看破: 霧の間に [NetworkProcessing] に出たオブジェクト名を照合する。

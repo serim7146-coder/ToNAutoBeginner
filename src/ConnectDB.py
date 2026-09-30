@@ -1,12 +1,18 @@
 import os
 import sys
 import json
+import hashlib
+import time
+from datetime import datetime, timezone
 import random
 import threading
 import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
+
+import config
+import DebugLog
 
 try:
     from dotenv import load_dotenv
@@ -148,38 +154,84 @@ def get_transformed_uid(VRChat_uid: str) -> int | None:
         print(f"transformed_uid取得エラー: {e}")
         return None
 
-def send_ToNRoundStatistics(round_name: str, terror_ids: list[int], map_id: int,
-                            transformed_uid: int | None, quiet: bool = False):
-    """ラウンドの統計を送る。quiet なら送信について何も出さない（霧の看破・Enrage 系）"""
+def round_type_id(round_name: str) -> int:
+    """ログのラウンド名 → 番号（ToN Save Manager の ToNRoundType）。表に無ければ 999"""
+    return config.ROUND_TYPE_IDS.get(str(round_name or "").strip(),
+                                     config.ROUND_TYPE_UNKNOWN_ID)
+
+
+def instance_key(instance_id: str) -> int | None:
+    """インスタンスの ID の SHA-256 の先頭8バイトを、符号つき64bit整数にする。空なら None"""
+    if not instance_id:
+        return None
+    digest = hashlib.sha256(instance_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def db_time(epoch: float | None) -> int:
+    """epoch 秒 → 2026-01-01 00:00:00 UTC からの秒。無ければ今"""
+    return int(time.time() if epoch is None else epoch) - config.DB_TIME_EPOCH
+
+
+def register_round(round_name: str, terror_ids: list[int], map_id: int,
+                   transformed_uid: int | None, quiet: bool = False,
+                   instance_key: int | None = None, round_time: float | None = None):
+    """ラウンドを DB v1（"ToNRounds"）へ送る（関数 register_round を通す）。
+
+    instance_key が同じで開始の差が15秒以内なら、DB 側で1行にまとめる（ソロなら None）。
+    round_time はそのラウンドの開始の行の時刻（epoch）。テラーは先頭3つ。
+    quiet なら送信について何も出さない（霧の看破・Enrage 系）
+    """
     say = (lambda _m: None) if quiet else print
+    round_id = round_type_id(round_name)
+    if round_id == config.ROUND_TYPE_UNKNOWN_ID:
+        DebugLog.write(f"未知のラウンド名: {round_name!r}")
     if not _configured():
         say("Supabase設定がないためラウンド統計送信をスキップします。")
         return
-    def _send_ToNRoundStatistics():
+    ids = (list(terror_ids or []) + [None, None, None])[:3]
+    payload = {
+        "p_instance": instance_key,
+        "p_time": db_time(round_time),
+        "p_round": round_id,
+        "p_map": map_id,
+        "p_t1": ids[0], "p_t2": ids[1], "p_t3": ids[2],
+        "p_uid": transformed_uid,
+    }
+
+    def _send():
         try:
-            data = json.dumps({
-                "round": round_name,
-                "terror_ids": terror_ids,
-                "map_id": map_id,
-                "transformed_uid": transformed_uid
-            }).encode()
             req = urllib.request.Request(
-                _url("ToNRoundStatistics"),
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    **_headers(),
-                },
-                method="POST"
-            )
+                _url("rpc/register_round"),
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json", **_headers()},
+                method="POST")
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
                 say(f"Supabase登録: {res.status}")
         except urllib.error.HTTPError as e:
             say(f"HTTPエラー: {e.code} {e.read()}")
         except Exception as e:
             say(f"送信エラー: {e}")
-            
-    threading.Thread(target=_send_ToNRoundStatistics, daemon=True).start()
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+def round_row(row: dict) -> dict:
+    """"ToNRounds" の1行を、統計画面が使う形（round 名・terror_ids・created_at など）に直す。
+    other_uids（同じラウンドを見たほかの人）があっても1件"""
+    number = row.get("round")
+    ts = row.get("time")
+    created = (datetime.fromtimestamp(int(ts) + config.DB_TIME_EPOCH, timezone.utc)
+               .isoformat().replace("+00:00", "Z") if ts is not None else None)
+    return {
+        "created_at": created,
+        "round": config.ROUND_TYPE_NAMES.get(number, str(number)),
+        "terror_ids": [t for t in (row.get("terror1"), row.get("terror2"), row.get("terror3"))
+                       if t is not None],
+        "map_id": row.get("map_id"),
+        "transformed_uid": row.get("transformed_uid"),
+    }
+
 
 def get_ToNRoundStatistics(
     exclude_rounds: tuple[str, ...] | list[str] | None = DEFAULT_EXCLUDED_STAT_ROUNDS,
@@ -191,15 +243,19 @@ def get_ToNRoundStatistics(
     all_rows = []
     offset = 0
     page_size = 1000
-    round_filter = _in_filter("round", include_rounds) if include_rounds else _not_in_filter("round", exclude_rounds)
+    # 絞り込みはラウンドの番号で（名前 → 番号）
+    include_ids = sorted({round_type_id(n) for n in include_rounds or ()})
+    exclude_ids = sorted({round_type_id(n) for n in exclude_rounds or ()})
+    round_filter = (_in_filter("round", include_ids) if include_rounds
+                    else _not_in_filter("round", exclude_ids))
     while True:
         req = urllib.request.Request(
-            _url(f"ToNRoundStatistics?select=*&order=created_at.desc{round_filter}&limit={page_size}&offset={offset}"),
+            _url(f"ToNRounds?select=*&order=time.desc{round_filter}&limit={page_size}&offset={offset}"),
             headers=_headers(accept=True)
         )
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
             data = json.loads(res.read().decode("utf-8"))
-        all_rows.extend(data)
+        all_rows.extend(round_row(row) for row in data)
         if len(data) < page_size:
             break
         offset += page_size
