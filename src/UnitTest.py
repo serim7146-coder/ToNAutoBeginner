@@ -1278,6 +1278,7 @@ class TestLiveLogCandidates(unittest.TestCase):
         app._log = app.logs.append
         app._dropped_logs = None
         app._live_candidates = lambda c: mainGUI.App._live_candidates(app, c)
+        app._dropped_log_lines = mainGUI.App._dropped_log_lines
         return app
 
     def test_the_assignment_uses_only_live_logs(self):
@@ -1288,7 +1289,8 @@ class TestLiveLogCandidates(unittest.TestCase):
         kept = app._live_candidates([live, dead])
 
         self.assertEqual(kept, [live])
-        self.assertTrue(any("候補から除外: dead.txt" in m for m in app.logs), app.logs)
+        self.assertEqual(app.logs,
+                         ["[割り当て] 候補から除外: 更新が止まっているログ 1件（dead.txt）"])
 
     def test_all_dead_falls_back_to_every_log(self):
         """全部外れたら絞り込む前の一覧を使う（割り当て不能にしない）"""
@@ -1315,20 +1317,54 @@ class TestLiveLogCandidates(unittest.TestCase):
 
         self.assertEqual(len(app.logs), 3, "顔ぶれが変わったら出す")
 
-    def test_the_dropped_logs_are_listed_newest_first(self):
+    def test_the_reasons_come_newest_first(self):
+        """理由の並びは初めて出てきた順（受け取った順＝新しい順）"""
         app = self._app()
         self._log("output_log_2026-09-26_12-00-00.txt")
         self._log("output_log_2026-09-26_09-00-00.txt",
                   quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
-        self._log("output_log_2026-09-26_11-00-00.txt",
+        self._log("output_log_2026-09-26_10-00-00.txt",
                   quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+        self._log("output_log_2026-09-26_11-00-00.txt", world="wrld_somewhere-else")
 
         app._live_candidates(VRChatDiscovery.find_latest_logs(Path(self._dir.name), 20))
 
         self.assertEqual(app.logs, [
-            "[割り当て] 候補から除外: output_log_2026-09-26_11-00-00.txt（更新が止まっています）",
-            "[割り当て] 候補から除外: output_log_2026-09-26_09-00-00.txt（更新が止まっています）",
+            "[割り当て] 候補から除外: ToN を離れているログ 1件（output_log_2026-09-26_11-00-00.txt）",
+            "[割り当て] 候補から除外: 更新が止まっているログ 2件",
         ])
+
+    def test_twelve_quiet_logs_make_one_line(self):
+        app = self._app()
+        live = self._log("live.txt")
+        dead = [self._log(f"dead{i:02d}.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+                for i in range(12)]
+
+        app._live_candidates([live, *dead])
+
+        self.assertEqual(app.logs, ["[割り当て] 候補から除外: 更新が止まっているログ 12件"])
+
+    def test_two_reasons_make_two_lines(self):
+        app = self._app()
+        live = self._log("live.txt")
+        dead = [self._log(f"dead{i}.txt", quiet_for=config.LOG_LIVE_GRACE_SEC + 10)
+                for i in range(3)]
+        away = self._log("away.txt", world="wrld_somewhere-else")
+
+        app._live_candidates([live, *dead, away])
+        app._live_candidates([live, *dead, away])
+
+        self.assertEqual(app.logs, [
+            "[割り当て] 候補から除外: 更新が止まっているログ 3件",
+            "[割り当て] 候補から除外: ToN を離れているログ 1件（away.txt）",
+        ], "顔ぶれが同じなら2回目は出さない")
+
+    def test_an_unknown_reason_is_shown_as_it_is(self):
+        self.assertEqual(
+            mainGUI.App._dropped_log_lines([("a.txt", "読めません"), ("b.txt", "謎"),
+                                            ("c.txt", "謎")]),
+            ["[割り当て] 候補から除外: 読めないログ 1件（a.txt）",
+             "[割り当て] 候補から除外: 謎: 2件"])
 
     def test_nothing_dropped_says_nothing(self):
         app = self._app()
@@ -1449,6 +1485,7 @@ class TestOSCPortsFromAssignment(unittest.TestCase):
         app = self._app([], [])
         app._dropped_logs = None
         app._live_candidates = lambda c: mainGUI.App._live_candidates(app, c)
+        app._dropped_log_lines = mainGUI.App._dropped_log_lines
         with patch.object(mainGUI.OSCClient, "udp_ports_by_pid", return_value=None), \
              patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]):
             mainGUI.App._resolve_windows(app, [])
@@ -15523,6 +15560,7 @@ class TestStartWithoutTnl(unittest.TestCase):
         app._dropped_logs = None
         for name in ("_resolve_tab_ports", "_resolve_windows", "_live_candidates"):
             setattr(app, name, getattr(mainGUI.App, name).__get__(app))
+        app._dropped_log_lines = mainGUI.App._dropped_log_lines
         app._apply_obs_settings = lambda: None
         app._assign_source = mainGUI.App._assign_source
         return app

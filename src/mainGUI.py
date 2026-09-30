@@ -1557,11 +1557,34 @@ class App(tk.Tk):
         self._log(f"[起動時検出] VRChatウィンドウを{n}窓検出 → 窓数を{n}に設定")
         self._assign_windows_and_logs(windows)
 
+    # 「候補から除外」のログで、理由ごとの言い方（理由ごとに1行にまとめる）
+    DROPPED_LOG_LABELS = {
+        "読めません": "読めないログ",
+        "更新が止まっています": "更新が止まっているログ",
+        "ToN を離れています": "ToN を離れているログ",
+    }
+
+    @classmethod
+    def _dropped_log_lines(cls, dropped) -> list:
+        """外したログを理由ごとに1行にする。理由の並びは初めて出てきた順（受け取った順
+        ＝新しい順）。1件だけの理由はファイル名を添え、2件以上は件数だけ"""
+        groups: dict = {}
+        for path, why in dropped:
+            groups.setdefault(why, []).append(Path(path).name)
+        lines = []
+        for why, names in groups.items():
+            label = cls.DROPPED_LOG_LABELS.get(why)
+            text = f"{label} {len(names)}件" if label else f"{why}: {len(names)}件"
+            if len(names) == 1:
+                text += f"（{names[0]}）"
+            lines.append(f"[割り当て] 候補から除外: {text}")
+        return lines
+
     def _live_candidates(self, candidates: list) -> list:
         """終わったログ・ToN を離れたログを候補から外す。
 
         全部外れたら絞り込む前の一覧を使う（割り当て不能にしない）。
-        外した顔ぶれが変わったときだけログを出す（受け取った順＝新しい順に出す）
+        外した顔ぶれが変わったときだけログを出す（理由ごとに1行）
         """
         kept, dropped = VRChatDiscovery.live_ton_logs(candidates)
         reasons = tuple(sorted((Path(p).name, why) for p, why in dropped))
@@ -1572,8 +1595,8 @@ class App(tk.Tk):
             return candidates
         if reasons != self._dropped_logs:
             self._dropped_logs = reasons
-            for path, why in dropped:
-                self._log(f"[割り当て] 候補から除外: {Path(path).name}（{why}）")
+            for line in self._dropped_log_lines(dropped):
+                self._log(line)
         return kept
 
     def _resolve_windows(self, windows: list) -> list:
