@@ -17911,9 +17911,12 @@ class TestEightPagesListId(unittest.TestCase):
                              list_id, page)
 
     def test_an_unknown_or_null_page_is_none(self):
-        self.assertIsNone(ReadJson.eight_pages_list_id(0, config.TERRORS), "list_id が null")
-        self.assertIsNone(ReadJson.eight_pages_list_id(44, config.TERRORS), "表に無い")
-        self.assertIsNone(ReadJson.eight_pages_list_id("いろは", config.TERRORS))
+        # 本物の terrors.json は全部埋まっているので、テスト用の表で見る
+        data = eight_pages_terrors({0: None, 50: 135})
+        self.assertIsNone(ReadJson.eight_pages_list_id(0, data), "list_id が null")
+        self.assertIsNone(ReadJson.eight_pages_list_id(44, data), "表に無い")
+        self.assertIsNone(ReadJson.eight_pages_list_id("いろは", data))
+        self.assertEqual(ReadJson.eight_pages_list_id(50, data), 135, "前提: 表は読めている")
 
     def test_a_missing_or_broken_table_does_not_raise(self):
         for raw in ({"classic": []}, {"8pages": "壊れている"},
@@ -17988,7 +17991,9 @@ class TestEightPagesListId(unittest.TestCase):
         self.assertTrue(any("Whiteface" in m for m in monitor.logs), monitor.logs)
 
     def test_an_unknown_number_is_logged_once_and_does_not_continue(self):
-        monitor = self._monitor({self.PAGES: {44, 135}})
+        # 44 は本物の表では登録済み。44 の無いテスト用の表で見る
+        monitor = self._monitor({self.PAGES: {44, 135}},
+                                terrors=eight_pages_terrors({50: 135}))
 
         started, sent, _play = self._run(
             monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
@@ -18012,7 +18017,7 @@ class TestEightPagesListId(unittest.TestCase):
         self.assertTrue(any("未登録の番号 0" in m for m in monitor.logs), monitor.logs)
 
     def test_the_warning_comes_back_next_round(self):
-        monitor = self._monitor({})
+        monitor = self._monitor({}, terrors=eight_pages_terrors({50: 135}))
         self._run(monitor, "Killers have been set - 44 1 0 // Round type is 8 Pages")
 
         monitor._process("This round is taking place at Facility (12) "
