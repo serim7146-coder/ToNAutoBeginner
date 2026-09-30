@@ -3616,7 +3616,10 @@ class TestFogStunned(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
         self.play.assert_called_once_with("continue.mp3")
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
-        self.send.assert_called_once_with("Fog", [self.WITCH], 0, None, quiet=False, instance_key=ANY, round_time=ANY)
+        # Walpurgisnacht はオルタネイトのテラー。DB へは Fog (Alternate) で送る（BJ）
+        self.send.assert_called_once_with("Fog (Alternate)", [self.WITCH], 0, None, quiet=False,
+                                          instance_key=ANY, round_time=ANY)
+        self.assertEqual(monitor.st.round_type, "Fog", "st.round_type は変えない")
 
     def test_an_unknown_name_is_logged_in_any_instance(self):
         for access in ("invite", "public"):
@@ -23936,6 +23939,70 @@ class TestDbV1(unittest.TestCase):
                                "terror_ids": [7, 9], "map_id": 12, "transformed_uid": -13})
         self.assertEqual(ConnectDB.round_row({"time": 0, "round": 999})["round"], "999")
         self.assertEqual(Statistics.row_datetime(row).year, 2026)
+
+
+class TestAlternateRoundNameForDb(unittest.TestCase):
+    """Fog / Ghost で送るテラーが全部オルタネイトなら「(Alternate)」で送る（開始の行は常に Fog）"""
+
+    ALT, ALT2, NORMAL = 167, 170, 101
+
+    def setUp(self):
+        terrors = {"alternate": {str(self.ALT): {}, str(self.ALT2): {}},
+                   "classic": {str(self.NORMAL): {}}}
+        for p in (patch.object(config, "TERRORS", terrors),):
+            p.start()
+            self.addCleanup(p.stop)
+        self.monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        self.monitor.st.map_id = 12
+        self.monitor.st.transformed_uid = 99
+
+    def _sent(self, round_type, ids, early=False):
+        st = self.monitor.st
+        st.round_type = round_type
+        st.statistics_sent = False
+        st.terror_ids = list(ids)
+        with patch.object(ConnectDB, "register_round") as send:
+            if early:
+                self.monitor._send_early_statistics(ids[0])
+            else:
+                self.monitor._send_round_statistics_once()
+        send.assert_called_once()
+        return ConnectDB.round_type_id(send.call_args.args[0])
+
+    def test_fog_with_alternate_terrors_is_52(self):
+        self.assertEqual(self._sent("Fog", [self.ALT]), 52)
+        self.assertEqual(self._sent("Fog", [self.ALT, self.ALT2]), 52)
+
+    def test_the_quiet_early_read_send_is_52_too(self):
+        self.assertEqual(self._sent("Fog", [self.ALT], early=True), 52)
+
+    def test_fog_with_normal_or_mixed_terrors_is_2(self):
+        self.assertEqual(self._sent("Fog", [self.NORMAL]), 2)
+        self.assertEqual(self._sent("Fog", [self.ALT, self.NORMAL]), 2)
+        self.assertEqual(self._sent("Fog", [self.NORMAL], early=True), 2)
+
+    def test_ghost_follows_the_same_rule(self):
+        self.assertEqual(self._sent("Ghost", [self.ALT]), 53)
+        self.assertEqual(self._sent("Ghost", [self.NORMAL]), 9)
+        self.assertEqual(self._sent("Ghost (Alternate)", [self.ALT]), 53)
+
+    def test_a_revealed_fog_alternate_stays_52(self):
+        self.assertEqual(self._sent("Fog (Alternate)", [self.ALT]), 52)
+        self.assertEqual(self._sent("Fog (Alternate)", [self.NORMAL]), 52)
+
+    def test_other_rounds_are_not_touched(self):
+        self.assertEqual(self._sent("Classic", [self.ALT]), 1)
+        self.assertEqual(self._sent("Alternate", [self.ALT]), 51)
+
+    def test_the_round_type_itself_stays_fog(self):
+        """判定・ラウンド指定自爆が見ている st.round_type は変えない"""
+        self._sent("Fog", [self.ALT])
+        self._sent("Fog", [self.ALT], early=True)
+        self.assertEqual(self.monitor.st.round_type, "Fog")
+
+    def test_no_terrors_is_the_round_type(self):
+        self.monitor.st.round_type = "Fog"
+        self.assertEqual(self.monitor._round_type_for_db([]), "Fog")
 
 
 class TestLogMonitorDbV1(unittest.TestCase):

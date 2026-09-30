@@ -1799,7 +1799,7 @@ class LogMonitor:
             return
         st.statistics_sent = True
         ConnectDB.register_round(
-            st.round_type,
+            self._round_type_for_db(st.terror_ids),
             list(st.terror_ids),
             st.map_id,
             st.transformed_uid,
@@ -1807,6 +1807,18 @@ class LogMonitor:
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
         )
+
+    def _round_type_for_db(self, terror_ids) -> str:
+        """DB へ送るラウンド名。Fog / Ghost で、送るテラーが全部オルタネイトなら
+        「Fog (Alternate)」「Ghost (Alternate)」にする（開始の行は常に Fog で、
+        (Alternate) は判明の行にしか出ない。看破・Enrage で先に分かったときも正しく送る）。
+        st.round_type は変えない（判定・ラウンド指定自爆が見ている）"""
+        round_type = self.st.round_type
+        ids = list(terror_ids or [])
+        if (round_type in ("Fog", "Ghost") and ids
+                and all(ReadJson.is_alternate_terror(tid, config.TERRORS) for tid in ids)):
+            return f"{round_type} (Alternate)"
+        return round_type
 
     def _db_instance_key(self):
         """DB v1 でまとめる目印。ソロ（自分以外がいないと分かっている）なら None。
@@ -1828,7 +1840,7 @@ class LogMonitor:
             return
         st.statistics_sent = True
         ConnectDB.register_round(
-            st.round_type, [tid], st.map_id, st.transformed_uid, quiet=True,
+            self._round_type_for_db([tid]), [tid], st.map_id, st.transformed_uid, quiet=True,
             instance_key=self._db_instance_key(), round_time=st.round_start_time)
 
     def _on_network_object(self, name: str):
