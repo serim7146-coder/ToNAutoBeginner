@@ -477,6 +477,13 @@ VARIANT_TERROR_IDS = frozenset({
 
 # ── 音量 ──
 DEFAULT_SOUND_VOLUME = 1.0
+# VRChat の窓ごとの音量（WindowVolume）。窓の状態で Windows の音量ミキサーの音量を
+# 切り替える。既定は OFF。値は %（0〜100）
+WINDOW_VOLUME_POLL_SEC          = 0.5
+DEFAULT_WINDOW_VOLUME_ENABLED   = False
+DEFAULT_WINDOW_VOLUME_CONTINUE  = 100
+DEFAULT_WINDOW_VOLUME_FREEZE    = 100
+DEFAULT_WINDOW_VOLUME_OTHER     = 0
 
 # ── 音声アナウンスファイルパス ──
 VOICE_CONTINUE     = str(resource_path("voice/Continue.mp3"))

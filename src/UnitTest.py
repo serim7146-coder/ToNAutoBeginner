@@ -52,6 +52,7 @@ import Recorder
 import SecretStore
 import FogEarlyRead
 import BeginDetect
+import WindowVolume
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -2382,6 +2383,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.v_freeze_rounds = {}
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -2432,6 +2434,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app._log = app.logs.append
         written = []
         with patch.object(mainGUI, "load_settings", return_value=dict(data)),              patch.object(mainGUI, "save_settings", written.append):
+            app._load_window_volume_settings = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app, written
 
@@ -9200,6 +9203,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
 
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["win_count"], 6)
@@ -9252,6 +9256,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app._log = app.logs.append
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
+            app._load_window_volume_settings = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 
@@ -12237,6 +12242,426 @@ class TestAimInWindowImage(unittest.TestCase):
             self.assertIsNone(WindowOperator.aim_in_window_image(0x100))
 
 
+class TestWindowVolumeCategory(unittest.TestCase):
+    """分類: 続行 ＞ フリーズ窓（フリーズを張った窓）＞ その他"""
+
+    def test_continue(self):
+        self.assertEqual(WindowVolume.category_of(WindowState(is_continue_round=True)),
+                         WindowVolume.CONTINUE)
+
+    def test_each_freeze_this_window_holds(self):
+        for held in ("equip_freeze_held", "speed_freeze_held", "round_freeze_held"):
+            st = WindowState()
+            setattr(st, held, True)
+            self.assertEqual(WindowVolume.category_of(st), WindowVolume.FREEZE, held)
+
+    def test_continue_wins_over_a_freeze(self):
+        st = WindowState(is_continue_round=True)
+        st.equip_freeze_held = True
+        st.continue_freeze_held = True
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
+
+    def test_dtm_waldo_continue_without_the_freeze_is_continue(self):
+        st = WindowState(is_continue_round=True)
+        st.continue_freeze_held = False
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
+
+    def test_nothing_is_other(self):
+        self.assertEqual(WindowVolume.category_of(WindowState()), WindowVolume.OTHER)
+        st = WindowState()
+        st.continue_freeze_held = True      # 続行の印が無ければ続行ではない
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.OTHER)
+
+
+class _FakeAudio:
+    """音声の部分の偽物。volumes は「音声セッションがあるプロセスの音量」"""
+
+    def __init__(self, pids, volumes):
+        self.pids = dict(pids)              # hwnd → pid
+        self.volumes = dict(volumes)        # pid → 0.0〜1.0
+        self.calls = []
+        self.error = None
+        self.raise_on_set = None
+        self.released = 0
+
+    def pid_of(self, hwnd):
+        self.calls.append(("pid", hwnd))
+        return self.pids.get(hwnd, 0)
+
+    def read_volumes(self, pids):
+        self.calls.append(("read", tuple(pids)))
+        return {p: self.volumes[p] for p in pids if p in self.volumes}
+
+    def set_volume(self, pid, level):
+        self.calls.append(("set", pid, round(level, 3)))
+        if self.raise_on_set is not None:
+            raise self.raise_on_set
+        if pid not in self.volumes:
+            return False
+        self.volumes[pid] = level
+        return True
+
+    def take_error(self):
+        error, self.error = self.error, None
+        return error
+
+    def release_com(self):
+        self.released += 1
+
+    def sets(self):
+        return [c for c in self.calls if c[0] == "set"]
+
+
+class TestWindowVolumeController(unittest.TestCase):
+    """0.5秒ごとに窓の分類を見て、変わったときだけ音量を設定する。停止で元に戻す"""
+
+    def setUp(self):
+        self.a = WindowState()                       # その他
+        self.b = WindowState(is_continue_round=True)  # 続行
+        self.c = WindowState()                       # まだ音を出していない窓
+        self.audio = _FakeAudio({0xA: 11, 0xB: 22, 0xC: 33}, {11: 0.8, 22: 0.6})
+        self.logs = []
+        self.ctl = WindowVolume.VolumeController(
+            lambda: [(1, 0xA, self.a), (2, 0xB, self.b), (3, 0xC, self.c)],
+            self.logs.append, audio=self.audio)
+        self.ctl.set_levels(100, 90, 0)
+        self.ctl.set_enabled(True)
+
+    def test_off_touches_nothing(self):
+        self.ctl.set_enabled(False)
+
+        for _ in range(3):
+            self.ctl._tick_safely()
+        self.ctl.restore()
+
+        self.assertEqual(self.audio.calls, [], "読みも書きもしない")
+        self.assertEqual(self.logs, [])
+
+    def test_the_default_is_off(self):
+        ctl = WindowVolume.VolumeController(lambda: [(1, 0xA, self.a)], self.logs.append,
+                                            audio=self.audio)
+        ctl.tick()
+        self.assertEqual(self.audio.calls, [])
+        self.assertFalse(config.DEFAULT_WINDOW_VOLUME_ENABLED)
+        self.assertEqual((config.DEFAULT_WINDOW_VOLUME_CONTINUE,
+                          config.DEFAULT_WINDOW_VOLUME_FREEZE,
+                          config.DEFAULT_WINDOW_VOLUME_OTHER), (100, 100, 0))
+
+    def test_each_window_gets_its_category_once(self):
+        self.ctl.tick()
+        self.ctl.tick()
+
+        self.assertEqual(self.audio.sets(), [("set", 11, 0.0), ("set", 22, 1.0)],
+                         "同じ分類が続くあいだは2回目以降設定しない")
+        self.assertEqual(self.logs, ["[窓1] VRChat の音量 → その他 0%",
+                                     "[窓2] VRChat の音量 → 続行 100%"])
+
+    def test_a_freeze_window_gets_the_freeze_level(self):
+        self.a.round_freeze_held = True
+        self.ctl.tick()
+        self.assertIn(("set", 11, 0.9), self.audio.sets())
+
+    def test_a_manual_change_is_left_alone_until_the_category_changes(self):
+        self.ctl.tick()
+        self.audio.volumes[11] = 0.7                # 利用者が音量ミキサーで変えた
+        self.audio.calls.clear()
+
+        self.ctl.tick()
+        self.assertEqual(self.audio.sets(), [], "読んだ値が違うだけでは設定し直さない")
+
+        self.a.equip_freeze_held = True
+        self.ctl.tick()
+        self.assertEqual(self.audio.sets(), [("set", 11, 0.9)])
+
+    def test_the_original_is_remembered_once_and_restored(self):
+        self.ctl.tick()
+        self.a.equip_freeze_held = True
+        self.ctl.tick()                             # 分類が変わっても元の音量は最初のまま
+        self.audio.calls.clear()
+
+        self.ctl.restore()
+
+        self.assertEqual(sorted(self.audio.sets()), [("set", 11, 0.8), ("set", 22, 0.6)])
+        self.assertEqual(self.logs[-1], "[停止] VRChat の音量を元に戻しました（2窓）")
+        self.audio.calls.clear()
+        self.ctl.restore()
+        self.assertEqual(self.audio.calls, [], "戻し終えたら覚えを消す")
+
+    def test_only_windows_it_set_and_still_alive_are_restored(self):
+        self.ctl.tick()
+        del self.audio.volumes[22]                  # 窓2を閉じた
+        self.audio.calls.clear()
+
+        self.ctl.restore()
+
+        self.assertEqual(self.audio.sets(), [("set", 11, 0.8)], "窓3（設定していない）・窓2（閉じた）は戻さない")
+        self.assertEqual(self.logs[-1], "[停止] VRChat の音量を元に戻しました（1窓）")
+
+    def test_turning_it_off_restores_at_once_and_on_again_remembers_anew(self):
+        self.ctl.tick()
+        self.ctl.set_enabled(False)
+        self.audio.calls.clear()
+
+        self.ctl.tick()
+        self.assertEqual(sorted(self.audio.sets()), [("set", 11, 0.8), ("set", 22, 0.6)])
+        self.audio.calls.clear()
+        self.ctl.tick()
+        self.assertEqual(self.audio.calls, [], "OFF のあいだは触らない")
+
+        self.audio.volumes[11] = 0.5                # OFF のあいだに手で変えた
+        self.ctl.set_enabled(True)
+        self.ctl.tick()
+        self.ctl.set_enabled(False)
+        self.audio.calls.clear()
+        self.ctl.tick()
+        self.assertIn(("set", 11, 0.5), self.audio.sets(), "ON に戻したら覚え直す")
+
+    def test_a_slider_change_takes_effect_on_the_next_tick(self):
+        self.ctl.tick()
+        self.audio.calls.clear()
+
+        self.ctl.set_levels(80, 90, 30)
+        self.ctl.tick()
+
+        self.assertEqual(self.audio.sets(), [("set", 11, 0.3), ("set", 22, 0.8)])
+
+    def test_a_window_without_a_session_is_tried_again_later(self):
+        self.ctl.tick()
+        self.assertNotIn(33, [c[1] for c in self.audio.sets()], "音を出していない窓には設定しない")
+
+        self.audio.volumes[33] = 0.4                # 音を出し始めた
+        self.ctl.tick()
+
+        self.assertIn(("set", 33, 0.0), self.audio.sets())
+        self.audio.calls.clear()
+        self.ctl.restore()
+        self.assertIn(("set", 33, 0.4), self.audio.sets())
+
+    def test_a_failed_set_is_not_remembered(self):
+        self.audio.pids[0xD] = 44
+        d = WindowState()
+        ctl = WindowVolume.VolumeController(lambda: [(4, 0xD, d)], self.logs.append,
+                                            audio=self.audio)
+        ctl.set_enabled(True)
+        self.audio.volumes[44] = 0.5
+        real = self.audio.set_volume
+        self.audio.set_volume = lambda pid, level: False
+        ctl.tick()
+        self.audio.set_volume = real
+        ctl.restore()
+        self.assertEqual(self.audio.sets(), [], "設定できなかった窓は戻す対象にしない")
+
+    def test_a_failure_is_logged_once_and_the_watch_goes_on(self):
+        self.audio.raise_on_set = OSError("boom")
+
+        for _ in range(3):
+            self.ctl._tick_safely()
+        self.audio.error = "COM を初期化できません"
+        self.ctl._tick_safely()
+
+        warnings = [m for m in self.logs if m.startswith("⚠ VRChat の音量を変えられません")]
+        self.assertEqual(len(warnings), 1, self.logs)
+        self.assertEqual(len([c for c in self.audio.sets() if c[1] == 11]), 4, "毎回試している")
+
+    def test_an_audio_error_alone_is_logged_once(self):
+        self.audio.error = "音量を読めません（x）"
+        self.ctl._tick_safely()
+        self.audio.error = "音量を読めません（y）"
+        self.ctl._tick_safely()
+        self.assertEqual(self.logs.count("⚠ VRChat の音量を変えられません（音量を読めません（x））"), 1)
+        self.assertEqual(sum(m.startswith("⚠") for m in self.logs), 1)
+
+    def test_the_thread_sets_then_restores_on_stop(self):
+        with patch.object(config, "WINDOW_VOLUME_POLL_SEC", 0.01):
+            self.ctl.start()
+            for _ in range(200):
+                if len(self.audio.sets()) >= 2:
+                    break
+                time.sleep(0.01)
+            self.ctl.stop()
+
+        self.assertEqual(self.audio.volumes[11], 0.8)
+        self.assertEqual(self.audio.volumes[22], 0.6)
+        self.assertEqual(self.audio.released, 1, "COM はそのスレッドで片付ける")
+        self.assertTrue(any("元に戻しました（2窓）" in m for m in self.logs), self.logs)
+
+    def test_the_thread_survives_an_exception(self):
+        self.audio.raise_on_set = OSError("boom")
+        with patch.object(config, "WINDOW_VOLUME_POLL_SEC", 0.01):
+            self.ctl.start()
+            for _ in range(200):
+                if len(self.audio.sets()) >= 6:
+                    break
+                time.sleep(0.01)
+            alive = self.ctl._thread.is_alive()
+            self.ctl.stop()
+        self.assertTrue(alive)
+        self.assertGreaterEqual(len(self.audio.sets()), 6)
+
+
+class TestWindowVolumeSettings(unittest.TestCase):
+    """settings.json: 古いファイル（キーが無い）でも既定値。壊れた値も既定値"""
+
+    def test_an_old_file_gives_the_defaults(self):
+        enabled, levels = WindowVolume.levels_from_settings({})
+        self.assertFalse(enabled)
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.FREEZE: 100,
+                                  WindowVolume.OTHER: 0})
+
+    def test_saved_values_are_read_and_clamped(self):
+        enabled, levels = WindowVolume.levels_from_settings({
+            "window_volume_enabled": True, "window_volume_continue": 75,
+            "window_volume_freeze": 150, "window_volume_other": -5})
+        self.assertTrue(enabled)
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 75, WindowVolume.FREEZE: 100,
+                                  WindowVolume.OTHER: 0})
+
+    def test_broken_values_fall_back(self):
+        enabled, levels = WindowVolume.levels_from_settings({
+            "window_volume_enabled": "yes", "window_volume_continue": "80",
+            "window_volume_freeze": True, "window_volume_other": None})
+        self.assertFalse(enabled)
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.FREEZE: 100,
+                                  WindowVolume.OTHER: 0})
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def _app(self):
+        app = type("FakeApp", (), {})()
+        app.v_wvol_enabled = self.Var(False)
+        app.v_wvol = {WindowVolume.CONTINUE: self.Var(100), WindowVolume.FREEZE: self.Var(100),
+                      WindowVolume.OTHER: self.Var(0)}
+        app._window_volume_values = lambda: mainGUI.App._window_volume_values(app)
+        return app
+
+    def test_they_are_saved_and_loaded_back(self):
+        app = self._app()
+        mainGUI.App._load_window_volume_settings(app, {
+            "window_volume_enabled": True, "window_volume_continue": 70,
+            "window_volume_freeze": 40, "window_volume_other": 10})
+
+        saved = mainGUI.App._window_volume_settings(app)
+
+        self.assertEqual(saved, {"window_volume_enabled": True, "window_volume_continue": 70,
+                                 "window_volume_freeze": 40, "window_volume_other": 10})
+
+    def test_the_save_includes_the_keys(self):
+        app = self._app()
+        stored = {}
+        fake = type("FakeApp", (), {})()
+        fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(fake, name, self.Var(""))
+        fake.v_freeze_rounds = {}
+        fake._window_volume_settings = lambda: mainGUI.App._window_volume_settings(app)
+        with patch.object(mainGUI, "save_settings", stored.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(fake)
+        for key in ("window_volume_enabled", "window_volume_continue",
+                    "window_volume_freeze", "window_volume_other"):
+            self.assertIn(key, stored)
+
+    def test_the_gui_hands_the_values_to_the_running_controller(self):
+        app = self._app()
+        app.v_wvol_enabled.set(True)
+        app.v_wvol[WindowVolume.OTHER].set(25)
+        app._window_volume = MagicMock()
+
+        mainGUI.App._apply_window_volume_settings(app)
+
+        app._window_volume.set_levels.assert_called_once_with(100, 100, 25)
+        app._window_volume.set_enabled.assert_called_once_with(True)
+
+    def test_nothing_happens_when_not_running(self):
+        app = self._app()
+        app._window_volume = None
+        mainGUI.App._apply_window_volume_settings(app)       # 落ちない
+
+
+class TestWindowVolumeInTheApp(unittest.TestCase):
+    """開始で見張りを作り、停止の頭（監視を止める前）で止めて元に戻す"""
+
+    def test_start_watches_every_monitor(self):
+        app = type("FakeApp", (), {})()
+        m1, m2 = MagicMock(window_idx=1), MagicMock(window_idx=2)
+        m1.cfg.hwnd, m2.cfg.hwnd = 0xA, 0xB
+        app.monitors = [m1, m2]
+        app._log = lambda _m: None
+        app._apply_window_volume_settings = MagicMock()
+        with patch.object(WindowVolume, "VolumeController") as ctl:
+            mainGUI.App._start_window_volume(app)
+        windows = ctl.call_args.args[0]()
+        self.assertEqual([(i, h) for i, h, _st in windows], [(1, 0xA), (2, 0xB)])
+        app._apply_window_volume_settings.assert_called_once()
+        ctl.return_value.start.assert_called_once()
+
+    def test_start_begins_watching_after_the_monitors_exist(self):
+        """_start は重いので、呼ぶ場所をソースで見る: 監視を作り終え、窓が無ければ
+        抜けた後（見張る窓が決まってから）"""
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        body = src[src.index("    def _start(self):"):src.index("    def _stop(self):")]
+        self.assertIn("self._start_window_volume()", body)
+        self.assertLess(body.index("if not self.monitors:"),
+                        body.index("self._start_window_volume()"))
+
+    def test_stop_restores_before_the_monitors_stop(self):
+        order = []
+        app = TestSuicideKeysReleasedByTheApp._app(self)
+        controller = MagicMock()
+        controller.stop.side_effect = lambda: order.append("volume")
+        app._window_volume = controller
+        app._stop_window_volume = lambda: mainGUI.App._stop_window_volume(app)
+        for m in app.monitors:
+            m.stop.side_effect = lambda: order.append("monitor")
+        with patch.object(mainGUI.WindowOperator, "release_key_background", return_value=True):
+            mainGUI.App._stop(app)
+        self.assertEqual(order[0], "volume")
+        self.assertIsNone(app._window_volume)
+
+
+def _audio_device_available() -> bool:
+    try:
+        WindowVolume.read_volumes([])
+        return WindowVolume.take_error() is None
+    except Exception:
+        return False
+    finally:
+        WindowVolume.release_com()
+
+
+@unittest.skipUnless(sys.platform == "win32" and _audio_device_available(), "音声デバイスが無い")
+class TestWindowVolumeCom(unittest.TestCase):
+    """本物の Core Audio を読むだけ（音量は変えない）"""
+
+    def tearDown(self):
+        WindowVolume.release_com()
+
+    def test_reading_does_not_raise(self):
+        volumes = WindowVolume.read_volumes([os.getpid(), 0])
+        self.assertIsInstance(volumes, dict)
+        for level in volumes.values():
+            self.assertTrue(0.0 <= level <= 1.0)
+        self.assertIsNone(WindowVolume.take_error())
+
+    def test_the_iid_is_isimpleaudiovolume(self):
+        g = WindowVolume.IID_ISimpleAudioVolume
+        self.assertEqual((g.d1, g.d2, g.d3), (0x87CE5498, 0x68D6, 0x44E5))
+
+    def test_a_missing_window_has_no_pid(self):
+        self.assertEqual(WindowVolume.pid_of(0), 0)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -12623,6 +13048,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         app = self._app()
 
         with self._released(app):
+            app._stop_window_volume = lambda: None
             mainGUI.App._stop(app)
 
         self.assertIn(("release", 0xA, "^"), app.order)
@@ -12633,6 +13059,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         app = self._app()
 
         with self._released(app):
+            app._stop_window_volume = lambda: None
             mainGUI.App._stop(app)
 
         kinds = [e[0] for e in app.order]
@@ -12646,6 +13073,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         app.destroy = lambda: app.order.append(("destroy",))
 
         with self._released(app):
+            app._stop_window_volume = lambda: None
             mainGUI.App._on_close(app)
 
         kinds = [e[0] for e in app.order]
@@ -12674,6 +13102,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
 
         with patch.object(mainGUI.WindowOperator, "release_key_background",
                           side_effect=OSError("gone")):
+            app._stop_window_volume = lambda: None
             mainGUI.App._stop(app)          # 落ちないこと
 
         self.assertFalse(app._running)
@@ -12683,6 +13112,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         app = self._app(hwnds=(0, 0xA))
 
         with self._released(app):
+            app._stop_window_volume = lambda: None
             mainGUI.App._stop(app)
 
         self.assertEqual([e[1] for e in app.order if e[0] == "release"], [0xA])
@@ -18137,6 +18567,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
 
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["emergency_stop_key"], "f9")
@@ -18448,10 +18879,12 @@ class TestStartKeySettings(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
             if valid:
+                app._load_window_volume_settings = lambda _data: None
                 mainGUI.App._load_saved_settings(app)
             else:
                 with patch.object(HotKey, "is_valid",
                                   side_effect=lambda k: k == "p"):
+                    app._load_window_volume_settings = lambda _data: None
                     mainGUI.App._load_saved_settings(app)
         return app
 
@@ -18471,6 +18904,7 @@ class TestStartKeySettings(unittest.TestCase):
 
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["start_key"], "f9")
@@ -18838,6 +19272,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
 
         with patch.object(mainGUI, "load_settings", return_value=dict(old)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
+            app._load_window_volume_settings = lambda _data: None
             mainGUI.App._load_saved_settings(app)
 
         self.assertEqual(app.v_ton_access.get(), config.TON_INSTANCE_ACCESS_INVITE)
@@ -18882,6 +19317,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app._log = lambda _m: None
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
+            app._load_window_volume_settings = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return getattr(app, var).get()
 
@@ -18891,6 +19327,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertIs(saved["join_world"], True)
@@ -18904,6 +19341,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["ton_instance_access"], config.TON_INSTANCE_ACCESS_INVITE)
@@ -18943,6 +19381,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._stop = MagicMock()
         app.destroy = MagicMock()
 
+        app._stop_window_volume = lambda: None
         mainGUI.App._on_close(app)
 
         app._save_launch_settings.assert_called_once()
@@ -18954,6 +19393,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._stop = lambda: order.append("stop")
         app.destroy = lambda: order.append("destroy")
 
+        app._stop_window_volume = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("destroy"))
@@ -18965,6 +19405,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._stop = lambda: order.append("stop")
         app.destroy = lambda: order.append("destroy")
 
+        app._stop_window_volume = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("stop"))
@@ -18975,6 +19416,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._stop = MagicMock()
         app.destroy = MagicMock()
 
+        app._stop_window_volume = lambda: None
         mainGUI.App._on_close(app)
 
         app.destroy.assert_called_once()
@@ -19005,6 +19447,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
@@ -19032,6 +19475,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings",
                           return_value={"tnl_path": "C:/list/my.tnl"}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["tnl_path"], "C:/list/my.tnl")
@@ -19180,6 +19624,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -20573,6 +21018,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings",
                           return_value=dict(stored or {})):
+            app._window_volume_settings = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -20699,6 +21145,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
 
         with patch.object(mainGUI, "load_settings", return_value=data), \
              patch.object(HotKey, "is_valid", return_value=True):
+            app._load_window_volume_settings = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 

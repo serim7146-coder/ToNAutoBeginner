@@ -27,6 +27,7 @@ import OSCClient
 import OBSClient
 import Recorder
 import SecretStore
+import WindowVolume
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -904,7 +905,7 @@ class App(tk.Tk):
         # 音量スライダー
         volf = ttk.Frame(fv)
         volf.pack(fill="x", pady=(6, 0))
-        ttk.Label(volf, text="音量:").pack(side="left")
+        ttk.Label(volf, text="ツールの声の音量:").pack(side="left")
         self.v_volume = tk.DoubleVar(value=1.0)
         ttk.Scale(volf, from_=0.0, to=1.0, variable=self.v_volume,
                   orient="horizontal", length=160,
@@ -913,6 +914,7 @@ class App(tk.Tk):
         self.lbl_volume.pack(side="left")
         self.v_volume.trace_add("write", lambda *_: self.lbl_volume.config(
             text=f"{int(self.v_volume.get()*100)}%"))
+        self._build_window_volume(fv)
 
         # ④ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
         f4_wrap = CollapsibleFrame(self, text="④ 外部ツール起動", collapsed=True)
@@ -1113,6 +1115,81 @@ class App(tk.Tk):
                 text="アイテム取得→Begin: OFF",
                 bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
+
+    # ── VRChat の窓の音量 ──────────────────────
+    def _build_window_volume(self, parent):
+        """枠「VRChat の窓の音量」。変えたらその場で見張りへ渡し、保存する"""
+        self._window_volume = None
+        box = ttk.LabelFrame(parent, text="VRChat の窓の音量")
+        box.pack(fill="x", pady=(6, 0))
+        self.v_wvol_enabled = tk.BooleanVar(value=config.DEFAULT_WINDOW_VOLUME_ENABLED)
+        ttk.Checkbutton(box, text="窓の状態で VRChat の音量を変える",
+                        variable=self.v_wvol_enabled,
+                        command=self._on_window_volume_changed).pack(anchor="w")
+        ttk.Label(box, text="続行ラウンドの窓・フリーズを張った窓・それ以外で、Windows の"
+                            "音量ミキサーの音量を切り替えます。停止で元に戻します",
+                  wraplength=420).pack(anchor="w")
+        self.v_wvol = {}
+        for key, label, default in (
+                (WindowVolume.CONTINUE, "続行", config.DEFAULT_WINDOW_VOLUME_CONTINUE),
+                (WindowVolume.FREEZE, "フリーズ窓", config.DEFAULT_WINDOW_VOLUME_FREEZE),
+                (WindowVolume.OTHER, "その他", config.DEFAULT_WINDOW_VOLUME_OTHER)):
+            row = ttk.Frame(box)
+            row.pack(fill="x")
+            ttk.Label(row, text=f"{label}:", width=10).pack(side="left")
+            var = tk.IntVar(value=default)
+            ttk.Scale(row, from_=0, to=100, variable=var, orient="horizontal", length=160,
+                      command=lambda _v, x=var: (x.set(int(float(_v))),
+                                                 self._on_window_volume_changed())
+                      ).pack(side="left", padx=(6, 4))
+            shown = ttk.Label(row, text=f"{default}%")
+            shown.pack(side="left")
+            var.trace_add("write", lambda *_a, x=var, s=shown: s.config(text=f"{x.get()}%"))
+            self.v_wvol[key] = var
+
+    def _window_volume_values(self) -> tuple:
+        return (bool(self.v_wvol_enabled.get()),
+                {key: int(var.get()) for key, var in self.v_wvol.items()})
+
+    def _on_window_volume_changed(self):
+        self._apply_window_volume_settings()
+        self._schedule_settings_save()
+
+    def _apply_window_volume_settings(self):
+        """動作中なら見張りへ渡す（次の回で効く）"""
+        controller = getattr(self, "_window_volume", None)
+        if controller is None:
+            return
+        enabled, levels = self._window_volume_values()
+        controller.set_levels(levels[WindowVolume.CONTINUE], levels[WindowVolume.FREEZE],
+                              levels[WindowVolume.OTHER])
+        controller.set_enabled(enabled)
+
+    def _load_window_volume_settings(self, data: dict):
+        enabled, levels = WindowVolume.levels_from_settings(data)
+        self.v_wvol_enabled.set(enabled)
+        for key, var in self.v_wvol.items():
+            var.set(levels[key])
+
+    def _window_volume_settings(self) -> dict:
+        enabled, levels = self._window_volume_values()
+        return {"window_volume_enabled": enabled,
+                "window_volume_continue": levels[WindowVolume.CONTINUE],
+                "window_volume_freeze": levels[WindowVolume.FREEZE],
+                "window_volume_other": levels[WindowVolume.OTHER]}
+
+    def _start_window_volume(self):
+        monitors = list(self.monitors)
+        self._window_volume = WindowVolume.VolumeController(
+            lambda: [(m.window_idx, m.cfg.hwnd, m.st) for m in monitors], self._log)
+        self._apply_window_volume_settings()
+        self._window_volume.start()
+
+    def _stop_window_volume(self):
+        """見張りを止めて元の音量に戻す（止めるのは監視より先）"""
+        controller, self._window_volume = getattr(self, "_window_volume", None), None
+        if controller is not None:
+            controller.stop()
 
     def _apply_freeze_settings(self):
         """GUIのフリーズ設定を全窓共通の状態へ反映する"""
@@ -1393,6 +1470,7 @@ class App(tk.Tk):
             # 旧形式の平文をその場で暗号化して書き直す（タブの有無に関係なく）
             save_settings(with_obs_password(load_settings(), password))
         self._apply_obs_settings()
+        self._load_window_volume_settings(data)    # 古い settings.json でも既定値
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -1650,6 +1728,7 @@ class App(tk.Tk):
             messagebox.showerror("エラー", "有効な窓/ログが見つかりません")
             return
 
+        self._start_window_volume()
         self._running = True
         self.btn_start.config(state="disabled")
         self.btn_stop.config(state="normal")
@@ -1658,6 +1737,7 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
 
     def _stop(self):
+        self._stop_window_volume()               # 元の音量に戻す（監視を止める前に）
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
         SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
@@ -2117,6 +2197,7 @@ class App(tk.Tk):
             "obs_record":    self.v_obs_enabled.get(),
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
+            **self._window_volume_settings(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す
