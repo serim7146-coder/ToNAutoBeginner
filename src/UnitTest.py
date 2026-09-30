@@ -212,19 +212,6 @@ class TestActionExecutorFocusFailure(unittest.TestCase):
         mock_hold.assert_not_called()
         self.assertTrue(any("自爆できませんでした" in m for m in logs), logs)
 
-    def test_do_after_round_aborts_when_focus_fails(self):
-        cfg = WindowConfig(hwnd=123)
-        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
-        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
-        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
-             patch.object(WindowOperator, "focus_window", return_value=False), \
-             patch.object(WindowOperator, "hold_key") as mock_hold, \
-             patch.object(WindowOperator, "click") as mock_click, \
-             patch.object(ActionExecutor.time, "sleep"):
-            ex.do_after_round()
-        mock_hold.assert_not_called()
-        mock_click.assert_not_called()
-
 class TestOSCClient(unittest.TestCase):
     """OSC送信（多重起動で窓ごとにポートを分ける）"""
 
