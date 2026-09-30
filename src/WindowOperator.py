@@ -187,6 +187,82 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
             user32.AttachThreadInput(self_tid, target_tid, False)
 
 
+def hold_keys_background(hwnd: int, keys, stop_event, resend_sec: float) -> bool:
+    """複数のキーを、stop_event が立つまでフォーカスを奪わずに押し続ける。
+
+    hold_key_background() と同じ手順（アタッチ・活性化の通知・SetFocus・
+    SetKeyboardState・WM_KEYDOWN）を resend_sec ごとにやり直す。アタッチは
+    送り直しのたびに付けて外す（数分つけっぱなしにしない。ほかの窓の自爆の
+    キー送信と重なっても互いに影響しないように）。2回目以降の WM_KEYDOWN は
+    押しっぱなしの繰り返し（lParam の bit30）。止めるときは全部に WM_KEYUP を
+    送り、キー状態から押下を消す（例外でも必ず離し、必ずデタッチする）。
+    最小化中・送れないキーなら何もせず False
+    """
+    params = [_background_key(hwnd, key) for key in keys]
+    if not params or any(p is None for p in params):
+        return False
+    try:
+        if user32.IsIconic(hwnd):
+            return False
+    except Exception:
+        return False
+    target_tid = params[0][0]
+    vks = [p[1] for p in params]
+    repeat = False
+    try:
+        while True:
+            _with_attached(target_tid, lambda: _press_keys(hwnd, params, repeat))
+            repeat = True
+            if stop_event.wait(resend_sec):
+                return True
+    except Exception:
+        return False
+    finally:
+        _with_attached(target_tid, lambda: _release_keys(hwnd, params, vks))
+
+
+def _with_attached(target_tid: int, work):
+    """呼んだスレッドを対象のスレッドにアタッチして work() を行い、必ず外す"""
+    self_tid = 0
+    attached = False
+    try:
+        self_tid = kernel32.GetCurrentThreadId()
+        attached = bool(user32.AttachThreadInput(self_tid, target_tid, True))
+        work()
+    finally:
+        if attached:
+            user32.AttachThreadInput(self_tid, target_tid, False)
+
+
+def _press_keys(hwnd: int, params, repeat: bool):
+    result = wintypes.DWORD()
+    for msg, wparam in ((WM_NCACTIVATE, 1), (WM_ACTIVATE, WA_ACTIVE)):
+        user32.SendMessageTimeoutW(hwnd, msg, wparam, 0, SMTO_ABORTIFHUNG,
+                                   ACTIVATE_TIMEOUT_MS, ctypes.byref(result))
+    user32.SetFocus(hwnd)
+    state = (ctypes.c_ubyte * 256)()
+    if user32.GetKeyboardState(ctypes.byref(state)):
+        for _tid, vk, _down, _up in params:
+            state[vk] = 0x80
+        user32.SetKeyboardState(ctypes.byref(state))
+    for _tid, vk, lparam_down, _up in params:
+        user32.PostMessageW(hwnd, WM_KEYDOWN, vk,
+                            lparam_down | (1 << 30) if repeat else lparam_down)
+
+
+def _release_keys(hwnd: int, params, vks):
+    for _tid, vk, _down, lparam_up in params:
+        try:
+            user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
+        except Exception:
+            pass
+    state = (ctypes.c_ubyte * 256)()
+    if user32.GetKeyboardState(ctypes.byref(state)):
+        for vk in vks:
+            state[vk] = 0
+        user32.SetKeyboardState(ctypes.byref(state))
+
+
 def release_key_background(hwnd: int, key: str) -> bool:
     """押されたままかもしれないキーを、フォーカスを奪わずに離す。
 

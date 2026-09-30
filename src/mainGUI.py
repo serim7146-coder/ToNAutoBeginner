@@ -561,6 +561,7 @@ class App(tk.Tk):
             # 設定しようとしているキーで停止や開始がかかると困る
             self._emergency_stop_key_pressed = False
             self._start_key_pressed = False
+            self._chase_keys_pressed = {}
             self._reschedule_emergency_poll()
             return
         key = self.v_emergency_key.get()
@@ -577,6 +578,7 @@ class App(tk.Tk):
                 f"[緊急停止] ⚠ {key!r} は使えないキーです")
 
         self._poll_start_key()
+        self._poll_chase_keys()
 
         try:
             self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
@@ -611,6 +613,35 @@ class App(tk.Tk):
                 self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
                 self.after(0, self._start)
         self._start_key_pressed = now
+
+    def _poll_chase_keys(self):
+        """チェイスのキー（F1 = 時計回り、F2 = 反時計回り）。停止キーと同じ200msの
+        ループに乗せる。押された瞬間だけ反応する（押し続けても1回）"""
+        if not getattr(self, "_running", False):
+            self._chase_keys_pressed = {}     # マクロが動いていない。キーも見ない
+            return
+        pressed = getattr(self, "_chase_keys_pressed", None)
+        if pressed is None:
+            pressed = self._chase_keys_pressed = {}
+        for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
+            try:
+                now = bool(keyboard.is_pressed(key))
+            except Exception:
+                now = False
+            if now and not pressed.get(key, False):
+                self._on_chase_key(direction, key)
+            pressed[key] = now
+
+    def _on_chase_key(self, direction: str, key: str):
+        """押した瞬間に前面の、監視している窓だけを回す。それ以外は何もしない
+        （ほかのアプリで F1 を使っていることがある）"""
+        if not self._running or not self.monitors:
+            return
+        front = WindowOperator.foreground_hwnd()
+        for monitor in self.monitors:
+            if front and monitor.cfg.hwnd == front:
+                monitor.on_chase_key(direction, HotKey.display(key))
+                return
 
     def _start_button_disabled(self) -> bool:
         """「▶ マクロ開始」が押せない状態か（動作中・起動中など）。

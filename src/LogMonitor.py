@@ -110,9 +110,26 @@ class LogMonitor:
     def stop(self):
         # 借りた前面は返さない（止めた瞬間に前面が飛ぶと驚くため）。札は捨てる
         SharedState.discard_front_loan(self.st)
+        # 押しっぱなしのまま残さない（使っていた2つを離す）
+        if self._action.chase_stop():
+            self._log("チェイス停止（監視の停止）")
         self._running = False
         self._stop_event.set()
         self._action.stop_velocity_receiver()
+
+    def on_chase_key(self, direction: str, key_label: str):
+        """チェイスのキー（この窓が前面のときに押された）。ラウンド中だけ"""
+        if not self.st.in_round:
+            self._log("チェイスはラウンド中だけ使えます")
+            return
+        name = "時計回り" if direction == "cw" else "反時計回り"
+        result = self._action.chase_key(direction)
+        if result == "start":
+            self._log(f"チェイス開始（{name}・{key_label}）")
+        elif result == "stop":
+            self._log(f"チェイス停止（{key_label}）")
+        else:
+            self._log(f"チェイスの向きを{name}に切り替え")
 
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
@@ -1252,6 +1269,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            if self._action.chase_stop():
+                self._log("チェイス停止（ラウンド終了）")
             st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
             st.early_read_hits = {}
             # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）

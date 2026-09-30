@@ -62,6 +62,10 @@ class ActionExecutor:
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
+        self._chase_lock = threading.Lock()
+        self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
+        self._chase_stop = None           # 送り直しのスレッドを止める合図
+        self._chase_thread = None
         self._speed_recv_warned = False   # 速度未受信の警告を出したか
         # カーソル方式を見送った理由は、同じラウンドで同じものを出さない
         self._cursor_reason_round = -1
@@ -79,6 +83,77 @@ class ActionExecutor:
     @property
     def uses_osc(self) -> bool:
         return self._osc is not None
+
+    # ── チェイス（押し続けて回る）──────────────────
+    # 向き → (OSC のアドレス2つ, OSC が使えない窓のキー2つ)。Shift なし
+    CHASE_INPUTS = {
+        "cw": (("/input/MoveLeft", "/input/LookRight"), ("a", ".")),
+        "ccw": (("/input/MoveRight", "/input/LookLeft"), ("d", ",")),
+    }
+
+    def chase_key(self, direction: str) -> str:
+        """チェイスのキー。"start" / "stop"（同じ向き）/ "switch"（反対の向き）。
+
+        どのスレッドから呼んでもよい（鍵）。前面を奪わないので
+        _GLOBAL_ACTION_LOCK は取らない
+        """
+        with self._chase_lock:
+            current = self._chase_dir
+            if current == direction:
+                self._stop_chase_locked()
+                return "stop"
+            if current is not None:
+                self._stop_chase_locked()    # 古い2つを離してから新しい2つを押す
+            self._start_chase_locked(direction)
+            return "switch" if current is not None else "start"
+
+    def chase_stop(self) -> bool:
+        """回っていれば止める（使っていた2つだけ離す）。止めたら True"""
+        with self._chase_lock:
+            if self._chase_dir is None:
+                return False
+            self._stop_chase_locked()
+            return True
+
+    @property
+    def chase_direction(self):
+        return self._chase_dir
+
+    def _start_chase_locked(self, direction: str):
+        stop = threading.Event()
+        self._chase_dir = direction
+        self._chase_stop = stop
+        self._chase_thread = threading.Thread(target=self._run_chase,
+                                              args=(direction, stop), daemon=True)
+        self._chase_thread.start()
+
+    def _stop_chase_locked(self):
+        stop, thread = self._chase_stop, self._chase_thread
+        self._chase_dir = self._chase_stop = self._chase_thread = None
+        if stop is not None:
+            stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(config.CHASE_RESEND_SEC * 10)   # 離し終えてから次へ
+
+    def _run_chase(self, direction: str, stop):
+        addresses, keys = self.CHASE_INPUTS[direction]
+        osc = self._osc
+        if osc is not None:
+            try:
+                while True:
+                    for address in addresses:
+                        osc.send(address, 1)
+                    if stop.wait(config.CHASE_RESEND_SEC):
+                        return
+            finally:
+                for address in addresses:       # stop_all() は使わない
+                    osc.send(address, 0)
+        if not WindowOperator.hold_keys_background(self._cfg.hwnd, keys, stop,
+                                                   config.CHASE_RESEND_SEC):
+            with self._chase_lock:
+                if self._chase_stop is stop:
+                    self._chase_dir = self._chase_stop = self._chase_thread = None
+            self._log("⚠ チェイス: キーを送れません（最小化中など）→ 止めました")
 
     def move(self, direction: str, seconds: float):
         """移動する。フォーカスは奪わない。

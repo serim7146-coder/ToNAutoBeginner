@@ -12699,6 +12699,353 @@ class TestWindowVolumeCom(unittest.TestCase):
         self.assertEqual(WindowVolume.pid_of(0), 0)
 
 
+class _ChaseOsc:
+    """OSC の送信を記録する偽物。_GLOBAL_ACTION_LOCK を持っていないことも見る"""
+
+    def __init__(self, test):
+        self.test = test
+        self.sent = []
+
+    def send(self, address, value):
+        self.test.assertFalse(SharedState._GLOBAL_ACTION_LOCK.locked(), "前面を奪わないので鍵は取らない")
+        self.sent.append((address, value))
+        return True
+
+    def stop_all(self, repeat=1):
+        self.test.fail("stop_all() は使わない")
+
+
+def _wait_until(check, timeout=2.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        if check():
+            return True
+        time.sleep(0.005)
+    return check()
+
+
+class TestChaseExecutor(unittest.TestCase):
+    """F1 = 時計回り（MoveLeft＋LookRight）、F2 = 反時計回り（MoveRight＋LookLeft）を押し続ける"""
+
+    def setUp(self):
+        p = patch.object(config, "CHASE_RESEND_SEC", 0.01)
+        p.start()
+        self.addCleanup(p.stop)
+        self.logs = []
+        self.ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x100, osc_port=9000),
+                                                WindowState(in_round=True), lambda: True,
+                                                self.logs.append)
+        self.osc = _ChaseOsc(self)
+        self.ex._osc = self.osc
+        self.addCleanup(self.ex.chase_stop)
+
+    def _ones(self, address):
+        return self.osc.sent.count((address, 1))
+
+    def test_f1_presses_move_left_and_look_right_and_resends(self):
+        self.assertEqual(self.ex.chase_key("cw"), "start")
+        self.assertTrue(_wait_until(lambda: self._ones("/input/MoveLeft") >= 3))
+
+        self.assertEqual({a for a, v in self.osc.sent if v == 1},
+                         {"/input/MoveLeft", "/input/LookRight"})
+        self.assertEqual([v for _a, v in self.osc.sent], [1] * len(self.osc.sent), "離さずに送り直す")
+
+    def test_f2_presses_move_right_and_look_left(self):
+        self.ex.chase_key("ccw")
+        self.assertTrue(_wait_until(lambda: self._ones("/input/LookLeft") >= 1))
+        self.ex.chase_stop()
+        self.assertEqual({a for a, _v in self.osc.sent}, {"/input/MoveRight", "/input/LookLeft"})
+
+    def test_the_same_key_stops_and_releases_only_its_two(self):
+        self.ex.chase_key("cw")
+        self.assertTrue(_wait_until(lambda: self._ones("/input/MoveLeft") >= 2))
+
+        self.assertEqual(self.ex.chase_key("cw"), "stop")
+
+        self.assertEqual(sorted(self.osc.sent[-2:]),
+                         [("/input/LookRight", 0), ("/input/MoveLeft", 0)])
+        self.assertIsNone(self.ex.chase_direction)
+        count = len(self.osc.sent)
+        time.sleep(0.05)
+        self.assertEqual(len(self.osc.sent), count, "止めた後は送らない")
+
+    def test_the_other_key_switches_without_stopping(self):
+        self.ex.chase_key("cw")
+        self.assertTrue(_wait_until(lambda: self._ones("/input/MoveLeft") >= 1))
+
+        self.assertEqual(self.ex.chase_key("ccw"), "switch")
+        self.assertTrue(_wait_until(lambda: self._ones("/input/MoveRight") >= 1))
+
+        sent = self.osc.sent
+        released = max(sent.index(("/input/MoveLeft", 0)), sent.index(("/input/LookRight", 0)))
+        self.assertLess(released, sent.index(("/input/MoveRight", 1)), "古い2つを離してから新しい2つ")
+        self.assertEqual(self.ex.chase_direction, "ccw")
+
+    def test_stop_when_not_chasing_does_nothing(self):
+        self.assertFalse(self.ex.chase_stop())
+        self.assertEqual(self.osc.sent, [])
+
+    def test_a_window_without_osc_holds_the_keys(self):
+        self.ex._osc = None
+        held = []
+
+        def hold(hwnd, keys, stop, resend):
+            held.append((hwnd, tuple(keys), resend))
+            stop.wait(2.0)
+            return True
+
+        with patch.object(WindowOperator, "hold_keys_background", side_effect=hold):
+            self.ex.chase_key("cw")
+            self.assertTrue(_wait_until(lambda: held))
+            self.ex.chase_key("ccw")
+            self.assertTrue(_wait_until(lambda: len(held) == 2))
+            self.ex.chase_stop()
+
+        self.assertEqual(held, [(0x100, ("a", "."), 0.01), (0x100, ("d", ","), 0.01)])
+
+    def test_keys_that_cannot_be_sent_stop_it_and_say_so(self):
+        self.ex._osc = None
+        with patch.object(WindowOperator, "hold_keys_background", return_value=False):
+            self.ex.chase_key("cw")
+            self.assertTrue(_wait_until(lambda: self.ex.chase_direction is None))
+        self.assertTrue(any("キーを送れません" in m for m in self.logs), self.logs)
+
+
+class TestHoldKeysBackground(unittest.TestCase):
+    """止める合図が来るまで、複数のキーを背面へ押し続ける"""
+
+    DOWN = {0x41: 0x1E0001, 0xBE: 0x340001}
+    UP = {vk: lp | (1 << 30) | (1 << 31) for vk, lp in DOWN.items()}
+
+    def setUp(self):
+        self.calls = []
+        u = MagicMock()
+        u.IsIconic.return_value = 0
+        u.AttachThreadInput.side_effect = lambda a, b, on: self.calls.append(("attach", on)) or 1
+        def pressed_state(ref):
+            for vk in self.DOWN:            # いまは押されている（押したキーの状態）
+                ref._obj[vk] = 0x80
+            return 1
+
+        u.GetKeyboardState.side_effect = pressed_state
+        u.SetKeyboardState.side_effect = lambda ref: self.calls.append(
+            ("state", tuple(ref._obj[vk] for vk in self.DOWN)))
+        u.PostMessageW.side_effect = lambda h, msg, vk, lp: self.calls.append((msg, vk, lp))
+        u.SendMessageTimeoutW.return_value = 1
+        k = MagicMock()
+        k.GetCurrentThreadId.return_value = 7
+        params = {"a": (9, 0x41, self.DOWN[0x41], self.UP[0x41]),
+                  ".": (9, 0xBE, self.DOWN[0xBE], self.UP[0xBE])}
+        for p in (patch.object(WindowOperator, "user32", u),
+                  patch.object(WindowOperator, "kernel32", k),
+                  patch.object(WindowOperator, "_background_key",
+                               side_effect=lambda h, key: params.get(key))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.u = u
+
+    class Stop:
+        """wait() が2回 False（送り直し）→ 3回目で True（止める合図）"""
+
+        def __init__(self, resends=2):
+            self.left = resends
+
+        def wait(self, _sec):
+            self.left -= 1
+            return self.left < 0
+
+    def _posts(self, msg):
+        return [c for c in self.calls if c[0] == msg]
+
+    def test_it_resends_with_the_repeat_bit_then_releases(self):
+        ok = WindowOperator.hold_keys_background(0x100, ("a", "."), self.Stop(2), 0.2)
+
+        self.assertTrue(ok)
+        downs = self._posts(WindowOperator.WM_KEYDOWN)
+        self.assertEqual(len(downs), 6, "3回（最初＋送り直し2回）× 2キー")
+        self.assertEqual(downs[:2], [(WindowOperator.WM_KEYDOWN, 0x41, self.DOWN[0x41]),
+                                     (WindowOperator.WM_KEYDOWN, 0xBE, self.DOWN[0xBE])])
+        for _m, vk, lp in downs[2:]:
+            self.assertEqual(lp, self.DOWN[vk] | (1 << 30), "2回目以降は押しっぱなしの繰り返し")
+        self.assertEqual(self._posts(WindowOperator.WM_KEYUP),
+                         [(WindowOperator.WM_KEYUP, 0x41, self.UP[0x41]),
+                          (WindowOperator.WM_KEYUP, 0xBE, self.UP[0xBE])])
+        self.assertEqual([c for c in self.calls if c[0] == "state"][-1], ("state", (0, 0)),
+                         "キー状態から押下を消す")
+
+    def test_it_attaches_and_detaches_for_every_resend(self):
+        WindowOperator.hold_keys_background(0x100, ("a", "."), self.Stop(2), 0.2)
+
+        attaches = [c[1] for c in self.calls if c[0] == "attach"]
+        self.assertEqual(attaches, [True, False] * 4, "送り直し3回＋離す1回。毎回外す")
+
+    def test_an_exception_still_releases_and_detaches(self):
+        self.u.SetFocus.side_effect = OSError("boom")
+
+        self.assertFalse(WindowOperator.hold_keys_background(0x100, ("a", "."), self.Stop(2), 0.2))
+
+        self.assertEqual(len(self._posts(WindowOperator.WM_KEYUP)), 2)
+        attaches = [c[1] for c in self.calls if c[0] == "attach"]
+        self.assertEqual(attaches.count(True), attaches.count(False))
+
+    def test_a_minimised_window_is_not_touched(self):
+        self.u.IsIconic.return_value = 1
+
+        self.assertFalse(WindowOperator.hold_keys_background(0x100, ("a", "."), self.Stop(), 0.2))
+        self.assertEqual(self.calls, [])
+
+    def test_an_unsendable_key_is_refused(self):
+        self.assertFalse(WindowOperator.hold_keys_background(0x100, ("a", "?"), self.Stop(), 0.2))
+        self.assertEqual(self.calls, [])
+
+
+class TestChaseKeysResolve(unittest.TestCase):
+    def test_comma_and_period_are_plain_keys(self):
+        """「,」「.」が Shift なしの VK に直せる（直せなければ None になり送れない）"""
+        tid = WindowOperator.kernel32.GetCurrentThreadId()
+        with patch.object(WindowOperator.user32, "GetWindowThreadProcessId", return_value=tid):
+            for key, vk in ((",", 0xBC), (".", 0xBE), ("a", 0x41), ("d", 0x44)):
+                params = WindowOperator._background_key(0x100, key)
+                self.assertIsNotNone(params, key)
+                self.assertEqual(params[1], vk, key)
+
+
+class TestChaseMonitor(unittest.TestCase):
+    """ラウンド中だけ。RoundOver・監視の停止で止まる"""
+
+    def setUp(self):
+        p = patch.object(config, "CHASE_RESEND_SEC", 0.01)
+        p.start()
+        self.addCleanup(p.stop)
+        self.monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x100, osc_port=9000), {},
+                                             lambda _m: None, window_idx=2)
+        self.logs = []
+        self.monitor.logger = self.logs.append
+        self.osc = _ChaseOsc(self)
+        self.monitor._action._osc = self.osc
+        self.monitor.st.in_round = True
+        self.addCleanup(self.monitor._action.chase_stop)
+
+    def test_outside_a_round_it_only_says_so(self):
+        self.monitor.st.in_round = False
+
+        self.monitor.on_chase_key("cw", "F1")
+
+        self.assertIsNone(self.monitor._action.chase_direction)
+        self.assertEqual(self.logs, ["[窓2] チェイスはラウンド中だけ使えます"])
+        time.sleep(0.03)
+        self.assertEqual(self.osc.sent, [])
+
+    def test_start_switch_and_stop_are_logged(self):
+        self.monitor.on_chase_key("cw", "F1")
+        self.monitor.on_chase_key("ccw", "F2")
+        self.monitor.on_chase_key("ccw", "F2")
+
+        self.assertEqual(self.logs, ["[窓2] チェイス開始（時計回り・F1）",
+                                     "[窓2] チェイスの向きを反時計回りに切り替え",
+                                     "[窓2] チェイス停止（F2）"])
+
+    def test_round_over_stops_it(self):
+        self.monitor.on_chase_key("cw", "F1")
+        self.assertTrue(_wait_until(lambda: self.osc.sent))
+
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(Recorder, "on_round_over"), \
+             patch.object(PlaySound, "play_sound"):
+            self.monitor._process("2026.09.30 13:00:00 Debug      -  RoundOver")
+
+        self.assertIsNone(self.monitor._action.chase_direction)
+        self.assertEqual(sorted(self.osc.sent[-2:]), [("/input/LookRight", 0), ("/input/MoveLeft", 0)])
+        self.assertIn("[窓2] チェイス停止（ラウンド終了）", self.logs)
+
+    def test_stopping_the_monitor_stops_it(self):
+        self.monitor.on_chase_key("ccw", "F2")
+        self.assertTrue(_wait_until(lambda: self.osc.sent))
+
+        self.monitor.stop()
+
+        self.assertIsNone(self.monitor._action.chase_direction)
+        self.assertEqual(sorted(self.osc.sent[-2:]), [("/input/LookLeft", 0), ("/input/MoveRight", 0)])
+
+
+class TestChaseKeysInTheApp(unittest.TestCase):
+    """押した瞬間に前面の、監視している窓だけ。押しっぱなしでも1回"""
+
+    def _app(self, running=True, fronts=(0xB,)):
+        app = type("FakeApp", (), {})()
+        app._running = running
+        self.a, self.b = MagicMock(), MagicMock()
+        self.a.cfg.hwnd, self.b.cfg.hwnd = 0xA, 0xB
+        app.monitors = [self.a, self.b]
+        app._on_chase_key = lambda d, k: mainGUI.App._on_chase_key(app, d, k)
+        return app
+
+    def _poll(self, app, pressed, front=0xB):
+        keyboard = MagicMock()
+        keyboard.is_pressed.side_effect = lambda key: key in pressed
+        with patch.object(mainGUI, "keyboard", keyboard), \
+             patch.object(mainGUI.WindowOperator, "foreground_hwnd", return_value=front):
+            mainGUI.App._poll_chase_keys(app)
+        return keyboard
+
+    def test_the_front_watched_window_gets_the_key(self):
+        app = self._app()
+
+        self._poll(app, {"f1"})
+
+        self.b.on_chase_key.assert_called_once_with("cw", "F1")
+        self.a.on_chase_key.assert_not_called()
+
+    def test_f2_is_counter_clockwise(self):
+        app = self._app()
+        self._poll(app, {"f2"}, front=0xA)
+        self.a.on_chase_key.assert_called_once_with("ccw", "F2")
+
+    def test_holding_the_key_reacts_once(self):
+        app = self._app()
+
+        for _ in range(3):
+            self._poll(app, {"f1"})
+        self._poll(app, set())
+        self._poll(app, {"f1"})
+
+        self.assertEqual(self.b.on_chase_key.call_count, 2)
+
+    def test_an_unwatched_front_window_does_nothing(self):
+        app = self._app()
+        self._poll(app, {"f1"}, front=0x999)
+        self._poll(app, {"f2"}, front=0)
+        self.a.on_chase_key.assert_not_called()
+        self.b.on_chase_key.assert_not_called()
+
+    def test_a_key_while_not_running_is_ignored(self):
+        app = self._app(running=False)
+        with patch.object(mainGUI.WindowOperator, "foreground_hwnd", return_value=0xB):
+            mainGUI.App._on_chase_key(app, "cw", "f1")
+        self.b.on_chase_key.assert_not_called()
+
+    def test_not_running_does_nothing_and_asks_no_keys(self):
+        app = self._app(running=False)
+
+        keyboard = self._poll(app, {"f1"})
+
+        keyboard.is_pressed.assert_not_called()
+        self.b.on_chase_key.assert_not_called()
+
+    def test_the_keys_are_f1_and_f2(self):
+        self.assertEqual((config.CHASE_CW_KEY, config.CHASE_CCW_KEY), ("f1", "f2"))
+        self.assertEqual(config.CHASE_RESEND_SEC, 0.2)
+
+    def test_the_poll_runs_in_the_emergency_loop_and_not_while_capturing(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        body = src[src.index("    def _poll_emergency_stop_key(self):"):]
+        body = body[:body.index("\n    def ")]
+        self.assertIn("self._poll_chase_keys()", body)
+        capture = body[:body.index("return")]
+        self.assertIn("self._chase_keys_pressed = {}", capture)
+        self.assertNotIn("self._poll_chase_keys()", capture)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 

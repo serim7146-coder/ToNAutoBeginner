@@ -479,6 +479,14 @@ VARIANT_TERROR_IDS = frozenset({
     HUNGRY_HOME_INVADER_ID, ATRACHED_ID, BLOODTHIRSTY_CREATURE_ID, GIGABYTES_ID,
 })
 
+# ── チェイス（前面の VRChat の窓を、ラウンド終了までぐるぐる回す）──
+# F1 = 時計回り（左へ歩きながら右を向く）、F2 = 反時計回り。suppress しない
+CHASE_CW_KEY     = "f1"
+CHASE_CCW_KEY    = "f2"
+# 押している間、この間隔で「押す」を送り直す（離しはしない）。ツールのほかの
+# 移動の stop_all() や UDP の取りこぼしで離されても、すぐ戻るように
+CHASE_RESEND_SEC = 0.2
+
 # ── 音量 ──
 DEFAULT_SOUND_VOLUME = 1.0
 # VRChat の窓ごとの音量（WindowVolume）。窓の状態で Windows の音量ミキサーの音量を
