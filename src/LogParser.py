@@ -33,6 +33,7 @@ EVENT_STUNNED = "stunned"
 EVENT_PLAYER_JOINED = "player_joined"
 EVENT_JOY = "joy"
 EVENT_PLAYER_LEFT = "player_left"
+EVENT_PAGE_COLLECTED = "page_collected"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -67,6 +68,10 @@ RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
 RE_STRING_DOWNLOAD = re.compile(
     r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
+ITEM_EQUIP_MARK = "Equipping "
+# 8 Pages でページを取った（n 枚目）。持ち込めないアイテムはここでなくなる
+RE_PAGE_COLLECTED = re.compile(r"^Page Collected - (\d)/8$")
+PAGE_COLLECTED_MARK = "Page Collected - "
 RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
 # 前絞りの印（*_MARK）。ログを末尾から遡る処理は、20万行を全部 parse() にかけると
 # 1本1秒以上かかる。探す行は必ずこの文字列を含むので、含まない行は parse() に
@@ -87,6 +92,9 @@ RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_CREATURE_BLOODTHIRSTY = re.compile(r"^The creature is bloodthirsty today[.][.][.]$")
 RE_HUNGRY_HOME_INVADER = re.compile(r"^I hear strange sounds coming from the kitchen[.]$")
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
+RESPAWN_MARK = "Player respawned"
+YOU_DIED_MARK = "You died"
+SUS_PLAYER_MARK = "Sus player"
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
 JOINING_MARK = "Joining wrld_"
@@ -113,6 +121,7 @@ class LogEvent:
     previous_item_id: int | None = None
     player_name: str = ""
     instance: str = ""      # 入室の行の wrld_… から後ろ全部（同じインスタンスなら誰でも同じ）
+    page: int = 0           # Page Collected の n（今は使わない）
 
 
 RE_LOG_TIME = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
@@ -299,6 +308,10 @@ def parse(line: str) -> LogEvent | None:
             item_id=int(m.group(1)),
             previous_item_id=int(m.group(2)) if m.group(2) is not None else None,
         )
+
+    m = RE_PAGE_COLLECTED.match(line)
+    if m:
+        return LogEvent(EVENT_PAGE_COLLECTED, page=int(m.group(1)))
 
     m = RE_SUS_PLAYER.match(line)
     if m:

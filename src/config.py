@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+import ItemCatalog
 import ReadJson
 
 
@@ -91,6 +92,10 @@ def resource_path(filename: str) -> Path:
 
 # ── テラーIDとテラー名の対応表.json ──
 TERRORS = ReadJson.load_terrors(resource_path("terrors.json"))
+
+# ── アイテムIDと名前・8 Pages に持ち込めるか（item.json）──
+# 無い・読めないときは空の表（所持アイテムは id だけで覚え、ページ取得でなくさない）
+ITEMS = ItemCatalog.load_items(resource_path("item.json"))
 
 # Enrage に出る個体名は terrors.json の "terrors" に入っている
 # （以前の terror_aliases.json は廃止した）

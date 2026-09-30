@@ -11,6 +11,7 @@ import WindowOperator
 import PlaySound
 import ConnectDB
 import DebugLog
+import ItemCatalog
 import Recorder
 import FogEarlyRead
 import ReadJson
@@ -38,6 +39,14 @@ _UNSET = object()       # 「まだ計算していない」を None（対応づ�
 
 def format_terror_ids(ids: list[int]) -> str:
     return ", ".join(_terror_name_cached(tid) for tid in ids)
+
+
+# 所持アイテムをなくした理由（公開ログ）。Punished などのラウンド開始は「<種類> 開始」
+HELD_LOST_PAGE = "ページ取得"
+HELD_LOST_RESPAWN = "リスポーン"
+HELD_LOST_RUN_DEATH = "Run 死亡"
+HELD_LOST_SABOTAGE = "Sabotage マーダー"
+HELD_LOST_INSTANCE = "インスタンス移動"
 
 
 # ═══════════════════════════════════════════════
@@ -351,22 +360,35 @@ class LogMonitor:
         return None
 
     # 監視開始の遡りで探す行（ログイン・入室・入ってきた人・出ていった人・
-    # ラウンド開始・生存）
+    # ラウンド開始・生存・所持アイテムを取り戻すための行）
     _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
                          LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK,
                          LogParser.ROUND_START_MARK, LogParser.LIVED_MARK,
-                         LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK)
+                         LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK,
+                         LogParser.ITEM_EQUIP_MARK, LogParser.PAGE_COLLECTED_MARK,
+                         LogParser.RESPAWN_MARK, LogParser.YOU_DIED_MARK,
+                         LogParser.SUS_PLAYER_MARK)
+    # 所持アイテムを取り戻すために、入室後の分を古い順に流す行
+    _HELD_ITEM_REPLAY_KINDS = (LogParser.EVENT_ITEM_EQUIP, LogParser.EVENT_ROUND_START,
+                               LogParser.EVENT_ROUND_OVER, LogParser.EVENT_PAGE_COLLECTED,
+                               LogParser.EVENT_RESPAWN, LogParser.EVENT_YOU_DIED,
+                               LogParser.EVENT_SUS_PLAYER)
     # 定期の Verified の位相を取り戻すために集める行
     _VERIFIED_LEARN_KINDS = (LogParser.EVENT_BEGIN_DONE, LogParser.EVENT_ROUND_START,
                              LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END)
 
     def _detect_instance_from_log(self, end: Optional[int] = None):
         """監視開始の遡り。end は監視を始める位置（それより後の行は監視が読む）"""
+        problem = ItemCatalog.take_load_problem()
+        if problem:
+            self._debug(problem)
         if not self.cfg.log_path or not self.cfg.log_path.exists():
             return
         try:
             found_user     = False
             found_instance = False
+            # 最後の Joining より後の、所持アイテムに関わる行（新しい順に溜まる）
+            item_events = []
             # 最後の Joining より後の入退室。逆向きに読むので新しい順に溜まる
             player_events = []
             # 最後の Joining より後（今のインスタンス）の生存と特殊ラウンド（3クラ）
@@ -400,6 +422,8 @@ class LogMonitor:
                     player_events.append(event)
                 if not found_instance and event.kind == LogParser.EVENT_LIVED:
                     lived += 1
+                if not found_instance and event.kind in self._HELD_ITEM_REPLAY_KINDS:
+                    item_events.append(event)
                 if not found_instance and event.kind == LogParser.EVENT_ROUND_START:
                     round_types.append(event.round_type)    # 1ラウンド1回
 
@@ -425,6 +449,10 @@ class LogMonitor:
                 if found_user and found_instance:
                     break
             self._learn_verified_phase(list(reversed(verified_events)))
+            if found_instance:
+                # 名前（Sabotage マーダーの判定）は入室より前の行で分かるので、最後に流す
+                self.st.held_item_id = self._replay_held_item(reversed(item_events))
+                self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
         except Exception as e:
             self._log(f"検出エラー: {e}")
         if self.st.players_known:
@@ -675,6 +703,91 @@ class LogMonitor:
             return
         st.sabotage_murder_this_round = True
         self._mark_item_lost("Sabotageマーダー判定: アイテムロスト")
+        self._lose_held_item(HELD_LOST_SABOTAGE)
+
+    # ── 所持アイテム（st.held_item_id）。今のロスト判定（st.item_id）とは別 ──
+    def held_item(self) -> tuple:
+        """今持っているアイテム (id, 名前 or None)。持っていなければ (0, None)"""
+        held = self.st.held_item_id
+        return held, (ItemCatalog.item_name(held, config.ITEMS) if held else None)
+
+    def _held_item_text(self) -> str:
+        held = self.st.held_item_id
+        if not held:
+            return "なし"
+        name = ItemCatalog.item_name(held, config.ITEMS)
+        return f"{name} (id={held})" if name else f"id={held}（表に無い）"
+
+    def _hold_item(self, item_id: int):
+        """装備した。同じアイテムの装備が続いたときはログを出さない"""
+        if item_id == self.st.held_item_id:
+            return
+        self.st.held_item_id = item_id
+        if item_id:
+            self._log(f"所持アイテム: {self._held_item_text()}")
+
+    def _lose_held_item(self, reason: str):
+        held = self.st.held_item_id
+        if not held:
+            return
+        self.st.held_item_id = 0
+        if reason == HELD_LOST_INSTANCE:
+            self._log(f"所持アイテム: なし（{reason}）")
+        else:
+            self._log(f"所持アイテム: なし（{ItemCatalog.label(held, config.ITEMS)} を "
+                      f"{reason} でロスト）")
+
+    @staticmethod
+    def _held_item_round_start_loss(round_type: str, sabotage_murder: bool):
+        """ラウンド開始でなくす理由（なくさなければ None）。8 Pages の開始ではなくさない
+        （持ち込めないアイテムはページを取ったときになくなる）"""
+        if sabotage_murder:
+            return HELD_LOST_SABOTAGE
+        if round_type in config.ROUND_START_ITEM_LOSS_ROUNDS and round_type != "8 Pages":
+            return f"{round_type} 開始"
+        return None
+
+    @staticmethod
+    def _page_loses_held_item(round_type: str, held: int) -> bool:
+        """8 Pages でページを取った: 表で 0 のアイテムだけなくす（1・表に無いはそのまま）"""
+        return (round_type == "8 Pages" and bool(held)
+                and ItemCatalog.eight_pages_allowed(held, config.ITEMS) is False)
+
+    def _replay_held_item(self, events) -> int:
+        """監視開始の遡り: 入室後の行（古い順）を監視中と同じ規則で流して、最後の所持を返す"""
+        held = 0
+        round_type = ""
+        in_round = False
+        pending_murder = False
+        for event in events:
+            kind = event.kind
+            if kind == LogParser.EVENT_ITEM_EQUIP:
+                held = event.item_id
+            elif kind == LogParser.EVENT_ROUND_START:
+                in_round = True
+                round_type = event.round_type
+                murder = round_type == "Sabotage" and pending_murder
+                pending_murder = False
+                if self._held_item_round_start_loss(round_type, murder):
+                    held = 0
+            elif kind == LogParser.EVENT_ROUND_OVER:
+                in_round = False
+            elif kind == LogParser.EVENT_SUS_PLAYER:
+                if self._same_player_name(event.player_name, self.st.local_player_name):
+                    if in_round and round_type == "Sabotage":
+                        held = 0
+                    else:
+                        pending_murder = True
+            elif kind == LogParser.EVENT_YOU_DIED:
+                if round_type == "Run":
+                    held = 0
+            elif kind == LogParser.EVENT_RESPAWN:
+                if in_round:
+                    held = 0
+            elif kind == LogParser.EVENT_PAGE_COLLECTED:
+                if self._page_loses_held_item(round_type, held):
+                    held = 0
+        return held
 
     def _hands_free(self) -> bool:
         """この窓で放置モードが効いているか。
@@ -1225,6 +1338,10 @@ class LogMonitor:
                 self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
             elif self._round_start_loses_item():
                 self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
+            held_reason = self._held_item_round_start_loss(st.round_type,
+                                                           st.sabotage_murder_this_round)
+            if held_reason:
+                self._lose_held_item(held_reason)
 
             # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
             # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
@@ -1302,11 +1419,18 @@ class LogMonitor:
                                    st.round_seq)
             if st.round_type == "Run":
                 self._mark_item_lost("Run死亡: アイテムロスト")
+                self._lose_held_item(HELD_LOST_RUN_DEATH)
             return
 
         if event.kind == LogParser.EVENT_RESPAWN:
             if st.in_round:
                 self._mark_item_lost("リスポーン: アイテムロスト")
+                self._lose_held_item(HELD_LOST_RESPAWN)
+            return
+
+        if event.kind == LogParser.EVENT_PAGE_COLLECTED:
+            if self._page_loses_held_item(st.round_type, st.held_item_id):
+                self._lose_held_item(HELD_LOST_PAGE)
             return
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
@@ -1448,6 +1572,8 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_JOINING:
+            # インスタンスを移動するとアイテムは消える（依頼者）
+            self._lose_held_item(HELD_LOST_INSTANCE)
             st.instance_id = event.instance
             st.instance_type = self._parse_instance_type(event.suffix)
             st.instance_access = LogParser.instance_access(event.suffix)
@@ -1481,6 +1607,7 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
             self._track_randomizer_item_change(event)
             st.item_id = event.item_id
+            self._hold_item(event.item_id)
             if st.speed_freeze_kind == "8pages":
                 # 8 Pages はスキャナーを取れたら再開してよい。ただし即座に
                 # 解除すると間が短すぎる（依頼者の指摘）。アイテムロスト側の

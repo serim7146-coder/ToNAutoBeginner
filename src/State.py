@@ -101,6 +101,9 @@ class WindowState:
     twilight_round_seq: int = -1          # 数えたラウンド（KILLERS_SET が2回来ても1回）
     item_id: int = 1
     item_id_at_round_start: int = 1
+    # 所持アイテム（0 = 持っていない）。item_id はロスト判定の都合（8 Pages の開始で
+    # 0 になるなど）を含むので、別に持つ。ログの表示と今後の判定用
+    held_item_id: int = 0
     waiting_for_equip: bool = False
     equip_freeze_held: bool = False
     # フリーズの理由で前面を借りたときの札（WindowOperator.FrontLoan）。最初の1枚だけ

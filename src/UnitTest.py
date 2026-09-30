@@ -59,6 +59,7 @@ import BeginDetect
 import RoundStore
 import VerifiedTracker
 import DebugLog
+import ItemCatalog
 import WindowVolume
 import ScreenCapture
 import ToNEntry
@@ -85,7 +86,10 @@ def setUpModule():
                        names=config.FOG_OBJECT_NAMES_PATH,
                        debug=config.DEBUG_LOG_PATH,
                        rounds=config.ROUND_STORE_PATH,
-                       trust=FogEarlyRead.trust)
+                       trust=FogEarlyRead.trust,
+                       items=config.ITEMS)
+    # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
+    config.ITEMS = {}
     config.SETTINGS_PATH = root / "settings.json"
     config.DEBUG_LOG_PATH = root / "debug.log"
     config.ROUND_STORE_PATH = root / "rounds.sqlite"
@@ -109,6 +113,7 @@ def tearDownModule():
     config.DEBUG_LOG_PATH = _real_paths["debug"]
     config.ROUND_STORE_PATH = _real_paths["rounds"]
     FogEarlyRead.trust = _real_paths["trust"]
+    config.ITEMS = _real_paths["items"]
     _sandbox.cleanup()
 
 
@@ -13503,6 +13508,353 @@ class TestLiveSkipFromTheNextRound(unittest.TestCase):
         self.assertIn("do_skip", self._killers(monitor))
 
 
+class TestItemCatalog(unittest.TestCase):
+    """BO: item.json（テスト用の一時ファイル。本物は読まない）"""
+
+    TEXT = ("// 8pagesに持ち込めるアイテムを1、持ち込めないアイテムを0としている。\n"
+            "{\"Survival\": {\"29\": [\"Emerald Coil\", 0], \"36\": [\"Hamburger\", 1]},\n"
+            "  // 途中のコメントも飛ばす\n"
+            " \"Enkephalin\": {\"5\": [\"Radar\", 1]}}\n")
+
+    def _file(self, text):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        path = Path(d.name) / "item.json"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_comment_lines_are_skipped_and_the_table_is_read(self):
+        items = ItemCatalog.load_items(self._file(self.TEXT))
+        self.assertEqual(ItemCatalog.item_name(29, items), "Emerald Coil")
+        self.assertEqual(ItemCatalog.item_name(5, items), "Radar")
+        self.assertEqual(items[36].category, "Survival")
+        self.assertIs(ItemCatalog.eight_pages_allowed(29, items), False)
+        self.assertIs(ItemCatalog.eight_pages_allowed(36, items), True)
+        self.assertIsNone(ItemCatalog.eight_pages_allowed(99, items), "表に無い")
+        self.assertIsNone(ItemCatalog.item_name(99, items))
+
+    def test_a_missing_file_is_an_empty_table(self):
+        ItemCatalog.take_load_problem()
+        items = ItemCatalog.load_items(Path(tempfile.gettempdir()) / "no_such_dir_bo" / "item.json")
+        self.assertEqual(items, {})
+        self.assertIn("item.json", ItemCatalog.take_load_problem())
+        self.assertIsNone(ItemCatalog.take_load_problem(), "1回だけ")
+
+    def test_a_broken_file_is_an_empty_table(self):
+        for text in ("{\"Survival\": {\"29\": [\"Emerald Coil\", 0]", "[1, 2]", ""):
+            self.assertEqual(ItemCatalog.load_items(self._file(text)), {}, text)
+
+    def test_rows_of_the_wrong_shape_are_skipped(self):
+        items = ItemCatalog.load_items(self._file(
+            "{\"A\": {\"1\": [\"Ok\", 1], \"2\": [\"Two\", 2], \"3\": \"x\", \"x\": [\"Bad id\", 0],"
+            " \"4\": [\"Short\"], \"6\": [\"Bool\", true]}, \"B\": [1]}"))
+        self.assertEqual(set(items), {1})
+
+    def test_config_reads_it_once_like_terrors(self):
+        src = Path(config.__file__).read_text(encoding="utf-8")
+        self.assertIn('ITEMS = ItemCatalog.load_items(resource_path("item.json"))', src)
+
+
+def _item_table():
+    return {29: ItemCatalog.Item("Emerald Coil", "Survival", False),
+            36: ItemCatalog.Item("Hamburger", "Survival", True)}
+
+
+class TestHeldItem(unittest.TestCase):
+    """BO: 所持アイテム（st.held_item_id）。今のロスト判定とは別"""
+
+    P = "2026.09.20 11:55:47 Debug      -  "
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.set_hands_free(False)
+        for p in (patch.object(config, "ITEMS", _item_table()),
+                  patch.object(ConnectDB, "register_round"),
+                  patch.object(LogMonitor.threading, "Thread")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+
+    def _monitor(self, round_type="", in_round=False):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.local_player_name = "serim01"
+        monitor.st.round_type = round_type
+        monitor.st.in_round = in_round
+        return monitor
+
+    def _feed(self, monitor, *lines):
+        for line in lines:
+            monitor._process(self.P + line)
+
+    def _held_logs(self, monitor):
+        return [m.split("] ", 1)[1] for m in monitor.logs if "所持アイテム" in m]
+
+    @staticmethod
+    def _start(round_type):
+        return f"This round is taking place at Sewers (12) and the round type is {round_type}"
+
+    def test_equipping_holds_it_and_logs_the_name_once(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", "Equipping 29. Was using 29", "Equipping 77.")
+        self.assertEqual(self._held_logs(monitor),
+                         ["所持アイテム: Emerald Coil (id=29)", "所持アイテム: id=77（表に無い）"])
+        self.assertEqual(monitor.held_item(), (77, None))
+        self._feed(monitor, "Equipping 36.")
+        self.assertEqual(monitor.held_item(), (36, "Hamburger"))
+
+    def test_nothing_held_at_first(self):
+        self.assertEqual(self._monitor().held_item(), (0, None))
+
+    def test_respawn_in_a_round_loses_it(self):
+        monitor = self._monitor("Classic", in_round=True)
+        self._feed(monitor, "Equipping 29.", "Player respawned, opted out!")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Emerald Coil を リスポーン でロスト）")
+
+    def test_respawn_outside_a_round_keeps_it(self):
+        monitor = self._monitor("Classic", in_round=False)
+        self._feed(monitor, "Equipping 29.", "Player respawned, opted out!")
+        self.assertEqual(monitor.st.held_item_id, 29)
+
+    def test_run_death_loses_it_other_deaths_do_not(self):
+        monitor = self._monitor("Run", in_round=True)
+        self._feed(monitor, "Equipping 77.", "You died.")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（id=77 を Run 死亡 でロスト）")
+        monitor = self._monitor("Classic", in_round=True)
+        self._feed(monitor, "Equipping 29.", "You died.")
+        self.assertEqual(monitor.st.held_item_id, 29)
+
+    def test_punished_start_loses_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 36.", self._start("Punished"))
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Hamburger を Punished 開始 でロスト）")
+
+    def test_a_classic_start_keeps_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("Classic"))
+        self.assertEqual(monitor.st.held_item_id, 29)
+
+    def test_sabotage_murder_during_the_round_loses_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("Sabotage"), "Sus player = 1 serim01")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Emerald Coil を Sabotage マーダー でロスト）")
+
+    def test_sabotage_murder_before_the_round_loses_it_at_the_start(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", "Sus player = 1 serim01")
+        self.assertEqual(monitor.st.held_item_id, 29, "まだ始まっていない")
+        self._feed(monitor, self._start("Sabotage"))
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Emerald Coil を Sabotage マーダー でロスト）")
+
+    def test_someone_else_as_murderer_keeps_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("Sabotage"), "Sus player = 1 other")
+        self.assertEqual(monitor.st.held_item_id, 29)
+
+    # ── 8 Pages ─────────────────────────────
+    def test_eight_pages_start_keeps_it_even_while_the_loss_judgment_drops_item_id(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("8 Pages"))
+        self.assertEqual(monitor.st.held_item_id, 29)
+        self.assertEqual(monitor.st.item_id, 0, "今のロスト判定はそのまま（開始で0）")
+
+    def test_a_page_loses_an_item_marked_0(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("8 Pages"), "Page Collected - 1/8")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Emerald Coil を ページ取得 でロスト）")
+
+    def test_a_page_keeps_an_item_marked_1_or_not_in_the_table(self):
+        for item in (36, 77):
+            monitor = self._monitor()
+            self._feed(monitor, f"Equipping {item}.", self._start("8 Pages"),
+                       "Page Collected - 1/8", "Page Collected - 2/8")
+            self.assertEqual(monitor.st.held_item_id, item, item)
+
+    def test_equipping_a_0_item_again_is_lost_at_the_next_page(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("8 Pages"), "Page Collected - 1/8",
+                   "Equipping 29.")
+        self.assertEqual(monitor.st.held_item_id, 29)
+        self._feed(monitor, "Page Collected - 2/8")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(sum("ページ取得 でロスト" in m for m in monitor.logs), 2)
+
+    def test_a_page_line_outside_eight_pages_keeps_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", self._start("Classic"), "Page Collected - 1/8")
+        self.assertEqual(monitor.st.held_item_id, 29)
+
+    def test_an_empty_table_never_loses_on_a_page(self):
+        with patch.object(config, "ITEMS", {}):
+            monitor = self._monitor()
+            self._feed(monitor, "Equipping 29.", self._start("8 Pages"), "Page Collected - 1/8")
+            self.assertEqual(monitor.st.held_item_id, 29)
+            self.assertIn("所持アイテム: id=29（表に無い）", self._held_logs(monitor))
+
+    # ── インスタンス移動 ─────────────────────────
+    def test_moving_to_another_instance_loses_it(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", "[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor), ["所持アイテム: Emerald Coil (id=29)",
+                                                    "所持アイテム: なし（インスタンス移動）"])
+
+    def test_moving_without_an_item_logs_nothing(self):
+        monitor = self._monitor()
+        self._feed(monitor, "[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
+        self.assertEqual(self._held_logs(monitor), [])
+
+    # ── 今のロスト判定が変わらない ─────────────────────
+    LOSS_LINES = [
+        "[Behaviour] Joining wrld_a:1~private(usr_me)~region(jp)",
+        "Equipping 29.",
+        "This round is taking place at Sewers (12) and the round type is Run",
+        "You died.",
+        "RoundOver",
+        "Verified Round End",
+        "Equipping 29.",
+        "This round is taking place at Sewers (12) and the round type is 8 Pages",
+        "Page Collected - 1/8",
+        "Equipping 36.",
+        "Page Collected - 2/8",
+        "RoundOver",
+        "Verified Round End",
+        "Equipping 36.",
+        "This round is taking place at Sewers (12) and the round type is Punished",
+        "Player respawned, opted out!",
+        "RoundOver",
+        "Verified Round End",
+        "Equipping 5.",
+        "Sus player = 1 serim01",
+        "This round is taking place at Sewers (12) and the round type is Sabotage",
+        "RoundOver",
+        "Verified Round End",
+    ]
+    # 変更前（76590e1）の LogMonitor で同じ並びを流して記録した値
+    # (st.item_id, waiting_for_equip, item_lost_this_round, 案内の回数)
+    LOSS_BEFORE = [(1, False, False, 0), (29, False, False, 0), (29, False, False, 0),
+                   (0, False, True, 0), (0, True, True, 1), (0, True, True, 1),
+                   (29, True, True, 1), (0, False, True, 1), (0, False, True, 1),
+                   (36, False, True, 1), (36, False, True, 1), (36, False, True, 1),
+                   (36, False, True, 1), (36, False, True, 1), (0, False, True, 1),
+                   (0, False, True, 1), (0, True, True, 2), (0, True, True, 2),
+                   (5, True, True, 2), (5, True, True, 2), (0, False, True, 2),
+                   (0, True, True, 3), (0, True, True, 3)]
+
+    def _loss_trajectory(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=False, voice_item_lost="lost.mp3"),
+                                        {}, lambda _m: None, window_idx=1)
+        monitor.st.local_player_name = "serim01"
+        monitor._action.announce_item_lost_once = MagicMock()
+        out = []
+        for line in self.LOSS_LINES:
+            monitor._process(self.P + line)
+            monitor.st.instance_type = config.INSTANCE_PRIVATE
+            out.append((monitor.st.item_id, monitor.st.waiting_for_equip,
+                        monitor.st.item_lost_this_round,
+                        monitor._action.announce_item_lost_once.call_count))
+        return out, monitor
+
+    def test_the_current_loss_judgment_is_unchanged(self):
+        with_held, monitor = self._loss_trajectory()
+        self.assertEqual(with_held, self.LOSS_BEFORE)
+        self.assertEqual(monitor.st.held_item_id, 0, "所持の方は Sabotage マーダーでなくしている")
+        with patch.object(LogMonitor.LogMonitor, "_hold_item", lambda self, _i: None), \
+             patch.object(LogMonitor.LogMonitor, "_lose_held_item", lambda self, _r: None):
+            without_held, _ = self._loss_trajectory()
+        self.assertEqual(with_held, without_held)
+
+
+class TestHeldItemRestored(unittest.TestCase):
+    """BO: 監視開始の遡りで、入室後のログから所持アイテムを取り戻す"""
+
+    PREFIX = "2026.09.20 11:55:47 Debug      -  "
+    ME = "usr_0e01408a"
+    JOIN = "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"
+
+    def setUp(self):
+        p = patch.object(config, "ITEMS", _item_table())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _restore(self, lines):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        tmp.write("\n".join(self.PREFIX + line for line in
+                            [f"User Authenticated: serim01 ({self.ME})"] + lines) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=Path(tmp.name)), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        with patch.object(ConnectDB, "send_Users", return_value=7), \
+             patch.object(monitor, "_start_daemon"):
+            monitor._detect_instance_from_log()
+        restored = [m for m in monitor.logs if "所持アイテム" in m]
+        self.assertEqual(len(restored), 1, monitor.logs)
+        return monitor, restored[0].split("] ", 1)[1]
+
+    @staticmethod
+    def _start(round_type):
+        return f"This round is taking place at Sewers (12) and the round type is {round_type}"
+
+    def test_the_last_item_after_joining(self):
+        monitor, log = self._restore([self.JOIN, "Equipping 36.", "Equipping 29."])
+        self.assertEqual(monitor.st.held_item_id, 29)
+        self.assertEqual(log, "所持アイテム（入室後のログから）: Emerald Coil (id=29)")
+
+    def test_an_item_before_joining_is_not_used(self):
+        monitor, log = self._restore(["Equipping 29.", self.JOIN, self._start("Classic")])
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(log, "所持アイテム（入室後のログから）: なし")
+
+    def test_an_item_not_in_the_table(self):
+        monitor, log = self._restore([self.JOIN, "Equipping 77."])
+        self.assertEqual(log, "所持アイテム（入室後のログから）: id=77（表に無い）")
+
+    def test_the_same_rules_as_while_watching(self):
+        cases = [
+            ([self._start("8 Pages"), "Equipping 29.", "Page Collected - 1/8"], 0),
+            ([self._start("8 Pages"), "Equipping 36.", "Page Collected - 1/8"], 36),
+            ([self._start("8 Pages"), "Equipping 77.", "Page Collected - 1/8"], 77),
+            (["Equipping 29.", self._start("8 Pages")], 29),
+            ([self._start("8 Pages"), "Equipping 29.", "Page Collected - 1/8",
+              "Equipping 29.", "Page Collected - 2/8"], 0),
+            ([self._start("Classic"), "Equipping 29.", "Page Collected - 1/8"], 29),
+            (["Equipping 29.", self._start("Punished")], 0),
+            (["Equipping 29.", self._start("Classic")], 29),
+            ([self._start("Run"), "Equipping 29.", "You died."], 0),
+            ([self._start("Classic"), "Equipping 29.", "You died."], 29),
+            ([self._start("Classic"), "Equipping 29.", "Player respawned, opted out!"], 0),
+            ([self._start("Classic"), "RoundOver", "Equipping 29.",
+              "Player respawned, opted out!"], 29),
+            (["Equipping 29.", "Sus player = 1 serim01", self._start("Sabotage")], 0),
+            (["Equipping 29.", self._start("Sabotage"), "Sus player = 1 serim01"], 0),
+            (["Equipping 29.", self._start("Sabotage"), "Sus player = 1 other"], 29),
+            (["Equipping 29.", "Sus player = 1 serim01", self._start("Classic"),
+              "RoundOver", self._start("Sabotage")], 29),
+            ([self._start("Punished"), "Equipping 36."], 36),
+        ]
+        for lines, expected in cases:
+            monitor, _log = self._restore([self.JOIN] + lines)
+            self.assertEqual(monitor.st.held_item_id, expected, lines)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -21232,6 +21584,20 @@ class TestStartScanPrefilter(unittest.TestCase):
         self.assertEqual(parse.call_count, 0, "Joining の無いログは1行も parse() しない")
 
     # ── 4/5. 統計用の通信は待たない ───────────────
+    def test_page_collected_line(self):
+        event = LogParser.parse("2026.09.20 11:55:47 Debug      -  Page Collected - 3/8")
+        self.assertEqual((event.kind, event.page), (LogParser.EVENT_PAGE_COLLECTED, 3))
+        self.assertIsNone(LogParser.parse("Page Collected - 3/9"))
+
+    def test_the_held_item_marks_are_in_the_patterns_and_the_scan(self):
+        for mark, rx in ((LogParser.ITEM_EQUIP_MARK, LogParser.RE_ITEM_EQUIP),
+                         (LogParser.PAGE_COLLECTED_MARK, LogParser.RE_PAGE_COLLECTED),
+                         (LogParser.RESPAWN_MARK, LogParser.RE_RESPAWN_GENERIC),
+                         (LogParser.YOU_DIED_MARK, LogParser.RE_YOU_DIED),
+                         (LogParser.SUS_PLAYER_MARK, LogParser.RE_SUS_PLAYER)):
+            self.assertIn(mark, rx.pattern.replace("(", ""))
+            self.assertIn(mark, LogMonitor.LogMonitor._START_SCAN_MARKS)
+
     def test_the_scan_does_not_wait_for_the_statistics_id(self):
         path = self._log_file(self.LINES)
         monitor = self._monitor(path)
