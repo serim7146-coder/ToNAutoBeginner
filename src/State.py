@@ -98,6 +98,9 @@ class WindowState:
     # フリーズの理由で前面を借りたときの札（WindowOperator.FrontLoan）。最初の1枚だけ
     # 持ち、この窓のフリーズが全部解けたら返す（SharedState.keep_front_loan）
     front_loan: object = field(default=None, compare=False, repr=False)
+    # アイテム取得→Begin モードの装備待ちなら、この窓の hwnd（0 = 前面を引き継がない）。
+    # 列の先頭にいるあいだ、ほかの窓が返そうとした札を引き継ぐ（SharedState）
+    equip_front_hwnd: int = 0
     item_lost_announced: bool = False
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False

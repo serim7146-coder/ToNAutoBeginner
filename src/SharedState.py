@@ -37,13 +37,35 @@ def _holds_any_freeze(st) -> bool:
 
 
 def _return_front_when_free(st):
-    """その窓のフリーズが全部解けていて札があれば、返しに行く"""
+    """その窓のフリーズが全部解けていて札があれば、返しに行く。
+
+    アイテム取得→Begin モードの装備待ちの窓が列の先頭にいれば、元の窓へは返さず
+    札をその窓へ引き継ぐ（その窓の見張りが前面化＋音声を出すので、元の窓を一瞬
+    挟まない）。その窓のフリーズが全部解けたら元の窓へ返る
+    """
     with _FRONT_LOAN_LOCK:
         loan = st.front_loan
         if loan is None or _holds_any_freeze(st):
             return
         st.front_loan = None
+        heir = _front_heir(st)
+        if heir is not None:
+            if heir.front_loan is None:
+                loan.hwnd = heir.equip_front_hwnd   # 次に前に出るのはその窓
+                heir.front_loan = loan
+            return                                  # 札が既にあればそちらを使う
     _start_give_back(loan)
+
+
+def _front_heir(st):
+    """札を引き継ぐ窓（装備待ちの列の先頭で、前面を引き継ぐ装備待ち）。無ければ None"""
+    with _EQUIP_FREEZE_LOCK:
+        if not _EQUIP_QUEUE:
+            return None
+        head = _EQUIP_QUEUE[0]
+    if head is st or not head.equip_front_hwnd:
+        return None
+    return head
 
 
 def _start_give_back(loan):
@@ -219,6 +241,7 @@ def equip_freeze_end(st):
         if not st.equip_freeze_held:
             return
         st.equip_freeze_held = False
+        st.equip_front_hwnd = 0
         _EQUIP_FREEZE_COUNT = max(0, _EQUIP_FREEZE_COUNT - 1)
         # 同一性で外す。WindowState は dataclass なので == は中身の比較
         # （いまは直前に落とした equip_freeze_held で区別がつくが、それに頼らない）

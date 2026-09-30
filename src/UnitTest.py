@@ -11482,11 +11482,13 @@ class TestReturnFront(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def _executor(self):
-        cfg = WindowConfig(hwnd=self.VRC, osc_port=9000, voice_item_lost="lost.mp3")
+    def _executor(self, hwnd=None, auto_begin=False):
+        cfg = WindowConfig(hwnd=hwnd or self.VRC, osc_port=9000, voice_item_lost="lost.mp3")
         st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
         st.waiting_for_equip = True
-        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+        return ActionExecutor.ActionExecutor(
+            cfg, st, lambda: True, lambda _m: None,
+            auto_begin_active=lambda: auto_begin), st
 
     def _monitor(self):
         monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=self.VRC), {}, lambda _m: None,
@@ -11642,6 +11644,153 @@ class TestReturnFront(unittest.TestCase):
         returned = self._returned()
         self.assertEqual(returned[0], ("cursor", self.CURSOR))
         self.assertEqual(returned[1], ("focus", self.EDITOR))
+
+    # ── アイテム取得→Begin モード: 元の窓へ返さず、アイテムロストの窓へ渡す ──────
+    WIN_B = 0x300
+
+    def _attend_later(self, ex):
+        """_attend_to_item_loss を回す。見張りは立てずに、あとで回せるよう返す"""
+        with patch.object(ActionExecutor.threading, "Thread") as thread:
+            ex._attend_to_item_loss()
+        if not thread.called:
+            return None
+        kwargs = thread.call_args.kwargs
+        return lambda: kwargs["target"](*kwargs["args"])
+
+    def _run_watcher(self, watcher):
+        with patch.object(ActionExecutor.time, "sleep",
+                          side_effect=AssertionError("見張りが出さないまま待っている")):
+            watcher()
+
+    def _mode(self, on):
+        SharedState.set_item_begin_mode(on)
+        self.addCleanup(SharedState.set_item_begin_mode, False)
+        SharedState.register_window_hwnd(self.WIN_B)
+
+    def test_the_mode_hands_the_front_to_the_item_loss_window(self):
+        """窓A の続行が解けても VSCode へは返さず、窓B が前に出る。窓B の装備が
+        終わったら VSCode へ返る。VSCode への返却は1回だけ"""
+        self._mode(True)
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")          # 札: VSCode
+        b, bst = self._executor(self.WIN_B, auto_begin=True)
+        watch_b = self._attend_later(b)
+        self.assertIsNotNone(watch_b, "窓A の続行中は待つ")
+
+        SharedState.continue_round_end(monitor.st)
+        self.assertEqual(self._returned(), [], "VSCode を一瞬挟まない")
+        self.assertEqual(self.front, self.VRC)
+
+        self._run_watcher(watch_b)                              # 窓B の前面化＋音声
+        self.assertEqual(self._returned(), [("focus", self.WIN_B)])
+        PlaySound.play_sound.assert_called_once()
+
+        SharedState.equip_freeze_end(bst)
+
+        self.assertEqual(self._returned(), [("focus", self.WIN_B)] + self.RETURNED)
+        self.assertEqual(self.events.count(("focus", self.EDITOR)), 1)
+        self.assertEqual(self.front, self.EDITOR)
+
+    def test_the_hand_over_does_not_depend_on_who_is_first(self):
+        """窓B の見張りが先に前へ出ても（札は無い）、引き継いだ札で1回だけ返る"""
+        self._mode(True)
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        b, bst = self._executor(self.WIN_B, auto_begin=True)
+        self._attend_later(b)
+        b._show_item_loss()                                     # 前は窓A（VRChat）→ 札なし
+        SharedState.continue_round_end(monitor.st)
+        self.assertNotIn(("focus", self.EDITOR), self.events)
+
+        SharedState.equip_freeze_end(bst)
+
+        self.assertEqual(self.events.count(("focus", self.EDITOR)), 1, self.events)
+
+    def test_the_same_window_keeps_the_front_until_its_equip_wait_ends(self):
+        self._mode(True)
+        ex, st = self._executor(auto_begin=True)
+        SharedState.continue_round_start(st)
+        with patch.object(SharedState, "nothing_frozen", return_value=True):
+            monitor = self._monitor()
+            monitor.st = st
+            monitor._focus_this_window_for("続行ラウンド")
+        self._attend_later(ex)
+
+        SharedState.continue_round_end(st)
+        self.assertEqual(self._returned(), [], "装備待ちが残っている")
+
+        SharedState.equip_freeze_end(st)
+        self.assertEqual(self._returned(), self.RETURNED)
+
+    def test_the_normal_mode_gives_back_then_borrows_again(self):
+        """通常モード: 続行が解けたら返す → Begin の後の案内で再び前面化（札は VSCode）
+        → 装備待ちが解けたら返す"""
+        self._mode(False)
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        SharedState.continue_round_end(monitor.st)
+        self.assertEqual(self._returned(), self.RETURNED)
+
+        b, bst = self._executor(self.WIN_B, auto_begin=True)
+        self.assertIsNone(self._attend_later(b), "ほかにフリーズが無いのでその場で出す")
+        SharedState.equip_freeze_end(bst)
+
+        self.assertEqual(self._returned(), self.RETURNED + [("focus", self.WIN_B)]
+                         + self.RETURNED)
+
+    def test_only_the_head_of_the_queue_takes_over(self):
+        self._mode(True)
+        SharedState.register_window_hwnd(0x400)
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        b, bst = self._executor(self.WIN_B, auto_begin=True)
+        c, cst = self._executor(0x400, auto_begin=True)
+        self._attend_later(b)
+        self._attend_later(c)
+
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertIsNotNone(bst.front_loan, "先頭の窓B が引き継ぐ")
+        self.assertIsNone(cst.front_loan)
+        self.assertEqual(bst.front_loan.hwnd, self.WIN_B)
+
+    def test_a_finished_mode_equip_wait_does_not_take_over_later(self):
+        """モードの装備待ちが解けたら印も消える。後で通常モードで並んでも引き継がない"""
+        self._mode(True)
+        b, bst = self._executor(self.WIN_B, auto_begin=True)
+        self._attend_later(b)
+        SharedState.equip_freeze_end(bst)
+        SharedState.set_item_begin_mode(False)
+        self.events.clear()
+        self.front = self.EDITOR
+
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        SharedState.equip_freeze_start(bst)             # 通常モードで並ぶ
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertEqual(self._returned(), self.RETURNED)
+        self.assertIsNone(bst.front_loan)
+
+    def test_a_window_without_auto_begin_does_not_take_over(self):
+        """モードが ON でも、自動 Begin が機能していない窓は引き継がない"""
+        self._mode(True)
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        b, bst = self._executor(self.WIN_B, auto_begin=False)
+        self._attend_later(b)
+        self.assertTrue(SharedState.is_first_in_equip_queue(bst))
+
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertEqual(self._returned(), self.RETURNED, "元の窓へ返す")
+        self.assertIsNone(bst.front_loan)
 
     # ── 8. 停止では返さない ─────────────────────────
     def test_stopping_does_not_give_back(self):

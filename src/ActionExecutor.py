@@ -154,6 +154,10 @@ class ActionExecutor:
         st = self._st
         if self._hands_free():
             return
+        if SharedState.get_item_begin_mode() and self._auto_begin_active():
+            # アイテム取得→Begin モード: 列の先頭にいるあいだ、ほかの窓が返す
+            # 前面の札を引き継ぐ（元の窓を一瞬挟まない）
+            st.equip_front_hwnd = self._cfg.hwnd
         SharedState.equip_freeze_start(st)          # 待たずに張る
         if self._nothing_frozen_but_mine():
             self._show_item_loss()
