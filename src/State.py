@@ -44,6 +44,11 @@ class WindowState:
     early_read_hits: dict = field(default_factory=dict)   # 正規化した名前 → ID
     early_read_tid: Optional[int] = None  # 看破で使ったID
     early_read_void: bool = False         # 2種類以上のIDが出た → このラウンドは使わない
+    # 看破の期間に objects の名前が1つでも当たったか（信用・void に関係なく）。DTM の否定
+    fog_object_seen: bool = False
+    # オブジェクトなし → DTM を確かめるログの時刻（0 = 確かめない）。1回だけ
+    fog_no_object_deadline: float = 0.0
+    fog_no_object_dtm: bool = False       # このラウンドでオブジェクトなし → DTM と判断した
     eight_pages_unknown_logged: bool = False   # 未登録の 8 Pages 番号の案内は1回だけ
     statistics_quiet: bool = False        # 看破の結果で送る統計は黙って送る
     log_pos: int = 0

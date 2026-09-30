@@ -1146,6 +1146,8 @@ class LogMonitor:
         at = LogParser.log_time(line)
         if at is not None:
             st.log_now = at         # 判定はすべてこのログの時刻で行う
+            if st.fog_no_object_deadline and at >= st.fog_no_object_deadline:
+                self._check_fog_no_object()     # この行を読む前に（5秒までに出た行だけで）
         event = LogParser.parse(line)
         if not event:
             return
@@ -1295,6 +1297,9 @@ class LogMonitor:
             st.early_read_hits             = {}
             st.early_read_tid              = None
             st.early_read_void             = False
+            st.fog_object_seen             = False
+            st.fog_no_object_deadline      = 0.0
+            st.fog_no_object_dtm           = False
             st.eight_pages_unknown_logged  = False
             st.fog                         = False
             st.begin_done                  = False
@@ -1440,6 +1445,7 @@ class LogMonitor:
                 self._log("チェイス停止（ラウンド終了）")
             st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
             st.early_read_hits = {}
+            st.fog_no_object_deadline = 0.0
             # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
             Recorder.on_round_over(self.window_idx)
             # Begin待ちの起点。実処理は Verified Round End 側で走るが、
@@ -1541,6 +1547,9 @@ class LogMonitor:
             # 看破の行を読むのはここから公開/RoundOver まで
             st.fog_reading = (config.FOG_EARLY_READ_ENABLED
                               and self.early_read_capable)
+            # 看破できる起動なら、5秒たっても objects の名前が出なければ DTM（ログの時刻で見る）
+            if st.fog_reading and config.FOG_NO_OBJECT_DTM_ENABLED and st.log_now:
+                st.fog_no_object_deadline = st.log_now + config.FOG_NO_OBJECT_DTM_SEC
             self._log("テラー不明 → revealed待ち")
             if self._hands_free():
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
@@ -1566,9 +1575,11 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_KILLERS_REVEALED:
             st.fog_reading = False
+            st.fog_no_object_deadline = 0.0
             self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
             # 答え合わせは公開の後（食い違いの警告はもう出してよい）
             self._check_early_read(event.terror_ids or [], event.round_type)
+            self._check_no_object_dtm(event.terror_ids or [], event.round_type)
             return
 
         if event.kind == LogParser.EVENT_JOINING:
@@ -2016,6 +2027,8 @@ class LogMonitor:
         if not key or key in st.early_read_hits:
             return
         tid = ReadJson.fog_terror_id_by_object_name(name, config.TERRORS)
+        if tid is not None:
+            st.fog_object_seen = True       # 信用・void に関係なく、テラーの名前が見えた
         if tid is None or not FogEarlyRead.trust.usable(key):
             return
         st.early_read_hits[key] = (tid, name)
@@ -2031,6 +2044,35 @@ class LogMonitor:
             return          # Enrage 系で先に決まった（二重に判定しない）
         st.early_read_tid = tid
         self._identify_fog_terror(tid, "看破", name, early_read=True)
+
+    def _check_fog_no_object(self):
+        """看破できる起動の霧で、Killers is unknown から5秒たっても objects の名前が
+        1つも当たらなかった → DTM と判断する（1回だけ）。看破と同じ入口を通すので、
+        許可が無ければ DB に黙って送るだけ"""
+        st = self.st
+        st.fog_no_object_deadline = 0.0
+        if not (config.FOG_NO_OBJECT_DTM_ENABLED and st.fog_reading
+                and not st.fog_object_seen and st.early_read_tid is None
+                and not st.early_read_void and self._fog_terror_unknown()):
+            return
+        st.fog_no_object_dtm = True
+        st.early_read_tid = DTM_TERROR_ID       # 後から名前が見えても二重に判定しない
+        self._identify_fog_terror(DTM_TERROR_ID, "看破（オブジェクトなし）", "",
+                                  early_read=True)
+
+    def _check_no_object_dtm(self, ids: list[int], round_type: str):
+        """公開の後: オブジェクトなし → DTM が外れていたら知らせる"""
+        st = self.st
+        if not st.fog_no_object_dtm or not ids:
+            return
+        st.fog_no_object_dtm = False
+        public = RoundDecision.normalize_killer_ids(list(ids)[:1], round_type)[0]
+        if public == DTM_TERROR_ID:
+            return
+        message = f"看破（オブジェクトなし）が外れました（公開: {format_terror_ids([public])}）"
+        if self._may_show_fog_info():
+            self._log(f"⚠ {message}")
+        self._debug(message)
 
     def _check_early_read(self, ids: list[int], round_type: str):
         """答え合わせ。看破で見えた名前ごとに、公開と一致したかを記録する。

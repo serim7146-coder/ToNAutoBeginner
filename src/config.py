@@ -434,6 +434,15 @@ FOG_EARLY_READ_ENABLED     = True
 FOG_EARLY_READ_LAUNCH_FLAG = "--enable-sdk-log-levels"
 # 名前ごとの答え合わせ（一致 / 食い違い）の記録
 FOG_OBJECT_NAMES_PATH = SETTINGS_PATH.parent / "fog_object_names.json"
+# 看破できる起動の霧で、Killers is unknown から FOG_NO_OBJECT_DTM_SEC たっても objects の
+# 名前が1つも当たらなければ DTM（50）と判断する（看破と同じ扱い: 許可なしなら DB にだけ送る）。
+# 手元の全ログ: DTM 以外の霧32回はすべて 0〜2秒後に名前が出た。DTM 1回は1つも出なかった
+# （確信度: 中。DTM の例が1回）。看破できない起動では DTM 以外でも出ないので使わない。
+# classic で objects が空なのは DTM だけ。alternate の Convict Squad・Joy・Foxy は別の行で分かる。
+# ⚠ Winterfest の期間は Neo Pilot（オブジェクト名が分からない）が霧に出る → DTM と取り違えうる。
+#   その期間は False にして止める
+FOG_NO_OBJECT_DTM_ENABLED = True
+FOG_NO_OBJECT_DTM_SEC     = 5.0
 
 # ── VRChat起動 ──
 MAX_WINDOWS             = 8      # 同時に扱える窓数の上限

@@ -3341,6 +3341,298 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.assertEqual(self.send.call_count, 1)
 
 
+class TestFogNoObjectDtm(unittest.TestCase):
+    """BQ: 看破できる起動の霧で、Killers is unknown から5秒たっても objects の名前が
+    1つも当たらなければ DTM（50）と判断する。時刻はログの行の時刻"""
+
+    FOG_KEY = "Fog/霧"
+    DTM = 50
+    SNAIL = 101
+    UNKNOWN = ("2026.09.21 22:04:41 Debug      -  Killers is unknown - ??? // "
+               "Will be revealed after 50 seconds // Round type is Fog")
+    SNAIL_AT_2 = ("2026.09.21 22:04:43 Warning    -  [NetworkProcessing] Ignoring TrySetOwner "
+                  "attempt on [20] Immortal Snail because tsuki__2 already owner")
+    OTHER_NAME_AT_2 = ("2026.09.21 22:04:43 Warning    -  [NetworkProcessing] Ignoring TrySetOwner "
+                       "attempt on [10] Chair because tsuki__2 already owner")
+
+    @staticmethod
+    def _at(sec, text="[Behaviour] tick"):
+        return f"2026.09.21 22:04:{41 + sec:02d} Debug      -  {text}"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.trust = FogEarlyRead.NameTrust(Path(self._dir.name) / "names.json")
+        for p in (patch.object(FogEarlyRead, "trust", self.trust),
+                  patch.object(config, "FOG_EARLY_READ_ENABLED", True),
+                  patch.object(config, "FOG_NO_OBJECT_DTM_ENABLED", True),
+                  patch.object(config, "FOG_NO_OBJECT_DTM_SEC", 5.0)):
+            p.start()
+            self.addCleanup(p.stop)
+        FogEarlyRead.set_early_read_enabled(True)
+        self.addCleanup(FogEarlyRead.set_early_read_enabled, False)
+        self.send = self._start(patch.object(ConnectDB, "register_round"))
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+        self.record = self._start(patch.object(Recorder, "on_continue_start"))
+        self.debug = self._start(patch.object(LogMonitor.DebugLog, "write"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, access="invite", capable=True, keep=None):
+        monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=True, voice_continue="continue.mp3"),
+                                        keep if keep is not None else {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = access
+        monitor.early_read_capable = capable
+        monitor.st.in_round = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._process(self.UNKNOWN)
+        return monitor
+
+    def _skipped(self):
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
+
+    def _dtm_logs(self, monitor):
+        return [m for m in monitor.logs if "オブジェクトなし" in m]
+
+    def _assert_no_dtm(self, monitor):
+        self.assertFalse(monitor.st.fog_no_object_dtm)
+        self.assertEqual(self._dtm_logs(monitor), [], monitor.logs)
+        for c in self.send.call_args_list:
+            self.assertNotEqual(c.args[1], [self.DTM])
+
+    # ── 判断する ─────────────────────────────
+    def test_nothing_seen_for_5_seconds_is_judged_as_dtm(self):
+        monitor = self._monitor()
+        monitor._process(self._at(4))
+        self.assertEqual(self._dtm_logs(monitor), [], "まだ5秒たっていない")
+        self.send.assert_not_called()
+
+        monitor._process(self._at(5))
+
+        self.assertEqual(self._skipped(), 1, "判定に使う（リストに無いので自爆）")
+        self.assertTrue(any("🔎 テラー判明(看破（オブジェクトなし）)" in m for m in monitor.logs),
+                        monitor.logs)
+        self.send.assert_called_once_with("Fog", [self.DTM], 0, None, quiet=True,
+                                          instance_key=ANY, round_time=ANY)
+        monitor._process(self._at(9))
+        self.assertEqual(self._skipped(), 1, "1回だけ")
+
+    def test_dtm_on_the_list_continues(self):
+        monitor = self._monitor(keep={self.FOG_KEY: {self.DTM}})
+        monitor._process(self._at(6))
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertEqual(self._skipped(), 0)
+
+    def test_without_permission_it_only_goes_to_the_db(self):
+        for access, button in (("friends_plus", True), ("public", True), ("invite", False)):
+            self.send.reset_mock()
+            self.thread.reset_mock()
+            FogEarlyRead.set_early_read_enabled(button)
+            monitor = self._monitor(access=access, keep={self.FOG_KEY: {self.DTM}})
+            before = list(monitor.logs)
+
+            monitor._process(self._at(6))
+
+            self.assertEqual(monitor.logs, before, (access, button))
+            self.assertEqual(self._skipped(), 0)
+            self.assertFalse(monitor.st.is_continue_round)
+            self.send.assert_called_once_with("Fog", [self.DTM], 0, None, quiet=True,
+                                              instance_key=ANY, round_time=ANY)
+
+    # ── 判断しない ────────────────────────────
+    def test_an_early_read_name_first(self):
+        monitor = self._monitor()
+        monitor._process(self.SNAIL_AT_2)
+        monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+        self.assertEqual(self._skipped(), 1, "看破の1回だけ")
+
+    def test_a_name_that_is_not_trusted_still_counts(self):
+        self.trust.record(ReadJson.normalize_object_name("Immortal Snail"), False)
+        with patch.object(config, "TERRORS", fog_early_read_terrors()):
+            monitor = self._monitor()
+            monitor._process(self.SNAIL_AT_2)
+            self.assertIsNone(monitor.st.early_read_tid, "前提: 信用が足りないので看破には使わない")
+            monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+        self.assertEqual(self._skipped(), 0)
+
+    def test_a_name_seen_while_void_still_counts(self):
+        with patch.object(config, "TERRORS", fog_early_read_terrors()):
+            monitor = self._monitor()
+            monitor.st.early_read_void = True
+            monitor._process(self.SNAIL_AT_2)
+            monitor.st.early_read_void = False      # void だけでは止まらないことを分けて見る
+            monitor._process(self._at(6))
+        self.assertTrue(monitor.st.fog_object_seen)
+        self._assert_no_dtm(monitor)
+
+    def test_a_name_not_in_the_objects_does_not_count(self):
+        monitor = self._monitor()
+        monitor._process(self.OTHER_NAME_AT_2)
+        monitor._process(self._at(6))
+        self.assertTrue(monitor.st.fog_no_object_dtm)
+
+    def test_void_does_not_judge(self):
+        monitor = self._monitor()
+        monitor._process(self._at(1, "[Behaviour] OnMasterClientSwitched"))
+        self.assertTrue(monitor.st.early_read_void)
+        monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+
+    def test_decided_by_the_enrage_family_or_foxy_or_joy(self):
+        for how in ("Enrage", "Foxy", "Joy", "Stunned"):
+            self.send.reset_mock()
+            monitor = self._monitor()
+            if how == "Enrage":
+                monitor._on_enrage("Immortal Snail")
+            elif how == "Foxy":
+                monitor._process(self._at(2, "foxy the pirate turned evil!"))
+            elif how == "Joy":
+                monitor._process(self._at(2, "JOY WILL SOON AWAKEN..."))
+            else:
+                monitor._process(self._at(2, "Immortal Snail was stunned."))
+            monitor._process(self._at(6))
+            self._assert_no_dtm(monitor)
+            self.assertIsNotNone(monitor.st.enrage_identified, how)
+
+    def test_not_capable_does_nothing(self):
+        monitor = self._monitor(capable=False)
+        monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+        self.send.assert_not_called()
+
+    def test_the_switch_off_does_nothing(self):
+        with patch.object(config, "FOG_NO_OBJECT_DTM_ENABLED", False):
+            monitor = self._monitor()
+            monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+        self.send.assert_not_called()
+
+    def test_the_switch_turned_off_before_the_deadline(self):
+        monitor = self._monitor()
+        with patch.object(config, "FOG_NO_OBJECT_DTM_ENABLED", False):
+            monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+
+    def test_the_seconds_come_from_the_config(self):
+        with patch.object(config, "FOG_NO_OBJECT_DTM_SEC", 8.0):
+            monitor = self._monitor()
+            monitor._process(self._at(6))
+            self.assertFalse(monitor.st.fog_no_object_dtm)
+            monitor._process(self._at(8))
+        self.assertTrue(monitor.st.fog_no_object_dtm)
+
+    def test_reveal_round_over_or_next_round_before_5_seconds(self):
+        for line in ("Killers have been revealed - 101 0 0 // Round type is Fog",
+                     "RoundOver",
+                     "This round is taking place at Sewers (12) and the round type is Classic"):
+            self.send.reset_mock()
+            monitor = self._monitor()
+            monitor._process(self._at(3, line))
+            self.assertEqual(monitor.st.fog_no_object_deadline, 0.0, line)
+            monitor._process(self._at(6))
+            self._assert_no_dtm(monitor)
+
+    def test_each_guard_on_its_own(self):
+        """ほかの経路でも守られている条件を、1つずつ外から崩して確かめる"""
+        for name, spoil in (("看破の期間の外", lambda st: setattr(st, "fog_reading", False)),
+                            ("看破で決まっている", lambda st: setattr(st, "early_read_tid", 6))):
+            self.send.reset_mock()
+            monitor = self._monitor()
+            spoil(monitor.st)
+            monitor._process(self._at(6))
+            self._assert_no_dtm(monitor)
+
+    def test_the_switch_is_read_when_arming(self):
+        with patch.object(config, "FOG_NO_OBJECT_DTM_ENABLED", False):
+            monitor = self._monitor()
+        monitor._process(self._at(6))
+        self._assert_no_dtm(monitor)
+
+    def test_a_non_fog_unknown_does_not_arm(self):
+        monitor = self._monitor()
+        self.assertTrue(monitor.st.fog_no_object_deadline, "前提: 霧の不明で構える")
+        monitor = self._monitor(capable=False)
+        self.assertFalse(monitor.st.fog_no_object_deadline)
+
+    # ── 公開の後の答え合わせ ─────────────────────────
+    REVEAL_SNAIL = "Killers have been revealed - 101 0 0 // Round type is Fog"
+    REVEAL_DTM = "Killers have been revealed - 50 0 0 // Round type is Fog"
+
+    def _debug_lines(self):
+        return [c.args[0] for c in self.debug.call_args_list if "オブジェクトなし" in c.args[0]]
+
+    def test_a_wrong_dtm_is_warned_after_the_reveal(self):
+        monitor = self._monitor()
+        monitor._process(self._at(6))
+        monitor._process(self._at(9, self.REVEAL_SNAIL))
+
+        warnings = [m for m in monitor.logs if "⚠ 看破（オブジェクトなし）が外れました（公開: " in m]
+        self.assertEqual(len(warnings), 1, monitor.logs)
+        self.assertIn("Immortal Snail", warnings[0])
+        self.assertEqual(len(self._debug_lines()), 1)
+
+    def test_a_wrong_dtm_in_an_ng_instance_goes_only_to_the_debug_log(self):
+        monitor = self._monitor(access="public")
+        monitor._process(self._at(6))
+        monitor._process(self._at(9, self.REVEAL_SNAIL))
+        self.assertFalse(any("外れました" in m for m in monitor.logs), monitor.logs)
+        self.assertEqual(len(self._debug_lines()), 1)
+        self.assertIn("外れました", self._debug_lines()[0])
+
+    def test_a_right_dtm_says_nothing(self):
+        monitor = self._monitor()
+        monitor._process(self._at(6))
+        monitor._process(self._at(9, self.REVEAL_DTM))
+        self.assertFalse(any("外れました" in m for m in monitor.logs))
+        self.assertEqual(self._debug_lines(), [])
+
+    def test_no_warning_without_the_judgment(self):
+        monitor = self._monitor()
+        monitor._process(self.SNAIL_AT_2)
+        monitor._process(self._at(9, "Killers have been revealed - 6 0 0 // Round type is Fog"))
+        self.assertFalse(any("オブジェクトなし）が外れました" in m for m in monitor.logs))
+        self.assertEqual(self._debug_lines(), [])
+
+    def test_a_new_round_clears_the_state(self):
+        monitor = self._monitor()
+        monitor._process(self.SNAIL_AT_2)
+        monitor._process(self._at(9, "This round is taking place at Sewers (12) and the round type is Fog"))
+        monitor._process("2026.09.21 22:05:10 Debug      -  Killers is unknown - ??? // "
+                         "Will be revealed after 50 seconds // Round type is Fog")
+        monitor._process("2026.09.21 22:05:16 Debug      -  tick")
+        self.assertTrue(monitor.st.fog_no_object_dtm, "前のラウンドで見えた名前は数えない")
+
+    # ── Convict Squad（本物の terrors.json）─────────────────
+    def test_convict_names_are_convict_squad(self):
+        for name in ("Convict (Etrigan)", "Convict (Nami", "Convict (Darkgrey)", "Convict (Have"):
+            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, config.TERRORS), 145, name)
+
+    def test_a_convict_name_decides_convict_squad_and_not_dtm(self):
+        monitor = self._monitor()
+        monitor._process("2026.09.21 22:04:42 Warning    -  [NetworkProcessing] Ignoring "
+                         "TrySetOwner attempt on [5] Convict (Nami because x already owner")
+        monitor._process(self._at(6))
+        self.assertEqual(monitor.st.early_read_tid, 145)
+        self.assertEqual(monitor.st.enrage_identified, 145)
+        self._assert_no_dtm(monitor)
+
+
 class TestFogEarlyReadAnswerCheck(unittest.TestCase):
     """答え合わせ（一度でも公開と食い違った名前は以後使わない）"""
 
@@ -3459,6 +3751,10 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
     def test_a_flood_of_names_after_the_reveal_is_not_read(self):
         """実ログ（2026-09-22 22:06:23）: 公開の約1分後に全オブジェクトの同期で数百の名前が
         一度に出た。看破は公開までなので、判定・DB・答え合わせのどれにも使わない"""
+        # 公開前の名前を空にした並びなので、オブジェクトなし → DTM（BQ）は止めて見る
+        p = patch.object(config, "FOG_NO_OBJECT_DTM_ENABLED", False)
+        p.start()
+        self.addCleanup(p.stop)
         monitor = self._monitor()
         self._round(monitor, [], FOG_EARLY_READ_ROUNDS[3][2])
         self.send.reset_mock()

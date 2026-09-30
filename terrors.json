@@ -153,7 +153,7 @@
     {"id": 142, "name": "Smile Walker", "terrors": ["Smile Walker"], "objects": ["SmileyWalker"]},
     {"id": 143, "name": "Mr. Mega", "terrors": ["Mr. Mega"], "objects": ["MR MEGA"]},
     {"id": 144, "name": "SM64.Z64", "terrors": ["SM64.Z64"], "objects": ["sm64.z64"]},
-    {"id": 145, "name": "Convict Squad", "terrors": ["Convict Etrigan", "Convict Little Witch", "Convict Squibbs", "Convict Nugget"], "objects": []},
+    {"id": 145, "name": "Convict Squad", "terrors": ["Convict Etrigan", "Convict Little Witch", "Convict Squibbs", "Convict Nugget"], "objects": ["Convict (Etrigan)", "Convict (Nami", "Convict (Darkgrey)", "Convict (Have"]},
     {"id": 146, "name": "Paradise Bird", "terrors": ["Paradise Bird"], "objects": ["Paradise Bird"]},
     {"id": 147, "name": "Angry Munci", "terrors": ["Angry Munci"], "objects": ["Munchi)"]},
     {"id": 148, "name": "Lord's Signal", "terrors": ["Lord's Signal"], "objects": ["DARKEST DAY"]},
