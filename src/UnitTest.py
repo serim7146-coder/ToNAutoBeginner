@@ -18452,6 +18452,78 @@ class TestHotKey(unittest.TestCase):
             self.assertIsNone(HotKey.capture(2.0))
 
 
+class TestAnnounceFold(unittest.TestCase):
+    """③ の音声ファイル12行は「アナウンス」（既定で閉じる）に畳む。音量の2つは外（下）"""
+
+    LABELS = ["続行ラウンド:", "Alternate:", "Midnight:", "Unbound:", "Fog:", "Ghost:",
+              "8 Pages(速度検知):", "Punish(速度検知):", "アイテムロスト:", "Intermission:",
+              "Foxy:", "主催リスト喪失:"]
+    VARS = ["v_voice_continue", "v_voice_alternate", "v_voice_midnight", "v_voice_unbound",
+            "v_voice_fog", "v_voice_ghost", "v_voice_8pages", "v_voice_punish",
+            "v_voice_item_lost", "v_voice_intermission", "v_voice_foxy", "v_voice_list_lost"]
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    @staticmethod
+    def _inside(widget, container) -> bool:
+        while widget is not None:
+            if widget is container:
+                return True
+            widget = widget.master
+        return False
+
+    def _all(self, root=None):
+        root = root or self.app
+        for child in root.winfo_children():
+            yield child
+            yield from self._all(child)
+
+    def _bound_to(self, option, var):
+        return [w for w in self._all()
+                if option in w.keys() and str(w.cget(option)) == str(var)]
+
+    def test_the_twelve_entries_are_in_the_fold_which_starts_closed(self):
+        fold = self.app._announce_frame
+        for name in self.VARS:
+            entries = self._bound_to("textvariable", getattr(self.app, name))
+            self.assertEqual(len(entries), 1, name)
+            self.assertTrue(self._inside(entries[0], fold.content), name)
+        self.assertEqual(fold.content.winfo_manager(), "", "既定で閉じている")
+
+    def test_the_two_volumes_stay_outside_below_the_fold(self):
+        fold = self.app._announce_frame
+        tool = self._bound_to("variable", self.app.v_volume)
+        window = self._bound_to("variable", self.app.v_wvol_enabled)
+        self.assertTrue(tool and window)
+        for widget in tool + window:
+            self.assertFalse(self._inside(widget, fold), widget)
+        parent = fold.master
+        order = parent.pack_slaves()
+
+        def slot(widget):
+            while widget.master is not parent:
+                widget = widget.master
+            return order.index(widget)
+
+        self.assertLess(order.index(fold), slot(tool[0]))
+        self.assertLess(slot(tool[0]), slot(window[0]), "並びは今のまま")
+
+    def test_opening_shows_the_rows_in_the_same_order(self):
+        fold = self.app._announce_frame
+        fold._toggle()
+        self.addCleanup(fold._toggle)
+        self.assertEqual(fold.content.winfo_manager(), "pack")
+        labels = [row.winfo_children()[0].cget("text") for row in fold.content.pack_slaves()]
+        self.assertEqual(labels, self.LABELS)
+
+
 class TestEmergencyKeyGui(unittest.TestCase):
     """GUI 側。App を1つ立てて確かめる"""
 
