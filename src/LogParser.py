@@ -48,6 +48,8 @@ RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
 RE_BEGIN_DONE = re.compile(r"^Verified$")
+VERIFIED_MARK = "Verified"      # 前絞りの印（Verified Round End も含む）
+ROUND_OVER_MARK = "RoundOver"
 # ToN側の綴りどおり（recieved）。本物のVerifiedにだけ続く行
 RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!$")
 # Beginが押されるとラウンドデータの取得が始まる。誰が押しても出る。

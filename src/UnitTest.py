@@ -53,6 +53,7 @@ import Recorder
 import SecretStore
 import FogEarlyRead
 import BeginDetect
+import VerifiedTracker
 import DebugLog
 import WindowVolume
 import ScreenCapture
@@ -17175,6 +17176,7 @@ class TestVerifiedStrafe(unittest.TestCase):
                                         lambda _m: None, window_idx=1)
         monitor.st.instance_type = instance_type
         monitor.st.round_end_seen = True
+        monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
         return monitor
 
     def _started(self, monitor, line="Verified"):
@@ -17205,7 +17207,7 @@ class TestVerifiedStrafe(unittest.TestCase):
         """不具合の再現: intermission 中の定期で横移動を始めない"""
         monitor = self._monitor()
         base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
-        monitor.st.periodic_phase = base
+        monitor._verified.last_periodic = base
         stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
 
         started = self._started(
@@ -17218,6 +17220,8 @@ class TestVerifiedStrafe(unittest.TestCase):
     def test_a_verified_before_the_round_end_does_not_strafe(self):
         monitor = self._monitor()
         monitor.st.round_end_seen = False
+        monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+        monitor._verified.on_round_over(0)
 
         started = self._started(monitor)
 
@@ -17252,6 +17256,8 @@ class TestVerifiedStrafe(unittest.TestCase):
         """Verified は Round End の後に来るので、横移動は必ず検知の最中に入る"""
         monitor = self._monitor()
         monitor.st.round_end_seen = False
+        monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+        monitor._verified.on_round_over(0)
 
         end = self._started(monitor, "Verified Round End")
         verified = self._started(monitor)
@@ -17595,6 +17601,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
                                         lambda _m: None, window_idx=1)
         monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
+        monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
         return monitor
 
     def _started(self, monitor, line=None):
@@ -17628,6 +17635,8 @@ class TestStringDownloadTrigger(unittest.TestCase):
                       config.INSTANCE_YAKIIMO, config.INSTANCE_PUBLIC):
             monitor = self._monitor(itype)
             monitor.st.round_end_seen = False
+            monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+            monitor._verified.on_round_over(0)
 
             started = self._started(monitor, self.END)
 
@@ -17639,6 +17648,8 @@ class TestStringDownloadTrigger(unittest.TestCase):
     def test_download_before_round_end_starts_nothing(self):
         monitor = self._monitor()
         monitor.st.round_end_seen = False
+        monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+        monitor._verified.on_round_over(0)
 
         self.assertEqual(self._started(monitor), [])
         self.assertFalse(monitor.st.speed_probe_done)
@@ -17696,19 +17707,21 @@ class TestStringDownloadTrigger(unittest.TestCase):
     def test_verified_periodic_guard_still_works(self):
         monitor = self._monitor()
         base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
-        monitor.st.periodic_phase = base
+        monitor._verified.last_periodic = base
         stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
 
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process(stamp.strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  Verified")
 
         self.assertFalse(monitor.st.begin_done)
-        self.assertEqual(monitor.st.periodic_phase, base + config.VERIFIED_PERIODIC_SEC)
+        self.assertEqual(monitor._verified.last_periodic, base + config.VERIFIED_PERIODIC_SEC)
 
 
     def test_verified_round_end_guard_still_works(self):
         monitor = self._monitor()
         monitor.st.round_end_seen = False
+        monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+        monitor._verified.on_round_over(0)
 
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process("Verified")
@@ -21407,7 +21420,10 @@ class TestRoundTypeObservation(unittest.TestCase):
              patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
             monitor._detect_instance_from_log()
 
-        self.assertEqual(self.written, [])
+        # 書いてよいのは定期 Verified の位相の1行だけ（BL）。ラウンドの行は書かない
+        self.assertFalse(any("round type" in m for m in self.written), self.written)
+        self.assertEqual(len(self.written), 1, self.written)
+        self.assertIn("定期 Verified の位相", self.written[0])
 
 
 class TestWaldoBareName(unittest.TestCase):
@@ -23068,6 +23084,289 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertEqual(SharedState.get_continue_round_count(), 0)
 
 
+class TestVerifiedTracker(unittest.TestCase):
+    """定期の Verified: 前回から300秒後。ラウンド中なら RoundOver の0〜1秒後へ遅れ、
+    次はそこから300秒後"""
+
+    P = 300.0
+
+    def setUp(self):
+        self.tr = VerifiedTracker.VerifiedTracker()
+
+    def _round(self, start, over, end=None):
+        self.tr.on_round_start(start)
+        self.tr.on_round_over(over)
+        if end is not None:
+            self.tr.on_round_end_verified(end)
+
+    def test_exactly_300_seconds_is_periodic(self):
+        self.tr.last_periodic = 1000.0
+        self.tr.on_round_end_verified(1100.0)
+        self.assertEqual(self.tr.on_verified(1300.0, False), VerifiedTracker.PERIODIC)
+        self.assertEqual(self.tr.last_periodic, 1300.0)
+
+    def test_a_due_during_a_round_comes_just_after_round_over(self):
+        self.tr.last_periodic = 1000.0
+        self._round(1200.0, 1400.0)                          # 予定 1300 はラウンド中
+        self.assertEqual(self.tr.on_verified(1401.0, False), VerifiedTracker.PERIODIC)
+        self.assertEqual(self.tr.last_periodic, 1401.0)
+        self.tr.on_round_end_verified(1413.0)
+        self.assertEqual(self.tr.on_verified(1701.0, False), VerifiedTracker.PERIODIC,
+                         "次はそこから300秒")
+
+    def test_without_a_phase_the_one_after_round_over_is_periodic(self):
+        self._round(100.0, 400.0)
+        self.assertEqual(self.tr.on_verified(400.0, False), VerifiedTracker.PERIODIC)
+        self.assertEqual(self.tr.last_periodic, 400.0, "位相を掴む")
+
+    def test_after_round_over_but_not_due_is_ignored(self):
+        self.tr.last_periodic = 1000.0
+        self._round(1100.0, 1250.0)                          # 予定 1300 はまだ
+        self.assertEqual(self.tr.on_verified(1251.0, False), VerifiedTracker.IGNORE)
+        self.assertEqual(self.tr.last_periodic, 1000.0, "位相は動かさない")
+
+    def test_after_round_over_is_only_two_seconds(self):
+        self._round(100.0, 400.0)
+        self.assertEqual(self.tr.on_verified(403.0, False), VerifiedTracker.IGNORE,
+                         "Verified Round End より前（RoundOver 直後以外）")
+
+    def test_an_off_schedule_verified_while_waiting_for_begin_is_begin(self):
+        self.tr.last_periodic = 1000.0
+        self._round(1050.0, 1150.0, 1163.0)
+        self.assertEqual(self.tr.on_verified(1190.0, False), VerifiedTracker.BEGIN)
+        self.assertEqual(self.tr.last_periodic, 1000.0)
+
+    def test_one_on_schedule_is_begin_only_if_just_pressed(self):
+        for pressed, expected in ((True, VerifiedTracker.BEGIN),
+                                  (False, VerifiedTracker.PERIODIC)):
+            tr = VerifiedTracker.VerifiedTracker()
+            tr.last_periodic = 1000.0
+            tr.on_round_end_verified(1200.0)
+            self.assertEqual(tr.on_verified(1300.0, pressed), expected, pressed)
+            self.assertEqual(tr.last_periodic, 1300.0, "どちらでも位相は更新")
+
+    def test_two_in_a_row_are_periodic_and_begin(self):
+        self.tr.last_periodic = 1000.0
+        self.tr.on_round_end_verified(1250.0)
+        self.assertEqual(self.tr.on_verified(1300.0, False), VerifiedTracker.PERIODIC)
+        self.assertEqual(self.tr.on_verified(1301.5, False), VerifiedTracker.BEGIN)
+
+    def test_the_tolerance_is_one_second(self):
+        for offset, expected in ((-1.5, VerifiedTracker.BEGIN), (-1.0, VerifiedTracker.PERIODIC),
+                                 (1.0, VerifiedTracker.PERIODIC), (1.5, VerifiedTracker.BEGIN)):
+            tr = VerifiedTracker.VerifiedTracker()
+            tr.last_periodic = 1000.0
+            tr.on_round_end_verified(1250.0)
+            self.assertEqual(tr.on_verified(1300.0 + offset, False), expected, offset)
+
+    def test_during_a_round_is_ignored(self):
+        self.tr.last_periodic = 1000.0
+        self.tr.on_round_start(1250.0)
+        self.assertEqual(self.tr.on_verified(1300.0, True), VerifiedTracker.IGNORE)
+        self.assertEqual(self.tr.last_periodic, 1000.0, "位相も動かさない")
+
+    def test_before_the_round_end_verified_is_ignored(self):
+        self._round(100.0, 200.0)
+        self.assertEqual(self.tr.on_verified(250.0, True), VerifiedTracker.IGNORE)
+
+    def test_a_begin_not_followed_becomes_the_phase(self):
+        self.tr.on_begin_not_followed(777.0)
+        self.assertEqual(self.tr.last_periodic, 777.0)
+
+
+class TestVerifiedInTheMonitor(unittest.TestCase):
+    """LogMonitor: 本物の行の時刻でトラッカーを進め、begin のときだけ受理（横移動）する"""
+
+    def _stamp(self, at):
+        return datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  "
+
+    def _monitor(self, path=None):
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _feed(self, monitor, at, body, clock=None):
+        with patch.object(LogMonitor.threading, "Thread") as thread, \
+             patch.object(SharedState, "get_speed_detect", return_value=True), \
+             patch.object(LogMonitor.time, "time", return_value=clock or at + 5000), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process(self._stamp(at) + body)
+        return [c.kwargs["target"].__func__.__name__ for c in thread.call_args_list
+                if "target" in c.kwargs and hasattr(c.kwargs["target"], "__func__")]
+
+    def test_only_begin_strafes(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        monitor = self._monitor()
+        self._feed(monitor, base, "This round is taking place at Facility (12) and the round type is Classic")
+        self._feed(monitor, base + 200, "RoundOver")
+        started = self._feed(monitor, base + 201, "Verified")      # 位相なし → RoundOver 直後の定期
+        self.assertNotIn("do_speed_strafe", started)
+        self.assertFalse(monitor.st.begin_done)
+        self.assertTrue(any("定期シグナル" in m for m in monitor.logs), monitor.logs)
+
+        self._feed(monitor, base + 213, "Verified Round End")
+        started = self._feed(monitor, base + 230, "Verified")      # 予定と合わない → 受理
+        self.assertIn("do_speed_strafe", started)
+        self.assertTrue(monitor.st.begin_done)
+
+    def test_the_next_periodic_after_a_continue_round_is_not_taken_for_begin(self):
+        """不具合の再現: 長い続行ラウンドの間に予定を迎え、RoundOver 直後に遅れて出た定期で
+        位相を直さないと、その300秒後の定期を Begin 待ちの受理と取り違えた"""
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        monitor = self._monitor()
+        monitor._verified.last_periodic = base
+        self._feed(monitor, base + 100, "This round is taking place at Facility (12) and the round type is Classic")
+        self._feed(monitor, base + 420, "RoundOver")                # 予定 base+300 はラウンド中
+        self._feed(monitor, base + 421, "Verified")                 # 遅れて出た定期
+        self._feed(monitor, base + 433, "Verified Round End")
+        self._feed(monitor, base + 500, "This round is taking place at Facility (12) and the round type is Classic")
+        self._feed(monitor, base + 690, "RoundOver")
+        self._feed(monitor, base + 703, "Verified Round End")
+
+        started = self._feed(monitor, base + 721, "Verified")       # base+421+300
+
+        self.assertNotIn("do_speed_strafe", started)
+        self.assertFalse(monitor.st.begin_done)
+
+    def test_a_press_just_before_makes_the_scheduled_one_a_begin(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        monitor = self._monitor()
+        monitor._verified.last_periodic = base
+        self._feed(monitor, base + 213, "Verified Round End")
+        monitor.st.last_begin_press_at = 50_000.0
+        started = self._feed(monitor, base + 300, "Verified", clock=50_000.0 + config.BEGIN_PRESS_RECENT_SEC)
+        self.assertIn("do_speed_strafe", started)
+
+    def test_a_press_too_long_ago_does_not_count(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        monitor = self._monitor()
+        monitor._verified.last_periodic = base
+        self._feed(monitor, base + 213, "Verified Round End")
+        monitor.st.last_begin_press_at = 50_000.0
+        started = self._feed(monitor, base + 300, "Verified",
+                             clock=50_000.0 + config.BEGIN_PRESS_RECENT_SEC + 0.5)
+        self.assertNotIn("do_speed_strafe", started)
+
+    def test_the_fallback_still_learns_the_phase(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        monitor = self._monitor()
+        self._feed(monitor, base + 13, "Verified Round End")
+        self._feed(monitor, base + 50, "Verified")
+        monitor.st.log_now = base + 50 + config.VERIFIED_ROUND_START_WAIT_SEC + 1
+        monitor._check_pending_verified()
+        self.assertEqual(monitor._verified.last_periodic, base + 50)
+
+    # ── 起動時に位相を取り戻す ───────────────────────
+    def _write_log(self, entries):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        tmp.write("\n".join(self._stamp(at) + body for at, body in entries) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return Path(tmp.name)
+
+    def test_the_phase_is_learned_from_the_last_30_minutes(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        start = "This round is taking place at Facility (12) and the round type is Classic"
+        entries = [(base, "User Authenticated: a (usr_0e01408a)"),
+                   (base + 1, "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"),
+                   (base + 100, start), (base + 400, "RoundOver"),
+                   (base + 401, "Verified"),                            # 遅れて出た定期
+                   (base + 413, "Verified Round End"),
+                   (base + 430, "Verified"), (base + 443, start),        # 本物の受理
+                   (base + 600, "RoundOver"), (base + 613, "Verified Round End")]
+        written = []
+        monitor = self._monitor(self._write_log(entries))
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None), \
+             patch.object(DebugLog, "write", side_effect=written.append):
+            monitor._detect_instance_from_log()
+
+        self.assertEqual(monitor._verified.last_periodic, base + 401)
+        self.assertTrue(any("定期 Verified の位相を復元" in m for m in written), written)
+        self.assertFalse(any("位相" in m for m in monitor.logs), "公開ログには出さない")
+        started = self._feed(monitor, base + 701, "Verified")      # その300秒後
+        self.assertNotIn("do_speed_strafe", started)
+        self.assertFalse(monitor.st.begin_done)
+
+    def test_a_begin_not_followed_in_the_past_is_the_phase(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        entries = [(base, "User Authenticated: a (usr_0e01408a)"),
+                   (base + 1, "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"),
+                   (base + 10, "This round is taking place at Facility (12) and the round type is Classic"),
+                   (base + 100, "RoundOver"), (base + 113, "Verified Round End"),
+                   (base + 150, "Verified"), (base + 400, "Verified Round End")]
+        monitor = self._monitor(self._write_log(entries))
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None), \
+             patch.object(DebugLog, "write"):
+            monitor._detect_instance_from_log()
+        self.assertEqual(monitor._verified.last_periodic, base + 150)
+
+    def test_older_than_30_minutes_is_not_used(self):
+        base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
+        entries = [(base, "User Authenticated: a (usr_0e01408a)"),
+                   (base + 1, "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"),
+                   (base + 10, "This round is taking place at Facility (12) and the round type is Classic"),
+                   (base + 100, "RoundOver"), (base + 101, "Verified"),
+                   (base + 101 + config.VERIFIED_LEARN_BACK_SEC + 10, "Verified Round End")]
+        monitor = self._monitor(self._write_log(entries))
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None), \
+             patch.object(DebugLog, "write"):
+            monitor._detect_instance_from_log()
+        self.assertIsNone(monitor._verified.last_periodic)
+
+
+class TestBeginPressTime(unittest.TestCase):
+    """押した時刻を残すのは、カーソルを置けた差し込みと前面化＋クリック（連打そのものは入れない）"""
+
+    def _executor(self):
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=1)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+
+    def test_a_click_records_the_time(self):
+        ex, st = self._executor()
+        with patch.object(ex, "_begin_by_cursor", return_value=False), \
+             patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"), \
+             patch.object(WindowOperator, "click"), \
+             patch.object(ActionExecutor.time, "time", return_value=4242.0):
+            ex._press_begin()
+        self.assertEqual(st.last_begin_press_at, 4242.0)
+
+    def test_a_dip_that_landed_records_the_time(self):
+        ex, st = self._executor()
+
+        @contextlib.contextmanager
+        def landed(_hwnd, _reason=None):
+            yield True
+
+        with patch.object(WindowOperator, "cursor_over_window", side_effect=landed), \
+             patch.object(ex, "_wait_begin_accepted", return_value=True), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ActionExecutor.time, "time", return_value=5151.0):
+            ex._dip_cursor_for_begin("")
+        self.assertEqual(st.last_begin_press_at, 5151.0)
+
+    def test_a_dip_that_could_not_land_records_nothing(self):
+        ex, st = self._executor()
+
+        @contextlib.contextmanager
+        def missed(_hwnd, _reason=None):
+            yield False
+
+        with patch.object(WindowOperator, "cursor_over_window", side_effect=missed), \
+             patch.object(WindowOperator, "cursor_target", return_value=(None, "")), \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex._dip_cursor_for_begin("")
+        self.assertEqual(st.last_begin_press_at, 0.0)
+
+
 class TestLogMonitorBeginDone(unittest.TestCase):
     """`Verified` は Begin 受理以外に、300秒ちょうどの定期シグナルでも出る。
 
@@ -23082,7 +23381,8 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
-        monitor.st.periodic_phase = phase
+        monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
+        monitor._verified.last_periodic = phase or None
         monitor.logs = []
         monitor.logger = monitor.logs.append
         return monitor
@@ -23108,27 +23408,35 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         self._at(monitor, base + config.VERIFIED_PERIODIC_SEC)
 
         self.assertFalse(monitor.st.begin_done)
-        self.assertEqual(monitor.st.periodic_phase, base + config.VERIFIED_PERIODIC_SEC,
+        self.assertEqual(monitor._verified.last_periodic, base + config.VERIFIED_PERIODIC_SEC,
                          "位相を更新すること")
         self.assertTrue(any("定期シグナル" in m for m in monitor.logs), monitor.logs)
 
-    def test_a_missed_periodic_is_still_recognised(self):
-        """1回取りこぼしても、倍数で追いつける"""
+    def test_a_missed_periodic_is_picked_up_after_the_next_round_over(self):
+        """倍数では追わない（定期はラウンド中なら RoundOver 直後へ遅れて位相がずれる）。
+        取りこぼしても、次に RoundOver 直後に来た定期で位相を掴み直す"""
         base = self._base()
         monitor = self._monitor(phase=base)
-
         self._at(monitor, base + 2 * config.VERIFIED_PERIODIC_SEC)
+        self.assertTrue(monitor.st.begin_done, "予定から外れた Verified は受理")
+
+        over = base + 2 * config.VERIFIED_PERIODIC_SEC + 200
+        self._at(monitor, over - 150, "This round is taking place at Facility (12) "
+                                      "and the round type is Classic")
+        self._at(monitor, over, "RoundOver")
+        monitor.st.begin_done = False
+        self._at(monitor, over + 1)
 
         self.assertFalse(monitor.st.begin_done)
+        self.assertEqual(monitor._verified.last_periodic, over + 1)
 
     def test_too_far_is_not_periodic(self):
         base = self._base()
         monitor = self._monitor(phase=base)
 
-        self._at(monitor, base + (config.VERIFIED_PERIODIC_MAX_MULT + 1)
-                 * config.VERIFIED_PERIODIC_SEC)
+        self._at(monitor, base + 11 * config.VERIFIED_PERIODIC_SEC)
 
-        self.assertTrue(monitor.st.begin_done, "遠すぎる倍数は当てにしない")
+        self.assertTrue(monitor.st.begin_done, "予定（前回＋300秒）以外は当てにしない")
 
     def test_the_boundary_is_one_second(self):
         base = self._base()
@@ -23180,7 +23488,7 @@ class TestLogMonitorBeginDone(unittest.TestCase):
                                      "and the round type is Classic")
 
         self.assertEqual(monitor.st.pending_verified_time, 0.0)
-        self.assertEqual(monitor.st.periodic_phase, 0.0, "位相は書き換えない")
+        self.assertIsNone(monitor._verified.last_periodic, "位相は書き換えない")
 
     def test_no_round_start_learns_the_phase(self):
         base = self._base()
@@ -23190,12 +23498,12 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         # 待ち時間ちょうどではまだ待つ
         monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC
         monitor._check_pending_verified()
-        self.assertEqual(monitor.st.periodic_phase, 0.0)
+        self.assertIsNone(monitor._verified.last_periodic)
 
         monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC + 1
         monitor._check_pending_verified()
 
-        self.assertEqual(monitor.st.periodic_phase, base, "Verified の時刻で位相を取る")
+        self.assertEqual(monitor._verified.last_periodic, base, "Verified の時刻で位相を取る")
         self.assertEqual(monitor.st.pending_verified_time, 0.0)
 
     def test_the_phase_it_learned_is_used_next_time(self):
@@ -23216,6 +23524,8 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         base = self._base()
         monitor = self._monitor()
         monitor.st.round_end_seen = False
+        monitor._verified.on_round_start(0)          # RoundOver の後・Verified Round End の前
+        monitor._verified.on_round_over(0)
 
         self._at(monitor, base)
 

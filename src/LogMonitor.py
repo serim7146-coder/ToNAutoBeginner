@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -13,6 +14,7 @@ import DebugLog
 import Recorder
 import FogEarlyRead
 import ReadJson
+import VerifiedTracker
 import LogParser
 import MatchTNL
 import RoundDecision
@@ -73,6 +75,8 @@ class LogMonitor:
         self._running = False
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # 定期の Verified を見分ける（窓ごと。起動時の遡りで位相を取り戻す）
+        self._verified = VerifiedTracker.VerifiedTracker()
         self._action = ActionExecutor(
             cfg=cfg,
             st=self.st,
@@ -239,25 +243,6 @@ class LogMonitor:
                 "Alternate": self.cfg.voice_alternate,
                 "Ghost": self.cfg.voice_ghost}.get(round_type, "")
 
-    def _is_periodic_verified(self, at: float) -> bool:
-        """この Verified は定期シグナルか。位相からの差が300秒の倍数なら定期。
-
-        位置をまだ掴んでいないときは False（Begin を取りこぼさない側に倒す）。
-        時刻はログの時刻で見る——壁時計だと、ログの追いつきや負荷で処理が
-        遅れたときに、定期を Begin 受理と取り違える（実際に起きた不具合）。
-        """
-        st = self.st
-        if not st.periodic_phase or not at:
-            return False
-        delta = at - st.periodic_phase
-        period = config.VERIFIED_PERIODIC_SEC
-        if delta < period - config.VERIFIED_PERIODIC_TOL_SEC:
-            return False
-        mult = round(delta / period)
-        if mult > config.VERIFIED_PERIODIC_MAX_MULT:
-            return False
-        return abs(delta - mult * period) <= config.VERIFIED_PERIODIC_TOL_SEC
-
     def _check_pending_verified(self):
         """採用したVerifiedにラウンド開始が続かなければ、定期シグナルだった。
 
@@ -269,7 +254,7 @@ class LogMonitor:
             return
         if (st.log_now - st.pending_verified_time) <= config.VERIFIED_ROUND_START_WAIT_SEC:
             return
-        st.periodic_phase = st.pending_verified_time
+        self._verified.on_begin_not_followed(st.pending_verified_time)   # 保険
         st.pending_verified_time = 0.0
         self._log("直前の Verified は定期シグナルでした（ラウンド開始が来ない）")
 
@@ -369,7 +354,11 @@ class LogMonitor:
     # ラウンド開始・生存）
     _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
                          LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK,
-                         LogParser.ROUND_START_MARK, LogParser.LIVED_MARK)
+                         LogParser.ROUND_START_MARK, LogParser.LIVED_MARK,
+                         LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK)
+    # 定期の Verified の位相を取り戻すために集める行
+    _VERIFIED_LEARN_KINDS = (LogParser.EVENT_BEGIN_DONE, LogParser.EVENT_ROUND_START,
+                             LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END)
 
     def _detect_instance_from_log(self, end: Optional[int] = None):
         """監視開始の遡り。end は監視を始める位置（それより後の行は監視が読む）"""
@@ -383,6 +372,9 @@ class LogMonitor:
             # 最後の Joining より後（今のインスタンス）の生存と特殊ラウンド（3クラ）
             lived = 0
             round_types = []
+            # 定期の Verified の位相用（新しい順に溜まる。入室をまたいでよい）
+            verified_events = []
+            newest = None
             lines = self._iter_log_lines_reversed(
                 self.cfg.log_path,
                 config.LOG_START_SCAN_CHUNK_BYTES,
@@ -394,6 +386,13 @@ class LogMonitor:
                 event = LogParser.parse(line)
                 if not event:
                     continue
+
+                if event.kind in self._VERIFIED_LEARN_KINDS:
+                    at = LogParser.log_time(line)
+                    if at is not None:
+                        newest = at if newest is None else newest
+                        if newest - at <= config.VERIFIED_LEARN_BACK_SEC:
+                            verified_events.append((at, event.kind))
 
                 if not found_instance and event.kind in (
                         LogParser.EVENT_PLAYER_JOINED,
@@ -425,6 +424,7 @@ class LogMonitor:
 
                 if found_user and found_instance:
                     break
+            self._learn_verified_phase(list(reversed(verified_events)))
         except Exception as e:
             self._log(f"検出エラー: {e}")
         if self.st.players_known:
@@ -432,6 +432,37 @@ class LogMonitor:
                       f"{len(self._other_players())}人")
         else:
             self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
+
+    def _learn_verified_phase(self, events):
+        """起動時: 過去の Verified・開始・RoundOver・Verified Round End を古い順に
+        トラッカーへ流して、定期の位相を取り戻す（押した時刻はログに無いので False）。
+        受理のあと15秒以内に開始が無ければ定期（監視中の保険と同じ）。結果は
+        デバッグログにだけ書く"""
+        tracker = self._verified
+        pending = None
+        last = None
+        for at, kind in events:
+            last = at
+            if pending is not None and at - pending > config.VERIFIED_ROUND_START_WAIT_SEC:
+                tracker.on_begin_not_followed(pending)
+                pending = None
+            if kind == LogParser.EVENT_ROUND_START:
+                pending = None
+                tracker.on_round_start(at)
+            elif kind == LogParser.EVENT_ROUND_OVER:
+                tracker.on_round_over(at)
+            elif kind == LogParser.EVENT_VERIFIED_END:
+                tracker.on_round_end_verified(at)
+            elif tracker.on_verified(at, False) == VerifiedTracker.BEGIN:
+                pending = at
+        if (pending is not None and last is not None
+                and last - pending > config.VERIFIED_ROUND_START_WAIT_SEC):
+            tracker.on_begin_not_followed(pending)
+        if tracker.last_periodic is None:
+            self._debug("定期 Verified の位相: 過去のログに見つかりません")
+        else:
+            stamp = datetime.fromtimestamp(tracker.last_periodic).strftime("%H:%M:%S")
+            self._debug(f"定期 Verified の位相を復元: 最後 {stamp}")
 
     def _restore_three_wins(self, lived: int, round_types: list):
         """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、
@@ -1068,20 +1099,18 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_BEGIN_DONE:
-            # `Verified` はBegin受理専用のログではない。ラウンド結果の検証完了と
-            # 300秒ちょうどの定期シグナルでも同じ行が出る。定期は位相（前に定期
-            # だと分かった時刻）からの差が300秒の倍数になるので、それで見分ける。
-            # 後ろの行では見分けられない（定期でも Begin 由来でも String Download
-            # と Everything recieved が続く）
+            # `Verified` はBegin受理専用のログではない。定期シグナルでも同じ行が出る
+            # （後ろの行では見分けられない）。見分けは VerifiedTracker（ログの時刻と、
+            # 予定と重なった1回だけツールが直前に押したか）
             now = st.log_now
-            if self._is_periodic_verified(now):
-                st.periodic_phase = now
+            pressed = (st.last_begin_press_at > 0 and time.time() - st.last_begin_press_at
+                       <= config.BEGIN_PRESS_RECENT_SEC)
+            kind = self._verified.on_verified(now, pressed)
+            if kind == VerifiedTracker.PERIODIC:
                 self._log("Verified を無視（定期シグナル）")
                 return
-
-            # Begin は Verified Round End の後にしか押せない。それより前の Verified は
-            # 定義上 Begin 受理ではありえない（RoundOver直後のラウンド結果検証のもの）。
-            if not st.round_end_seen:
+            if kind == VerifiedTracker.IGNORE:
+                # Begin は Verified Round End の後にしか押せない
                 self._log("Verified を無視（Verified Round End より前）")
                 return
 
@@ -1136,6 +1165,7 @@ class LogMonitor:
                 SharedState.continue_round_end(st)
             st.in_round                    = True
             st.round_seq                  += 1
+            self._verified.on_round_start(st.log_now)
             st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
             st.round_end_seen              = False
             st.round_type                  = event.round_type
@@ -1281,6 +1311,7 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            self._verified.on_round_over(st.log_now)
             if self._action.chase_stop():
                 self._log("チェイス停止（ラウンド終了）")
             st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
@@ -1329,6 +1360,7 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_VERIFIED_END:
+            self._verified.on_round_end_verified(st.log_now)
             # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
             # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
             st.sus_players = []

@@ -645,6 +645,7 @@ class ActionExecutor:
                 time.sleep(config.BEGIN_CURSOR_GAP_SEC)
                 continue
             self._dip_landed = True
+            st.last_begin_press_at = time.time()   # カーソルを置けた＝押した
             if self._wait_begin_accepted(round_seq):
                 return True
         return False
@@ -737,6 +738,7 @@ class ActionExecutor:
                 return False
             self._log(f"Beginクリック{tail}")
             WindowOperator.click()
+            st.last_begin_press_at = time.time()
             # 離した直後に元の窓へ返す。Begin は押した瞬間に判定され、クリックの
             # 押す→離すの間で足りているので、別に待たない
             WindowOperator.return_front(loan)

@@ -176,15 +176,17 @@ BEGIN_LEFT_SEC        = 0.15   # 冒頭で左を重ねる時間（斜めにな�
 BEGIN_FORWARD_SEC_LATER = 3.2  # パニッシュ後
 BEGIN_LEFT_SEC_LATER  = 0.16   # パニッシュ後
 
-# `Verified` はBegin受理以外に、ラウンド結果の検証完了と約300秒周期の定期シグナルでも出る。
-# 判定に使うのは「前回の“定期シグナル”からの間隔」であって「前回のVerifiedからの
-# 間隔」ではない（定期の直前には24〜83秒間隔でラウンド由来のVerifiedが入るため）。
-# 周期は窓ごとに位相が違い、ドリフトもするので指数平滑で追従させる。
-# 定期シグナルの Verified はぴったり300秒ごと（実ログで27回連続、ぶれ0）。
-# 位相（最後に定期だと分かった時刻）からの差が300秒の倍数なら定期と見なす
+# `Verified` は Begin の受理のほかに、定期シグナルでも出る（VerifiedTracker）。
+# 手元のログ全部で調べた規則（2026-09-30）: 定期は前回の定期から300秒後。その時点が
+# ラウンド中なら、そのラウンドの RoundOver の0〜1秒後まで遅れて出て、次はそこから
+# 300秒後（定期 4,294件のうち 300秒ちょうど 1,402件・RoundOver 直後 2,254件）。
+# 本物の受理はほぼ必ずラウンド開始の12〜13秒前。今までの見分け方との比較で、
+# 受理したのに始まらない取り違えが 206件 → 18件
 VERIFIED_PERIODIC_SEC      = 300.0
-VERIFIED_PERIODIC_TOL_SEC  = 1.0     # 予測からの許容ズレ
-VERIFIED_PERIODIC_MAX_MULT = 10      # 取りこぼしても復帰できるよう50分先まで見る
+VERIFIED_PERIODIC_TOL_SEC  = 1.0     # 予定からの許容ズレ
+VERIFIED_AFTER_OVER_SEC    = 2.0     # RoundOver からこの秒数以内の Verified は遅れて出た定期の候補
+BEGIN_PRESS_RECENT_SEC     = 3.0     # 予定と重なった1回を受理とみなす「直前に押した」の長さ（壁時計）
+VERIFIED_LEARN_BACK_SEC    = 1800.0  # 起動時に位相を取り戻すため遡るログの長さ
 # 採用した Verified の後、ラウンド開始が来るまでの実測は12〜13秒
 VERIFIED_ROUND_START_WAIT_SEC = 15.0
 VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
