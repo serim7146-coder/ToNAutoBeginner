@@ -24982,34 +24982,23 @@ class TestGuiRoundHelpers(unittest.TestCase):
         self.assertEqual(colors, list(StatisticsGUI.ROUND_CHART_COLORS[:3]))
         self.assertTrue(all(len(args) >= 4 for args, _kwargs in window.round_chart.polygons))
 
-    def test_filtered_rows_and_round_summary_reuses_cache_for_same_key(self):
+    def test_the_terror_stats_are_cached_per_filter(self):
+        """同じ条件なら手元の集計を撮り直さない。条件が変わったら捨てる"""
         window = type("FakeStatisticsWindow", (), {})()
-        window.rows = [{"round": "Unbound"}]
-        window._filter_cache_key = None
-        window._filter_cache_rows = []
-        window._filter_cache_round_rows = []
+        window._filter = None
         window._terror_stats_cache = {"unbound": (1, 1, [])}
         window._map_counts_cache = {1: [("Sewers", 1)]}
-        start = datetime(2026, 5, 1, 0)
-        end = datetime(2026, 5, 2, 0)
-        key = (1, start, end, ("Unbound",))
-
-        with patch.object(StatisticsGUI.Statistics, "filter_rows", return_value=window.rows) as mock_filter, \
-             patch.object(StatisticsGUI.Statistics, "round_summary", return_value=[("Unbound", 1, 1)]) as mock_summary:
-            first = StatisticsGUI.StatisticsWindow._filtered_rows_and_round_summary(
-                window, key, start, end, {"Unbound"}
-            )
-            second = StatisticsGUI.StatisticsWindow._filtered_rows_and_round_summary(
-                window, key, start, end, {"Unbound"}
-            )
-
-        self.assertEqual(first, second)
-        mock_filter.assert_called_once()
-        mock_summary.assert_called_once()
+        flt = RoundStore.Filter(start=0, end=10, rounds=frozenset({10}))
+        if flt != window._filter:
+            window._filter = flt
+            window._terror_stats_cache.clear()
+            window._map_counts_cache.clear()
         self.assertEqual(window._terror_stats_cache, {})
         self.assertEqual(window._map_counts_cache, {})
+        self.assertEqual(flt, RoundStore.Filter(start=0, end=10, rounds=frozenset({10})),
+                         "条件は値で比べる")
 
-    def test_terror_map_counts_are_cached_per_filtered_rows(self):
+    def test_terror_map_counts_are_cached_per_filter(self):
         class FakeTree:
             def __init__(self):
                 self.inserted = []
@@ -25023,15 +25012,16 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window = type("FakeStatisticsWindow", (), {})()
         window.terror_tree = FakeTree()
         window.map_tree = FakeTree()
-        window.filtered_rows = [{"round": "Classic", "terror_ids": [1], "map_id": 1}]
+        window._filter = None
         window._map_counts_cache = {}
         window._clear_tree = MagicMock()
+        window.store = MagicMock()
+        window.store.map_counts_for_terror.return_value = [(12, 1, 1)]
 
-        with patch.object(StatisticsGUI.Statistics, "map_counts_for_terror", return_value=[("Sewers", 1)]) as mock_counts:
-            StatisticsGUI.StatisticsWindow._on_terror_selected(window)
-            StatisticsGUI.StatisticsWindow._on_terror_selected(window)
+        StatisticsGUI.StatisticsWindow._on_terror_selected(window)
+        StatisticsGUI.StatisticsWindow._on_terror_selected(window)
 
-        mock_counts.assert_called_once_with(window.filtered_rows, 1)
+        window.store.map_counts_for_terror.assert_called_once_with(None, 1)
         self.assertEqual(window._clear_tree.call_count, 2)
         self.assertEqual(len(window.map_tree.inserted), 2)
 
@@ -25057,6 +25047,182 @@ class TestGuiRoundHelpers(unittest.TestCase):
 # ═══════════════════════════════════════════════
 #  ConnectDB.py
 # ═══════════════════════════════════════════════
+class TestRoundStoreAggregation(unittest.TestCase):
+    """集計は手元の SQLite で。数え方は今の Statistics と同じ"""
+
+    MINE, OTHER = -13, 7
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        self.store.add_own(10, 1, 1, 1, None, None, self.MINE)             # 自分（1人目）
+        self.rows = [
+            {"time": 100, "round": 10, "map_id": 12, "terror1": 201, "terror2": None,
+             "terror3": None, "transformed_uid": self.OTHER, "other_uids": [self.MINE, 9]},
+            {"time": 200, "round": 6, "map_id": 1, "terror1": 5, "terror2": 6,
+             "terror3": 7, "transformed_uid": self.OTHER, "other_uids": None},
+            {"time": 300, "round": 6, "map_id": 12, "terror1": 6, "terror2": 5,
+             "terror3": None, "transformed_uid": 8, "other_uids": None},
+            {"time": 90000, "round": 2, "map_id": 12, "terror1": 5, "terror2": None,
+             "terror3": None, "transformed_uid": 8, "other_uids": [9]},
+        ]
+        self.store.sync(lambda _since, _mine: list(self.rows))
+
+    def _dicts(self):
+        """今の画面が使っていた形（ConnectDB.round_row）"""
+        return [ConnectDB.round_row({"time": t, "round": r, "map_id": m, "terror1": a,
+                                     "terror2": b, "terror3": c, "transformed_uid": u,
+                                     "other_uids": uids_list(o)})
+                for t, r, m, a, b, c, u, o, _origin in self.store.rows()]
+
+    def test_the_round_summary_matches_the_old_counting(self):
+        new = Statistics.round_summary_from_counts(
+            (StatisticsGUI._round_name(rid), n, s) for rid, n, s in self.store.round_summary(RoundStore.Filter()))
+        self.assertEqual(new, Statistics.round_summary(self._dicts()))
+
+    def test_the_terror_statistics_match_the_old_counting(self):
+        for category in ("classic", "alternate", "unbound"):
+            ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
+            new = Statistics.analyze_terror_counts(self.store.terror_counts(RoundStore.Filter()),
+                                                   config.TERRORS, ids)
+            self.assertEqual(new, Statistics.analyze_terrors(self._dicts(), config.TERRORS, ids), category)
+
+    def test_the_map_counts_match_the_old_counting(self):
+        for tid in (5, 6, 201):
+            new = Statistics.map_counts_from_entries(
+                (m, StatisticsGUI._round_name(r), h)
+                for m, r, h in self.store.map_counts_for_terror(RoundStore.Filter(), tid))
+            self.assertEqual(new, Statistics.map_counts_for_terror(self._dicts(), tid), tid)
+
+    def test_mine_is_first_player_or_in_other_uids(self):
+        mine = RoundStore.Filter(mine=True)
+        self.assertEqual(sorted(r for r, _n, _s in self.store.round_summary(mine)), [1, 10])
+        self.assertEqual(sum(n for _r, n, _s in self.store.round_summary(RoundStore.Filter())), 5)
+
+    def test_mine_without_any_uid_is_empty(self):
+        store = RoundStore.RoundStore(Path(self._dir.name) / "empty.sqlite")
+        store.sync(lambda _since, _mine: list(self.rows))
+        self.assertEqual(store.round_summary(RoundStore.Filter(mine=True)), [])
+
+    def test_period_and_rounds_filter(self):
+        flt = RoundStore.Filter(start=150, end=350, rounds=frozenset({6}))
+        self.assertEqual(self.store.round_summary(flt), [(6, 2, 5)])
+        self.assertEqual(self.store.round_summary(RoundStore.Filter(rounds=frozenset())), [])
+
+    def test_the_start_of_the_period_excludes_earlier_rounds(self):
+        self.assertEqual(sum(n for _r, n, _s in self.store.round_summary(RoundStore.Filter(start=250))), 2)
+        self.assertEqual(sum(n for _r, n, _s in self.store.round_summary(RoundStore.Filter(end=250))), 3)
+
+    def test_only_candidate_terrors_make_the_slots(self):
+        """二項検定の枠数は、そのカテゴリの候補のテラーだけ（数え方の本体を直接確かめる）"""
+        ids = Statistics.candidate_ids_for_category("classic", config.TERRORS)
+        counts = self.store.terror_counts(RoundStore.Filter())
+        expected = sum(n for tid, n in counts.items() if tid in ids)
+        total, _candidates, _rows = Statistics.analyze_terror_counts(counts, config.TERRORS, ids)
+        self.assertEqual(total, expected)
+        self.assertLess(total, sum(counts.values()), "候補外（Unbound の 201）は入らない")
+
+    def test_the_same_round_name_or_map_is_added_up(self):
+        self.assertEqual(Statistics.round_summary_from_counts([("Fog", 2, 2), ("Fog", 3, 1)]),
+                         [("Fog", 5, 3)])
+        name = Statistics.map_name_for_id(12, "Classic")
+        self.assertEqual(Statistics.map_counts_from_entries([(12, "Classic", 1), (12, "Classic", 2)]),
+                         [(name, 3)])
+
+    def test_pairs_are_counted_in_either_order(self):
+        pairs = self.store.terror_pairs(RoundStore.Filter())
+        self.assertEqual(pairs[0], (5, 6, 2), "5-6 と 6-5 は同じ組")
+        self.assertIn((5, 7, 1), pairs)
+        self.assertIn((6, 7, 1), pairs)
+
+    def test_map_and_terror(self):
+        counts: dict = {}
+        for m, _r, t, n in self.store.map_terror_counts(RoundStore.Filter()):
+            counts[(m, t)] = counts.get((m, t), 0) + n            # ラウンドをまたいで足す
+        self.assertEqual(counts[(12, 5)], 2)
+        self.assertEqual(counts[(1, 5)], 1)
+
+    def test_players_per_round(self):
+        self.assertEqual(self.store.player_counts(RoundStore.Filter()), {1: 3, 2: 1, 3: 1})
+        self.assertEqual(self.store.player_counts(RoundStore.Filter(mine=True)), {1: 1, 3: 1})
+
+    def test_the_time_series_in_local_time(self):
+        day = self.store.time_series(RoundStore.Filter(), "day", 5)
+        first_day = datetime.fromtimestamp(config.DB_TIME_EPOCH + 10).strftime("%Y-%m-%d")
+        self.assertEqual(day[0], (first_day, 4, 2), "その日のラウンド数と、テラー5の枠数")
+        hours = dict((k, n) for k, n, _h in self.store.time_series(RoundStore.Filter(), "hour"))
+        self.assertEqual(sum(hours.values()), 5)
+        self.assertEqual(hours[datetime.fromtimestamp(config.DB_TIME_EPOCH + 90000).hour], 1)
+
+    def test_the_time_range(self):
+        self.assertEqual(self.store.time_range(), (10, 90000))
+
+
+def uids_list(text):
+    return RoundStore.uids_list(text)
+
+
+class TestStatisticsWindowV1(unittest.TestCase):
+    """統計画面を本物の Tk で開く（通信は差し替え。手元は一時フォルダ）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        self.store.add_own(100, 6, 12, 5, 6, None, -13)
+        self.store.add_own(200, 10, 12, 201, None, None, -13)
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+
+    def _open(self, fetch):
+        # 取り込みのスレッドはその場で回す（mainloop が無いと、別スレッドからの after を Tk が断る）
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=fetch),              patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            window = StatisticsGUI.StatisticsWindow(self.root, store=self.store)
+            for _ in range(400):
+                self.root.update()
+                if not window._rows_loading:
+                    break
+                time.sleep(0.005)
+        self.root.update()
+        return window
+
+    def test_it_has_the_five_tabs(self):
+        window = self._open(lambda s, m: [])
+        self.assertEqual([window.tabs.tab(t, "text") for t in window.tabs.tabs()],
+                         ["ラウンド", "テラー", "時間の流れ", "組み合わせ", "マルチ"])
+
+    def test_a_failed_update_still_shows_what_is_here(self):
+        def offline(_since, _mine):
+            raise OSError("offline")
+
+        window = self._open(offline)
+
+        self.assertEqual(window.v_status.get(), "更新できませんでした（手元の分を表示）")
+        self.assertEqual(len(window.round_legend.get_children()), 2, "手元の2ラウンド")
+        self.assertIn("手元 2件", window.v_info.get())
+
+    def test_the_multi_tab_only_for_my_share(self):
+        window = self._open(lambda s, m: [])
+        self.assertIn("自分の分", window.v_multi_note.get())
+        self.assertEqual(window.multi_tree.get_children(), ())
+
+        window.v_scope.set("mine")
+        window._analyze()
+
+        self.assertIn("ソロ 2", window.v_multi_note.get())
+        rows = [window.multi_tree.item(i, "values") for i in window.multi_tree.get_children()]
+        self.assertEqual(rows, [("1人", "2", "100.0")])
+
+    def test_the_combos_show_names_not_ids(self):
+        window = self._open(lambda s, m: [])
+        pairs = [window.pair_tree.item(i, "values") for i in window.pair_tree.get_children()]
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0][:2], (Statistics.terror_name(5, config.TERRORS),
+                                        Statistics.terror_name(6, config.TERRORS)))
+
+
 class TestGetTransformedUid(unittest.TestCase):
     def test_round_filters_url_encode_round_names(self):
         self.assertEqual(

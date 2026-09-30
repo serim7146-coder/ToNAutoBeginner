@@ -252,8 +252,21 @@ def round_summary(rows: list[dict[str, Any]]) -> list[tuple[str, int, int]]:
             slots[round_name] = slots.get(round_name, 0) + len(terror_ids)
         else:
             slots[round_name] = slots.get(round_name, 0)
+    return round_summary_from_counts(
+        (round_name, counts[round_name], slots.get(round_name, 0)) for round_name in counts)
+
+
+def round_summary_from_counts(entries) -> list[tuple[str, int, int]]:
+    """集計済みの [(ラウンド名, ラウンド数, 枠数)] をまとめて並べる（統計画面 v1 は
+    手元の SQLite の GROUP BY から渡す。数え方は round_summary と同じ）"""
+    counts: dict[str, int] = {}
+    slots: dict[str, int] = {}
+    for round_name, count, slot in entries:
+        name = str(round_name or "Unknown").strip() or "Unknown"
+        counts[name] = counts.get(name, 0) + int(count or 0)
+        slots[name] = slots.get(name, 0) + int(slot or 0)
     return sorted(
-        ((round_name, counts[round_name], slots.get(round_name, 0)) for round_name in counts),
+        ((round_name, counts[round_name], slots[round_name]) for round_name in counts),
         key=lambda item: (-item[1], item[0]),
     )
 
@@ -302,8 +315,7 @@ def analyze_terrors(
     terror_data: dict[str, dict[str, str]],
     candidate_ids: set[int],
 ) -> tuple[int, int, list[TerrorStatistic]]:
-    counts = {terror_id: 0 for terror_id in candidate_ids}
-    total_slots = 0
+    counts: dict[int, int] = {}
     for row in rows:
         terror_ids = row.get("terror_ids")
         if not isinstance(terror_ids, list):
@@ -313,10 +325,19 @@ def analyze_terrors(
                 tid = int(terror_id)
             except (TypeError, ValueError):
                 continue
-            if tid not in candidate_ids:
-                continue
             counts[tid] = counts.get(tid, 0) + 1
-            total_slots += 1
+    return analyze_terror_counts(counts, terror_data, candidate_ids)
+
+
+def analyze_terror_counts(
+    all_counts: dict[int, int],
+    terror_data: dict[str, dict[str, str]],
+    candidate_ids: set[int],
+) -> tuple[int, int, list[TerrorStatistic]]:
+    """{テラー: 出た枠数} から、候補ごとの出現回数と二項検定（数え方は analyze_terrors と
+    同じ。統計画面 v1 は手元の SQLite の GROUP BY から渡す）"""
+    counts = {terror_id: int(all_counts.get(terror_id, 0) or 0) for terror_id in candidate_ids}
+    total_slots = sum(counts.values())
 
     candidate_count = len(candidate_ids)
     if candidate_count == 0 or total_slots == 0:
@@ -340,7 +361,7 @@ def analyze_terrors(
 
 
 def map_counts_for_terror(rows: list[dict[str, Any]], terror_id: int) -> list[tuple[str, int]]:
-    counts: dict[str, int] = {}
+    entries = []
     for row in rows:
         terror_ids = row.get("terror_ids")
         if not isinstance(terror_ids, list):
@@ -354,6 +375,15 @@ def map_counts_for_terror(rows: list[dict[str, Any]], terror_id: int) -> list[tu
                 pass
         if hits == 0:
             continue
-        map_name = map_name_for_id(row.get("map_id"), str(row.get("round") or "").strip())
-        counts[map_name] = counts.get(map_name, 0) + hits
+        entries.append((row.get("map_id"), str(row.get("round") or "").strip(), hits))
+    return map_counts_from_entries(entries)
+
+
+def map_counts_from_entries(entries) -> list[tuple[str, int]]:
+    """[(map_id, ラウンド名, 回数)] をマップ名ごとにまとめて多い順に（数え方は
+    map_counts_for_terror と同じ）"""
+    counts: dict[str, int] = {}
+    for map_id, round_name, hits in entries:
+        map_name = map_name_for_id(map_id, str(round_name or "").strip())
+        counts[map_name] = counts.get(map_name, 0) + int(hits or 0)
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))

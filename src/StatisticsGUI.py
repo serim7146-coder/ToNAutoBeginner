@@ -10,6 +10,7 @@ import SharedState
 import UIFont
 import WindowOperator
 import ConnectDB
+import RoundStore
 import Statistics
 
 BG  = config.GUI_BG
@@ -24,7 +25,6 @@ ROUND_CHIP_COLUMNS = 6
 ROUND_CHIP_WIDTH = 21
 ROUND_CHIP_MIN_WIDTH = 158
 DEFAULT_EXCLUDED_ROUNDS = {"Classic", "Run"}
-FilterCacheKey = tuple[int, datetime, datetime, tuple[str, ...]]
 ROUND_CHART_COLORS = (
     "#accdff",
     "#a6e3a1",
@@ -115,32 +115,54 @@ def _round_count_sort_key(row: tuple[str, int, int]) -> tuple[int, tuple[int, in
     return (-count, _round_order_key(round_name))
 
 
+# 組み合わせのタブに出す行数（多い順）
+COMBO_ROWS = 200
+
+
+def _round_name(round_id) -> str:
+    """ラウンドの番号 → 名前（表に無い番号はその数字）"""
+    return config.ROUND_TYPE_NAMES.get(round_id, str(round_id))
+
+
+def _db_time(dt: datetime) -> int:
+    """ローカルの日時 → DB の time（2026-01-01 UTC からの秒）"""
+    return int(dt.timestamp()) - config.DB_TIME_EPOCH
+
+
+def _local(db_time: int) -> datetime:
+    return datetime.fromtimestamp(int(db_time) + config.DB_TIME_EPOCH)
+
+
 class StatisticsWindow(tk.Toplevel):
-    def __init__(self, parent):
+    """統計画面 v1。DB から差分だけ手元の SQLite（RoundStore）へ取り込み、集計は手元で行う。
+
+    タブ: ラウンド／テラー／時間の流れ／組み合わせ／マルチ。範囲は「全体」か「自分の分」
+    （1人目が自分か、other_uids に自分がいる行。ほかの人の uid は表示しない）
+    """
+
+    def __init__(self, parent, store=None):
         super().__init__(parent)
         self.title("ToN Statistics")
-        self.geometry("1180x880")
+        self.geometry("1180x900")
         self.minsize(980, 760)
         self.configure(bg=BG)
-        self.rows: list[dict] = []
-        self.filtered_rows: list[dict] = []
-        self._rows_revision = 0
-        self._filter_cache_key: FilterCacheKey | None = None
-        self._filter_cache_rows: list[dict] = []
-        self._filter_cache_round_rows: list[tuple[str, int, int]] = []
-        self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
-        self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
+        self.store = store or RoundStore.default_store()
         self._dt_vars: dict[str, dict[str, tk.IntVar]] = {}
         self.round_vars: dict[str, tk.BooleanVar] = {}
+        self._round_ids: dict[str, int] = {}
         self.v_terror_category = tk.StringVar(value="unbound")
+        self.v_scope = tk.StringVar(value="all")
         self._category_buttons: dict[str, tk.Button] = {}
-        self._round_stats_visible = False
         self._round_chart_rows: list[tuple[str, int, int]] = []
         self._round_chart_job: str | None = None
         self._rows_loading = False
-        self._loaded_deferred_rounds: set[str] = set()
-        self._loading_deferred_rounds: set[str] = set()
+        self._range_set = False
+        self._filter: RoundStore.Filter | None = None
+        self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
+        self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
+        self._selected_terror: int | None = None
         self.v_status = tk.StringVar(value="統計データ未読み込み")
+        self.v_info = tk.StringVar(value="")
         self._remember_own_window()      # 録画中だけキャプチャから外すため
         self._build_ui()
         self._load_rows_async()
@@ -162,15 +184,24 @@ class StatisticsWindow(tk.Toplevel):
         except tk.TclError:
             pass
 
+    # ── 画面 ─────────────────────────────────
     def _build_ui(self):
         controls = ttk.LabelFrame(self, text="集計条件", padding=8)
         controls.pack(fill="x", padx=12, pady=(12, 6))
+
+        scope = ttk.Frame(controls)
+        scope.pack(fill="x", pady=(0, 6))
+        ttk.Label(scope, text="範囲").pack(side="left", padx=(0, 6))
+        for text, value in (("全体", "all"), ("自分の分", "mine")):
+            ttk.Radiobutton(scope, text=text, value=value, variable=self.v_scope,
+                            command=self._analyze).pack(side="left", padx=(0, 8))
+        ttk.Label(scope, textvariable=self.v_info, foreground=SUB).pack(side="left", padx=(12, 0))
 
         period = ttk.Frame(controls)
         period.pack(fill="x", pady=(0, 8))
         self._make_datetime_picker(period, "開始", "start").pack(side="left", padx=(0, 18))
         self._make_datetime_picker(period, "終了", "end").pack(side="left", padx=(0, 18))
-        ttk.Button(period, text="再読み込み", command=self._load_rows_async).pack(side="left", padx=(0, 6))
+        ttk.Button(period, text="更新", command=self._load_rows_async).pack(side="left", padx=(0, 6))
         ttk.Button(period, text="集計", command=self._analyze).pack(side="left")
         ttk.Label(period, textvariable=self.v_status, foreground=YLW).pack(side="left", padx=(12, 0))
 
@@ -181,107 +212,18 @@ class StatisticsWindow(tk.Toplevel):
         ttk.Label(list_frame, text="ラウンド（複数選択）").pack(anchor="w")
         self.round_chip_frame = tk.Frame(list_frame, bg=BG)
         self.round_chip_frame.pack(fill="x", pady=(4, 0))
-
         round_buttons = ttk.Frame(rounds)
         round_buttons.pack(side="left", padx=(10, 0), anchor="n")
         ttk.Button(round_buttons, text="全選択", command=self._select_all_rounds).pack(fill="x", pady=(18, 4))
         ttk.Button(round_buttons, text="全解除", command=self._clear_round_selection).pack(fill="x")
 
-        self.main_pane = ttk.PanedWindow(self, orient="vertical")
-        self.main_pane.pack(fill="both", expand=True, padx=12, pady=6)
-
-        self.round_stats_frame = ttk.LabelFrame(self.main_pane, text="ラウンド統計", padding=8)
-        round_chart_body = ttk.Frame(self.round_stats_frame)
-        round_chart_body.pack(fill="both", expand=True)
-        round_chart_body.grid_columnconfigure(0, minsize=360, weight=3)
-        round_chart_body.grid_columnconfigure(1, minsize=440, weight=2)
-        round_chart_body.grid_columnconfigure(2, weight=0)
-        round_chart_body.grid_rowconfigure(0, weight=1)
-        self.round_chart = tk.Canvas(
-            round_chart_body,
-            bg=BG,
-            height=260,
-            highlightthickness=0,
-            bd=0,
-        )
-        self.round_chart.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        self.round_chart.bind("<Configure>", self._schedule_round_chart_draw)
-        self.round_legend = ttk.Treeview(
-            round_chart_body,
-            columns=("mark", "round", "count", "percent"),
-            show="headings",
-            height=8,
-        )
-        self.round_legend.heading("mark", text="")
-        self.round_legend.heading("round", text="ラウンド")
-        self.round_legend.heading("count", text="回数")
-        self.round_legend.heading("percent", text="%")
-        self.round_legend.column("mark", width=34, minwidth=34, anchor="center", stretch=False)
-        self.round_legend.column("round", width=260, minwidth=180, stretch=True)
-        self.round_legend.column("count", width=82, minwidth=70, anchor="e", stretch=False)
-        self.round_legend.column("percent", width=82, minwidth=70, anchor="e", stretch=False)
-        round_legend_scroll = ttk.Scrollbar(round_chart_body, orient="vertical", command=self.round_legend.yview)
-        self.round_legend.configure(yscrollcommand=round_legend_scroll.set)
-        self.round_legend.grid(row=0, column=1, sticky="nsew")
-        round_legend_scroll.grid(row=0, column=2, sticky="ns")
-
-        self.results_pane = ttk.PanedWindow(self.main_pane, orient="horizontal")
-        self.main_pane.add(self.results_pane, weight=4)
-
-        terror_frame = ttk.LabelFrame(self.results_pane, text="テラー出現回数", padding=8)
-        self.results_pane.add(terror_frame, weight=3)
-        category_bar = tk.Frame(terror_frame, bg=BG)
-        category_bar.pack(fill="x", pady=(0, 8))
-        for label, value in (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound")):
-            btn = tk.Button(
-                category_bar,
-                text=label,
-                command=lambda v=value: self._set_terror_category(v),
-                padx=14,
-                pady=3,
-                bd=1,
-                relief="raised",
-                bg=SUB,
-                fg=FG,
-                activebackground=ACC,
-                activeforeground=BG,
-                font=(UIFont.UI, 9, "bold"),
-            )
-            btn.pack(side="left", padx=(0, 6))
-            self._category_buttons[value] = btn
-        self._refresh_category_buttons()
-        self.terror_tree = ttk.Treeview(
-            terror_frame,
-            columns=("id", "name", "count", "expected", "p_value", "label"),
-            show="headings",
-        )
-        for col, text, width, anchor in (
-            ("id", "ID", 58, "e"),
-            ("name", "テラー", 260, "w"),
-            ("count", "回数", 86, "e"),
-            ("expected", "期待", 86, "e"),
-            ("p_value", "上側p値", 110, "e"),
-            ("label", "判定", 130, "w"),
-        ):
-            self.terror_tree.heading(col, text=text)
-            self.terror_tree.column(col, width=width, minwidth=48, anchor=anchor, stretch=(col == "name"))
-        terror_scroll = ttk.Scrollbar(terror_frame, orient="vertical", command=self.terror_tree.yview)
-        self.terror_tree.configure(yscrollcommand=terror_scroll.set)
-        self.terror_tree.pack(side="left", fill="both", expand=True)
-        terror_scroll.pack(side="left", fill="y")
-        self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
-
-        map_frame = ttk.LabelFrame(self.results_pane, text="選択テラーのマップ一覧", padding=8)
-        self.results_pane.add(map_frame, weight=2)
-        self.map_tree = ttk.Treeview(map_frame, columns=("map", "count"), show="headings")
-        self.map_tree.heading("map", text="マップ")
-        self.map_tree.heading("count", text="回数")
-        self.map_tree.column("map", width=260, minwidth=120, stretch=True)
-        self.map_tree.column("count", width=90, minwidth=60, anchor="e", stretch=False)
-        map_scroll = ttk.Scrollbar(map_frame, orient="vertical", command=self.map_tree.yview)
-        self.map_tree.configure(yscrollcommand=map_scroll.set)
-        self.map_tree.pack(side="left", fill="both", expand=True)
-        map_scroll.pack(side="left", fill="y")
+        self.tabs = ttk.Notebook(self)
+        self.tabs.pack(fill="both", expand=True, padx=12, pady=6)
+        self._build_round_tab()
+        self._build_terror_tab()
+        self._build_time_tab()
+        self._build_combo_tab()
+        self._build_multi_tab()
 
         ttk.Label(
             self,
@@ -289,6 +231,97 @@ class StatisticsWindow(tk.Toplevel):
             foreground=YLW,
         ).pack(anchor="w", padx=12, pady=(0, 10))
 
+    def _tab(self, text: str) -> ttk.Frame:
+        frame = ttk.Frame(self.tabs, padding=8)
+        self.tabs.add(frame, text=text)
+        return frame
+
+    def _tree(self, parent, columns) -> ttk.Treeview:
+        """[(列, 見出し, 幅, 寄せ)] の表（縦のスクロールつき）"""
+        body = ttk.Frame(parent)
+        body.pack(side="left", fill="both", expand=True)
+        tree = ttk.Treeview(body, columns=[c[0] for c in columns], show="headings")
+        for col, text, width, anchor in columns:
+            tree.heading(col, text=text)
+            tree.column(col, width=width, minwidth=48, anchor=anchor, stretch=(anchor == "w"))
+        scroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="left", fill="y")
+        return tree
+
+    def _build_round_tab(self):
+        tab = self._tab("ラウンド")
+        tab.grid_columnconfigure(0, minsize=360, weight=3)
+        tab.grid_columnconfigure(1, minsize=440, weight=2)
+        tab.grid_rowconfigure(0, weight=1)
+        self.round_chart = tk.Canvas(tab, bg=BG, height=260, highlightthickness=0, bd=0)
+        self.round_chart.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.round_chart.bind("<Configure>", self._schedule_round_chart_draw)
+        legend = ttk.Frame(tab)
+        legend.grid(row=0, column=1, sticky="nsew")
+        self.round_legend = self._tree(legend, (("mark", "", 34, "center"), ("round", "ラウンド", 260, "w"),
+                                                ("count", "回数", 82, "e"), ("percent", "%", 82, "e")))
+
+    def _build_terror_tab(self):
+        tab = self._tab("テラー")
+        pane = ttk.PanedWindow(tab, orient="horizontal")
+        pane.pack(fill="both", expand=True)
+        terror_frame = ttk.LabelFrame(pane, text="テラー出現回数", padding=8)
+        pane.add(terror_frame, weight=3)
+        category_bar = tk.Frame(terror_frame, bg=BG)
+        category_bar.pack(fill="x", pady=(0, 8))
+        for label, value in (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound")):
+            btn = tk.Button(category_bar, text=label, command=lambda v=value: self._set_terror_category(v),
+                            padx=14, pady=3, bd=1, relief="raised", bg=SUB, fg=FG,
+                            activebackground=ACC, activeforeground=BG, font=(UIFont.UI, 9, "bold"))
+            btn.pack(side="left", padx=(0, 6))
+            self._category_buttons[value] = btn
+        self._refresh_category_buttons()
+        body = ttk.Frame(terror_frame)
+        body.pack(fill="both", expand=True)
+        self.terror_tree = self._tree(body, (("id", "ID", 58, "e"), ("name", "テラー", 260, "w"),
+                                             ("count", "回数", 86, "e"), ("expected", "期待", 86, "e"),
+                                             ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")))
+        self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
+        map_frame = ttk.LabelFrame(pane, text="選択テラーのマップ一覧", padding=8)
+        pane.add(map_frame, weight=2)
+        self.map_tree = self._tree(map_frame, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
+
+    def _build_time_tab(self):
+        tab = self._tab("時間の流れ")
+        self.v_time_note = tk.StringVar(value="")
+        ttk.Label(tab, textvariable=self.v_time_note, foreground=YLW).pack(anchor="w")
+        self.day_chart = tk.Canvas(tab, bg=BG, height=240, highlightthickness=0, bd=0)
+        self.day_chart.pack(fill="both", expand=True, pady=(4, 8))
+        self.hour_chart = tk.Canvas(tab, bg=BG, height=240, highlightthickness=0, bd=0)
+        self.hour_chart.pack(fill="both", expand=True)
+        self._day_rows: list[tuple] = []
+        self._hour_rows: list[tuple] = []
+        for canvas in (self.day_chart, self.hour_chart):
+            canvas.bind("<Configure>", lambda _e: self._draw_time_charts())
+
+    def _build_combo_tab(self):
+        tab = self._tab("組み合わせ")
+        pane = ttk.PanedWindow(tab, orient="horizontal")
+        pane.pack(fill="both", expand=True)
+        pairs = ttk.LabelFrame(pane, text="一緒に出たテラーの組（2体以上のラウンド）", padding=8)
+        pane.add(pairs, weight=1)
+        self.pair_tree = self._tree(pairs, (("a", "テラー", 220, "w"), ("b", "テラー", 220, "w"),
+                                            ("count", "回数", 80, "e")))
+        maps = ttk.LabelFrame(pane, text="マップとテラーの組", padding=8)
+        pane.add(maps, weight=1)
+        self.map_terror_tree = self._tree(maps, (("map", "マップ", 220, "w"), ("terror", "テラー", 220, "w"),
+                                                 ("count", "回数", 80, "e")))
+
+    def _build_multi_tab(self):
+        tab = self._tab("マルチ")
+        self.v_multi_note = tk.StringVar(value="")
+        ttk.Label(tab, textvariable=self.v_multi_note, foreground=YLW).pack(anchor="w", pady=(0, 6))
+        self.multi_tree = self._tree(tab, (("players", "見た人数", 120, "e"), ("count", "ラウンド数", 120, "e"),
+                                           ("percent", "%", 100, "e")))
+
+    # ── 期間 ─────────────────────────────────
     def _make_datetime_picker(self, parent, label: str, key: str) -> ttk.Frame:
         frame = ttk.Frame(parent)
         ttk.Label(frame, text=label).pack(side="left", padx=(0, 4))
@@ -333,97 +366,64 @@ class StatisticsWindow(tk.Toplevel):
             return datetime(year, month, day, hour, 59, 59)
         return datetime(year, month, day, hour, 0, 0)
 
+    # ── 取り込み（差分だけ DB から）──────────────────────
     def _load_rows_async(self):
         if self._rows_loading:
             return
         self._rows_loading = True
-        self.v_status.set("統計データ取得中...")
-        self._loaded_deferred_rounds.clear()
-        self._loading_deferred_rounds.clear()
-        self._clear_round_stats()
-        self._clear_tree(self.terror_tree)
-        self._clear_tree(self.map_tree)
+        self.v_status.set("統計データ更新中...")
         threading.Thread(target=self._load_rows_worker, daemon=True).start()
 
     def _load_rows_worker(self):
+        ok = self.store.sync(ConnectDB.fetch_rounds)
         try:
-            rows = ConnectDB.get_ToNRoundStatistics()
-            self.after(0, lambda: self._on_rows_loaded(rows, None))
-        except Exception as e:
-            self.after(0, lambda error=e: self._on_rows_loaded([], error))
+            self.after(0, lambda: self._on_rows_loaded(ok))
+        except (tk.TclError, RuntimeError):
+            pass                     # 取り込みの間に閉じた
 
-    def _on_rows_loaded(self, rows: list[dict], error: Exception | None):
+    def _on_rows_loaded(self, ok: bool):
         self._rows_loading = False
-        if error:
-            self.v_status.set(f"取得エラー: {error}")
-            return
-        self.rows = rows
-        self._rows_revision += 1
-        self._invalidate_analysis_cache()
+        self.v_info.set(f"最終更新 {datetime.now().strftime('%H:%M:%S')} / 手元 {self.store.count()}件")
         self._populate_rounds()
-        dates = sorted(dt for dt in (Statistics.row_datetime(row) for row in rows) if dt is not None)
-        if dates:
-            self._set_picker_datetime("start", dates[0])
-            self._set_picker_datetime("end", dates[-1])
-        self.v_status.set(f"{len(rows)}件取得")
+        if not self._range_set:
+            first, last = self.store.time_range()
+            if first is not None:
+                self._set_picker_datetime("start", _local(first))
+                self._set_picker_datetime("end", _local(last))
+                self._range_set = True
         self._analyze()
+        if not ok:
+            self.v_status.set("更新できませんでした（手元の分を表示）")
 
+    # ── ラウンドの選択 ───────────────────────────
     def _populate_rounds(self):
+        previous = {name: var.get() for name, var in self.round_vars.items()}
         for child in self.round_chip_frame.winfo_children():
             child.destroy()
         self.round_vars.clear()
-        rounds = Statistics.available_rounds(self.rows)
+        self._round_ids = {_round_name(rid): rid for rid in self.store.available_rounds()}
         for col in range(ROUND_CHIP_COLUMNS):
-            self.round_chip_frame.grid_columnconfigure(
-                col,
-                minsize=ROUND_CHIP_MIN_WIDTH,
-                weight=1,
-                uniform="round_chip",
-            )
-
-        row = 0
-        col = 0
-        for display_name, round_name in _ordered_round_entries(rounds):
+            self.round_chip_frame.grid_columnconfigure(col, minsize=ROUND_CHIP_MIN_WIDTH, weight=1,
+                                                       uniform="round_chip")
+        row = col = 0
+        for display_name, round_name in _ordered_round_entries(list(self._round_ids)):
             if round_name is None:
                 if col:
                     row += 1
                     col = 0
-                separator = tk.Frame(self.round_chip_frame, bg=ACC, height=1)
-                separator.grid(
-                    row=row,
-                    column=0,
-                    columnspan=ROUND_CHIP_COLUMNS,
-                    sticky="ew",
-                    padx=4,
-                    pady=(6, 5),
-                )
+                tk.Frame(self.round_chip_frame, bg=ACC, height=1).grid(
+                    row=row, column=0, columnspan=ROUND_CHIP_COLUMNS, sticky="ew", padx=4, pady=(6, 5))
                 row += 1
                 continue
-
-            var = tk.BooleanVar(value=round_name not in DEFAULT_EXCLUDED_ROUNDS)
+            var = tk.BooleanVar(value=previous.get(round_name, round_name not in DEFAULT_EXCLUDED_ROUNDS))
             self.round_vars[round_name] = var
-            chip = tk.Checkbutton(
-                self.round_chip_frame,
-                text=display_name,
-                variable=var,
-                indicatoron=False,
-                command=self._style_round_chips,
-                bg=SUB,
-                fg=FG,
-                selectcolor=ACC,
-                activebackground=ACC,
-                activeforeground=BG,
-                font=(UIFont.UI, 9, "bold"),
-                relief="raised",
-                bd=1,
-                width=ROUND_CHIP_WIDTH,
-                padx=0,
-                pady=4,
-                anchor="center",
-            )
+            chip = tk.Checkbutton(self.round_chip_frame, text=display_name, variable=var, indicatoron=False,
+                                  command=self._style_round_chips, bg=SUB, fg=FG, selectcolor=ACC,
+                                  activebackground=ACC, activeforeground=BG, font=(UIFont.UI, 9, "bold"),
+                                  relief="raised", bd=1, width=ROUND_CHIP_WIDTH, padx=0, pady=4,
+                                  anchor="center")
             chip.round_name = round_name
             chip.grid(row=row, column=col, padx=4, pady=4, sticky="ew")
-
             col += 1
             if col >= ROUND_CHIP_COLUMNS:
                 row += 1
@@ -443,63 +443,6 @@ class StatisticsWindow(tk.Toplevel):
     def _selected_rounds(self) -> set[str]:
         return {round_name for round_name, var in self.round_vars.items() if var.get()}
 
-    def _ensure_deferred_rounds_loaded(self, rounds: set[str]) -> bool:
-        missing = sorted(
-            (rounds & DEFAULT_EXCLUDED_ROUNDS)
-            - self._loaded_deferred_rounds
-            - self._loading_deferred_rounds
-        )
-        if not missing:
-            return True
-
-        self._loading_deferred_rounds.update(missing)
-        self.v_status.set(f"{', '.join(missing)} を追加ロード中...")
-        threading.Thread(target=self._load_deferred_rounds_worker, args=(missing,), daemon=True).start()
-        return False
-
-    def _load_deferred_rounds_worker(self, rounds: list[str]):
-        try:
-            rows = ConnectDB.get_ToNRoundStatistics(exclude_rounds=None, include_rounds=rounds)
-            self.after(0, lambda: self._on_deferred_rounds_loaded(rounds, rows, None))
-        except Exception as e:
-            self.after(0, lambda error=e: self._on_deferred_rounds_loaded(rounds, [], error))
-
-    def _on_deferred_rounds_loaded(self, rounds: list[str], rows: list[dict], error: Exception | None):
-        self._loading_deferred_rounds.difference_update(rounds)
-        if error:
-            self.v_status.set(f"{', '.join(rounds)} の追加ロードに失敗: {error}")
-            return
-
-        self._loaded_deferred_rounds.update(rounds)
-        existing_keys = {
-            (
-                row.get("created_at"),
-                row.get("round"),
-                row.get("map_id"),
-                tuple(row.get("terror_ids") or []),
-                row.get("transformed_uid"),
-            )
-            for row in self.rows
-        }
-        added = 0
-        for row in rows:
-            key = (
-                row.get("created_at"),
-                row.get("round"),
-                row.get("map_id"),
-                tuple(row.get("terror_ids") or []),
-                row.get("transformed_uid"),
-            )
-            if key not in existing_keys:
-                self.rows.append(row)
-                existing_keys.add(key)
-                added += 1
-        if added:
-            self._rows_revision += 1
-            self._invalidate_analysis_cache()
-        self.v_status.set(f"{', '.join(rounds)} を{len(rows)}件追加ロード")
-        self._analyze()
-
     def _style_round_chips(self):
         for child in self.round_chip_frame.winfo_children():
             if not isinstance(child, tk.Checkbutton):
@@ -507,11 +450,8 @@ class StatisticsWindow(tk.Toplevel):
             round_name = getattr(child, "round_name", child.cget("text"))
             var = self.round_vars.get(round_name)
             selected = bool(var and var.get())
-            child.configure(
-                bg=ACC if selected else SUB,
-                fg=BG if selected else FG,
-                relief="sunken" if selected else "raised",
-            )
+            child.configure(bg=ACC if selected else SUB, fg=BG if selected else FG,
+                            relief="sunken" if selected else "raised")
 
     def _set_terror_category(self, category: str):
         if self.v_terror_category.get() == category:
@@ -524,11 +464,15 @@ class StatisticsWindow(tk.Toplevel):
         active = self.v_terror_category.get()
         for category, btn in self._category_buttons.items():
             selected = category == active
-            btn.configure(
-                bg=ACC if selected else SUB,
-                fg=BG if selected else FG,
-                relief="sunken" if selected else "raised",
-            )
+            btn.configure(bg=ACC if selected else SUB, fg=BG if selected else FG,
+                          relief="sunken" if selected else "raised")
+
+    # ── 集計 ─────────────────────────────────
+    def _make_filter(self, start_at: datetime, end_at: datetime, rounds: set[str]) -> RoundStore.Filter:
+        return RoundStore.Filter(
+            start=_db_time(start_at), end=_db_time(end_at),
+            rounds=frozenset(self._round_ids[name] for name in rounds if name in self._round_ids),
+            mine=self.v_scope.get() == "mine")
 
     def _analyze(self):
         try:
@@ -537,75 +481,48 @@ class StatisticsWindow(tk.Toplevel):
         except (ValueError, tk.TclError) as e:
             messagebox.showerror("日時エラー", f"日時を確認してください: {e}", parent=self)
             return
-
         if start_at > end_at:
             messagebox.showerror("日時エラー", "開始日時は終了日時以前にしてください。", parent=self)
             return
-
         rounds = self._selected_rounds()
         if not rounds:
-            self.filtered_rows = []
-            self._clear_round_stats()
-            self._clear_tree(self.terror_tree)
-            self._clear_tree(self.map_tree)
-            self._hide_round_stats()
+            self._clear_all()
             self.v_status.set("ラウンドを選択してください")
             return
-        if not self._ensure_deferred_rounds_loaded(rounds):
-            return
 
-        filter_key = self._make_filter_cache_key(start_at, end_at, rounds)
-        self.filtered_rows, round_rows = self._filtered_rows_and_round_summary(filter_key, start_at, end_at, rounds)
-        if len(rounds) > 1 and len(round_rows) > 1:
-            self._show_round_stats(round_rows)
-        else:
-            self._hide_round_stats()
-
-        category = self.v_terror_category.get()
-        cached_terror_stats = self._terror_stats_cache.get(category)
-        if cached_terror_stats is None:
-            candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
-            cached_terror_stats = Statistics.analyze_terrors(
-                self.filtered_rows, config.TERRORS, candidate_ids
-            )
-            self._terror_stats_cache[category] = cached_terror_stats
-        total_slots, candidate_count, terror_rows = cached_terror_stats
-        self._render_terror_stats(terror_rows)
-        self._clear_tree(self.map_tree)
-        self.v_status.set(
-            f"{len(self.filtered_rows)}ラウンド / {total_slots}枠 / 候補{candidate_count}体"
-        )
-
-    def _make_filter_cache_key(
-        self,
-        start_at: datetime,
-        end_at: datetime,
-        rounds: set[str],
-    ) -> FilterCacheKey:
-        return (self._rows_revision, start_at, end_at, tuple(sorted(rounds)))
-
-    def _filtered_rows_and_round_summary(
-        self,
-        filter_key: FilterCacheKey,
-        start_at: datetime,
-        end_at: datetime,
-        rounds: set[str],
-    ) -> tuple[list[dict], list[tuple[str, int, int]]]:
-        if filter_key != self._filter_cache_key:
-            self._filter_cache_key = filter_key
-            self._filter_cache_rows = Statistics.filter_rows(self.rows, start_at, end_at, rounds)
-            self._filter_cache_round_rows = Statistics.round_summary(self._filter_cache_rows)
+        flt = self._make_filter(start_at, end_at, rounds)
+        if flt != self._filter:
+            self._filter = flt
             self._terror_stats_cache.clear()
             self._map_counts_cache.clear()
-        return self._filter_cache_rows, self._filter_cache_round_rows
+        round_rows = Statistics.round_summary_from_counts(
+            (_round_name(rid), count, slots) for rid, count, slots in self.store.round_summary(flt))
+        self._show_round_stats(round_rows)
 
-    def _invalidate_analysis_cache(self):
-        self._filter_cache_key = None
-        self._filter_cache_rows = []
-        self._filter_cache_round_rows = []
-        self._terror_stats_cache.clear()
-        self._map_counts_cache.clear()
+        category = self.v_terror_category.get()
+        stats = self._terror_stats_cache.get(category)
+        if stats is None:
+            candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
+            stats = Statistics.analyze_terror_counts(self.store.terror_counts(flt), config.TERRORS,
+                                                     candidate_ids)
+            self._terror_stats_cache[category] = stats
+        total_slots, candidate_count, terror_rows = stats
+        self._render_terror_stats(terror_rows)
+        self._clear_tree(self.map_tree)
+        self._render_time(flt)
+        self._render_combos(flt)
+        self._render_multi(flt)
+        total_rounds = sum(count for _name, count, _slots in round_rows)
+        self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
 
+    def _clear_all(self):
+        self._clear_round_stats()
+        for tree in (self.terror_tree, self.map_tree, self.pair_tree, self.map_terror_tree, self.multi_tree):
+            self._clear_tree(tree)
+        self._day_rows, self._hour_rows = [], []
+        self._draw_time_charts()
+
+    # ── ラウンドのタブ ─────────────────────────────
     def _clear_round_stats(self):
         self._round_chart_rows = []
         if self._round_chart_job is not None:
@@ -629,12 +546,8 @@ class StatisticsWindow(tk.Toplevel):
             tag = f"round_color_{index}"
             self.round_legend.tag_configure(tag, foreground=color)
             percent = count / total * 100
-            self.round_legend.insert(
-                "",
-                "end",
-                values=("■", _round_display_name(round_name), count, f"{percent:.1f}"),
-                tags=(tag,),
-            )
+            self.round_legend.insert("", "end", values=("■", _round_display_name(round_name), count,
+                                                        f"{percent:.1f}"), tags=(tag,))
 
     def _schedule_round_chart_draw(self, _event=None):
         if self._round_chart_job is not None:
@@ -644,27 +557,14 @@ class StatisticsWindow(tk.Toplevel):
                 pass
         self._round_chart_job = self.after(70, self._draw_round_chart)
 
-    def _draw_round_slice(
-        self,
-        canvas: tk.Canvas,
-        cx: float,
-        cy: float,
-        radius: float,
-        start: float,
-        extent: float,
-        color: str,
-    ):
+    def _draw_round_slice(self, canvas: tk.Canvas, cx: float, cy: float, radius: float,
+                          start: float, extent: float, color: str):
         steps = max(2, int(abs(extent) / 4) + 1)
         points = [(cx, cy)]
         for step in range(steps + 1):
             angle = math.radians(start + extent * step / steps)
             points.append((cx + radius * math.cos(angle), cy - radius * math.sin(angle)))
-        canvas.create_polygon(
-            *points,
-            fill=color,
-            outline=BG,
-            width=1,
-        )
+        canvas.create_polygon(*points, fill=color, outline=BG, width=1)
 
     def _draw_round_chart(self):
         self._round_chart_job = None
@@ -674,7 +574,6 @@ class StatisticsWindow(tk.Toplevel):
         total = sum(count for _, count, _ in rows)
         if total <= 0:
             return
-
         width = max(canvas.winfo_width(), 1)
         height = max(canvas.winfo_height(), 1)
         size = min(width, height) - 18
@@ -683,7 +582,6 @@ class StatisticsWindow(tk.Toplevel):
         radius = size / 2
         cx = width / 2
         cy = height / 2
-
         start = 90.0
         for index, (_round_name, count, _slots) in enumerate(rows):
             extent = count / total * 360
@@ -691,16 +589,8 @@ class StatisticsWindow(tk.Toplevel):
             slice_start = start - extent
             self._draw_round_slice(canvas, cx, cy, radius, slice_start, extent, color)
             start = slice_start
-
         inner = size * 0.38
-        canvas.create_oval(
-            cx - inner / 2,
-            cy - inner / 2,
-            cx + inner / 2,
-            cy + inner / 2,
-            fill=BG,
-            outline=BG,
-        )
+        canvas.create_oval(cx - inner / 2, cy - inner / 2, cx + inner / 2, cy + inner / 2, fill=BG, outline=BG)
         canvas.create_text(cx, cy - 8, text=str(total), fill=FG, font=(UIFont.UI, 18, "bold"))
         canvas.create_text(cx, cy + 14, text="rounds", fill=YLW, font=(UIFont.UI, 9))
 
@@ -708,33 +598,15 @@ class StatisticsWindow(tk.Toplevel):
         ordered_rows = sorted(rows, key=_round_count_sort_key)
         self._round_chart_rows = ordered_rows
         self._render_round_legend(ordered_rows)
-        if not self._round_stats_visible:
-            self.main_pane.insert(0, self.round_stats_frame, weight=2)
-            self._round_stats_visible = True
         self._schedule_round_chart_draw()
 
-    def _hide_round_stats(self):
-        if self._round_stats_visible:
-            self.main_pane.forget(self.round_stats_frame)
-            self._round_stats_visible = False
-        self._clear_round_stats()
-
+    # ── テラーのタブ ──────────────────────────────
     def _render_terror_stats(self, rows: list[Statistics.TerrorStatistic]):
         self._clear_tree(self.terror_tree)
         for row in rows:
-            self.terror_tree.insert(
-                "",
-                "end",
-                iid=str(row.terror_id),
-                values=(
-                    row.terror_id,
-                    row.name,
-                    row.count,
-                    f"{row.expected:.2f}",
-                    self._format_p_value(row.p_value),
-                    row.label,
-                ),
-            )
+            self.terror_tree.insert("", "end", iid=str(row.terror_id), values=(
+                row.terror_id, row.name, row.count, f"{row.expected:.2f}",
+                self._format_p_value(row.p_value), row.label))
 
     def _on_terror_selected(self, _event=None):
         selection = self.terror_tree.selection()
@@ -744,14 +616,94 @@ class StatisticsWindow(tk.Toplevel):
             terror_id = int(selection[0])
         except ValueError:
             return
+        self._selected_terror = terror_id
         self._clear_tree(self.map_tree)
         rows = self._map_counts_cache.get(terror_id)
         if rows is None:
-            rows = Statistics.map_counts_for_terror(self.filtered_rows, terror_id)
+            rows = Statistics.map_counts_from_entries(
+                (map_id, _round_name(rid), hits)
+                for map_id, rid, hits in self.store.map_counts_for_terror(self._filter, terror_id))
             self._map_counts_cache[terror_id] = rows
         for map_name, count in rows:
             self.map_tree.insert("", "end", values=(map_name, count))
+        if self._filter is not None:
+            self._render_time(self._filter)
 
+    # ── 時間の流れのタブ ───────────────────────────
+    def _render_time(self, flt: RoundStore.Filter):
+        tid = self._selected_terror
+        self._day_rows = self.store.time_series(flt, "day", tid)
+        self._hour_rows = self.store.time_series(flt, "hour", tid)
+        if tid is None:
+            self.v_time_note.set("ラウンド数（テラーのタブで選ぶと、そのテラーの出現数と割合）")
+        else:
+            self.v_time_note.set(f"{Statistics.terror_name(tid, config.TERRORS)} の出現数（ラウンド数に対する割合）")
+        self._draw_time_charts()
+
+    def _draw_time_charts(self):
+        tid = self._selected_terror
+        self._draw_bars(self.day_chart, "日ごと", [(str(k)[5:], n, hits) for k, n, hits in self._day_rows], tid)
+        by_hour = {int(k): (n, hits) for k, n, hits in self._hour_rows if k is not None}
+        self._draw_bars(self.hour_chart, "時間帯（0〜23時）",
+                        [(str(h), *by_hour.get(h, (0, 0))) for h in range(24)], tid)
+
+    def _draw_bars(self, canvas: tk.Canvas, title: str, rows, terror_id):
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 1)
+        height = max(canvas.winfo_height(), 1)
+        canvas.create_text(8, 10, text=title, anchor="w", fill=YLW, font=(UIFont.UI, 9))
+        values = [(label, hits if terror_id is not None else n, n) for label, n, hits in rows]
+        top = max((v for _l, v, _n in values), default=0)
+        if not values or top <= 0:
+            return
+        left, bottom, usable = 8, height - 18, height - 40
+        step = (width - 16) / len(values)
+        for index, (label, value, rounds) in enumerate(values):
+            x0 = left + index * step + 1
+            x1 = x0 + max(step - 2, 1)
+            y = bottom - usable * value / top
+            canvas.create_rectangle(x0, y, x1, bottom, fill=ACC, outline="")
+            if step >= 22:
+                canvas.create_text((x0 + x1) / 2, bottom + 9, text=label, fill=FG, font=(UIFont.UI, 7))
+                text = str(value) if terror_id is None else (
+                    f"{value}\n{value / rounds * 100:.0f}%" if rounds else str(value))
+                canvas.create_text((x0 + x1) / 2, y - 12, text=text, fill=FG, font=(UIFont.UI, 7))
+
+    # ── 組み合わせのタブ ───────────────────────────
+    def _render_combos(self, flt: RoundStore.Filter):
+        self._clear_tree(self.pair_tree)
+        for a, b, count in self.store.terror_pairs(flt)[:COMBO_ROWS]:
+            self.pair_tree.insert("", "end", values=(Statistics.terror_name(a, config.TERRORS),
+                                                     Statistics.terror_name(b, config.TERRORS), count))
+        self._clear_tree(self.map_terror_tree)
+        merged: dict[tuple[str, int], int] = {}
+        for map_id, rid, tid, count in self.store.map_terror_counts(flt):
+            key = (Statistics.map_name_for_id(map_id, _round_name(rid)), tid)
+            merged[key] = merged.get(key, 0) + count
+        ordered = sorted(merged.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
+        for (map_name, tid), count in ordered[:COMBO_ROWS]:
+            self.map_terror_tree.insert("", "end", values=(map_name, Statistics.terror_name(tid, config.TERRORS),
+                                                           count))
+
+    # ── マルチのタブ ──────────────────────────────
+    def _render_multi(self, flt: RoundStore.Filter):
+        self._clear_tree(self.multi_tree)
+        if not flt.mine:
+            self.v_multi_note.set("範囲を「自分の分」にすると表示します")
+            return
+        counts = self.store.player_counts(flt)
+        total = sum(counts.values())
+        if not total:
+            self.v_multi_note.set("自分の分のラウンドがありません")
+            return
+        solo = counts.get(1, 0)
+        self.v_multi_note.set(f"ソロ {solo}（{solo / total * 100:.1f}%） / "
+                              f"マルチ {total - solo}（{(total - solo) / total * 100:.1f}%）")
+        for players in sorted(counts):
+            self.multi_tree.insert("", "end", values=(f"{players}人", counts[players],
+                                                      f"{counts[players] / total * 100:.1f}"))
+
+    # ── 共通 ─────────────────────────────────
     def _clear_tree(self, tree: ttk.Treeview):
         items = tree.get_children()
         if items:

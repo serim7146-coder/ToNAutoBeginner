@@ -16,6 +16,7 @@ DB から取ったラウンドと、自分が送ったラウンドを貯める�
 """
 import sqlite3
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import config
@@ -59,6 +60,27 @@ def uids_list(text) -> list[int]:
         except ValueError:
             pass
     return out
+
+
+@dataclass(frozen=True)
+class Filter:
+    """集計の条件。時刻は DB と同じ（2026-01-01 UTC からの秒）。rounds は番号の集合
+    （None なら絞らない）。mine は「自分の分」（1人目が自分か、other_uids に自分がいる行）"""
+    start: int | None = None
+    end: int | None = None
+    rounds: frozenset | None = None
+    mine: bool = False
+
+
+# テラーの3列をまとめて1列として数えるための部分問い合わせ
+_TERRORS = ("select terror1 as tid, map_id, round, time from f where terror1 is not null "
+            "union all select terror2, map_id, round, time from f where terror2 is not null "
+            "union all select terror3, map_id, round, time from f where terror3 is not null")
+# 見た人数（1人目＋other_uids の数）
+_PLAYERS = ("case when other_uids is null or other_uids = '' then 1 "
+            "else 2 + length(other_uids) - length(replace(other_uids, ',', '')) end")
+# ローカル時刻（time は 2026-01-01 UTC からの秒）
+_LOCAL = "datetime(time + {epoch}, 'unixepoch', 'localtime')"
 
 
 class RoundStore:
@@ -183,6 +205,91 @@ class RoundStore:
                             (str(newest),))
             return True
         return bool(self._run(work, False))
+
+    # ── 集計（SQLite の GROUP BY。行を Python の辞書にしない）──────
+    def _where(self, con, flt: Filter):
+        clauses, params = [], []
+        if flt.start is not None:
+            clauses.append("time >= ?")
+            params.append(int(flt.start))
+        if flt.end is not None:
+            clauses.append("time <= ?")
+            params.append(int(flt.end))
+        if flt.rounds is not None:
+            ids = sorted(int(r) for r in flt.rounds)
+            clauses.append(f"round in ({','.join('?' * len(ids))})" if ids else "0")
+            params.extend(ids)
+        if flt.mine:
+            mine = sorted(uids_list(self._meta(con, "my_uids")))
+            if not mine:
+                clauses.append("0")
+            else:
+                ors = [f"transformed_uid in ({','.join('?' * len(mine))})"]
+                params.extend(mine)
+                for uid in mine:
+                    ors.append("(',' || ifnull(other_uids, '') || ',') like ?")
+                    params.append(f"%,{uid},%")
+                clauses.append("(" + " or ".join(ors) + ")")
+        return (" where " + " and ".join(clauses)) if clauses else "", params
+
+    def _query(self, flt: Filter, sql: str, extra=(), default=None):
+        """f（条件で絞った rounds）を使う問い合わせ"""
+        def work(con):
+            where, params = self._where(con, flt)
+            return con.execute(f"with f as (select * from rounds{where}) " + sql,
+                               (*params, *extra)).fetchall()
+        return self._run(work, [] if default is None else default)
+
+    def available_rounds(self) -> list[int]:
+        return [r[0] for r in self._run(
+            lambda con: con.execute("select distinct round from rounds order by round").fetchall(), [])]
+
+    def time_range(self, flt: Filter = Filter()):
+        """(最初, 最後) の time。無ければ (None, None)"""
+        rows = self._query(flt, "select min(time), max(time) from f")
+        return tuple(rows[0]) if rows else (None, None)
+
+    def round_summary(self, flt: Filter) -> list[tuple[int, int, int]]:
+        """[(ラウンドの番号, ラウンド数, テラーの枠数)]"""
+        return self._query(flt, "select round, count(*), sum((terror1 is not null) + "
+                                "(terror2 is not null) + (terror3 is not null)) from f group by round")
+
+    def terror_counts(self, flt: Filter) -> dict[int, int]:
+        """{テラー: 出た枠数}（3列をまとめて数える）"""
+        return dict(self._query(flt, f"select tid, count(*) from ({_TERRORS}) group by tid"))
+
+    def map_counts_for_terror(self, flt: Filter, terror_id: int) -> list[tuple]:
+        """[(map_id, ラウンドの番号, そのテラーの枠数)]"""
+        return self._query(flt, f"select map_id, round, count(*) from ({_TERRORS}) where tid = ? "
+                                "group by map_id, round", (int(terror_id),))
+
+    def time_series(self, flt: Filter, unit: str, terror_id: int | None = None) -> list[tuple]:
+        """日（unit='day'、'YYYY-MM-DD'）か時間帯（unit='hour'、0〜23）ごとの
+        [(区切り, ラウンド数, そのテラーの枠数)]。ローカル時刻で区切る"""
+        from config import DB_TIME_EPOCH
+        local = _LOCAL.format(epoch=int(DB_TIME_EPOCH))
+        key = f"date({local})" if unit == "day" else f"cast(strftime('%H', {local}) as integer)"
+        tid = -1 if terror_id is None else int(terror_id)
+        return self._query(flt, f"select {key} as k, count(*), sum((terror1 is ?) + (terror2 is ?)"
+                                " + (terror3 is ?)) from f group by k order by k", (tid, tid, tid))
+
+    def terror_pairs(self, flt: Filter) -> list[tuple[int, int, int]]:
+        """一緒に出たテラーの組 [(小さい方, 大きい方, 回数)]。多い順"""
+        pairs = " union all ".join(
+            f"select min({a}, {b}) as a, max({a}, {b}) as b from f "
+            f"where {a} is not null and {b} is not null"
+            for a, b in (("terror1", "terror2"), ("terror1", "terror3"), ("terror2", "terror3")))
+        return self._query(flt, f"select a, b, count(*) as n from ({pairs}) group by a, b "
+                                "order by n desc, a, b")
+
+    def map_terror_counts(self, flt: Filter) -> list[tuple]:
+        """[(map_id, ラウンドの番号, テラー, 枠数)]"""
+        return self._query(flt, f"select map_id, round, tid, count(*) from ({_TERRORS}) "
+                                "group by map_id, round, tid")
+
+    def player_counts(self, flt: Filter) -> dict[int, int]:
+        """{見た人数（1人目＋other_uids）: ラウンド数}"""
+        return dict(self._query(flt, f"select {_PLAYERS} as n, count(*) from f group by n"))
 
     def count(self) -> int:
         return int(self._run(lambda con: con.execute("select count(*) from rounds").fetchone()[0], 0))
