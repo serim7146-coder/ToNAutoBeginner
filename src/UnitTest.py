@@ -36,6 +36,7 @@ import ReadJson
 import MatchTNL
 import ProcessCheck
 import tkinter as tk
+from tkinter import ttk
 import ToolLauncher
 import HotKey
 import RoundSequence
@@ -2467,6 +2468,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -2519,6 +2521,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(data)),              patch.object(mainGUI, "save_settings", written.append):
             app._load_window_volume_settings = lambda _data: None
             app._load_fog_early_read_setting = lambda _data: None
+            app._load_launch_options_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app, written
 
@@ -4245,7 +4248,8 @@ class TestAppTabLifecycle(unittest.TestCase):
                 self.destroyed = True
 
         class NewTab:
-            def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None):
+            def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None,
+                         section_collapsed=None, on_section_toggled=None):
                 self.parent = parent
                 self.idx = idx
                 self.on_log_selected = on_log_selected
@@ -4259,6 +4263,8 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._on_tab_log_selected = lambda tab: None
         app._apply_tab_settings_live = lambda tab: None
         app._apply_saved_window_settings = lambda: None
+        app._tab_sections = {}
+        app._on_tab_section_toggled = lambda _key, _collapsed: None
         app.tabs = [OldTab(), OldTab()]
         old_tabs = list(app.tabs)
 
@@ -9624,6 +9630,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["win_count"], 6)
@@ -9678,6 +9685,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
             app._load_fog_early_read_setting = lambda _data: None
+            app._load_launch_options_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 
@@ -13094,6 +13102,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
         fake.v_freeze_rounds = {}
         fake._window_volume_settings = lambda: mainGUI.App._window_volume_settings(app)
         fake._fog_early_read_setting = lambda: {}
+        fake._launch_options_setting = lambda: {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(fake)
@@ -13708,6 +13717,7 @@ class TestSettingsLive(unittest.TestCase):
         fake._window_volume_settings = lambda: {}
         fake.v_fog_early_read = self.Var(True)
         fake._fog_early_read_setting = lambda: mainGUI.App._fog_early_read_setting(fake)
+        fake._launch_options_setting = lambda: {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(fake)
@@ -13720,7 +13730,7 @@ class TestSettingsLive(unittest.TestCase):
         self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
         self.assertNotIn("突入で全窓停止", src)
         self.assertNotIn("ラウンドごとの扱い", src)
-        self.assertIn('text="霧看破を使う（Friends・Invite+・Invite のみ）"', src)
+        self.assertIn('text="霧を即時判定する（Friends・Invite+・Invite のみ）"', src)   # BR
 
     # ── 窓ごとの設定を動作中も反映 ─────────────────────
     def _live_app(self, running=True):
@@ -14149,6 +14159,301 @@ class TestHeldItemRestored(unittest.TestCase):
         for lines, expected in cases:
             monitor, _log = self._restore([self.JOIN] + lines)
             self.assertEqual(monitor.st.held_item_id, expected, lines)
+
+
+class TestGuiTweaksBR(unittest.TestCase):
+    """BR: 画面の調整（本物の App を1つ作って見る。見た目そのものは依頼者が実機で確かめる）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        self.save = patch.object(self.app, "_schedule_settings_save")
+        self.saved = self.save.start()
+        self.addCleanup(self.save.stop)
+        for var in (self.app.v_freeze_8pages, self.app.v_freeze_punish,
+                    *self.app.v_freeze_rounds.values()):
+            var.set(False)
+        self.app._apply_freeze_settings()
+        self.addCleanup(SharedState.set_freeze_rounds, [])
+        self.addCleanup(SharedState.set_freeze_on_8pages, False)
+        self.addCleanup(SharedState.set_freeze_on_punish, False)
+
+    # ── 1・2. 名前 ───────────────────────────
+    def test_the_renamed_labels(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn('text="③ サウンド設定"', src)
+        self.assertNotIn("音声アナウンス設定", src)
+        self.assertIn('text="霧を即時判定する（Friends・Invite+・Invite のみ）"', src)
+        self.assertNotIn("霧看破を使う", src)
+
+    # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────
+    def _speed_check(self, text):
+        for row in self.app.winfo_children():
+            for child in row.winfo_children():
+                if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
+                    return child
+        self.fail(text)
+
+    def test_checking_a_speed_freeze_checks_the_same_round_entry_freeze(self):
+        for text, name, other in (("8 Pages検知でフリーズ", "8 Pages", "Punished"),
+                                  ("Punished検知でフリーズ", "Punished", "8 Pages")):
+            for var in self.app.v_freeze_rounds.values():
+                var.set(False)
+            self.saved.reset_mock()
+            self._speed_check(text).invoke()                 # 入れる
+
+            self.assertTrue(self.app.v_freeze_rounds[name].get(), name)
+            self.assertFalse(self.app.v_freeze_rounds[other].get(), "もう一方は変えない")
+            self.assertIn(name, SharedState.get_freeze_rounds(), "全窓の状態へ反映")
+            self.saved.assert_called()
+
+            self._speed_check(text).invoke()                 # 外す
+            self.assertTrue(self.app.v_freeze_rounds[name].get(), "外しても突入側はそのまま")
+
+    def test_unchecking_does_not_check_the_round_entry_side(self):
+        self.app.v_freeze_8pages.set(True)          # 読み込みなどで入っていた
+        self._speed_check("8 Pages検知でフリーズ").invoke()      # 外す
+        self.assertFalse(self.app.v_freeze_8pages.get())
+        self.assertFalse(self.app.v_freeze_rounds["8 Pages"].get(), "外すときは連動しない")
+
+    def test_the_round_entry_side_does_not_touch_the_speed_side(self):
+        self.app.v_freeze_rounds["8 Pages"].set(True)
+        self.app._apply_freeze_settings()
+        self.assertFalse(self.app.v_freeze_8pages.get())
+
+    def test_loading_does_not_link(self):
+        data = {"freeze_8pages": True, "freeze_punish": True, "freeze_rounds": []}
+        with patch.object(mainGUI, "load_settings", return_value=data), \
+             patch.object(self.app, "_load_tnl", lambda show_error=True: None), \
+             patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
+            self.app._load_saved_settings()
+        self.assertTrue(self.app.v_freeze_8pages.get())
+        self.assertFalse(self.app.v_freeze_rounds["8 Pages"].get())
+        self.assertFalse(self.app.v_freeze_rounds["Punished"].get())
+
+    def test_the_launch_options_are_loaded_at_start(self):
+        self.addCleanup(self.app.v_launch_options.set, "")
+        with patch.object(mainGUI, "load_settings", return_value={"launch_extra_options": "--x"}),              patch.object(self.app, "_load_tnl", lambda show_error=True: None),              patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
+            self.app._load_saved_settings()
+        self.assertEqual(self.app.v_launch_options.get(), "--x")
+
+    # ── 4. 並び ─────────────────────────────
+    def test_eight_pages_comes_before_punished(self):
+        rounds = list(config.ROUND_FREEZE_SELECTABLE)
+        self.assertLess(rounds.index("8 Pages"), rounds.index("Punished"))
+        self.assertEqual(list(self.app.v_freeze_rounds), rounds)
+
+    # ── 5. インスタンスタイプ ───────────────────────
+    def test_four_instance_types_in_this_order(self):
+        self.assertEqual(config.TON_INSTANCE_ACCESS_CHOICES,
+                         ("invite", "invite_plus", "friends", "friends_plus"))
+        self.assertEqual(config.TON_INSTANCE_ACCESS_DEFAULT, "invite_plus")
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        order = [src.index(f'ttk.Radiobutton(lf22, text="{label}"')
+                 for label in ("インバイト", "インバイト+", "フレンド", "フレンド+")]
+        self.assertEqual(order, sorted(order))
+
+    # ── 6. 起動オプション ────────────────────────
+    def test_the_launch_options_are_saved_and_restored(self):
+        self.app.v_launch_options.set("--foo --bar")
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        self.assertEqual(saved["launch_extra_options"], "--foo --bar")
+        for data, expected in (({"launch_extra_options": "--x"}, "--x"), ({}, ""),
+                               ({"launch_extra_options": 3}, ""),
+                               ({"launch_extra_options": ["--x"]}, ""),
+                               ({"launch_extra_options": None}, "")):
+            self.app.v_launch_options.set("前の値")
+            self.app._load_launch_options_setting(data)
+            self.assertEqual(self.app.v_launch_options.get(), expected, data)
+
+    def test_the_launch_options_start_empty(self):
+        self.assertEqual(mainGUI.App._launch_options_setting(
+            type("A", (), {"v_launch_options": tk.StringVar(self.app, value="")})()),
+            {"launch_extra_options": ""})
+
+    # ── 7. 窓タブの折りたたみ ──────────────────────
+    def _state(self, key):
+        return [tab.sections[key].collapsed for tab in self.app.tabs]
+
+    def _shown(self, key):
+        return [tab.sections[key].content.winfo_manager() == "pack" for tab in self.app.tabs]
+
+    def test_opening_one_opens_all_tabs_and_only_that_section(self):
+        count = len(self.app.tabs)
+        self.addCleanup(self.app._rebuild_tabs, count)
+        self.app._rebuild_tabs(3)
+        self.assertEqual(self._state("rounds"), [True] * 3, "既定は閉じる")
+
+        self.app.tabs[1].sections["rounds"]._toggle()
+
+        self.assertEqual(self._state("rounds"), [False] * 3)
+        self.assertEqual(self._shown("rounds"), [True] * 3)
+        self.assertEqual(self._state("assign"), [True] * 3, "もう一方の枠は変わらない")
+
+        self.app.tabs[2].sections["rounds"]._toggle()
+        self.assertEqual(self._state("rounds"), [True] * 3)
+        self.assertEqual(self._shown("rounds"), [False] * 3)
+
+    def test_rebuilt_tabs_keep_the_state(self):
+        count = len(self.app.tabs)
+        self.addCleanup(self.app._rebuild_tabs, count)
+        self.app._rebuild_tabs(2)
+        self.addCleanup(self.app._tab_sections.update, {"assign": True, "rounds": True})
+        self.app.tabs[0].sections["assign"]._toggle()
+        self.assertEqual(self._state("assign"), [False] * 2)
+        self.assertEqual(self._state("rounds"), [True] * 2, "もう一方の枠は変わらない")
+
+        self.app._rebuild_tabs(4)
+
+        self.assertEqual(self._state("assign"), [False] * 4)
+        self.assertEqual(self._shown("assign"), [True] * 4)
+        self.assertEqual(self._state("rounds"), [True] * 4)
+
+    def test_other_collapsibles_are_not_linked(self):
+        frame = mainGUI.CollapsibleFrame(self.app, text="x", collapsed=True)
+        self.addCleanup(frame.destroy)
+        frame._toggle()
+        self.assertFalse(frame.collapsed)
+        self.assertEqual(self._state("assign"), [True] * len(self.app.tabs))
+
+    # ── 8. 緊急停止のキーの行 ───────────────────────
+    def test_the_emergency_key_moved_to_the_start_key_row(self):
+        row = self.app.lbl_start_key.master
+        self.assertEqual(row.pack_slaves()[:5],
+                         [self.app.lbl_emergency, self.app.btn_capture_key, self.app.lbl_start_key,
+                          self.app.btn_capture_start_key, self.app.btn_clear_start_key])
+        self.assertNotIn(self.app.lbl_emergency, self.app.btn_start.master.pack_slaves())
+
+
+class TestLaunchOptionsBR(unittest.TestCase):
+    """BR: インスタンスタイプ4つのリンクと、起動オプションの欄"""
+
+    def test_the_four_links(self):
+        for access, kind in ((config.TON_INSTANCE_ACCESS_INVITE, "~private(u)~region"),
+                             (config.TON_INSTANCE_ACCESS_INVITE_PLUS, "~private(u)~canRequestInvite~region"),
+                             (config.TON_INSTANCE_ACCESS_FRIENDS, "~friends(u)~region"),
+                             (config.TON_INSTANCE_ACCESS_FRIENDS_PLUS, "~hidden(u)~region"),
+                             ("unknown", "~private(u)~region"), (None, "~private(u)~region")):
+            link = VRChatLauncher.build_ton_link("u", 0, region="jp", access=access)
+            self.assertIn(kind, link, access)
+            self.assertTrue(link.endswith("~region(jp)"), link)
+            self.assertIn(config.TON_WORLD_ID + ":", link)
+
+    def test_the_log_side_reads_them_as_private(self):
+        for access in config.TON_INSTANCE_ACCESS_CHOICES:
+            link = VRChatLauncher.build_ton_link("usr_x", 0, access=access)
+            suffix = link.split(":", 2)[-1]
+            self.assertEqual(LogMonitor.LogMonitor._parse_instance_type(suffix),
+                             config.INSTANCE_PRIVATE, access)
+
+    BASE = [str(Path("C:/VRChat.exe")), "--profile=0", "--no-vr"]
+
+    def test_no_extra_options_is_the_same_as_before(self):
+        for extra in ("", "   ", None):
+            self.assertEqual(VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0,
+                                                              extra_options=extra),
+                             self.BASE + list(config.LAUNCH_OPTION), repr(extra))
+
+    def test_extra_options_go_after_the_launch_option(self):
+        args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0,
+                                                extra_options=" --foo   --bar ")
+        self.assertEqual(args, self.BASE + list(config.LAUNCH_OPTION) + ["--foo", "--bar"])
+
+    def test_the_same_option_is_not_added_twice(self):
+        args = VRChatLauncher.build_launch_args(
+            Path("C:/VRChat.exe"), 0,
+            extra_options=f"{config.LAUNCH_OPTION[0]} --no-vr --foo --foo")
+        self.assertEqual(args, self.BASE + list(config.LAUNCH_OPTION) + ["--foo"])
+
+    def test_launch_one_passes_them(self):
+        with patch.object(VRChatLauncher.subprocess, "Popen") as popen:
+            VRChatLauncher.launch_one(Path("C:/VRChat.exe"), 0, extra_options="--foo")
+        self.assertEqual(popen.call_args.args[0][-1], "--foo")
+
+
+class TestHandsFreeSpeedDetectBR(unittest.TestCase):
+    """BR: 完全放置モードが効く窓（private）では速度検知を始めない。効かない窓は今のまま"""
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+        self.addCleanup(SharedState.set_speed_detect, config.SPEED_DETECT_ENABLED)
+        self.addCleanup(SharedState.set_hands_free, False)
+
+    def _monitor(self, instance_type):
+        monitor = LogMonitor.LogMonitor(WindowConfig(osc_port=9000), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.round_end_seen = True
+        monitor._verified.on_round_end_verified(0)
+        return monitor
+
+    def _started(self, call):
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            call()
+        return [c.kwargs["target"].__func__.__name__
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def test_the_probe(self):
+        for hands_free, itype, expected in ((True, config.INSTANCE_PRIVATE, False),
+                                            (True, config.INSTANCE_PUBLIC, True),
+                                            (False, config.INSTANCE_PRIVATE, True)):
+            SharedState.set_hands_free(hands_free)
+            monitor = self._monitor(itype)
+            started = self._started(monitor._start_speed_probe)
+            self.assertEqual("do_speed_detect" in started, expected, (hands_free, itype))
+
+    def test_the_strafe(self):
+        for hands_free, expected in ((True, False), (False, True)):
+            SharedState.set_hands_free(hands_free)
+            monitor = self._monitor(config.INSTANCE_PRIVATE)
+            started = self._started(lambda: monitor._process("Verified"))
+            self.assertEqual("do_speed_strafe" in started, expected, hands_free)
+
+    def _executor(self, itype):
+        st = WindowState(instance_type=itype)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=123, osc_port=9000), st,
+                                           lambda: True, lambda _m: None)
+        ex._speed_ready.set()
+        return ex, st
+
+    def test_the_executor_does_nothing_in_hands_free(self):
+        SharedState.set_hands_free(True)
+        ex, _st = self._executor(config.INSTANCE_PRIVATE)
+        ex._receiver = MagicMock()
+        with patch.object(ex, "move") as move, patch.object(ex, "_sample_speed") as sample, \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_speed_strafe()
+            ex.do_speed_detect()
+        move.assert_not_called()
+        sample.assert_not_called()
+
+    def test_the_executor_still_works_in_public(self):
+        SharedState.set_hands_free(True)
+        ex, st = self._executor(config.INSTANCE_PUBLIC)
+        receiver = MagicMock()
+        ex._receiver = receiver
+        calls = []
+
+        def sample(_r):
+            calls.append(1)
+            st.in_round = True                  # 1回で抜ける
+
+        with patch.object(ex, "move") as move, patch.object(ex, "_sample_speed", side_effect=sample), \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_speed_strafe()
+            ex.do_speed_detect()
+        self.assertTrue(move.called)
+        self.assertEqual(calls, [1])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -18794,11 +19099,13 @@ class TestSpeedDetect(unittest.TestCase):
             st, _logs, played = self._run(self.FakeReceiver(6.5), instance_type=itype)
             self.assertEqual(st.speed_round_kind, "8pages", itype)
 
-    def test_hands_free_is_silent(self):
+    def test_hands_free_does_not_detect(self):
+        """BR: 完全放置モードが効く窓では速度検知を動かさない（判定・フリーズ・音声のどれも）"""
         SharedState.set_hands_free(True)
         st, _logs, played = self._run(self.FakeReceiver(6.5))
 
-        self.assertEqual(st.speed_round_kind, "8pages", "判定自体はする")
+        self.assertEqual(st.speed_round_kind, "", "判定もしない")
+        self.assertFalse(st.speed_freeze_held)
         self.assertEqual(played, [])
 
     def test_toggle_off_does_nothing(self):
@@ -20201,6 +20508,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["emergency_stop_key"], "f9")
@@ -20466,15 +20774,16 @@ class TestStartKeyGui(unittest.TestCase):
         self.assertEqual(self.app.v_start_key.get(), "")
 
     # ── 窓の幅 ────────────────────────────────
-    def test_the_control_row_did_not_grow(self):
-        """別のPCで崩れた件（47aefa4 / 73e577c）があるので幅を増やさない"""
-        self.assertIsNot(self.app.lbl_start_key.master,
-                         self.app.lbl_emergency.master,
-                         "同じ行には入らないので次の行に置く")
-        self.app.update_idletasks()
-        self.assertLessEqual(self.app.lbl_start_key.master.winfo_reqwidth(),
-                             self.app.lbl_emergency.master.winfo_reqwidth(),
-                             "開始キーの行が操作の行より広くならないこと")
+    def test_the_emergency_key_is_on_the_start_key_row(self):
+        """BR: 緊急停止のキー設定はマクロ開始キーと同じ行の先頭。ボタンの行には置かない
+        （別のPCで崩れた件 47aefa4 / 73e577c があるので、ボタンの行は広げない）"""
+        row = self.app.lbl_start_key.master
+        self.assertIs(self.app.lbl_emergency.master, row)
+        self.assertIs(self.app.btn_capture_key.master, row)
+        self.assertIsNot(self.app.btn_start.master, row)
+        order = row.pack_slaves()
+        self.assertEqual(order[:3], [self.app.lbl_emergency, self.app.btn_capture_key,
+                                     self.app.lbl_start_key])
 
 
 class TestStartKeySettings(unittest.TestCase):
@@ -20514,12 +20823,14 @@ class TestStartKeySettings(unittest.TestCase):
             if valid:
                 app._load_window_volume_settings = lambda _data: None
                 app._load_fog_early_read_setting = lambda _data: None
+                app._load_launch_options_setting = lambda _data: None
                 mainGUI.App._load_saved_settings(app)
             else:
                 with patch.object(HotKey, "is_valid",
                                   side_effect=lambda k: k == "p"):
                     app._load_window_volume_settings = lambda _data: None
                     app._load_fog_early_read_setting = lambda _data: None
+                    app._load_launch_options_setting = lambda _data: None
                     mainGUI.App._load_saved_settings(app)
         return app
 
@@ -20541,6 +20852,7 @@ class TestStartKeySettings(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["start_key"], "f9")
@@ -20780,6 +21092,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app.v_desktop_mode = self.FakeVar(True)
         app.v_use_osc = self.FakeVar(True)
         app.v_ton_access = self.FakeVar(access or config.TON_INSTANCE_ACCESS_INVITE_PLUS)
+        app.v_launch_options = self.FakeVar("")
         app.v_launch_count = self.FakeVar(windows)
         app.tabs = []
         for i in range(windows):
@@ -20819,6 +21132,13 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
 
     def _links(self, launched):
         return [a[3] for a, _kw in launched]
+
+    def test_the_field_value_is_passed(self):
+        """BR: 起動のたびに、その時点の起動オプションの欄の値を渡す"""
+        app = self._app(windows=2)
+        app.v_launch_options = self.FakeVar("--foo")
+        launched, _box = self._launch(app)
+        self.assertEqual([kw.get("extra_options") for _a, kw in launched], ["--foo", "--foo"])
 
     def test_each_window_gets_its_own_new_instance(self):
         launched, box = self._launch(self._app(windows=3))
@@ -20910,6 +21230,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
             app._load_fog_early_read_setting = lambda _data: None
+            app._load_launch_options_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
 
         self.assertEqual(app.v_ton_access.get(), config.TON_INSTANCE_ACCESS_INVITE)
@@ -20956,8 +21277,16 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
             app._load_fog_early_read_setting = lambda _data: None
+            app._load_launch_options_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return getattr(app, var).get()
+
+    def test_all_four_are_restored_and_others_are_the_default(self):
+        for access in ("invite", "invite_plus", "friends", "friends_plus"):
+            self.assertEqual(self._load({"ton_instance_access": access}), access)
+        for bad in ("hidden", "public", 1, None):
+            self.assertEqual(self._load({"ton_instance_access": bad}),
+                             config.TON_INSTANCE_ACCESS_DEFAULT, bad)
 
     def test_the_join_check_is_saved_and_restored(self):
         app = self._app()
@@ -20967,6 +21296,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertIs(saved["join_world"], True)
@@ -20982,6 +21312,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["ton_instance_access"], config.TON_INSTANCE_ACCESS_INVITE)
@@ -21093,6 +21424,7 @@ class TestSettingsArePersisted(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
@@ -21122,6 +21454,7 @@ class TestSettingsArePersisted(unittest.TestCase):
                           return_value={"tnl_path": "C:/list/my.tnl"}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["tnl_path"], "C:/list/my.tnl")
@@ -21272,6 +21605,7 @@ class TestToolLauncherSettings(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -23112,6 +23446,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
                           return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -23240,6 +23575,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
              patch.object(HotKey, "is_valid", return_value=True):
             app._load_window_volume_settings = lambda _data: None
             app._load_fog_early_read_setting = lambda _data: None
+            app._load_launch_options_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 

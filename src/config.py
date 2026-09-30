@@ -200,7 +200,7 @@ VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 ROUND_FREEZE_SELECTABLE = [
-    "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "Punished", "8 Pages"
+    "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished"
 ]
 # 霧に入ったときの音声。既定では鳴らさない（仕組みと voice_fog の設定は残す）
 ANNOUNCE_FOG_ON_ENTRY = False
@@ -376,12 +376,20 @@ LAUNCH_OPTION = ["--enable-debug-gui", "--enable-sdk-log-levels", "--enable-udon
 # ── ToNワールド ──
 TON_WORLD_ID = "wrld_a61cdabe-1218-4287-9ffc-2a4d1414e5bd"  # Terrors of Nowhere
 TON_DEFAULT_REGION = "jp"
-# 起動時に作るインスタンスの公開範囲（全窓で共通）。インバイト+ は自分の招待を
-# 持っている人が友達を呼べるぶん、霧の看破は働かない（FogEarlyRead.EARLY_READ_ACCESS）
-TON_INSTANCE_ACCESS_INVITE      = "invite"
-TON_INSTANCE_ACCESS_INVITE_PLUS = "invite_plus"
-TON_INSTANCE_ACCESS_CHOICES     = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACCESS_INVITE_PLUS)
-TON_INSTANCE_ACCESS_DEFAULT     = TON_INSTANCE_ACCESS_INVITE_PLUS
+# 起動時に作るインスタンスの公開範囲（全窓で共通）。リンクの形:
+#   インバイト   ~private(usr)                    自分が呼んだ人だけ
+#   インバイト+  ~private(usr)~canRequestInvite   招待を持つ人が友達を呼べる
+#   フレンド     ~friends(usr)                    自分のフレンドが入れる
+#   フレンド+    ~hidden(usr)                     中にいる人のフレンドも入れる
+# 霧の即時判定（看破）が使えるのは Invite・Invite+・Friends だけ（フレンド+ では
+# 使えない。FogEarlyRead.EARLY_READ_ACCESS）。放置モード・自爆はどれでも private 扱い
+TON_INSTANCE_ACCESS_INVITE       = "invite"
+TON_INSTANCE_ACCESS_INVITE_PLUS  = "invite_plus"
+TON_INSTANCE_ACCESS_FRIENDS      = "friends"
+TON_INSTANCE_ACCESS_FRIENDS_PLUS = "friends_plus"
+TON_INSTANCE_ACCESS_CHOICES      = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACCESS_INVITE_PLUS,
+                                    TON_INSTANCE_ACCESS_FRIENDS, TON_INSTANCE_ACCESS_FRIENDS_PLUS)
+TON_INSTANCE_ACCESS_DEFAULT      = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
 # 的の位置は画面比率で持つ。スポーン地点と向きが固定なので毎回同じ位置に出る。

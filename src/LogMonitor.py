@@ -240,6 +240,8 @@ class LogMonitor:
         st = self.st
         if st.speed_probe_done or not SharedState.get_speed_detect():
             return
+        if self._hands_free():
+            return          # 完全放置モードの窓では速度検知を動かさない（ログも出さない）
         st.speed_probe_done = True
         self._log("速度検知 開始")
         self._start_daemon(self._action.do_speed_detect)
@@ -1239,6 +1241,7 @@ class LogMonitor:
             # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
             if (st.instance_type == config.INSTANCE_PRIVATE
                     and SharedState.get_speed_detect()
+                    and not self._hands_free()
                     and not st.speed_strafe_done):
                 st.speed_strafe_done = True
                 self._start_daemon(self._action.do_speed_strafe)

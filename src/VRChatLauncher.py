@@ -130,19 +130,23 @@ def latest_user_id(log_dir) -> Optional[str]:
 
 def build_ton_link(owner_user_id: str, index: int = 0,
                    region: str = None, access: str = None) -> Optional[str]:
-    """ToNの private インスタンスへの参加リンクを組み立てる。
+    """ToNの新規インスタンスへの参加リンクを組み立てる。
 
-    access が TON_INSTANCE_ACCESS_INVITE_PLUS ならインバイト+（招待を持つ人が
-    友達を呼べる）。省いたときは今までどおりインバイト
+    access（config.TON_INSTANCE_ACCESS_*）でインスタンスの種類を決める:
+    インバイト ~private(usr)・インバイト+ ~private(usr)~canRequestInvite・
+    フレンド ~friends(usr)・フレンド+ ~hidden(usr)。省略・知らない値はインバイト
     """
     if not owner_user_id:
         return None
     region = region or config.TON_DEFAULT_REGION
     number = new_instance_number(index)
-    plus = ("~canRequestInvite"
-            if access == config.TON_INSTANCE_ACCESS_INVITE_PLUS else "")
-    return ("vrchat://launch?ref=vrchat.com&id=%s:%d~private(%s)%s~region(%s)"
-            % (config.TON_WORLD_ID, number, owner_user_id, plus, region))
+    kind = {
+        config.TON_INSTANCE_ACCESS_INVITE_PLUS: "~private(%s)~canRequestInvite",
+        config.TON_INSTANCE_ACCESS_FRIENDS: "~friends(%s)",
+        config.TON_INSTANCE_ACCESS_FRIENDS_PLUS: "~hidden(%s)",
+    }.get(access, "~private(%s)") % owner_user_id
+    return ("vrchat://launch?ref=vrchat.com&id=%s:%d%s~region(%s)"
+            % (config.TON_WORLD_ID, number, kind, region))
 
 
 # ── 起動 ──────────────────────────────────────
@@ -153,11 +157,14 @@ def build_launch_args(
     desktop_mode: bool = True,
     instance_link: Optional[str] = None,
     osc_index: Optional[int] = None,
+    extra_options: str = "",
 ) -> list[str]:
     """起動引数を組み立てる。
 
     osc_index を渡すと窓ごとに別のOSCポートを割り当てる。VRChatは既定で
     UDP 9000 を掴むため、多重起動では指定しないと2窓目以降が受信できない。
+    extra_options は画面の「起動オプション」の文字。空白で区切って LAUNCH_OPTION の
+    後ろに付ける（すでに入っているものと同じものは二重に付けない）
     """
     args = [str(exe), f"--profile={int(profile_id)}"]
     if desktop_mode:
@@ -168,6 +175,9 @@ def build_launch_args(
     if instance_link:
         args.append(instance_link)
     args.extend(config.LAUNCH_OPTION)
+    for option in (extra_options or "").split():
+        if option not in args:
+            args.append(option)
     return args
 
 
@@ -177,8 +187,10 @@ def launch_one(
     desktop_mode: bool = True,
     instance_link: Optional[str] = None,
     osc_index: Optional[int] = None,
+    extra_options: str = "",
 ):
-    args = build_launch_args(exe, profile_id, desktop_mode, instance_link, osc_index)
+    args = build_launch_args(exe, profile_id, desktop_mode, instance_link, osc_index,
+                             extra_options)
     subprocess.Popen(args, cwd=str(Path(exe).parent))
     return args
 

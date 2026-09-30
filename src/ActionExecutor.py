@@ -1054,8 +1054,8 @@ class ActionExecutor:
         こちらからは動かさない（受信のみ）。どのインスタンスでも動かしてよい。
         """
         st = self._st
-        if not SharedState.get_speed_detect():
-            return
+        if not SharedState.get_speed_detect() or self._hands_free():
+            return          # 放置モードの窓では動かさない（途中でトグルを入れた場合の念のため）
         receiver = self._receiver
         if receiver is None:
             return
@@ -1087,7 +1087,7 @@ class ActionExecutor:
         アイテムロスト後は動かさない（拾いに行く操作の邪魔をしないため）。
         """
         st = self._st
-        if not SharedState.get_speed_detect() or not self._cfg.osc_port:
+        if not SharedState.get_speed_detect() or not self._cfg.osc_port or self._hands_free():
             return
         if st.waiting_for_equip:
             self._log("アイテムロスト後のため速度検知の横移動はしません")

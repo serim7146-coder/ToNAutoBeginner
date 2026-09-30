@@ -173,9 +173,16 @@ def build_launch_plan(tabs: list) -> list:
 
 
 class WindowTab(ttk.Frame):
-    def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None):
+    # 全窓でそろえる折りたたみ（App が枠ごとの開閉を持って全タブへ配る）
+    SECTIONS = ("assign", "rounds")
+
+    def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
+                 section_collapsed=None, on_section_toggled=None):
         super().__init__(parent)
         self.idx = idx
+        self._section_collapsed = dict(section_collapsed or {})
+        self._on_section_toggled = on_section_toggled
+        self.sections: dict = {}
         self._hwnd_map: dict[str, int] = {}
         # 窓↔ログの確定で分かったOSCポート（0ならOSC不可）。GUIには出さない
         self.osc_in = 0
@@ -184,6 +191,23 @@ class WindowTab(ttk.Frame):
         self._on_settings_changed = on_settings_changed
         self._build()
         self._watch_settings()
+
+    def _section(self, parent, key: str, text: str) -> "CollapsibleFrame":
+        """全窓でそろえる折りたたみを作る（既定は閉じた状態）"""
+        def toggled(collapsed):
+            if self._on_section_toggled is not None:
+                self._on_section_toggled(key, collapsed)
+
+        frame = CollapsibleFrame(parent, text=text,
+                                 collapsed=self._section_collapsed.get(key, True),
+                                 on_toggle=toggled)
+        self.sections[key] = frame
+        return frame
+
+    def set_section_collapsed(self, key: str, collapsed: bool):
+        frame = self.sections.get(key)
+        if frame is not None:
+            frame.set_collapsed(collapsed)
 
     def _watch_settings(self):
         """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
@@ -209,8 +233,8 @@ class WindowTab(ttk.Frame):
         p = self
 
         # HWNDとログは自動割り当てで決まるので既定は畳んでおく。
-        # タブごとに別インスタンスなので、窓ごとに独立して開閉する
-        assign = CollapsibleFrame(p, text="窓の割り当て", collapsed=True)
+        # 開閉は全窓でそろえる（App._on_tab_section_toggled）
+        assign = self._section(p, "assign", text="窓の割り当て")
         assign.pack(fill="x")
         a = assign.content
 
@@ -260,9 +284,8 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
-        rounds = CollapsibleFrame(
-            p, text="ラウンドごとの自爆設定（プライベートインスタンスのみ）",
-            collapsed=True)
+        rounds = self._section(
+            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
         rounds.pack(fill="x", pady=(4, 0))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
@@ -475,9 +498,10 @@ class LogOverlay(tk.Toplevel):
 # ── 折りたたみ可能フレーム ──────────────────────
 class CollapsibleFrame(tk.Frame):
     """クリックで折りたたみ可能なLabelFrame風ウィジェット"""
-    def __init__(self, parent, text: str, collapsed: bool = False, **kwargs):
+    def __init__(self, parent, text: str, collapsed: bool = False, on_toggle=None, **kwargs):
         super().__init__(parent, bg=config.GUI_BG, **kwargs)
         self._collapsed = collapsed
+        self._on_toggle = on_toggle       # クリックで開閉したら on_toggle(collapsed)
         # ヘッダ行
         hf = tk.Frame(self, bg=config.GUI_BG)
         hf.pack(fill="x")
@@ -496,8 +520,20 @@ class CollapsibleFrame(tk.Frame):
         if not collapsed:
             self.content.pack(fill="x", padx=8, pady=(0, 4))
 
+    @property
+    def collapsed(self) -> bool:
+        return self._collapsed
+
     def _toggle(self):
-        self._collapsed = not self._collapsed
+        self.set_collapsed(not self._collapsed)
+        if self._on_toggle is not None:
+            self._on_toggle(self._collapsed)
+
+    def set_collapsed(self, collapsed: bool):
+        """外から開閉を決める（on_toggle は呼ばない）"""
+        if collapsed == self._collapsed:
+            return
+        self._collapsed = collapsed
         if self._collapsed:
             self.content.pack_forget()
             self._toggle_btn.config(text="▶")
@@ -907,6 +943,10 @@ class App(tk.Tk):
                         value=config.TON_INSTANCE_ACCESS_INVITE).pack(side="left", padx=(6, 0))
         ttk.Radiobutton(lf22, text="インバイト+", variable=self.v_ton_access,
                         value=config.TON_INSTANCE_ACCESS_INVITE_PLUS).pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(lf22, text="フレンド", variable=self.v_ton_access,
+                        value=config.TON_INSTANCE_ACCESS_FRIENDS).pack(side="left", padx=(6, 0))
+        ttk.Radiobutton(lf22, text="フレンド+", variable=self.v_ton_access,
+                        value=config.TON_INSTANCE_ACCESS_FRIENDS_PLUS).pack(side="left", padx=(6, 0))
         ttk.Label(lf22, text="※ 窓ごとにToNの新規インスタンスを作ります",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
@@ -921,15 +961,24 @@ class App(tk.Tk):
         ttk.Label(lf25, text="※ 警告同意→Casual→BGMあり→LET ME PLAY の順に押します",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
+        # 起動オプション（config.LAUNCH_OPTION の後ろに足す。空白で区切る。既定は空）
+        lf26 = ttk.Frame(f2_launch)
+        lf26.pack(fill="x", pady=(4, 0))
+        ttk.Label(lf26, text="起動オプション:").pack(side="left")
+        self.v_launch_options = tk.StringVar(value="")
+        ttk.Entry(lf26, textvariable=self.v_launch_options, width=60).pack(side="left", padx=(6, 0))
+
 
         # ③ 窓タブ
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="x", expand=False, padx=12, pady=4)
         self.tabs: list[WindowTab] = []
+        # 窓タブの折りたたみの開閉（True = 閉じている）。全タブで共通。保存しない
+        self._tab_sections = {key: True for key in WindowTab.SECTIONS}
         self._rebuild_tabs(self.v_win_count.get())
 
         # 音声ファイル設定
-        fv_wrap = CollapsibleFrame(self, text="③ 音声アナウンス設定", collapsed=True)
+        fv_wrap = CollapsibleFrame(self, text="③ サウンド設定", collapsed=True)
         fv_wrap.pack(fill="x", padx=12, pady=4)
         fv = fv_wrap.content
 
@@ -1040,20 +1089,20 @@ class App(tk.Tk):
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
-        self.lbl_emergency = ttk.Label(fc, text="",
+
+        # キー設定の行: 緊急停止のキー、続けてマクロ開始のキー（依頼者の決定）。
+        # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
+        fsk = ttk.Frame(self)
+        fsk.pack(pady=(0, 4))
+        self.lbl_emergency = ttk.Label(fsk, text="",
                                        foreground=config.GUI_ORG)
-        self.lbl_emergency.pack(side="left", padx=(10, 0))
-        self.btn_capture_key = ttk.Button(fc, text="キーを押して設定", width=16,
+        self.lbl_emergency.pack(side="left")
+        self.btn_capture_key = ttk.Button(fsk, text="キーを押して設定", width=16,
                                           command=self._begin_capture_key)
         self.btn_capture_key.pack(side="left", padx=(6, 0))
         self._refresh_emergency_key_label()
-
-        # マクロ開始のキー。緊急停止と同じ行には入らない（窓の幅を広げると
-        # 別のPCで崩れる。47aefa4 / 73e577c）ので、次の行に置く
-        fsk = ttk.Frame(self)
-        fsk.pack(pady=(0, 4))
         self.lbl_start_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
-        self.lbl_start_key.pack(side="left")
+        self.lbl_start_key.pack(side="left", padx=(16, 0))
         self.btn_capture_start_key = ttk.Button(
             fsk, text="キーを押して設定", width=16,
             command=lambda: self._begin_capture_key("start"))
@@ -1095,12 +1144,14 @@ class App(tk.Tk):
         self.v_freeze_8pages = tk.BooleanVar(value=False)
         self.v_freeze_punish = tk.BooleanVar(value=False)
         ttk.Checkbutton(ffz, text="8 Pages検知でフリーズ", variable=self.v_freeze_8pages,
-                        command=self._apply_freeze_settings).pack(side="left")
+                        command=lambda: self._on_speed_freeze_changed("8 Pages")
+                        ).pack(side="left")
         ttk.Checkbutton(ffz, text="Punished検知でフリーズ", variable=self.v_freeze_punish,
-                        command=self._apply_freeze_settings).pack(side="left", padx=(12, 0))
+                        command=lambda: self._on_speed_freeze_changed("Punished")
+                        ).pack(side="left", padx=(12, 0))
         # 霧看破の許可（ツール全体で1つ。既定は切る）
         self.v_fog_early_read = tk.BooleanVar(value=False)
-        ttk.Checkbutton(ffz, text="霧看破を使う（Friends・Invite+・Invite のみ）",
+        ttk.Checkbutton(ffz, text="霧を即時判定する（Friends・Invite+・Invite のみ）",
                         variable=self.v_fog_early_read,
                         command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
 
@@ -1136,10 +1187,18 @@ class App(tk.Tk):
         self.tabs.clear()
         for i in range(count):
             tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected,
-                            on_settings_changed=self._apply_tab_settings_live)
+                            on_settings_changed=self._apply_tab_settings_live,
+                            section_collapsed=self._tab_sections,
+                            on_section_toggled=self._on_tab_section_toggled)
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
+
+    def _on_tab_section_toggled(self, key: str, collapsed: bool):
+        """窓タブの折りたたみを1つ開閉したら、全タブの同じ枠をそろえる（保存はしない）"""
+        self._tab_sections[key] = collapsed
+        for tab in self.tabs:
+            tab.set_section_collapsed(key, collapsed)
 
     def _on_win_count_change(self):
         if self._running:
@@ -1281,8 +1340,24 @@ class App(tk.Tk):
         self.v_fog_early_read.set(enabled)
         FogEarlyRead.set_early_read_enabled(enabled)
 
+    def _load_launch_options_setting(self, data: dict):
+        extra = data.get("launch_extra_options", "")
+        self.v_launch_options.set(extra if isinstance(extra, str) else "")   # 壊れた値は空
+
+    def _launch_options_setting(self) -> dict:
+        return {"launch_extra_options": str(self.v_launch_options.get())}
+
     def _fog_early_read_setting(self) -> dict:
         return {"fog_early_read_enabled": bool(self.v_fog_early_read.get())}
+
+    def _on_speed_freeze_changed(self, round_name: str):
+        """速度検知でフリーズにチェックを入れたら、ラウンド突入でフリーズの同じラウンドも
+        入れる。入れるときだけ（外しても突入側はそのまま）。起動時の読み込みでは呼ばない"""
+        var = self.v_freeze_8pages if round_name == "8 Pages" else self.v_freeze_punish
+        if var.get() and round_name in self.v_freeze_rounds:
+            self.v_freeze_rounds[round_name].set(True)
+        self._apply_freeze_settings()
+        self._schedule_settings_save()
 
     def _apply_freeze_settings(self):
         """GUIのフリーズ設定を全窓共通の状態へ反映する"""
@@ -1521,6 +1596,7 @@ class App(tk.Tk):
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
         self.v_ton_access.set(access)
+        self._load_launch_options_setting(data)
         self._saved_profiles = data.get("profiles", [])
         # 窓数は控えるだけ。反映するのは _auto_detect_windows() の「未検出」の
         # ときだけ（開いている窓があればその数を優先する）
@@ -2083,6 +2159,7 @@ class App(tk.Tk):
         join_ton = self.v_join_world.get()
         user_id = None
         ton_access = self.v_ton_access.get()
+        extra_options = self.v_launch_options.get()     # その時点の欄の値
         if join_ton:
             user_id = VRChatLauncher.latest_user_id(config.VRCHAT_LOG_DIR)
             if not user_id:
@@ -2133,7 +2210,8 @@ class App(tk.Tk):
                         if join_ton else None)
                     args = VRChatLauncher.launch_one(
                         exe, profile_id, desktop, link,
-                        osc_index=osc_index if use_osc else None)
+                        osc_index=osc_index if use_osc else None,
+                        extra_options=extra_options)
                     self._log("[起動] 窓%d: %s" % (window_no, " ".join(args[1:])))
                     appeared = VRChatLauncher.wait_for_windows(
                         baseline, i + 1, config.LAUNCH_EACH_WINDOW_TIMEOUT)
@@ -2328,6 +2406,7 @@ class App(tk.Tk):
             "obs_port":      self.v_obs_port.get().strip(),
             **self._window_volume_settings(),
             **self._fog_early_read_setting(),
+            **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す
