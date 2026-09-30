@@ -2727,9 +2727,17 @@ class TestEarlyReadNames(unittest.TestCase):
             self.assertIsNone(LogParser.log_time(line), line)
 
     def test_lines_without_an_object_are_not_events(self):
-        for body in ("[NetworkProcessing] Received ownership transfer of 12 from 3 to 4",
-                     "[NetworkProcessing] Transferred ownership of monsterDetectionBox to 9"):
-            self.assertIsNone(LogParser.parse("2026.09.21 16:38:23 Debug      -  " + body))
+        self.assertIsNone(LogParser.parse("2026.09.21 16:38:23 Debug      -  "
+                                          "[NetworkProcessing] Received ownership transfer of 12 from 3 to 4"))
+
+    def test_a_bare_world_part_is_read_but_never_a_terror(self):
+        """番号なしの「Transferred ownership of 名前 to 数字」は名前を取る（Waldo のため。BK）。
+        ワールドの部品の名前は objects に無いので、看破には使われない"""
+        event = LogParser.parse("2026.09.21 16:38:23 Debug      -  "
+                                "[NetworkProcessing] Transferred ownership of monsterDetectionBox to 9")
+        self.assertEqual(event.player_name, "monsterDetectionBox")
+        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("monsterDetectionBox", data))
 
     def test_normalization(self):
         data = fog_early_read_terrors()
@@ -21400,6 +21408,69 @@ class TestRoundTypeObservation(unittest.TestCase):
             monitor._detect_instance_from_log()
 
         self.assertEqual(self.written, [])
+
+
+class TestWaldoBareName(unittest.TestCase):
+    """霧の看破で、番号の付かないオブジェクト名（Waldo）も拾う"""
+
+    TAG = "[NetworkProcessing] "
+
+    def _name(self, rest):
+        return LogParser.network_object_name(self.TAG + rest)
+
+    def test_the_two_bare_forms_give_the_name(self):
+        self.assertEqual(self._name("Ignoring TrySetOwner attempt on Waldo because serim01 already owner"),
+                         "Waldo")
+        self.assertEqual(self._name("Transferred ownership of Waldo to 3"), "Waldo")
+
+    def test_the_numbered_forms_are_as_before(self):
+        for rest, name in (
+                ("Ignoring TrySetOwner attempt on [20] Immortal Snail because tsuki__2 already owner",
+                 "Immortal Snail"),
+                ("Transferred ownership of [86] WALPURGISNACHT to 20", "WALPURGISNACHT"),
+                ("serim01 would like to transfer [10] Kuro GuidingStar to すぅみ_suumi", "Kuro GuidingStar"),
+                ("Non-owner attempted to request ownership of [10] Kuro GuidingStar for someone else.",
+                 "Kuro GuidingStar"),
+                ("Setting [12] witchling (15) to request ownership", "witchling (15)"),
+                ("Transferred ownership of [29b] SmileyWalker to 17", "SmileyWalker")):
+            self.assertEqual(self._name(rest), name, rest)
+
+    def test_other_bare_lines_are_not_read(self):
+        for rest in ("Holding message 10 from 3", "Could not locate owner on Name_tag",
+                     "Transferred ownership of Waldo to someone",
+                     "serim01 would like to transfer Waldo to すぅみ_suumi"):
+            self.assertEqual(self._name(rest), "", rest)
+
+    def test_waldo_is_in_the_real_objects(self):
+        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Waldo", data), 131)
+        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Waldo", config.TERRORS), 131)
+
+    def test_a_bare_waldo_line_reads_the_fog_early(self):
+        """本物の行で: 霧のラウンド中に番号なしの Waldo → 看破で 131（本物の terrors.json）"""
+        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        for p in (patch.object(config, "TERRORS", data),
+                  patch.object(config, "FOG_EARLY_READ_ENABLED", True),
+                  patch.object(LogMonitor.threading, "Thread"),
+                  patch.object(PlaySound, "play_sound"),
+                  patch.object(Recorder, "on_continue_start"),
+                  patch.object(ConnectDB, "register_round")):
+            p.start()
+            self.addCleanup(p.stop)
+        monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=True), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.logger = lambda _m: None
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.instance_access = "invite"
+        monitor.early_read_capable = True
+        monitor.st.in_round = True
+        prefix = "2026.09.30 21:22:00 Debug      -  "
+        monitor._process(prefix + "Killers is unknown - ??? // Will be revealed after 50 seconds "
+                                  "// Round type is Fog")
+
+        monitor._process(prefix + "[NetworkProcessing] Transferred ownership of Waldo to 3")
+
+        self.assertEqual(monitor.st.early_read_tid, 131)
 
 
 class TestPlayersRestoredOnStart(unittest.TestCase):

@@ -144,12 +144,23 @@ def strip_prefix(line: str) -> str:
 EVENT_NETWORK_OBJECT = "network_object"
 NETWORK_PROCESSING_TAG = "[NetworkProcessing] "
 RE_NETWORK_OBJECT = re.compile(r"^\[NetworkProcessing\] .*?\[[^\]]+\] (.+)$")
+# 番号の付かない形（Waldo など）。この2つだけ拾う（ほかの番号なしの行はワールドの部品）:
+#   Ignoring TrySetOwner attempt on Waldo because serim01 already owner
+#   Transferred ownership of Waldo to 3
+RE_NETWORK_OBJECT_BARE = (
+    re.compile(r"^\[NetworkProcessing\] .*? attempt on (.+?) because .+ already owner$"),
+    re.compile(r"^\[NetworkProcessing\] Transferred ownership of (.+) to \d+$"),
+)
 
 
 def network_object_name(line: str) -> str:
     """`[NetworkProcessing]` の行からオブジェクト名を取り出す。無ければ空文字"""
     m = RE_NETWORK_OBJECT.match(line)
     if not m:
+        for bare in RE_NETWORK_OBJECT_BARE:      # 番号ありの形を優先する
+            b = bare.match(line)
+            if b:
+                return b.group(1).strip()
         return ""
     rest = m.group(1)
     for tail in (" to request ownership", " for someone else."):

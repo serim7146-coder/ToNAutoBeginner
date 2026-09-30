@@ -131,7 +131,7 @@
     {"id": 128, "name": "Living Shadow", "terrors": ["Living Shadow"], "objects": ["LivingShadow"]},
     {"id": 129, "name": "The Plague Doctor", "terrors": ["The Plague Doctor", "SCP-049-B"], "objects": ["SCP-049", "zombie"]},
     {"id": 130, "name": "The Rat", "terrors": ["The Rat"], "objects": ["TheRat"]},
-    {"id": 131, "name": "Waldo", "terrors": ["Waldo"], "objects": []},
+    {"id": 131, "name": "Waldo", "terrors": ["Waldo"], "objects": ["Waldo"]},
     {"id": 132, "name": "Clockey", "terrors": ["Clockey"], "objects": ["Clocky"]},
     {"id": 133, "name": "Malicious Twins", "terrors": ["Malicious Twin"], "objects": ["Twin1"]},
     {"id": 190, "name": "Hungry Home Invader", "terrors": ["Hungry Home Invader"], "objects": []},
