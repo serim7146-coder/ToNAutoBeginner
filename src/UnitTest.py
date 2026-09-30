@@ -20332,6 +20332,236 @@ class TestStartScanPrefilter(unittest.TestCase):
                         monitor.logs)
 
 
+class TestThreeWinsRestored(unittest.TestCase):
+    """3クラ（DTM/Waldo 続行）の勝利数を、今のインスタンスに入ってからのログで取り戻す。
+
+    どのラウンドでも生き残ったら1勝。Twilight 以外の特殊ラウンドが1回でもあるか、
+    Twilight が2回以上なら3勝扱い。入り直すと0に戻る
+    """
+
+    ME = "usr_0e01408a"
+    PREFIX = "2026.09.30 13:00:00 Debug      -  "
+    OLD_JOIN = "[Behaviour] Joining wrld_old:1~private(usr_me)~region(jp)"
+    JOIN = "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"
+    LIVED = "Lived in round."
+
+    @staticmethod
+    def _round(round_type):
+        return f"This round is taking place at Facility (12) and the round type is {round_type}"
+
+    def _write(self, lines):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        tmp.write("\n".join(self.PREFIX + line for line in lines) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        return Path(tmp.name)
+
+    def _monitor(self, path=None, cancel_afk=True):
+        cfg = WindowConfig(log_path=path, cancel_afk=cancel_afk)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
+
+    def _scan(self, after_join, before_join=(), cancel_afk=True, end=None):
+        path = self._write([f"User Authenticated: serim01 ({self.ME})", *before_join,
+                            self.JOIN, *after_join])
+        monitor = self._monitor(path, cancel_afk)
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log(end=end)
+        return monitor
+
+    def _said(self, monitor):
+        return [m for m in monitor.logs if "3クラ" in m or "3勝" in m or "生存数" in m]
+
+    # ── 遡り ─────────────────────────────────
+    def test_two_lives_and_no_special_round_is_two(self):
+        monitor = self._scan([self._round("Classic"), self.LIVED,
+                              self._round("Run"), self.LIVED, self._round("Classic")])
+
+        self.assertEqual(monitor.st.open_special_round_wins, 2)
+        self.assertEqual(self._said(monitor),
+                         ["[窓1] 3クラ: 入室後のログから 生存2回・特殊ラウンドなし → 2/3"])
+
+    def test_four_lives_stop_at_three(self):
+        monitor = self._scan([self._round("Classic"), self.LIVED] * 4)
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+
+    def test_one_special_round_is_three(self):
+        monitor = self._scan([self._round("Classic"), self._round("Fog")])
+
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), ["[窓1] 3クラ: 入室後に Fog → 3勝扱い"])
+
+    def test_one_twilight_keeps_the_lives(self):
+        monitor = self._scan([self._round("Twilight"), self.LIVED])
+
+        self.assertEqual(monitor.st.open_special_round_wins, 1)
+        self.assertEqual(monitor.st.twilight_count, 1)
+        self.assertEqual(self._said(monitor),
+                         ["[窓1] 3クラ: 入室後のログから 生存1回・Twilight 1回 → 1/3"])
+
+    def test_two_twilights_are_three(self):
+        monitor = self._scan([self._round("Twilight"), self._round("Classic"),
+                              self._round("Twilight")])
+
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(monitor.st.twilight_count, 2)
+        self.assertEqual(self._said(monitor), ["[窓1] 3クラ: 入室後に Twilight 2回 → 3勝扱い"])
+
+    def test_nothing_before_the_last_join_counts(self):
+        """入り直すと0に戻る。前のインスタンスの生存・特殊ラウンドは数えない"""
+        monitor = self._scan([self._round("Classic")],
+                             before_join=[self.OLD_JOIN, self._round("Fog"), self.LIVED,
+                                          self.LIVED, self._round("Twilight")])
+
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertEqual(monitor.st.twilight_count, 0)
+
+    def test_a_log_without_a_join_leaves_zero(self):
+        path = self._write([f"User Authenticated: serim01 ({self.ME})",
+                            self._round("Fog"), self.LIVED])
+        monitor = self._monitor(path)
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log()
+
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertEqual(self._said(monitor), [])
+
+    def test_the_scan_says_nothing_when_the_continue_is_off(self):
+        monitor = self._scan([self._round("Classic"), self.LIVED], cancel_afk=False)
+
+        self.assertEqual(monitor.st.open_special_round_wins, 1, "数えはする")
+        self.assertEqual(self._said(monitor), [])
+
+    def test_the_new_marks_are_part_of_their_regexes(self):
+        self.assertIn(LogParser.ROUND_START_MARK, LogParser.RE_ROUND_START.pattern)
+        self.assertIn(LogParser.LIVED_MARK, LogParser.RE_LIVED.pattern)
+        self.assertIn(LogParser.ROUND_START_MARK, LogMonitor.LogMonitor._START_SCAN_MARKS)
+        self.assertIn(LogParser.LIVED_MARK, LogMonitor.LogMonitor._START_SCAN_MARKS)
+
+    # ── 遡りと監視で二重に数えない ─────────────────────
+    def test_lines_after_the_start_position_are_left_to_the_watch(self):
+        """監視はファイルの末尾（log_pos）から読む。遡りはそこまでしか数えない"""
+        path = self._write([f"User Authenticated: serim01 ({self.ME})", self.JOIN,
+                            self._round("Classic"), self.LIVED])
+        start = path.stat().st_size
+        with open(path, "a", encoding="utf-8") as f:       # 遡りの間に追記された
+            f.write(self.PREFIX + self._round("Classic") + "\n" + self.PREFIX + self.LIVED + "\n")
+        monitor = self._monitor(path)
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log(end=start)
+        self.assertEqual(monitor.st.open_special_round_wins, 1)
+
+        monitor._process(self.PREFIX + self.LIVED)          # 監視が読む追記分
+
+        self.assertEqual(monitor.st.open_special_round_wins, 2, "追記分は1回だけ数える")
+
+    def test_the_watch_passes_its_start_position_to_the_scan(self):
+        src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
+        body = src[src.index("    def _run(self):"):]
+        body = body[:body.index("\n    def ")]
+        self.assertIn("self.st.log_pos = cfg.log_path.stat().st_size", body)
+        self.assertIn("self._detect_instance_from_log(end=self.st.log_pos)", body)
+        self.assertLess(body.index("self.st.log_pos = cfg.log_path.stat().st_size"),
+                        body.index("self._detect_instance_from_log(end=self.st.log_pos)"))
+
+    # ── 監視中 ────────────────────────────────
+    def _live(self, monitor, *lines):
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(PlaySound, "play_sound"):
+            for line in lines:
+                monitor._process(self.PREFIX + line)
+
+    def _twilight_round(self, monitor, killers_set_times=1):
+        monitor.st.round_seq += 1
+        monitor.st.round_type = "Twilight"
+        for _ in range(killers_set_times):
+            self._live(monitor, "Killers have been set - 1 0 0 // Round type is Twilight")
+
+    def test_a_life_in_any_round_counts(self):
+        monitor = self._monitor()
+        monitor.st.is_open_special_round_round = False       # DTM/Waldo のラウンドではない
+
+        self._live(monitor, self.LIVED)
+
+        self.assertEqual(monitor.st.open_special_round_wins, 1)
+        self.assertIn("[窓1] 生存数: 1/3", monitor.logs)
+        self.assertFalse(monitor.st.is_open_special_round_round)
+
+    def test_lives_stop_at_three_and_celebrate_once(self):
+        monitor = self._monitor()
+
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED, self.LIVED)
+
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(sum("🎉 3勝達成" in m for m in monitor.logs), 1)
+        self.assertEqual(sum("生存数" in m for m in monitor.logs), 3)
+
+    def test_the_second_twilight_is_three(self):
+        monitor = self._monitor()
+
+        self._twilight_round(monitor)
+        self.assertEqual(monitor.st.open_special_round_wins, 0, "1回目は数えない")
+        self.assertEqual(self._said(monitor), [])
+        self._twilight_round(monitor)
+
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), [
+            "[窓1] 特殊ラウンド（Twilight 2回目）を経験したので3勝扱い → 以降のDTM/Waldoはスキップします"])
+
+    def test_a_twilight_from_the_log_plus_one_while_watching_is_three(self):
+        monitor = self._scan([self._round("Twilight")])
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+
+        self._twilight_round(monitor)
+
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+
+    def test_two_killers_set_lines_in_one_round_are_one_twilight(self):
+        monitor = self._monitor()
+
+        self._twilight_round(monitor, killers_set_times=2)
+
+        self.assertEqual(monitor.st.twilight_count, 1)
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+
+    def test_other_special_rounds_still_count_at_once(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Fog"
+        self._live(monitor, "Killers have been set - 1 0 0 // Round type is Fog")
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+
+    def test_a_new_instance_starts_from_zero(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED)
+        monitor.st.twilight_count = 1
+
+        self._live(monitor, "[Behaviour] Joining wrld_next:3~private(usr_me)~region(jp)")
+
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertEqual(monitor.st.twilight_count, 0)
+        self.assertIn("[窓1] 3クラ: 別のインスタンスに入ったので 0/3 に戻します", monitor.logs)
+
+    def test_a_new_instance_from_zero_says_nothing(self):
+        monitor = self._monitor()
+        self._live(monitor, "[Behaviour] Joining wrld_next:3~private(usr_me)~region(jp)")
+        self.assertFalse(any("別のインスタンス" in m for m in monitor.logs))
+
+    def test_the_watch_says_nothing_when_the_continue_is_off(self):
+        monitor = self._monitor(cancel_afk=False)
+
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED)
+        self._twilight_round(monitor)
+        self._live(monitor, "[Behaviour] Joining wrld_next:3~private(usr_me)~region(jp)")
+
+        self.assertEqual(self._said(monitor), [])
+
+
 class TestPlayersRestoredOnStart(unittest.TestCase):
     """マクロを途中で始めても、いまのインスタンスの人数が分かること"""
 

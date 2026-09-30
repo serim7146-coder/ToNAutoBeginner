@@ -91,6 +91,10 @@ class WindowState:
     speed_freeze_kind: str = ""      # "8pages" / "punish"。解除条件を覚えるため
     is_open_special_round_round: bool = False
     open_special_round_wins: int = 0
+    # 今のインスタンスで経験した Twilight（OPEN_SPECIAL_ROUND_NOT_PROOF）の回数。
+    # 1回目は3クラ前にも起こりうるので数えない。2回目で3勝扱い
+    twilight_count: int = 0
+    twilight_round_seq: int = -1          # 数えたラウンド（KILLERS_SET が2回来ても1回）
     item_id: int = 1
     item_id_at_round_start: int = 1
     waiting_for_equip: bool = False

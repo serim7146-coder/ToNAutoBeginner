@@ -289,12 +289,15 @@ class LogMonitor:
             self._log("✅ この窓の装備待ち解除（他窓の装備待ちが残っています）")
 
     @staticmethod
-    def _iter_log_lines_reversed(path, chunk_size: int):
+    def _iter_log_lines_reversed(path, chunk_size: int, end: Optional[int] = None):
+        """末尾（end を渡せばその位置）から先頭へ向かって1行ずつ返す"""
         if chunk_size <= 0:
             chunk_size = 256 * 1024
 
         with open(path, "rb") as f:
             pos = f.seek(0, 2)
+            if end is not None:
+                pos = min(pos, max(0, end))
             pending = b""
             while pos > 0:
                 read_size = min(chunk_size, pos)
@@ -339,11 +342,14 @@ class LogMonitor:
             return None
         return None
 
-    # 監視開始の遡りで探す4種類の行（ログイン・入室・入ってきた人・出ていった人）
+    # 監視開始の遡りで探す行（ログイン・入室・入ってきた人・出ていった人・
+    # ラウンド開始・生存）
     _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
-                         LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK)
+                         LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK,
+                         LogParser.ROUND_START_MARK, LogParser.LIVED_MARK)
 
-    def _detect_instance_from_log(self):
+    def _detect_instance_from_log(self, end: Optional[int] = None):
+        """監視開始の遡り。end は監視を始める位置（それより後の行は監視が読む）"""
         if not self.cfg.log_path or not self.cfg.log_path.exists():
             return
         try:
@@ -351,9 +357,13 @@ class LogMonitor:
             found_instance = False
             # 最後の Joining より後の入退室。逆向きに読むので新しい順に溜まる
             player_events = []
+            # 最後の Joining より後（今のインスタンス）の生存と特殊ラウンド（3クラ）
+            lived = 0
+            round_types = []
             lines = self._iter_log_lines_reversed(
                 self.cfg.log_path,
                 config.LOG_START_SCAN_CHUNK_BYTES,
+                end,
             )
             for line in lines:
                 if not any(mark in line for mark in self._START_SCAN_MARKS):
@@ -366,6 +376,10 @@ class LogMonitor:
                         LogParser.EVENT_PLAYER_JOINED,
                         LogParser.EVENT_PLAYER_LEFT):
                     player_events.append(event)
+                if not found_instance and event.kind == LogParser.EVENT_LIVED:
+                    lived += 1
+                if not found_instance and event.kind == LogParser.EVENT_ROUND_START:
+                    round_types.append(event.round_type)    # 1ラウンド1回
 
                 if not found_user and event.kind == LogParser.EVENT_USER_AUTH:
                     self._log(f"UserID検出: {event.user_id}")
@@ -383,6 +397,7 @@ class LogMonitor:
                     # マクロを途中で始めても人数が分かるように。積み上げないと
                     # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
                     self._restore_players(reversed(player_events))
+                    self._restore_three_wins(lived, list(reversed(round_types)))
 
                 if found_user and found_instance:
                     break
@@ -393,6 +408,35 @@ class LogMonitor:
                       f"{len(self._other_players())}人")
         else:
             self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
+
+    def _restore_three_wins(self, lived: int, round_types: list):
+        """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、
+        3クラの勝利数を決める（再起動しても取り戻す。入り直すと0に戻るので
+        最後の Joining より後だけ）。
+
+        生存1回で1勝（3で打ち止め）。Twilight 以外の特殊ラウンドが1回でもあるか、
+        Twilight が2回以上なら3勝扱い（生存数は自分で稼いだ前提なので、マルチでは
+        足りないことがある）
+        """
+        st = self.st
+        target = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        proofs = [t for t in round_types if t in config.SPECIAL_ROUND
+                  and t not in config.OPEN_SPECIAL_ROUND_NOT_PROOF]
+        twilights = [t for t in round_types if t in config.OPEN_SPECIAL_ROUND_NOT_PROOF]
+        st.twilight_count = len(twilights)
+        if proofs:
+            st.open_special_round_wins = target
+            said = f"入室後に {proofs[0]} → 3勝扱い"
+        elif len(twilights) >= 2:
+            st.open_special_round_wins = target
+            said = f"入室後に {twilights[0]} {len(twilights)}回 → 3勝扱い"
+        else:
+            st.open_special_round_wins = min(lived, target)
+            specials = f"{twilights[0]} 1回" if twilights else "特殊ラウンドなし"
+            said = (f"入室後のログから 生存{lived}回・{specials}"
+                    f" → {st.open_special_round_wins}/{target}")
+        if self.cfg.cancel_afk:
+            self._log(f"3クラ: {said}")
 
     def _fetch_transformed_uid(self, user_id):
         """統計用のIDを取りに行く（裏のスレッドで）。
@@ -539,7 +583,7 @@ class LogMonitor:
         # 過去ログからインスタンスタイプを検出（ワールド入室後の起動に対応）。
         # log_pos を確定させた後に行う。先に検出すると、その間にVRChatが追記した行が
         # 「起動前からあった行」として読み飛ばされる。
-        self._detect_instance_from_log()
+        self._detect_instance_from_log(end=self.st.log_pos)
         self._log("監視開始")
         try:
             with open(cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1158,12 +1202,21 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_KILLERS_SET:
-            # 特殊ラウンドを経験したら3勝扱い（3クラ前にも出る Twilight は除く）
-            if (st.round_type in config.SPECIAL_ROUND
-                    and st.round_type not in config.OPEN_SPECIAL_ROUND_NOT_PROOF):
+            # 特殊ラウンドを経験したら3勝扱い。3クラ前にも出る Twilight は1回目は
+            # 数えず、2回目で（過去のログの1回と監視中の1回も2回目）
+            proof = None
+            if st.round_type in config.OPEN_SPECIAL_ROUND_NOT_PROOF:
+                if st.twilight_round_seq != st.round_seq:
+                    st.twilight_round_seq = st.round_seq
+                    st.twilight_count += 1
+                    if st.twilight_count >= 2:
+                        proof = f"{st.round_type} 2回目"
+            elif st.round_type in config.SPECIAL_ROUND:
+                proof = st.round_type
+            if proof is not None:
                 if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
                         and self.cfg.cancel_afk):
-                    self._log(f"特殊ラウンド（{st.round_type}）を経験したので3勝扱い"
+                    self._log(f"特殊ラウンド（{proof}）を経験したので3勝扱い"
                               " → 以降のDTM/Waldoはスキップします")
                 st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
             if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
@@ -1335,6 +1388,12 @@ class LogMonitor:
             st.instance_access = LogParser.instance_access(event.suffix)
             # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
             self.sequence.reset()
+            # 3クラはインスタンスに入り直すと0に戻る
+            if st.open_special_round_wins and self.cfg.cancel_afk:
+                self._log("3クラ: 別のインスタンスに入ったので 0/"
+                          f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS} に戻します")
+            st.open_special_round_wins = 0
+            st.twilight_count = 0
             st.enrage_identified = None
             # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
             st.players = set()
@@ -1376,11 +1435,14 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_LIVED:
             st.lived_this_round = True
-            if st.is_open_special_round_round:
+            # どのラウンドでも生き残ったら1勝（3で打ち止め）
+            if st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
                 st.open_special_round_wins += 1
-                self._log(f"生存数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
-                if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                    self._log("🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします")
+                if self.cfg.cancel_afk:
+                    self._log(f"生存数: {st.open_special_round_wins}/"
+                              f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
+                    if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+                        self._log("🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします")
             st.is_open_special_round_round = False
             return
 

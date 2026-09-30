@@ -36,12 +36,14 @@ EVENT_PLAYER_LEFT = "player_left"
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
+ROUND_START_MARK = " and the round type is "      # 前絞りの印（USER_AUTH_MARK の説明を参照）
 RE_MAP_ID = re.compile(r"\((\d+)\)$")
 RE_KILLERS_SET = re.compile(r"Killers have been set - (\d+) (\d+) (\d+) // Round type is (.+)")
 RE_KILLERS_UNKNOWN = re.compile(r"Killers is unknown - \?\?\? // .+ // Round type is (.+)")
 RE_KILLERS_REVEALED = re.compile(r"Killers have been revealed - (\d+) (\d+) (\d+) // Round type is (.+)")
 RE_FOXY = re.compile(r"foxy the pirate turned evil!", re.IGNORECASE)
 RE_LIVED = re.compile(r"^Lived in round[.]$")
+LIVED_MARK = "Lived in round"
 RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
