@@ -27,6 +27,7 @@ import OSCClient
 import OBSClient
 import Recorder
 import SecretStore
+import FogEarlyRead
 import WindowVolume
 from StatisticsGUI import StatisticsWindow
 
@@ -172,7 +173,7 @@ def build_launch_plan(tabs: list) -> list:
 
 
 class WindowTab(ttk.Frame):
-    def __init__(self, parent, idx: int, on_log_selected=None):
+    def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None):
         super().__init__(parent)
         self.idx = idx
         self._hwnd_map: dict[str, int] = {}
@@ -180,7 +181,29 @@ class WindowTab(ttk.Frame):
         self.osc_in = 0
         self.osc_out = 0
         self._on_log_selected = on_log_selected
+        self._on_settings_changed = on_settings_changed
         self._build()
+        self._watch_settings()
+
+    def _watch_settings(self):
+        """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
+        if self._on_settings_changed is None:
+            return
+        for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
+                    self.v_announce_intermission, *self.v_skip_rounds.values(),
+                    *self.v_continue_rounds.values()):
+            var.trace_add("write", lambda *_a: self._on_settings_changed(self))
+
+    def live_settings(self) -> dict:
+        """動作中の監視（WindowConfig）へ渡す、窓ごとの設定"""
+        return {
+            "auto_begin": self.v_auto_begin.get(),
+            "do_skip": self.v_do_skip.get(),
+            "cancel_afk": self.v_cancel_afk.get(),
+            "announce_intermission": self.v_announce_intermission.get(),
+            "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
+            "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
+        }
 
     def _build(self):
         p = self
@@ -236,9 +259,9 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
-        # ── ラウンドごとの扱い（privateのみ） ──
+        # ── ラウンドごとの自爆設定（privateのみ） ──
         rounds = CollapsibleFrame(
-            p, text="ラウンドごとの扱い（プライベートインスタンスのみ）",
+            p, text="ラウンドごとの自爆設定（プライベートインスタンスのみ）",
             collapsed=True)
         rounds.pack(fill="x", pady=(4, 0))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
@@ -316,14 +339,7 @@ class WindowTab(ttk.Frame):
             hwnd=self._get_selected_hwnd(),
             log_path=log_path,
             active=True,
-            auto_begin=self.v_auto_begin.get(),
-            do_skip=self.v_do_skip.get(),
-            cancel_afk=self.v_cancel_afk.get(),
-            announce_intermission=self.v_announce_intermission.get(),
-            skip_rounds={name for name, var in self.v_skip_rounds.items()
-                         if var.get()},
-            continue_rounds={name for name, var in self.v_continue_rounds.items()
-                             if var.get()},
+            **self.live_settings(),
         ), None
 
 
@@ -891,8 +907,7 @@ class App(tk.Tk):
                         value=config.TON_INSTANCE_ACCESS_INVITE).pack(side="left", padx=(6, 0))
         ttk.Radiobutton(lf22, text="インバイト+", variable=self.v_ton_access,
                         value=config.TON_INSTANCE_ACCESS_INVITE_PLUS).pack(side="left", padx=(6, 0))
-        ttk.Label(lf22, text="※ インバイト+ では霧の看破は働きません。"
-                  "窓ごとにToNの新規インスタンスを作ります",
+        ttk.Label(lf22, text="※ 窓ごとにToNの新規インスタンスを作ります",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         lf25 = ttk.Frame(f2_launch)
@@ -1083,10 +1098,15 @@ class App(tk.Tk):
                         command=self._apply_freeze_settings).pack(side="left")
         ttk.Checkbutton(ffz, text="Punished検知でフリーズ", variable=self.v_freeze_punish,
                         command=self._apply_freeze_settings).pack(side="left", padx=(12, 0))
+        # 霧看破の許可（ツール全体で1つ。既定は切る）
+        self.v_fog_early_read = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ffz, text="霧看破を使う（Friends・Invite+・Invite のみ）",
+                        variable=self.v_fog_early_read,
+                        command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
 
         ffr = ttk.Frame(self)
         ffr.pack(pady=(0, 4))
-        ttk.Label(ffr, text="突入で全窓停止:").pack(side="left")
+        ttk.Label(ffr, text="ラウンド突入でフリーズ:").pack(side="left")
         self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
         for name, var in self.v_freeze_rounds.items():
             ttk.Checkbutton(ffr, text=name, variable=var,
@@ -1115,7 +1135,8 @@ class App(tk.Tk):
             tab.destroy()
         self.tabs.clear()
         for i in range(count):
-            tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected)
+            tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected,
+                            on_settings_changed=self._apply_tab_settings_live)
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
@@ -1249,6 +1270,19 @@ class App(tk.Tk):
         controller, self._window_volume = getattr(self, "_window_volume", None), None
         if controller is not None:
             controller.stop()
+
+    def _on_fog_early_read_changed(self):
+        FogEarlyRead.set_early_read_enabled(self.v_fog_early_read.get())   # 次の判定から効く
+        self._schedule_settings_save()
+
+    def _load_fog_early_read_setting(self, data: dict):
+        enabled = data.get("fog_early_read_enabled", False)
+        enabled = enabled if isinstance(enabled, bool) else False   # 古い・壊れた値は切る
+        self.v_fog_early_read.set(enabled)
+        FogEarlyRead.set_early_read_enabled(enabled)
+
+    def _fog_early_read_setting(self) -> dict:
+        return {"fog_early_read_enabled": bool(self.v_fog_early_read.get())}
 
     def _apply_freeze_settings(self):
         """GUIのフリーズ設定を全窓共通の状態へ反映する"""
@@ -1530,6 +1564,7 @@ class App(tk.Tk):
             save_settings(with_obs_password(load_settings(), password))
         self._apply_obs_settings()
         self._load_window_volume_settings(data)    # 古い settings.json でも既定値
+        self._load_fog_early_read_setting(data)
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -1547,6 +1582,18 @@ class App(tk.Tk):
                 tab.v_profile.set(int(pid))
             except (ValueError, tk.TclError):
                 pass
+
+    def _apply_tab_settings_live(self, tab):
+        """動作中なら、その窓の監視の設定（WindowConfig）を書き換える。次の判定から効き、
+        決めたことはやり直さない。止まっているときは何もしない（次の開始で写る）。
+        Tk のスレッドから1回の代入で差し替えるだけ（監視のスレッドは読むだけ）"""
+        if not getattr(self, "_running", False):
+            return
+        settings = tab.live_settings()
+        for monitor in getattr(self, "monitors", []):
+            if monitor.window_idx == tab.idx + 1:
+                for key, value in settings.items():
+                    setattr(monitor.cfg, key, value)
 
     def _clear_tab_round_settings(self, window_idx: int):
         """監視スレッドから呼ばれる。Tk変数はメインスレッドでしか触れない"""
@@ -2280,6 +2327,7 @@ class App(tk.Tk):
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
             **self._window_volume_settings(),
+            **self._fog_early_read_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
         # ファイルに残り続ける。危ない設定は明示的に消す

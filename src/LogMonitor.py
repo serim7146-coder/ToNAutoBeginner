@@ -236,7 +236,7 @@ class LogMonitor:
         self._start_daemon(self._action.do_speed_detect)
 
     def _round_entry_voice(self, round_type: str) -> str:
-        """突入で全窓停止を選んだラウンドに入ったときの音声。対象外なら空文字"""
+        """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字"""
         return {"Fog": self.cfg.voice_fog,
                 "Unbound": self.cfg.voice_unbound,
                 "Midnight": self.cfg.voice_midnight,

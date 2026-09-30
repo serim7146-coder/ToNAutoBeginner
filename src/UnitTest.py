@@ -7,7 +7,9 @@ from unittest.mock import patch, MagicMock, call, ANY
 import threading
 import time
 import sys
+import subprocess
 import json
+import copy
 import urllib.request
 import urllib.parse
 import tempfile
@@ -355,10 +357,12 @@ class TestPerWindowInstance(unittest.TestCase):
             self.assertRegex(link, r"~private\(usr_abc\)~region\(jp\)$")
         self.assertRegex(plus, r"~private\(usr_abc\)~canRequestInvite~region\(jp\)$")
 
-    def test_only_an_invite_instance_can_be_read_early(self):
-        """インバイト+ を選ぶと看破は働かない（GUI の注意書きのとおり）"""
+    def test_both_invite_kinds_can_be_read_early_with_the_button(self):
+        """インバイトもインバイト+ も、霧看破のボタンが ON なら看破する（BN）"""
+        FogEarlyRead.set_early_read_enabled(True)
+        self.addCleanup(FogEarlyRead.set_early_read_enabled, False)
         self.assertTrue(FogEarlyRead.early_read_allowed(config.TON_INSTANCE_ACCESS_INVITE))
-        self.assertFalse(FogEarlyRead.early_read_allowed(config.TON_INSTANCE_ACCESS_INVITE_PLUS))
+        self.assertTrue(FogEarlyRead.early_read_allowed(config.TON_INSTANCE_ACCESS_INVITE_PLUS))
         self.assertEqual(config.TON_INSTANCE_ACCESS_DEFAULT,
                          config.TON_INSTANCE_ACCESS_INVITE_PLUS, "既定はインバイト+")
 
@@ -2457,6 +2461,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -2508,6 +2513,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         written = []
         with patch.object(mainGUI, "load_settings", return_value=dict(data)),              patch.object(mainGUI, "save_settings", written.append):
             app._load_window_volume_settings = lambda _data: None
+            app._load_fog_early_read_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app, written
 
@@ -2623,10 +2629,13 @@ class TestInstanceAccess(unittest.TestCase):
         return LogParser.instance_access(event.suffix)
 
     def test_the_nine_kinds(self):
+        """看破は、霧看破のボタンが ON で Friends・Invite+・Invite のときだけ（BN）"""
+        FogEarlyRead.set_early_read_enabled(True)
+        self.addCleanup(FogEarlyRead.set_early_read_enabled, False)
         cases = {
             "~private(usr_0e01408a)": ("invite", True),
-            "~private(usr_0e01408a)~canRequestInvite": ("invite_plus", False),
-            "~friends(usr_0e01408a)": ("friends", False),
+            "~private(usr_0e01408a)~canRequestInvite": ("invite_plus", True),
+            "~friends(usr_0e01408a)": ("friends", True),
             "~group(grp_8f8ace13)~groupAccessType(members)": ("group_members", False),
             "~hidden(usr_0e01408a)": ("friends_plus", False),
             "~group(grp_8f8ace13)~groupAccessType(plus)": ("group_plus", False),
@@ -2850,6 +2859,8 @@ class TestFogEarlyReadUse(unittest.TestCase):
                   patch.object(config, "FOG_EARLY_READ_ENABLED", True)):
             p.start()
             self.addCleanup(p.stop)
+        FogEarlyRead.set_early_read_enabled(True)          # 霧看破のボタン（BN）
+        self.addCleanup(FogEarlyRead.set_early_read_enabled, False)
         self.send = self._start(patch.object(ConnectDB, "register_round"))
         self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
         self.play = self._start(patch.object(PlaySound, "play_sound"))
@@ -2963,9 +2974,31 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.assertFalse(self.send.call_args.kwargs["quiet"], f"{how}: 公開と同じく普通に送る")
 
     # ── 看破してよいのはインバイトだけ ─────────────────
-    def test_only_an_invite_instance_is_read_early(self):
-        """インバイト以外は、公開範囲が狭くても DB に黙って送るだけ"""
-        for access, allowed in (("invite", True), ("invite_plus", False), ("friends", False),
+    def test_the_button_off_is_like_ng_even_in_invite(self):
+        """霧看破のボタンが OFF なら、インバイトでも NG と同じ（判定せず、DB に黙って送るだけ）"""
+        FogEarlyRead.set_early_read_enabled(False)
+        monitor = self._monitor(access="invite", keep={self.FOG_KEY: {self.SNAIL}})
+        before = list(monitor.logs)
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertFalse(self._judged(monitor))
+        self.assertEqual(monitor.logs, before, "何も出さない")
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True,
+                                          instance_key=ANY, round_time=ANY)
+
+    def test_turning_the_button_on_works_from_the_next_decision(self):
+        FogEarlyRead.set_early_read_enabled(False)
+        monitor = self._monitor(access="friends")
+        FogEarlyRead.set_early_read_enabled(True)          # 動作中に入れる
+
+        monitor._process(self.SNAIL_LINE)
+
+        self.assertEqual(self._skipped(), 1, "Friends でも看破で判定する")
+
+    def test_only_friends_and_invite_instances_are_read_early(self):
+        """ボタン ON で看破するのは Friends・Invite+・Invite だけ。ほかは DB に黙って送るだけ（BN）"""
+        for access, allowed in (("invite", True), ("invite_plus", True), ("friends", True),
                                 ("group_members", False), ("friends_plus", False),
                                 ("group_plus", False), ("group_public", False),
                                 ("public", False), ("unknown", False)):
@@ -3911,7 +3944,7 @@ class TestAppTabLifecycle(unittest.TestCase):
                 self.destroyed = True
 
         class NewTab:
-            def __init__(self, parent, idx, on_log_selected=None):
+            def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None):
                 self.parent = parent
                 self.idx = idx
                 self.on_log_selected = on_log_selected
@@ -3923,6 +3956,7 @@ class TestAppTabLifecycle(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.nb = FakeNotebook()
         app._on_tab_log_selected = lambda tab: None
+        app._apply_tab_settings_live = lambda tab: None
         app._apply_saved_window_settings = lambda: None
         app.tabs = [OldTab(), OldTab()]
         old_tabs = list(app.tabs)
@@ -9288,6 +9322,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["win_count"], 6)
@@ -9341,6 +9376,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
+            app._load_fog_early_read_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 
@@ -12756,6 +12792,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
             setattr(fake, name, self.Var(""))
         fake.v_freeze_rounds = {}
         fake._window_volume_settings = lambda: mainGUI.App._window_volume_settings(app)
+        fake._fog_early_read_setting = lambda: {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(fake)
@@ -13305,6 +13342,165 @@ class TestChaseKeysEndToEnd(unittest.TestCase):
         self.keys._tap(self.app, "f2", times=2)
 
         self.assertEqual(self.logs, ["[窓2] チェイスはラウンド中だけ使えます"] * 2)
+
+
+class TestSettingsLive(unittest.TestCase):
+    """BN: 霧看破のボタンの保存・表示の名前・窓ごとの設定を動作中も反映"""
+
+    class Var:
+        def __init__(self, value=False):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def setUp(self):
+        self.addCleanup(FogEarlyRead.set_early_read_enabled, False)
+
+    # ── 霧看破のボタンの保存と読み込み ─────────────────
+    def _fog_app(self):
+        app = type("FakeApp", (), {})()
+        app.v_fog_early_read = self.Var(False)
+        return app
+
+    def test_the_button_is_loaded_and_saved(self):
+        for data, expected in (({}, False), ({"fog_early_read_enabled": True}, True),
+                               ({"fog_early_read_enabled": "yes"}, False),
+                               ({"fog_early_read_enabled": False}, False)):
+            app = self._fog_app()
+            mainGUI.App._load_fog_early_read_setting(app, data)
+            self.assertEqual(app.v_fog_early_read.get(), expected, data)
+            self.assertEqual(FogEarlyRead.early_read_enabled(), expected, data)
+            self.assertEqual(mainGUI.App._fog_early_read_setting(app),
+                             {"fog_early_read_enabled": expected})
+
+    def test_the_default_is_off(self):
+        """起動したての値（ほかのテストが触る前）を、新しいプロセスで見る"""
+        out = subprocess.run([sys.executable, "-c", "import FogEarlyRead as F; "
+                              "print(F.early_read_enabled(), F.early_read_allowed('invite'))"],
+                             cwd=str(Path(FogEarlyRead.__file__).parent), capture_output=True,
+                             text=True, timeout=60)
+        self.assertEqual(out.stdout.strip(), "False False", out.stderr)
+
+    def test_changing_the_button_applies_and_saves(self):
+        app = self._fog_app()
+        app.v_fog_early_read.set(True)
+        app._schedule_settings_save = MagicMock()
+        mainGUI.App._on_fog_early_read_changed(app)
+        self.assertTrue(FogEarlyRead.early_read_allowed("friends"))
+        self.assertFalse(FogEarlyRead.early_read_allowed("friends_plus"))
+        app._schedule_settings_save.assert_called_once()
+
+    def test_the_save_includes_the_key(self):
+        stored = {}
+        fake = type("FakeApp", (), {})()
+        fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(fake, name, self.Var(""))
+        fake.v_freeze_rounds = {}
+        fake._window_volume_settings = lambda: {}
+        fake.v_fog_early_read = self.Var(True)
+        fake._fog_early_read_setting = lambda: mainGUI.App._fog_early_read_setting(fake)
+        with patch.object(mainGUI, "save_settings", stored.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(fake)
+        self.assertIs(stored["fog_early_read_enabled"], True)
+
+    # ── 表示の名前 ─────────────────────────────
+    def test_the_two_renamed_labels(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn('text="ラウンド突入でフリーズ:"', src)
+        self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
+        self.assertNotIn("突入で全窓停止", src)
+        self.assertNotIn("ラウンドごとの扱い", src)
+        self.assertIn('text="霧看破を使う（Friends・Invite+・Invite のみ）"', src)
+
+    # ── 窓ごとの設定を動作中も反映 ─────────────────────
+    def _live_app(self, running=True):
+        app = type("FakeApp", (), {})()
+        app._running = running
+        self.cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk=True,
+                                  announce_intermission=False) for _ in range(2)]
+        app.monitors = []
+        for idx, cfg in enumerate(self.cfgs):
+            m = MagicMock()
+            m.window_idx = idx + 1
+            m.cfg = cfg
+            app.monitors.append(m)
+        return app
+
+    def _tab(self, app):
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        return mainGUI.WindowTab(root, 1, on_settings_changed=lambda t: mainGUI.App._apply_tab_settings_live(app, t))
+
+    def test_each_kind_reaches_only_that_windows_monitor(self):
+        app = self._live_app()
+        tab = self._tab(app)                          # 窓2（idx 1）
+        before = copy.deepcopy(self.cfgs[0])
+
+        tab.v_auto_begin.set(False)
+        tab.v_do_skip.set(False)
+        tab.v_cancel_afk.set(False)
+        tab.v_announce_intermission.set(True)
+        tab.v_skip_rounds["Classic"].set(True)
+        tab.v_continue_rounds["Fog"].set(True)
+
+        cfg = self.cfgs[1]
+        self.assertEqual((cfg.auto_begin, cfg.do_skip, cfg.cancel_afk, cfg.announce_intermission),
+                         (False, False, False, True))
+        self.assertEqual(cfg.skip_rounds, {"Classic"})
+        self.assertEqual(cfg.continue_rounds, {"Fog"})
+        self.assertEqual(self.cfgs[0], before, "ほかの窓は変わらない")
+
+    def test_clearing_the_round_checks_reaches_the_monitor(self):
+        """入室で GUI のチェックが外れる → 監視へも空が渡る（食い違わない）"""
+        app = self._live_app()
+        tab = self._tab(app)
+        tab.v_skip_rounds["Classic"].set(True)
+        tab.v_skip_rounds["Classic"].set(False)
+        self.assertEqual(self.cfgs[1].skip_rounds, set())
+
+    def test_nothing_happens_while_stopped(self):
+        app = self._live_app(running=False)
+        tab = self._tab(app)
+        tab.v_do_skip.set(False)
+        self.assertTrue(self.cfgs[1].do_skip, "次の開始で写る")
+
+    def test_the_tabs_are_built_with_the_hook(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn("on_settings_changed=self._apply_tab_settings_live", src)
+
+
+class TestLiveSkipFromTheNextRound(unittest.TestCase):
+    """ラウンド中に自動自爆を入れても、そのラウンドでは自爆しない／次のラウンドから効く"""
+
+    def setUp(self):
+        # ラウンド指定自爆のテストの道具を借りる（そのテストは流さない）
+        self.helper = TestSkipRoundsByType("test_a_listed_round_is_skipped")
+        self.helper.setUp()
+        self.addCleanup(self.helper.tearDown)
+        self._monitor = self.helper._monitor
+        self._killers = self.helper._killers
+
+    def test_turning_skip_on_mid_round_waits_for_the_next_round(self):
+        monitor = self._monitor(do_skip=False)
+        self.assertNotIn("do_skip", self._killers(monitor))
+
+        monitor.cfg.do_skip = True                     # 動作中に入れた（Tk のスレッドから代入）
+        with patch.object(LogMonitor.threading, "Thread") as thread:
+            monitor._process("2026.10.01 12:00:30 Debug      -  Verified")
+        self.assertNotIn("do_skip", _decision_threads(thread), "そのラウンドはやり直さない")
+
+        monitor.st.round_seq += 1                      # 次のラウンド
+        self.assertIn("do_skip", self._killers(monitor))
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -16451,7 +16647,7 @@ class TestSpeedFreeze(unittest.TestCase):
 
 
 class TestRoundFreezeVoice(unittest.TestCase):
-    """突入で全窓停止を選んだラウンドに入ったら、そのラウンドの音声を鳴らす"""
+    """ラウンド突入でフリーズを選んだラウンドに入ったら、そのラウンドの音声を鳴らす"""
 
     ROUND_LINE = ("This round is taking place at Facility (12) "
                   "and the round type is %s")
@@ -19351,6 +19547,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["emergency_stop_key"], "f9")
@@ -19663,11 +19860,13 @@ class TestStartKeySettings(unittest.TestCase):
              patch.object(mainGUI, "save_settings", lambda _d: None):
             if valid:
                 app._load_window_volume_settings = lambda _data: None
+                app._load_fog_early_read_setting = lambda _data: None
                 mainGUI.App._load_saved_settings(app)
             else:
                 with patch.object(HotKey, "is_valid",
                                   side_effect=lambda k: k == "p"):
                     app._load_window_volume_settings = lambda _data: None
+                    app._load_fog_early_read_setting = lambda _data: None
                     mainGUI.App._load_saved_settings(app)
         return app
 
@@ -19688,6 +19887,7 @@ class TestStartKeySettings(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["start_key"], "f9")
@@ -20056,6 +20256,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(old)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
+            app._load_fog_early_read_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
 
         self.assertEqual(app.v_ton_access.get(), config.TON_INSTANCE_ACCESS_INVITE)
@@ -20101,6 +20302,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):
             app._load_window_volume_settings = lambda _data: None
+            app._load_fog_early_read_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return getattr(app, var).get()
 
@@ -20111,6 +20313,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertIs(saved["join_world"], True)
@@ -20125,6 +20328,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["ton_instance_access"], config.TON_INSTANCE_ACCESS_INVITE)
@@ -20235,6 +20439,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
@@ -20263,6 +20468,7 @@ class TestSettingsArePersisted(unittest.TestCase):
              patch.object(mainGUI, "load_settings",
                           return_value={"tnl_path": "C:/list/my.tnl"}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["tnl_path"], "C:/list/my.tnl")
@@ -20412,6 +20618,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -22237,6 +22444,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
              patch.object(mainGUI, "load_settings",
                           return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -22364,6 +22572,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         with patch.object(mainGUI, "load_settings", return_value=data), \
              patch.object(HotKey, "is_valid", return_value=True):
             app._load_window_volume_settings = lambda _data: None
+            app._load_fog_early_read_setting = lambda _data: None
             mainGUI.App._load_saved_settings(app)
         return app
 

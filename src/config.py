@@ -535,7 +535,7 @@ VOICE_FOXY         = str(resource_path("voice/SpawnFoxy.mp3"))
 # 速度からの先読み用
 VOICE_8PAGES       = str(resource_path("voice/8Pages.mp3"))
 VOICE_PUNISH       = str(resource_path("voice/Punished.mp3"))
-# 突入で全窓停止を選んだラウンドに入ったときの音声（霧は VOICE_FOG を使う）
+# ラウンド突入でフリーズを選んだラウンドに入ったときの音声（霧は VOICE_FOG を使う）
 VOICE_UNBOUND      = str(resource_path("voice/Unbound.mp3"))
 VOICE_MIDNIGHT     = str(resource_path("voice/Midnight.mp3"))
 VOICE_ALTERNATE    = str(resource_path("voice/Alternate.mp3"))

@@ -26,13 +26,29 @@ LOG_HEAD_BYTES = 8192       # 起動引数はログの先頭付近に出る（VR
 # 判定（自爆・続行）はもう動いているので取り消せない。名前ごとの答え合わせ（trust）が
 # 次のラウンドから外すのは、公開と食い違った名前だけ
 
-# 看破してよい公開範囲（依頼者の決定）。自分が呼んだ人しか入れないインバイトだけ。
-# インバイト+・フレンド・グループオンリーも外した（安全側に倒す）
-EARLY_READ_ACCESS = frozenset({LogParser.ACCESS_INVITE})
+# 看破してよい公開範囲（依頼者の決定 2026-10-01）。Friends・Invite+・Invite だけ。
+# さらに、ツール全体のボタン（set_early_read_enabled）で許可したときだけ看破する。
+# それ以外は NG と同じ（判定・表示には使わず、DB にだけ黙って送る）
+EARLY_READ_ACCESS = frozenset({LogParser.ACCESS_FRIENDS, LogParser.ACCESS_INVITE_PLUS,
+                               LogParser.ACCESS_INVITE})
+
+_enabled_lock = threading.Lock()
+_enabled = False        # 既定は切る（許可のボタン）。settings.json の fog_early_read_enabled
+
+
+def set_early_read_enabled(enabled: bool):
+    global _enabled
+    with _enabled_lock:
+        _enabled = bool(enabled)
+
+
+def early_read_enabled() -> bool:
+    with _enabled_lock:
+        return _enabled
 
 
 def early_read_allowed(access: str) -> bool:
-    return access in EARLY_READ_ACCESS
+    return early_read_enabled() and access in EARLY_READ_ACCESS
 
 
 def launched_for_early_read(log_path) -> bool:
