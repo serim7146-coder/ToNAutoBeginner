@@ -261,6 +261,17 @@ BEGIN_CURSOR_GAP_SEC   = 0.3        # 置けなかったときに、次を試す
 # 試す回数で上限が決まるので、ループ全体の締め切りは持たない（以前の
 # BEGIN_CURSOR_LIMIT_SEC = 4.0 は、1回目の受理待ちが5秒あると2回目を切り捨てていた）
 BEGIN_CURSOR_DIPS      = 2
+# ── Begin が押せなかったときの位置合わせ（BeginDetect で BEGIN を探して横移動で寄せる）──
+# 照準（クライアント領域の中央）と BEGIN の文字の中心の、横のずれを見る。縦は OSC で
+# 視点を上下に振れないので直さない（実測では文字が照準の少し上に来る。照準は黒い天板に乗る）
+BEGIN_ADJUST_TOL          = 0.3    # 許容: 文字幅に対する割合（これ以内なら動かない）
+BEGIN_ADJUST_PROBE_SEC    = 0.1    # 1回目の横移動（px/秒 がまだ分からないとき）
+BEGIN_ADJUST_MIN_SEC      = 0.05   # 1回の横移動の下限・上限
+BEGIN_ADJUST_MAX_SEC      = 0.4
+BEGIN_ADJUST_MAX_STEPS    = 4      # 横移動の回数の上限
+BEGIN_ADJUST_MAX_TOTAL_SEC = 1.2   # 1回の位置合わせで横移動してよい合計
+BEGIN_ADJUST_SETTLE_SEC   = 0.4    # 動いてから撮り直すまでの待ち（減速を待つ）
+BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変わらなければ打ち切る（OSC が届いていない等）
 # 押してから受理（Verified）を待つ上限。差し込み後の待ち（_wait_begin_accepted）と、
 # 前面化＋クリック後の押し直し前の待ち（_begin_accepted）で共用する（依頼者の判断）。
 # 押せた回は実測 0.2 秒ほどで受理が来るので、待たずに抜ける（2026-09-27 22:35 は

@@ -2,7 +2,9 @@ import threading
 import time
 from typing import Callable
 
+import BeginDetect
 import config
+import ScreenCapture
 import SharedState
 import WindowOperator
 import OSCClient
@@ -37,6 +39,9 @@ ITEM_LOSS_WATCH_SEC = 0.2
 
 
 class ActionExecutor:
+    # 検出器が使えないことは、アプリ起動中に1回だけ告げる
+    _detector_unavailable_logged = False
+
     def __init__(
         self,
         cfg: WindowConfig,
@@ -62,6 +67,9 @@ class ActionExecutor:
         self._cursor_reason_round = -1
         self._cursor_reasons: set = set()
         self._spam_paused_round = -1      # 連打の休止を告げたラウンド
+        self._begin_given_up_round = -1   # BEGIN が見つからずあきらめたラウンド
+        self._last_press = "click"        # 直前の回で何で押したか（"dip" / "click"）
+        self._dip_landed = False          # 直前の差し込みでカーソルを置けたか
         # 受信の準備（bind）が済んだことを横移動側へ伝える。
         # VRChatは値が変わったときしか送らないので、bind前に動き出すと
         # 立ち上がりのサンプルを永久に取りこぼす。
@@ -289,22 +297,40 @@ class ActionExecutor:
             time.sleep(0.1)
 
     def _confirm_begin(self, round_seq: int):
-        """押した Begin が受理されなければ押し直す（最大 BEGIN_RETRY_MAX 回）。
+        """1回目を押した後。受理されなければ押し直す。1ラウンドで押すのは
+        BEGIN_RETRY_MAX 回（1回目を含む）で終わり、その後に押し直しは続かない。
 
-        押し直すのはクリックだけ。Begin 前の移動はやり直さない（もう位置に
-        ついている）。受理は本物の Verified（st.begin_done）で見る。
+        差し込み → 位置合わせ → 差し込み → 前面化＋クリック
+        （最初から前面化＋クリックの窓は クリック → 位置合わせ → クリック → クリック）。
+        各回の手段は _press_begin() が決める。3回目は必ず前面化＋クリック。
+        位置合わせは1回目と2回目の間に1回だけ。BEGIN が画面に無ければ、窓を前に
+        出すだけにして、そのラウンドの Begin はあきらめる（利用者が直す）。
+        Begin 前の移動はやり直さない。受理は本物の Verified（st.begin_done）で見る。
         """
         limit = config.BEGIN_RETRY_MAX
         for attempt in range(2, limit + 1):
-            if self._begin_accepted(round_seq):
+            if self._accepted_after_press(round_seq):
                 return
             if not self._should_retry_begin(round_seq):
                 return
+            if attempt == 2:
+                if self._adjust_to_begin(round_seq) == "not_found":
+                    self._show_window_without_begin(round_seq)
+                    return
+                if not self._should_retry_begin(round_seq):
+                    return          # 位置合わせの間に受理された・止めた
             self._log(f"Begin が受理されていません → 押し直し（{attempt}/{limit}回目）")
-            if not self._click_begin_again(round_seq):
+            if not self._click_begin_again(round_seq, click_only=attempt == limit):
                 return
-        if not self._begin_accepted(round_seq) and self._should_retry_begin(round_seq):
+        if not self._accepted_after_press(round_seq) and self._should_retry_begin(round_seq):
             self._log(f"⚠ Begin を{limit}回押しましたが受理されませんでした")
+
+    def _accepted_after_press(self, round_seq: int) -> bool:
+        """直前の回が受理されたか。差し込みは中で受理を待ち終えているので待たない。
+        クリックの後は _begin_accepted() で待つ"""
+        if self._last_press == "dip":
+            return self._st.begin_done
+        return self._begin_accepted(round_seq)
 
     def _begin_accepted(self, round_seq: int) -> bool:
         """受理を待つ。受理されたか、もう待つ意味が無くなったら返る"""
@@ -320,9 +346,10 @@ class ActionExecutor:
         st = self._st
         return (self._is_running() and not st.in_round and not st.begin_done
                 and st.round_seq == round_seq
+                and self._begin_given_up_round != round_seq
                 and st.instance_type == config.INSTANCE_PRIVATE)
 
-    def _click_begin_again(self, round_seq: int) -> bool:
+    def _click_begin_again(self, round_seq: int, click_only: bool = False) -> bool:
         """押すところだけやり直す。他窓の解除を待ってから押す"""
         if not self._wait_other_windows():
             return False
@@ -330,7 +357,104 @@ class ActionExecutor:
             return False
         if not self._begin_precheck():
             return False
-        return self._press_begin(again=True)
+        return self._press_begin(again=True, click_only=click_only)
+
+    # ── Begin の位置合わせ（画像で BEGIN を探して横移動で照準に寄せる）──
+    def _adjust_to_begin(self, round_seq: int) -> str:
+        """照準（クライアント領域の中央）と BEGIN の文字の横のずれを、横移動で詰める。
+
+        "aimed": 許容内にした・動かずに済んだ・途中で打ち切った（BEGIN は最初に
+        見えていた）／"not_found": 最初の撮影で BEGIN が無い／"skip": 使えない・
+        撮れない・中止。視点は回さない（回した向きが次のラウンドの Begin 前移動に
+        残ると、明後日の方向へ歩く）。_GLOBAL_ACTION_LOCK は取らない（撮影も
+        横移動も前面を奪わない。検出は1〜2秒かかる）
+        """
+        if not BeginDetect.available():
+            if not ActionExecutor._detector_unavailable_logged:
+                ActionExecutor._detector_unavailable_logged = True
+                self._log("Begin: 画像での位置合わせは使えません（OpenCV か見本が読めません）")
+            return "skip"
+        if self._adjust_stopped(round_seq):
+            return "skip"
+        seen = self._look_for_begin()
+        if seen is None:
+            return "skip"
+        hit, aim_x = seen
+        if hit is None:
+            return "not_found"
+        dx = hit["cx"] - aim_x
+        px_per_sec = None
+        total = 0.0
+        steps = 0
+        while True:
+            if abs(dx) <= hit["w"] * config.BEGIN_ADJUST_TOL:
+                if steps:
+                    self._log(f"Begin: 位置合わせ済み（横 {dx:+.0f}px）")
+                else:
+                    self._log(f"Begin: BEGIN は照準の上にあります（横 {dx:+.0f}px）"
+                              "→ そのまま2回目を押します")
+                return "aimed"
+            if steps >= config.BEGIN_ADJUST_MAX_STEPS:
+                return self._adjust_gave_up(f"{steps}回動いた。横 {dx:+.0f}px")
+            sec = (config.BEGIN_ADJUST_PROBE_SEC if px_per_sec is None
+                   else abs(dx) / px_per_sec)
+            sec = min(max(sec, config.BEGIN_ADJUST_MIN_SEC), config.BEGIN_ADJUST_MAX_SEC)
+            sec = min(sec, config.BEGIN_ADJUST_MAX_TOTAL_SEC - total)
+            if sec < config.BEGIN_ADJUST_MIN_SEC:
+                return self._adjust_gave_up(f"合計 {total:.2f}秒動いた。横 {dx:+.0f}px")
+            if self._adjust_stopped(round_seq):
+                return "skip"
+            direction, label = ("right", "右") if dx > 0 else ("left", "左")
+            self._log(f"Begin: 位置合わせ（照準から横 {dx:+.0f}px）→ {label}へ {sec:.2f}秒")
+            self.move(direction, sec)
+            total += sec
+            steps += 1
+            time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
+            if self._adjust_stopped(round_seq):
+                return "skip"
+            seen = self._look_for_begin()
+            if seen is None or seen[0] is None:
+                return self._adjust_gave_up("BEGIN を見失った")
+            hit, aim_x = seen
+            new_dx = hit["cx"] - aim_x
+            moved = abs(dx - new_dx)
+            if moved <= config.BEGIN_ADJUST_MIN_MOVE_PX:
+                return self._adjust_gave_up(f"動いていない（{moved:.0f}px）")
+            px_per_sec = moved / sec
+            dx = new_dx
+
+    def _adjust_gave_up(self, why: str) -> str:
+        self._log(f"Begin: 位置合わせを打ち切り（{why}）→ 2回目を押します")
+        return "aimed"
+
+    def _adjust_stopped(self, round_seq: int) -> bool:
+        st = self._st
+        return (not self._is_running() or st.in_round or st.round_seq != round_seq
+                or st.begin_done)
+
+    def _look_for_begin(self):
+        """撮って BEGIN を探す。(見つけた文字 or None, 照準の x)。撮れなければ None"""
+        hwnd = self._cfg.hwnd
+        aim = WindowOperator.aim_in_window_image(hwnd)
+        if aim is None:
+            return None
+        bits, w, h = ScreenCapture.capture_window(hwnd)
+        if not bits or w <= 0 or h <= 0:
+            return None
+        return BeginDetect.find(bits, w, h), aim[0]
+
+    def _show_window_without_begin(self, round_seq: int):
+        """BEGIN が画面に無い。クリックしても当たらないので、窓を前に出すだけにして
+        そのラウンドの Begin はあきらめる。元の窓へは返さない（利用者が直す場面
+        なので、どの窓か分かるように前に残す）。音声は出さない"""
+        self._begin_given_up_round = round_seq
+        self._log("Begin: 画面に BEGIN が見つかりません → 窓を前に出すだけにします（クリックしない）")
+        if not self._wait_other_windows():
+            return
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._is_running() or self._st.in_round:
+                return
+            WindowOperator.focus_window(self._cfg.hwnd)
 
     def _vrchat_is_in_front(self) -> bool:
         """VRChat の窓が前面か。前面ならカーソルを触らずフォールバックする。
@@ -420,6 +544,7 @@ class ActionExecutor:
         """
         st = self._st
         round_seq = st.round_seq
+        self._dip_landed = False        # 1度でもカーソルを置けたか（_press_begin が見る）
         for attempt in range(config.BEGIN_CURSOR_DIPS):
             if st.begin_done:
                 return True             # 間に受理されていた
@@ -444,6 +569,7 @@ class ActionExecutor:
                     return False        # 点が出せない（最小化・画面外など）
                 time.sleep(config.BEGIN_CURSOR_GAP_SEC)
                 continue
+            self._dip_landed = True
             if self._wait_begin_accepted(round_seq):
                 return True
         return False
@@ -481,8 +607,13 @@ class ActionExecutor:
         self._cursor_reasons.add(reason)
         self._log(f"Begin: {reason}")
 
-    def _press_begin(self, again: bool = False) -> bool:
-        """Begin を押す。押せたら True。
+    def _press_begin(self, again: bool = False, click_only: bool = False) -> bool:
+        """Begin を1回押す。押した（差し込んだ・クリックした）ら True。
+
+        1回で使う手段は1つ: 差し込めたら（受理が来なくても）この回はそこまで。
+        差し込みが「置けない」（1度もカーソルを置けなかった）で終わった回だけ、
+        その回のうちに前面化＋クリックで押す。click_only は3回目（必ず前面化＋クリック）。
+        何で押したかは self._last_press に残す（"dip" / "click"）。
 
         OSCが使える窓は、連打している /input/UseRight に合わせて、カーソルを
         Begin のボタンの上（＝照準＝クライアント領域の中央）へ一瞬だけ置く。
@@ -496,14 +627,24 @@ class ActionExecutor:
         """
         st = self._st
         tail = "（押し直し）" if again else ""
-        if self._begin_by_cursor() and not self._vrchat_is_in_front():
+        round_seq = st.round_seq
+        self._last_press = "click"
+        if (not click_only and self._begin_by_cursor()
+                and not self._vrchat_is_in_front()):
             stop = self._start_use_spam(st.round_seq) if again else None
             try:
                 if self._dip_cursor_for_begin(tail):
+                    self._last_press = "dip"
                     return True
             finally:
                 if stop is not None:
                     stop.set()
+            if self._dip_landed:
+                # 差し込めた（受理は来なかった）。この回はここまで。止めた・
+                # ラウンドが始まった・変わったなら、押していない扱い
+                self._last_press = "dip"
+                return (self._is_running() and not st.in_round
+                        and st.round_seq == round_seq)
         if st.begin_done:
             # 差し込みで押せていた。ロック待ちにも入らない
             self._log("Begin: 受理されたので前面化しません")

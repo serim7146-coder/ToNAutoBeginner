@@ -51,6 +51,7 @@ import OBSClient
 import Recorder
 import SecretStore
 import FogEarlyRead
+import BeginDetect
 import ScreenCapture
 import ToNEntry
 import mainGUI
@@ -11848,6 +11849,407 @@ class TestReturnFront(unittest.TestCase):
         self.assertEqual(self._returned(), self.RETURNED)
 
 
+def _cv2_available() -> bool:
+    try:
+        import cv2  # noqa: F401
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_cv2_available(), "OpenCV / numpy が無い")
+class TestBeginDetect(unittest.TestCase):
+    """[ BEGIN ] の文字を窓の画像から探す検出器（届けられたもの。中身は変えない）"""
+
+    def setUp(self):
+        import numpy as np
+        self.np = np
+        self.addCleanup(setattr, BeginDetect, "_templates", BeginDetect._templates)
+
+    def _template(self):
+        import cv2
+        path = config.resource_path(BeginDetect.TEMPLATE_FILES[0])
+        data = self.np.fromfile(str(path), dtype=self.np.uint8)
+        return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+    def _pasted(self, x, y):
+        """黒い 1920x1080 に begin_1.png を2倍にして貼る。貼った中心を返す"""
+        import cv2
+        t = cv2.resize(self._template(), None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        img = self.np.zeros((1080, 1920, 3), dtype=self.np.uint8)
+        h, w = t.shape[:2]
+        img[y:y + h, x:x + w] = t
+        return img, (x + w / 2, y + h / 2)
+
+    def test_the_templates_load(self):
+        self.assertTrue(BeginDetect.available())
+
+    def test_a_pasted_begin_is_found_at_its_centre(self):
+        img, (cx, cy) = self._pasted(700, 480)
+
+        hit = BeginDetect.find_in_bgr(img)
+
+        self.assertIsNotNone(hit)
+        self.assertLessEqual(abs(hit["cx"] - cx), 5, hit)
+        self.assertLessEqual(abs(hit["cy"] - cy), 5, hit)
+
+    def test_nothing_is_found_in_black_or_noise(self):
+        black = self.np.zeros((1080, 1920, 3), dtype=self.np.uint8)
+        noise = self.np.random.default_rng(1).integers(0, 256, (1080, 1920, 3),
+                                                       dtype=self.np.uint8)
+        self.assertIsNone(BeginDetect.find_in_bgr(black))
+        self.assertIsNone(BeginDetect.find_in_bgr(noise))
+
+    def test_missing_templates_make_it_unavailable(self):
+        img, _c = self._pasted(700, 480)             # 貼る絵は差し替える前に作る
+        BeginDetect._templates = None
+        with patch.object(BeginDetect, "TEMPLATE_FILES", ("begin_templates/nope.png",)):
+            self.assertFalse(BeginDetect.available())
+            self.assertIsNone(BeginDetect.find_in_bgr(img))
+        BeginDetect._templates = None
+
+    def test_the_capture_format_is_accepted(self):
+        """ScreenCapture.capture_window の形（BGRA のバイト列）から探せる"""
+        img, (cx, _cy) = self._pasted(900, 500)
+        alpha = self.np.full((1080, 1920, 1), 255, dtype=self.np.uint8)
+        bits = self.np.concatenate([img, alpha], axis=2).tobytes()
+
+        hit = BeginDetect.find(bits, 1920, 1080)
+
+        self.assertIsNotNone(hit)
+        self.assertLessEqual(abs(hit["cx"] - cx), 5)
+        self.assertIsNone(BeginDetect.find(b"", 1920, 1080))
+
+
+class TestBeginThreePresses(unittest.TestCase):
+    """1ラウンドで押すのは3回（BEGIN_RETRY_MAX）で終わり。位置合わせは1回目と
+    2回目の間に1回だけ。差し込み → 位置合わせ → 差し込み → 前面化＋クリック、
+    最初から前面化＋クリックの窓は クリック → 位置合わせ → クリック → クリック"""
+
+    def setUp(self):
+        self.events = []
+        self.logs = []
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        self.st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5, round_seq=1)
+        self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
+        self.accept_after = None          # この出来事の数に達したら受理
+        self.dips = []                    # 差し込みごとの結果（"miss" / "unplaceable" / "ok"）
+        self.adjust = "aimed"
+        self.front = [False]              # _vrchat_is_in_front の答え（尽きたら最後の値）
+        for p in (patch.object(config, "BEGIN_RETRY_WAIT_SEC", 0),
+                  patch.object(ActionExecutor.time, "sleep"),
+                  patch.object(self.ex, "_wait_other_windows", return_value=True),
+                  patch.object(self.ex, "_begin_precheck", return_value=True),
+                  patch.object(self.ex, "_start_use_spam", return_value=None),
+                  patch.object(self.ex, "_begin_by_cursor", return_value=True),
+                  patch.object(self.ex, "_vrchat_is_in_front", side_effect=self._front),
+                  patch.object(self.ex, "_dip_cursor_for_begin", side_effect=self._dip),
+                  patch.object(self.ex, "_adjust_to_begin", side_effect=self._adjust),
+                  patch.object(WindowOperator, "borrow_front", side_effect=self._borrow),
+                  patch.object(WindowOperator, "return_front"),
+                  patch.object(WindowOperator, "click", side_effect=lambda: self._event("click")),
+                  patch.object(WindowOperator, "focus_window",
+                               side_effect=lambda h: self._event("focus") or True)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _event(self, name):
+        self.events.append(name)
+        if self.accept_after is not None and len(self.events) >= self.accept_after:
+            self.st.begin_done = True
+
+    def _front(self):
+        return self.front.pop(0) if len(self.front) > 1 else self.front[0]
+
+    def _dip(self, _tail):
+        result = self.dips.pop(0) if self.dips else "miss"
+        self.ex._dip_landed = result != "unplaceable"
+        self._event("dip")
+        return self.st.begin_done
+
+    def _adjust(self, _round_seq):
+        self._event("adjust")
+        return self.adjust
+
+    def _borrow(self, _hwnd):
+        self.borrowed = getattr(self, "borrowed", 0) + 1
+        return True, None
+
+    def _round(self):
+        """do_after_round の押すところと同じ: 1回目を押し、押せたら確かめる"""
+        if self.ex._press_begin():
+            self.ex._confirm_begin(self.st.round_seq)
+
+    def test_dip_adjust_dip_is_enough(self):
+        self.dips = ["miss", "ok"]
+        self.accept_after = 3
+
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust", "dip"])
+
+    def test_dip_adjust_dip_click_and_no_more(self):
+        with patch.object(self.ex, "_begin_accepted",
+                          wraps=self.ex._begin_accepted) as waited:
+            self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust", "dip", "click"])
+        # 差し込みは中で受理を待ち終えている。待ち直すのはクリックの後だけ
+        self.assertEqual(waited.call_count, 1, "クリックの後の1回だけ")
+        self.assertTrue(any("Begin を3回押しましたが受理されませんでした" in m
+                            for m in self.logs), self.logs)
+
+    def test_a_click_window_clicks_three_times(self):
+        self.ex._begin_by_cursor.return_value = False
+
+        self._round()
+
+        self.assertEqual(self.events, ["click", "adjust", "click", "click"])
+
+    def test_vrchat_in_front_before_the_second_turns_it_into_a_click(self):
+        self.front = [False, True]
+
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust", "click", "click"])
+
+    def test_an_unplaceable_dip_clicks_within_the_same_turn(self):
+        self.dips = ["unplaceable", "unplaceable"]
+
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "click", "adjust", "dip", "click", "click"])
+        turns = [m for m in self.logs if "押し直し（" in m]
+        self.assertEqual(len(turns), 2, "回は3回（1回目＋押し直し2回）")
+
+    def test_an_acceptance_after_any_turn_ends_it(self):
+        for after, expected in ((1, ["dip"]), (3, ["dip", "adjust", "dip"]),
+                                (4, ["dip", "adjust", "dip", "click"])):
+            self.events.clear()
+            self.st.begin_done = False
+            self.accept_after = after
+
+            self._round()
+
+            self.assertEqual(self.events, expected, after)
+        self.assertFalse(any("受理されませんでした" in m for m in self.logs))
+
+    def test_a_missing_begin_only_shows_the_window(self):
+        self.adjust = "not_found"
+
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust", "focus"], "クリックしない")
+        self.assertEqual(getattr(self, "borrowed", 0), 0, "札を作らない（元の窓へ返さない）")
+        self.assertFalse(self.ex._should_retry_begin(self.st.round_seq))
+        self.assertTrue(any("BEGIN が見つかりません" in m for m in self.logs), self.logs)
+        self.assertFalse(any("受理されませんでした" in m for m in self.logs))
+
+    def test_a_missing_begin_in_a_click_window_also_stops_clicking(self):
+        self.ex._begin_by_cursor.return_value = False
+        self.adjust = "not_found"
+
+        self._round()
+
+        self.assertEqual(self.events, ["click", "adjust", "focus"])
+
+    def test_the_give_up_is_only_for_that_round(self):
+        self.adjust = "not_found"
+        self._round()
+        self.st.round_seq += 1
+
+        self.assertTrue(self.ex._should_retry_begin(self.st.round_seq))
+
+    def test_a_skipped_adjustment_keeps_the_order(self):
+        self.adjust = "skip"
+
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust", "dip", "click"])
+
+    def test_an_acceptance_during_the_adjustment_stops_there(self):
+        def accept(_round_seq):
+            self._event("adjust")
+            self.st.begin_done = True
+            return "skip"
+
+        self.ex._adjust_to_begin.side_effect = accept
+        self._round()
+
+        self.assertEqual(self.events, ["dip", "adjust"])
+        self.assertFalse(any("押し直し" in m for m in self.logs), self.logs)
+
+    def test_a_dip_that_landed_counts_as_the_turn(self):
+        """差し込めた回（受理なし）は、その回のうちにクリックへ落ちない"""
+        self.assertTrue(self.ex._press_begin())
+        self.assertEqual(self.events, ["dip"])
+        self.assertEqual(self.ex._last_press, "dip")
+
+
+class TestBeginAdjust(unittest.TestCase):
+    """位置合わせ: 撮影 → BEGIN を探す → 照準との横のずれ → 横移動 → 撮り直し"""
+
+    AIM = (1000.0, 500.0)
+
+    def setUp(self):
+        self.moves = []
+        self.logs = []
+        self.hits = []
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        self.st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5, round_seq=1)
+        self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
+        self.addCleanup(setattr, ActionExecutor.ActionExecutor, "_detector_unavailable_logged",
+                        ActionExecutor.ActionExecutor._detector_unavailable_logged)
+        self.capture = patch.object(ScreenCapture, "capture_window",
+                                    return_value=(b"\0" * 16, 2, 2))
+        for p in (patch.object(BeginDetect, "available", return_value=True),
+                  patch.object(BeginDetect, "find", side_effect=self._find),
+                  patch.object(WindowOperator, "aim_in_window_image", return_value=self.AIM),
+                  self.capture,
+                  patch.object(ActionExecutor.time, "sleep"),
+                  patch.object(self.ex, "move", side_effect=self._move)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _hit(self, dx, w=100):
+        return {"score": 0.9, "dark": 0.9, "cx": self.AIM[0] + dx, "cy": 480.0,
+                "w": w, "h": 20}
+
+    def _find(self, _bits, _w, _h):
+        self.assertFalse(SharedState._GLOBAL_ACTION_LOCK.locked(), "撮影・検出でロックを持たない")
+        if not self.hits:
+            return None
+        dx = self.hits.pop(0)
+        return None if dx is None else self._hit(dx)
+
+    def _move(self, direction, sec):
+        self.assertFalse(SharedState._GLOBAL_ACTION_LOCK.locked(), "横移動でロックを持たない")
+        self.moves.append((direction, round(sec, 3)))
+
+    def test_it_moves_right_then_uses_the_measured_speed(self):
+        """1回目 0.1秒で 150px 動いた → 1500px/秒 → 残り 60px は 0.04秒 → 下限の 0.05秒"""
+        self.hits = [210, 60, 10]
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.05)])
+        self.assertTrue(any("位置合わせ済み（横 +10px）" in m for m in self.logs), self.logs)
+        self.assertTrue(any("位置合わせ（照準から横 +210px）→ 右へ 0.10秒" in m
+                            for m in self.logs), self.logs)
+
+    def test_it_moves_left_when_begin_is_left(self):
+        self.hits = [-120, -10]
+
+        self.ex._adjust_to_begin(1)
+
+        self.assertEqual(self.moves, [("left", 0.1)])
+
+    def test_the_second_step_uses_the_measured_speed(self):
+        """1回目 0.1秒で 100px → 1000px/秒 → 残り 200px は 0.2秒"""
+        self.hits = [300, 200, 0]
+
+        self.ex._adjust_to_begin(1)
+
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.2)])
+
+    def test_within_the_tolerance_it_does_not_move(self):
+        self.hits = [30]          # 許容 = 100 * 0.3 = 30px
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+
+        self.assertEqual(self.moves, [])
+        self.assertTrue(any("照準の上にあります" in m for m in self.logs), self.logs)
+
+    def test_the_step_count_is_capped(self):
+        self.hits = [1000, 900, 800, 700, 600, 500, 400]
+        with patch.object(config, "BEGIN_ADJUST_MAX_TOTAL_SEC", 100):
+            self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(len(self.moves), config.BEGIN_ADJUST_MAX_STEPS)
+        self.assertTrue(any("打ち切り" in m for m in self.logs))
+
+    def test_the_total_time_is_capped(self):
+        """0.1秒で 10px（100px/秒）→ 以後は上限 0.4秒ずつ → 合計 1.2秒で止まる"""
+        self.hits = [5000, 4990, 4950, 4910, 4870, 4830]
+        with patch.object(config, "BEGIN_ADJUST_MAX_STEPS", 100):
+            self.ex._adjust_to_begin(1)
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.4), ("right", 0.4),
+                                      ("right", 0.3)])
+        self.assertAlmostEqual(sum(s for _d, s in self.moves),
+                               config.BEGIN_ADJUST_MAX_TOTAL_SEC)
+
+    def test_it_stops_when_nothing_moved(self):
+        self.hits = [200, 196]            # 4px しか変わらない（OSC が届いていない等）
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+
+        self.assertEqual(self.moves, [("right", 0.1)])
+        self.assertTrue(any("動いていない" in m for m in self.logs), self.logs)
+
+    def test_losing_begin_after_a_move_ends_it_as_aimed(self):
+        self.hits = [200, None]
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(len(self.moves), 1)
+
+    def test_an_acceptance_stops_it(self):
+        self.hits = [400, 300, 200, 100]
+        self.ex.move.side_effect = lambda d, s: (self._move(d, s),
+                                                 setattr(self.st, "begin_done", True))
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+
+        self.assertEqual(len(self.moves), 1, "それ以上動かない")
+
+    def test_a_new_round_or_a_stop_stops_it(self):
+        self.hits = [400, 300]
+        self.st.in_round = True
+        self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+        self.st.in_round = False
+        self.assertEqual(self.ex._adjust_to_begin(2), "skip", "別のラウンド")
+        self.assertEqual(self.moves, [])
+
+    def test_no_begin_on_the_first_shot_is_not_found(self):
+        self.hits = [None]
+
+        self.assertEqual(self.ex._adjust_to_begin(1), "not_found")
+        self.assertEqual(self.moves, [])
+
+    def test_no_capture_is_a_skip(self):
+        self.capture.stop()
+        with patch.object(ScreenCapture, "capture_window", return_value=(b"", 0, 0)):
+            self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+        self.capture.start()
+        with patch.object(WindowOperator, "aim_in_window_image", return_value=None):
+            self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+
+    def test_an_unavailable_detector_is_a_skip_told_once(self):
+        ActionExecutor.ActionExecutor._detector_unavailable_logged = False
+        with patch.object(BeginDetect, "available", return_value=False):
+            self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+            self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+        self.assertEqual(sum("使えません" in m for m in self.logs), 1, self.logs)
+
+
+class TestAimInWindowImage(unittest.TestCase):
+    def test_the_aim_is_in_window_image_coordinates(self):
+        """窓表示（タイトルバーあり）: クライアントの左上は窓の左上から (8, 31) ずれる。
+        照準はクライアントの中央を、窓の画像（GetWindowRect 基準）の座標で返す"""
+        with patch.object(WindowOperator.win32gui, "GetWindowRect",
+                          return_value=(100, 50, 1100, 850)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen",
+                          return_value=(108, 81)), \
+             patch.object(WindowOperator.win32gui, "GetClientRect",
+                          return_value=(0, 0, 984, 761)):
+            self.assertEqual(WindowOperator.aim_in_window_image(0x100), (500.0, 411.5))
+
+    def test_no_client_area_is_none(self):
+        with patch.object(WindowOperator.win32gui, "GetWindowRect", return_value=(0, 0, 10, 10)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen", return_value=(0, 0)), \
+             patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 0, 0)):
+            self.assertIsNone(WindowOperator.aim_in_window_image(0x100))
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -12817,7 +13219,9 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         click.assert_not_called()
 
     # ── 2. 来なければフォールバック ──────────────────
-    def test_no_acceptance_falls_back_to_the_click(self):
+    def test_no_acceptance_ends_the_turn_without_a_click(self):
+        """受理が来なくても、差し込めた回はその回のうちにクリックへ落ちない（AW:
+        次の回は位置合わせの後。受理待ちは上限で抜ける）"""
         executor, _st = self._executor()
         started = time.time()
 
@@ -12825,8 +13229,8 @@ class TestWaitForTheAcceptance(unittest.TestCase):
                                               press_wait=0.2)
 
         self.assertTrue(ok)
-        focus.assert_called_once()
-        click.assert_called_once()
+        focus.assert_not_called()
+        click.assert_not_called()
         self.assertTrue(user32.moves, "差し込みはしている")
         self.assertLess(time.time() - started, 5.0)
 
@@ -13706,8 +14110,8 @@ class TestVRChatInFrontFallback(unittest.TestCase):
 
         self.assertEqual(user32.moves.count((550, 500)),
                          config.BEGIN_CURSOR_DIPS, "差し続ける")
-        focus.assert_called_once()   # 押せないままなので最後は従来方式
-        click.assert_called_once()
+        focus.assert_not_called()    # 差し込めた回はクリックへ落ちない（AW）
+        click.assert_not_called()
 
     def test_a_small_rounding_error_is_allowed(self):
         """DPI スケーリングなどの端数は許す"""
@@ -13934,8 +14338,10 @@ class TestBeginByCursor(unittest.TestCase):
             ok, user32, focus, click, _press = self._press(executor, sleep=False)
 
         self.assertTrue(ok)
-        focus.assert_called_once()      # 押せないままなら従来方式へ落とす
-        click.assert_called_once()
+        # 差し込めた回は、受理が来なくてもその回のうちにクリックへ落ちない（AW:
+        # 1ラウンドで押すのは3回。次の回は位置合わせの後）
+        focus.assert_not_called()
+        click.assert_not_called()
         self.assertEqual(user32.moves.count((500, 500)), config.BEGIN_CURSOR_DIPS,
                          "試すたびにカーソルを戻す")
         # DWELL は WindowOperator 側の待ちと同じ秒数なので、回数ではなく有無で見る
@@ -13951,8 +14357,9 @@ class TestBeginByCursor(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(user32.moves.count((500, 500)), config.BEGIN_CURSOR_DIPS)
-        focus.assert_called_once()      # 試し終えたら従来方式へ
-        click.assert_called_once()
+        focus.assert_not_called()       # 試し終えたらこの回はここまで（AW）
+        click.assert_not_called()
+        self.assertEqual(executor._last_press, "dip")
 
     def test_a_shop_item_still_uses_the_cursor(self):
         """st.item_id はショップの装備で、手に持っているかではない。
@@ -14254,7 +14661,7 @@ class TestBeginByCursor(unittest.TestCase):
              patch.object(executor, "_press_begin", return_value=True) as press:
             self.assertTrue(executor._click_begin_again(4))
 
-        press.assert_called_once_with(again=True)
+        press.assert_called_once_with(again=True, click_only=False)
 
     def test_the_retry_gives_up_after_the_limit(self):
         executor, st = self._executor()
@@ -14265,12 +14672,15 @@ class TestBeginByCursor(unittest.TestCase):
              patch.object(executor, "_should_retry_begin", return_value=True), \
              patch.object(executor, "_wait_other_windows", return_value=True), \
              patch.object(executor, "_begin_precheck", return_value=True), \
+             patch.object(executor, "_adjust_to_begin", return_value="skip"), \
              patch.object(executor, "_press_begin",
-                          side_effect=lambda again=False: presses.append(again) or True), \
+                          side_effect=lambda again=False, click_only=False:
+                          presses.append((again, click_only)) or True), \
              patch.object(ActionExecutor.time, "sleep"):
             executor._confirm_begin(st.round_seq)
 
-        self.assertEqual(presses, [True, True], "2回目と3回目を押し直して諦める")
+        self.assertEqual(presses, [(True, False), (True, True)],
+                         "2回目と3回目（前面化＋クリック）を押して諦める")
 
 
 class TestBeginNeverDropsTheItem(unittest.TestCase):

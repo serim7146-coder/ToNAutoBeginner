@@ -37,6 +37,7 @@ main.py ──▶ mainGUI.App (Tkinter)
 | `LogParser.py` | VRChatログの1行を正規表現で`LogEvent`（種別+付帯情報）に変換するステートレスな関数群。 |
 | `ActionExecutor.py` | 実際のウィンドウ操作：自爆キー長押し(`do_skip`)、Begin前移動+クリック+リトライ(`do_after_round`)、DTM/Waldo中のAFK防止ループ(`do_open_special_round_loop`)。`SharedState`のロック/イベントを使って他窓と協調する。 |
 | `WindowOperator.py` | 最下層のOS操作（`win32gui`でフォーカス、`keyboard`でキー押下、`pydirectinput`でクリック）。 |
+| `BeginDetect.py` | Begin が押せなかったときの画像での位置合わせ。窓の画像（`ScreenCapture.capture_window`）から `[ BEGIN ]` の文字を OpenCV で探す（見本は `begin_templates/`）。`ActionExecutor._adjust_to_begin` が横移動で照準に寄せるのに使う。 |
 | `MatchTNL.py` | `.tnl`（続行リスト）ファイルの読み込みと、ログ上のテラーID→tnlスロットIDへの変換（Alternate枠+134オフセット、Unbound+200オフセット）。 |
 | `RoundDecision.py` | テラーID正規化（`MatchTNL`呼び出し）と、「続行すべきか」「DTM/Waldo3クラ解放対象か」の判定ロジック。 |
 | `ReadJson.py` | `terrors.json`のロードとテラーID↔名前の相互変換。 |

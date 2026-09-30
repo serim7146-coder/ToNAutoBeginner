@@ -427,6 +427,24 @@ def return_front(loan) -> bool:
     return focus_window(loan.previous)
 
 
+def aim_in_window_image(hwnd: int) -> tuple | None:
+    """照準（クライアント領域の中央）を、窓の画像（GetWindowRect 基準。
+    ScreenCapture.capture_window の座標）で返す。取れなければ None。
+
+    窓表示ではタイトルバーと枠の分だけクライアント領域がずれるので、
+    ClientToScreen(0,0) と窓の左上の差を足す
+    """
+    try:
+        left, top, _right, _bottom = win32gui.GetWindowRect(hwnd)
+        cx, cy = win32gui.ClientToScreen(hwnd, (0, 0))
+        _l, _t, cw, ch = win32gui.GetClientRect(hwnd)
+    except Exception:
+        return None
+    if cw <= 0 or ch <= 0:
+        return None
+    return (cx - left + cw / 2, cy - top + ch / 2)
+
+
 def cursor_position() -> tuple | None:
     point = wintypes.POINT()
     try:

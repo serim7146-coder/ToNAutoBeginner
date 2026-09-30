@@ -3,3 +3,5 @@ pywin32
 pydirectinput
 keyboard
 python-dotenv
+numpy
+opencv-python-headless
