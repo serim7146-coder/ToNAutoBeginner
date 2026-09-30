@@ -18109,6 +18109,58 @@ class TestSkipRoundsByType(unittest.TestCase):
 
         self.assertIn("do_skip", started)
 
+    # ── 特殊ラウンドを経験したら3勝扱い（Twilight は除く） ──────────
+    def _special_round(self, monitor, round_type):
+        """その種別のラウンドで Killers have been set を受ける。出たログを返す"""
+        logs = []
+        monitor.logger = logs.append
+        monitor.st.round_type = round_type
+        with patch.object(LogMonitor.threading, "Thread"),              patch.object(PlaySound, "play_sound"):
+            monitor._process("2026.09.30 13:36:11 Debug      -  Killers have been set - "
+                             f"1 0 0 // Round type is {round_type}")
+        monitor.st.round_type = "Classic"            # 次のラウンド
+        return [m for m in logs if "3勝扱い" in m]
+
+    def test_twilight_does_not_count_as_three_wins(self):
+        """Twilight は特殊ラウンドだが3クラ前にも出る（2026-09-30 窓2: 0勝で DTM を自爆した）"""
+        monitor = self._monitor()
+
+        told = self._special_round(monitor, "Twilight")
+
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertEqual(told, [])
+        started = self._killers(monitor, [self.DTM])
+        self.assertNotIn("do_skip", started, "続く DTM は続行（3クラ解放）")
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertIn("Twilight", config.SPECIAL_ROUND, "特殊ラウンドであることは変わらない")
+
+    def test_other_special_rounds_still_count_and_say_so_once(self):
+        for round_type in ("Fog", "Mystic Moon", "Blood Moon"):
+            monitor = self._monitor()
+
+            told = self._special_round(monitor, round_type)
+
+            self.assertEqual(monitor.st.open_special_round_wins,
+                             config.OPEN_SPECIAL_ROUND_TARGET_WINS, round_type)
+            self.assertEqual(told, [f"[窓1] 特殊ラウンド（{round_type}）を経験したので3勝扱い"
+                                    " → 以降のDTM/Waldoはスキップします"], round_type)
+            self.assertIn("do_skip", self._killers(monitor, [self.DTM]), round_type)
+
+    def test_nothing_is_said_when_three_wins_are_already_done(self):
+        monitor = self._monitor()
+        monitor.st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+
+        self.assertEqual(self._special_round(monitor, "Fog"), [])
+        self.assertEqual(monitor.st.open_special_round_wins,
+                         config.OPEN_SPECIAL_ROUND_TARGET_WINS)
+
+    def test_nothing_is_said_when_the_dtm_waldo_continue_is_off(self):
+        monitor = self._monitor(cancel_afk=False)
+
+        self.assertEqual(self._special_round(monitor, "Fog"), [])
+        self.assertEqual(monitor.st.open_special_round_wins,
+                         config.OPEN_SPECIAL_ROUND_TARGET_WINS, "3勝扱いにはなる")
+
     def test_the_skip_applies_when_cancel_afk_is_off(self):
         monitor = self._monitor(cancel_afk=False)
 

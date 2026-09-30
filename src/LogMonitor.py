@@ -1158,8 +1158,13 @@ class LogMonitor:
             return
 
         if event.kind == LogParser.EVENT_KILLERS_SET:
-            # 特殊ラウンドを経験したら3勝扱い
-            if st.round_type in config.SPECIAL_ROUND:
+            # 特殊ラウンドを経験したら3勝扱い（3クラ前にも出る Twilight は除く）
+            if (st.round_type in config.SPECIAL_ROUND
+                    and st.round_type not in config.OPEN_SPECIAL_ROUND_NOT_PROOF):
+                if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
+                        and self.cfg.cancel_afk):
+                    self._log(f"特殊ラウンド（{st.round_type}）を経験したので3勝扱い"
+                              " → 以降のDTM/Waldoはスキップします")
                 st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
             if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
                 st.round_type = event.round_type

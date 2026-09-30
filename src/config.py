@@ -291,6 +291,10 @@ OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
     ReadJson.terror_id("Waldo", TERRORS)
 }
 OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）
+# 「特殊ラウンドを経験したら3勝扱い」の例外。特殊ラウンドだが、例外的に3クラ前にも
+# 出現するもの（依頼者 2026-09-30: Twilight だけ。ほかの Moon は出現条件の都合で
+# 3クラ前には起こりえない）。特殊ラウンドであることは変わらない（SPECIAL_ROUND には残す）
+OPEN_SPECIAL_ROUND_NOT_PROOF = {"Twilight"}
 OPEN_SPECIAL_ROUND_INTERVAL_SEC = 60.0   # AFK回避の移動の間隔（秒）
 
 # ── フリーズ解除待機 ──
