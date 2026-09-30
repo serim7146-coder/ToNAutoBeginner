@@ -163,8 +163,10 @@ def build_launch_args(
 
     osc_index を渡すと窓ごとに別のOSCポートを割り当てる。VRChatは既定で
     UDP 9000 を掴むため、多重起動では指定しないと2窓目以降が受信できない。
-    extra_options は画面の「起動オプション」の文字。空白で区切って LAUNCH_OPTION の
-    後ろに付ける（すでに入っているものと同じものは二重に付けない）
+    extra_options は画面の「起動オプション」の文字。空白で区切って、その順で
+    LAUNCH_OPTION の後ろに付ける。`-` で始まる語（オプションの名前）は、すでに引数に
+    ある（LAUNCH_OPTION・欄の前のほうを含む）完全に同じ語なら付けない。`-` で始まらない
+    語（値。`-screen-width 1080 -screen-height 1080` の 1080 など）はいつも付ける
     """
     args = [str(exe), f"--profile={int(profile_id)}"]
     if desktop_mode:
@@ -175,9 +177,10 @@ def build_launch_args(
     if instance_link:
         args.append(instance_link)
     args.extend(config.LAUNCH_OPTION)
-    for option in (extra_options or "").split():
-        if option not in args:
-            args.append(option)
+    for word in (extra_options or "").split():
+        if word.startswith("-") and word in args:
+            continue                    # 同じオプションは二重に付けない
+        args.append(word)
     return args
 
 

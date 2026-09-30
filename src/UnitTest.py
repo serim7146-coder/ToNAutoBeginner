@@ -14375,6 +14375,20 @@ class TestLaunchOptionsBR(unittest.TestCase):
             extra_options=f"{config.LAUNCH_OPTION[0]} --no-vr --foo --foo")
         self.assertEqual(args, self.BASE + list(config.LAUNCH_OPTION) + ["--foo"])
 
+    def test_values_are_always_added(self):
+        """BS: 重複を見るのは - で始まる語だけ。値の語（1080）は同じでも付ける"""
+        args = VRChatLauncher.build_launch_args(
+            Path("C:/VRChat.exe"), 0,
+            extra_options="-screen-width 1080 -screen-height 1080")
+        self.assertEqual(args, self.BASE + list(config.LAUNCH_OPTION)
+                         + ["-screen-width", "1080", "-screen-height", "1080"])
+
+    def test_an_option_already_in_launch_option_is_not_added(self):
+        args = VRChatLauncher.build_launch_args(
+            Path("C:/VRChat.exe"), 0, extra_options="--enable-sdk-log-levels --foo --foo 0 0")
+        self.assertEqual(args.count("--enable-sdk-log-levels"), 1)
+        self.assertEqual(args, self.BASE + list(config.LAUNCH_OPTION) + ["--foo", "0", "0"])
+
     def test_launch_one_passes_them(self):
         with patch.object(VRChatLauncher.subprocess, "Popen") as popen:
             VRChatLauncher.launch_one(Path("C:/VRChat.exe"), 0, extra_options="--foo")
