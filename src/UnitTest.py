@@ -53,6 +53,7 @@ import Recorder
 import SecretStore
 import FogEarlyRead
 import BeginDetect
+import RoundStore
 import VerifiedTracker
 import DebugLog
 import WindowVolume
@@ -80,9 +81,11 @@ def setUpModule():
     _real_paths.update(settings=config.SETTINGS_PATH,
                        names=config.FOG_OBJECT_NAMES_PATH,
                        debug=config.DEBUG_LOG_PATH,
+                       rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust)
     config.SETTINGS_PATH = root / "settings.json"
     config.DEBUG_LOG_PATH = root / "debug.log"
+    config.ROUND_STORE_PATH = root / "rounds.sqlite"
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
@@ -101,6 +104,7 @@ def tearDownModule():
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
     config.DEBUG_LOG_PATH = _real_paths["debug"]
+    config.ROUND_STORE_PATH = _real_paths["rounds"]
     FogEarlyRead.trust = _real_paths["trust"]
     _sandbox.cleanup()
 
@@ -128,6 +132,10 @@ class TestNoRealSettings(unittest.TestCase):
                           TestDbV1.RunNow), patch("builtins.print") as printed:
             ConnectDB.register_round("Classic", [1], 1, 1)
         self.assertIn("送信エラー", str(printed.call_args))
+
+    def test_the_round_store_path_is_not_the_real_one(self):
+        self._assert_not_real(config.ROUND_STORE_PATH)
+        self._assert_not_real(RoundStore.default_store().path)
 
     def test_the_debug_log_path_is_not_the_real_one(self):
         self._assert_not_real(config.DEBUG_LOG_PATH)
@@ -24384,6 +24392,90 @@ class TestAlternateRoundNameForDb(unittest.TestCase):
     def test_no_terrors_is_the_round_type(self):
         self.monitor.st.round_type = "Fog"
         self.assertEqual(self.monitor._round_type_for_db([]), "Fog")
+
+
+class TestRoundStoreOwn(unittest.TestCase):
+    """統計画面 v1: 自分が送ったラウンドを手元の SQLite に貯める（一時フォルダ）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+
+    def test_an_own_row_is_stored_with_its_uid(self):
+        self.assertTrue(self.store.add_own(100, 2, 12, 101, None, None, -13))
+
+        self.assertEqual(self.store.rows(), [(100, 2, 12, 101, None, None, -13, None, "own")])
+        self.assertEqual(self.store.my_uids(), {-13})
+
+    def test_without_a_uid_nothing_is_stored(self):
+        self.assertFalse(self.store.add_own(100, 2, 12, 101, None, None, None))
+        self.assertEqual(self.store.rows(), [])
+        self.assertEqual(self.store.my_uids(), set())
+
+    def test_my_uids_collect_every_account(self):
+        self.store.add_own(100, 1, 1, 5, None, None, -13)
+        self.store.add_own(200, 1, 1, 5, None, None, 40)
+        self.store.add_own(300, 1, 1, 5, None, None, -13)
+        self.assertEqual(self.store.my_uids(), {-13, 40})
+
+    def test_the_same_uid_and_second_in_two_windows_are_both_kept(self):
+        """同じアカウントを複数の窓で動かすと、同じ秒に別々のラウンドが始まりうる"""
+        self.store.add_own(100, 1, 12, 5, None, None, -13)
+        self.store.add_own(100, 6, 12, 5, 6, 7, -13)          # 別のラウンド
+        self.store.add_own(100, 1, 34, 5, None, None, -13)     # 別のマップ
+        self.store.add_own(100, 1, 12, 9, None, None, -13)     # 別のテラー
+        self.store.add_own(100, 1, 12, 5, None, None, -13)     # 全く同じ → 1行
+        self.assertEqual(self.store.count(), 4)
+
+    def test_a_broken_place_does_not_raise(self):
+        blocker = Path(self._dir.name) / "file"
+        blocker.write_text("x", encoding="utf-8")
+        store = RoundStore.RoundStore(blocker / "rounds.sqlite")
+        self.assertFalse(store.add_own(100, 1, 1, 1, None, None, 1))
+        self.assertEqual(store.rows(), [])
+        self.assertEqual(store.my_uids(), set())
+
+    def test_the_real_place_is_next_to_settings(self):
+        self.assertEqual(_real_paths["rounds"].name, "rounds.sqlite")
+        self.assertEqual(_real_paths["rounds"].parent, _real_paths["settings"].parent)
+
+
+class TestRegisterRoundKeepsOwnRows(unittest.TestCase):
+    """register_round で DB へ送るとき、手元にも自分の行（送った値そのまま）"""
+
+    RunNow = TestDbV1.RunNow
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        p = patch.object(config, "ROUND_STORE_PATH", Path(self._dir.name) / "rounds.sqlite")
+        p.start()
+        self.addCleanup(p.stop)
+        self.store = RoundStore.default_store()
+
+    def _send(self, *args, **kwargs):
+        return TestDbV1._send(self, *args, **kwargs)
+
+    def test_the_sent_values_are_kept(self):
+        _req, body = self._send("Fog", [101, 7, 3, 9], 12, -13, instance_key=42,
+                                round_time=1767225600 + 10)
+
+        self.assertEqual(self.store.rows(), [(10, 2, 12, 101, 7, 3, -13, None, "own")])
+        self.assertEqual((body["p_t1"], body["p_t2"], body["p_t3"]), (101, 7, 3))
+
+    def test_a_quiet_send_is_kept_too(self):
+        self._send("Fog", [101], 12, -13, quiet=True, round_time=1767225600 + 20)
+        self.assertEqual(self.store.rows()[0][:4], (20, 2, 12, 101))
+
+    def test_no_uid_keeps_nothing(self):
+        self._send("Fog", [101], 12, None, round_time=1767225600 + 30)
+        self.assertEqual(self.store.rows(), [])
+
+    def test_a_store_failure_does_not_stop_the_send(self):
+        with patch.object(RoundStore.RoundStore, "add_own", side_effect=None, return_value=False):
+            req, _body = self._send("Fog", [101], 12, -13, round_time=1767225600 + 40)
+        self.assertTrue(req.full_url.endswith("rpc/register_round"))
 
 
 class TestLogMonitorDbV1(unittest.TestCase):

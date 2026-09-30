@@ -20,6 +20,8 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 # デバッグログ（公開ログとは別。DebugLog）。上限を超えたら .1 へ回す
 DEBUG_LOG_PATH = SETTINGS_PATH.parent / "debug.log"
 DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
+# 統計画面 v1 の手元の保存（RoundStore。DB から取った分と自分が送った分）
+ROUND_STORE_PATH = SETTINGS_PATH.parent / "rounds.sqlite"
 
 # ── ToN ListTool の主催リスト追従 ──
 # ToN ListTool が %APPDATA% に書いている統合リストを読んで続行判定に使う。

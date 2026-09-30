@@ -13,6 +13,7 @@ from pathlib import Path
 
 import config
 import DebugLog
+import RoundStore
 
 try:
     from dotenv import load_dotenv
@@ -200,6 +201,9 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     }
 
     def _send():
+        # 手元にも「自分の行」として貯める（統計画面は自分の行を DB から取りに行かない）
+        RoundStore.default_store().add_own(
+            payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid)
         try:
             req = urllib.request.Request(
                 _url("rpc/register_round"),
