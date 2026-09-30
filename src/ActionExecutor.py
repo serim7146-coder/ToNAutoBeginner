@@ -178,26 +178,29 @@ class ActionExecutor:
             time.sleep(ITEM_LOSS_WATCH_SEC)
 
     def _show_item_loss(self):
-        """この窓を前面化し、同時に音声を鳴らす"""
+        """この窓を前面化し、同時に音声を鳴らす。借りた前面は装備待ちが解けたら返す"""
         with SharedState._GLOBAL_ACTION_LOCK:
-            if WindowOperator.focus_window(self._cfg.hwnd):
+            ok, loan = WindowOperator.borrow_front(self._cfg.hwnd)
+            if ok:
+                SharedState.keep_front_loan(self._st, loan)
                 self._log("この窓を前面化しました（アイテム装備待ち）")
             else:
                 self._log("⚠ 前面化に失敗（装備待ちは継続）")
         self.announce_item_lost_once()
 
-    def focus(self) -> bool:
-        """この窓にフォーカスを当てる。失敗したら False を返す。
+    def _borrow_front(self) -> tuple:
+        """この窓にフォーカスを当てる。(取れたか, 返すための札) を返す。
 
         フォーカスを取れないまま操作を送ると、別のウィンドウにキーや
-        クリックが飛ぶため、呼び出し側は必ず戻り値を確認すること。
+        クリックが飛ぶため、呼び出し側は必ず取れたかを確認すること。
         """
         hwnd = self._cfg.hwnd
-        if WindowOperator.focus_window(hwnd):
+        ok, loan = WindowOperator.borrow_front(hwnd)
+        if ok:
             self._log(f"フォーカス切替 → HWND={hwnd:#010x}")
-            return True
-        self._log(f"⚠ フォーカス取得失敗 HWND={hwnd:#010x} → 操作を中止")
-        return False
+        else:
+            self._log(f"⚠ フォーカス取得失敗 HWND={hwnd:#010x} → 操作を中止")
+        return ok, loan
 
     # ── 自爆 ──────────────────────────────────
 
@@ -509,10 +512,14 @@ class ActionExecutor:
                 return True
             if not self._is_running() or st.in_round:
                 return False
-            if not self.focus():
+            ok, loan = self._borrow_front()
+            if not ok:
                 return False
             self._log(f"Beginクリック{tail}")
             WindowOperator.click()
+            # 離した直後に元の窓へ返す。Begin は押した瞬間に判定され、クリックの
+            # 押す→離すの間で足りているので、別に待たない
+            WindowOperator.return_front(loan)
         return True
 
     def _begin_precheck(self, check_freeze: bool = True) -> bool:
@@ -962,7 +969,9 @@ class ActionExecutor:
         既存の作法どおりロックを取ってから切り替える（数秒待たされてもよい）。
         """
         with SharedState._GLOBAL_ACTION_LOCK:
-            if WindowOperator.focus_window(self._cfg.hwnd):
+            ok, loan = WindowOperator.borrow_front(self._cfg.hwnd)
+            if ok:
+                SharedState.keep_front_loan(self._st, loan)   # 速度検知が解けたら返す
                 self._log("この窓を前面化しました（速度検知フリーズ）")
             else:
                 self._log("⚠ 前面化に失敗（フリーズは継続）")

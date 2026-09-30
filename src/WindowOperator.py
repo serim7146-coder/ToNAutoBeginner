@@ -10,6 +10,7 @@ import keyboard
 import pydirectinput
 
 import config
+import SharedState
 
 
 def _attach_and_raise(hwnd: int) -> None:
@@ -372,6 +373,58 @@ def foreground_hwnd() -> int:
         return int(win32gui.GetForegroundWindow() or 0)
     except Exception:
         return 0
+
+
+class FrontLoan:
+    """ツールが VRChat の窓を前面にしたときに控える、返すための札"""
+
+    def __init__(self, hwnd: int, previous: int, cursor):
+        self.hwnd = hwnd            # 前に出した VRChat の窓
+        self.previous = previous    # その直前に前面だった窓
+        self.cursor = cursor        # その直前のカーソル位置（取れなければ None）
+
+    def give_back(self) -> bool:
+        return return_front(self)
+
+
+def borrow_front(hwnd: int) -> tuple:
+    """直前の前面の窓とカーソル位置を控えてから、hwnd を前面化する。
+
+    (前面化できたか, 札) を返す。元の窓が無い・VRChat の窓（管理下の窓。クラス名
+    では見ない）・同じ窓なら、返す必要がないので札は None。ツール自身の画面は
+    「作業していた窓」なので札を出す
+    """
+    previous = foreground_hwnd()
+    cursor = cursor_position()
+    ok = focus_window(hwnd)
+    if (not ok or not previous or previous == hwnd
+            or previous in SharedState.managed_hwnds()):
+        return ok, None
+    return ok, FrontLoan(hwnd, previous, cursor)
+
+
+def return_front(loan) -> bool:
+    """札の窓へ前面を返す。先にカーソルを戻してから前面にする。返したら True。
+
+    返さない: 札が無い・前面がもう「ツールが前に出した VRChat」ではない（利用者が
+    自分で移っているので引き戻さない）・元の窓がもう無い。返さないときはカーソルも
+    動かさない。ロック（SharedState._GLOBAL_ACTION_LOCK）は呼び出し側が取る
+    """
+    if loan is None:
+        return False
+    if foreground_hwnd() != loan.hwnd:
+        return False
+    try:
+        if not win32gui.IsWindow(loan.previous):
+            return False
+    except Exception:
+        return False
+    if loan.cursor is not None:
+        try:
+            user32.SetCursorPos(*loan.cursor)
+        except Exception:
+            pass
+    return focus_window(loan.previous)
 
 
 def cursor_position() -> tuple | None:

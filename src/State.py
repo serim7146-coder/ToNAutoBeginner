@@ -95,6 +95,9 @@ class WindowState:
     item_id_at_round_start: int = 1
     waiting_for_equip: bool = False
     equip_freeze_held: bool = False
+    # フリーズの理由で前面を借りたときの札（WindowOperator.FrontLoan）。最初の1枚だけ
+    # 持ち、この窓のフリーズが全部解けたら返す（SharedState.keep_front_loan）
+    front_loan: object = field(default=None, compare=False, repr=False)
     item_lost_announced: bool = False
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False

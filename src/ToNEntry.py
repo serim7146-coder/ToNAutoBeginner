@@ -122,11 +122,16 @@ class ToNEntry:
         with SharedState._GLOBAL_ACTION_LOCK:
             if not self._is_running():
                 return False
-            if not WindowOperator.focus_window(self._hwnd):
+            ok, loan = WindowOperator.borrow_front(self._hwnd)
+            if not ok:
                 self._log(f"⚠ {label}: フォーカス取得失敗 → 中止")
                 return False
             WindowOperator.click()
             self._log(f"クリック（{label}）")
+            if loan is not None:
+                # 入室パネルは離した瞬間に判定されるので、離した後に待ってから返す
+                time.sleep(config.FOCUS_RETURN_AFTER_RELEASE_SEC)
+                WindowOperator.return_front(loan)
             return True
 
     # ── 一連の流れ ────────────────────────────

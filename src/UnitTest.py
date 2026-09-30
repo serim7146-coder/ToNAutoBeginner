@@ -11434,6 +11434,271 @@ class TestEquipQueue(unittest.TestCase):
         self.assertEqual(self.shown, [("focus", 0x10), ("sound", 0x10)])
 
 
+class TestReturnFront(unittest.TestCase):
+    """ツールが VRChat の窓を前面にしたら、理由が終わった時点でカーソルを戻し、
+    元の窓を前面に戻す（依頼者: バックグラウンドにしていた窓に戻ると理想的）。
+
+    Begin のフォールバックは離した直後、入室のクリックは離して
+    FOCUS_RETURN_AFTER_RELEASE_SEC 後、フリーズの前面化はその窓のフリーズが解けたとき
+    """
+
+    VRC = 0x100          # ツールが前に出す VRChat の窓
+    OTHER_VRC = 0x200    # 管理下の別の VRChat の窓
+    EDITOR = 0x900       # 利用者が作業していた窓（VSCode など）
+    CURSOR = (11, 22)
+
+    def setUp(self):
+        self.front = self.EDITOR
+        self.alive = {self.VRC, self.OTHER_VRC, self.EDITOR, 0x901, 0x777}
+        self.events = []
+        SharedState.clear_window_hwnds()
+        SharedState.register_window_hwnd(self.VRC)
+        SharedState.register_window_hwnd(self.OTHER_VRC)
+        for reset in (SharedState.clear_window_hwnds, SharedState.equip_freeze_reset,
+                      SharedState.continue_round_reset, SharedState.speed_freeze_reset,
+                      SharedState.round_freeze_reset):
+            self.addCleanup(reset)
+        user32 = MagicMock()
+        user32.SetCursorPos.side_effect = (
+            lambda x, y: self.events.append(("cursor", (x, y))) or True)
+
+        def focus(hwnd):
+            self.events.append(("focus", hwnd))
+            self.front = hwnd
+            return True
+
+        for p in (patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front),
+                  patch.object(WindowOperator, "cursor_position", return_value=self.CURSOR),
+                  patch.object(WindowOperator, "focus_window", side_effect=focus),
+                  patch.object(WindowOperator, "user32", user32),
+                  patch.object(WindowOperator.win32gui, "IsWindow",
+                               side_effect=lambda h: h in self.alive),
+                  patch.object(WindowOperator, "click",
+                               side_effect=lambda: self.events.append(("click",))),
+                  # 返しに行く裏のスレッドは、その場で回す
+                  patch.object(SharedState, "_start_give_back",
+                               side_effect=lambda loan: SharedState._give_back(loan)),
+                  patch.object(PlaySound, "play_sound")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _executor(self):
+        cfg = WindowConfig(hwnd=self.VRC, osc_port=9000, voice_item_lost="lost.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=0)
+        st.waiting_for_equip = True
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=self.VRC), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.logger = lambda _m: None
+        return monitor
+
+    RETURNED = [("cursor", CURSOR), ("focus", EDITOR)]
+
+    def _returned(self):
+        """前に出した後の出来事（前に出した瞬間より後ろ）"""
+        first = self.events.index(("focus", self.VRC))
+        return self.events[first + 1:]
+
+    def _press_begin_by_fallback(self, ex):
+        with patch.object(ex, "_begin_by_cursor", return_value=False), \
+             patch.object(ActionExecutor.time, "sleep",
+                          side_effect=lambda s: self.events.append(("sleep", s))):
+            return ex._press_begin()
+
+    # ── 1. Begin のフォールバック: 離した直後 ───────────────
+    def test_the_begin_fallback_gives_back_right_after_the_click(self):
+        ex, _st = self._executor()
+
+        self.assertTrue(self._press_begin_by_fallback(ex))
+
+        self.assertEqual(self.events, [("focus", self.VRC), ("click",)] + self.RETURNED,
+                         "クリックと返すの間に待ちが無い")
+        self.assertEqual(self.front, self.EDITOR)
+
+    # ── 2. 入室のクリック: 離して0.3秒後 ──────────────────
+    def test_the_entry_click_waits_after_the_release_before_giving_back(self):
+        entry = ToNEntry.ToNEntry(self.VRC, osc_port=9000)
+        with patch.object(ToNEntry.time, "sleep",
+                          side_effect=lambda s: self.events.append(("sleep", s))):
+            self.assertTrue(entry.click("警告同意"))
+
+        self.assertEqual(self.events, [("focus", self.VRC), ("click",),
+                                       ("sleep", config.FOCUS_RETURN_AFTER_RELEASE_SEC)]
+                         + self.RETURNED)
+        self.assertEqual(config.FOCUS_RETURN_AFTER_RELEASE_SEC, 0.3)
+
+    # ── 3. フリーズの前面化: 解けたとき ───────────────────
+    def _freeze_cases(self):
+        """(名前, 張る, 前に出す, 解く)"""
+        def by_monitor(label, start, end):
+            monitor = self._monitor()
+            return (lambda: start(monitor.st),
+                    lambda: monitor._focus_this_window_for(label),
+                    lambda: end(monitor.st))
+
+        def by_executor(show, start, end):
+            ex, st = self._executor()
+            return (lambda: start(st), lambda: show(ex), lambda: end(st))
+
+        return [
+            ("続行", *by_monitor("続行ラウンド", SharedState.continue_round_start,
+                                SharedState.continue_round_end)),
+            ("突入", *by_monitor("ラウンド突入フリーズ", SharedState.round_freeze_start,
+                                SharedState.round_freeze_end)),
+            ("速度検知", *by_executor(lambda ex: ex._focus_for_speed_freeze(),
+                                    SharedState.speed_freeze_start,
+                                    SharedState.speed_freeze_end)),
+            ("アイテムロスト", *by_executor(lambda ex: ex._show_item_loss(),
+                                      SharedState.equip_freeze_start,
+                                      SharedState.equip_freeze_end)),
+        ]
+
+    def test_a_freeze_focus_gives_back_when_the_freeze_ends(self):
+        for name, start, show, end in self._freeze_cases():
+            self.events.clear()
+            self.front = self.EDITOR
+            start()
+            show()
+            self.assertEqual(self.events, [("focus", self.VRC)], f"{name}: 前にした瞬間には返さない")
+
+            end()
+
+            self.assertEqual(self._returned(), self.RETURNED, name)
+
+    def test_it_waits_until_every_freeze_of_the_window_is_gone(self):
+        """続行で借りたまま装備待ちになったら、装備待ちが解けるまで返さない"""
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        SharedState.equip_freeze_start(monitor.st)
+
+        SharedState.continue_round_end(monitor.st)
+        self.assertEqual(self._returned(), [], "まだ装備待ちがある")
+
+        SharedState.equip_freeze_end(monitor.st)
+        self.assertEqual(self._returned(), self.RETURNED)
+
+    # ── 4. 元の窓が VRChat なら返さない ───────────────────
+    def test_nothing_is_given_back_to_a_vrchat_window(self):
+        self.front = self.OTHER_VRC
+        ex, _st = self._executor()
+        self._press_begin_by_fallback(ex)
+        self.assertEqual(self._returned(), [("click",)], "カーソルも動かさない")
+
+        for name, start, show, end in self._freeze_cases():
+            self.events.clear()
+            self.front = self.OTHER_VRC
+            start()
+            show()
+            end()
+            self.assertEqual(self._returned(), [], name)
+
+    def test_the_tools_own_window_is_given_back(self):
+        """ツール自身の画面は管理下の VRChat ではない（作業していた窓）"""
+        SharedState.register_own_window(self.EDITOR)
+        self.addCleanup(SharedState.unregister_own_window, self.EDITOR)
+        ex, _st = self._executor()
+        self._press_begin_by_fallback(ex)
+        self.assertEqual(self._returned(), [("click",)] + self.RETURNED)
+
+    # ── 5. 返す瞬間に前面が変わっていたら返さない ───────────────
+    def test_nothing_is_given_back_if_the_user_moved_on(self):
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+
+        self.front = 0x777               # 利用者が自分で別の窓へ移った
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertEqual(self._returned(), [], "引き戻さない・カーソルも動かさない")
+        self.assertEqual(self.front, 0x777)
+
+    # ── 6. 元の窓が消えていたら返さない ───────────────────
+    def test_nothing_is_given_back_to_a_closed_window(self):
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+
+        self.alive.discard(self.EDITOR)
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertEqual(self._returned(), [])
+
+    def test_no_previous_window_means_nothing_to_give_back(self):
+        self.front = 0
+        ex, _st = self._executor()
+        self._press_begin_by_fallback(ex)
+        self.assertEqual(self._returned(), [("click",)])
+
+    # ── 7. カーソルが先、前面は後 ─────────────────────
+    def test_the_cursor_goes_back_before_the_window(self):
+        ex, st = self._executor()
+        SharedState.speed_freeze_start(st)
+        ex._focus_for_speed_freeze()
+        SharedState.speed_freeze_end(st)
+
+        returned = self._returned()
+        self.assertEqual(returned[0], ("cursor", self.CURSOR))
+        self.assertEqual(returned[1], ("focus", self.EDITOR))
+
+    # ── 8. 停止では返さない ─────────────────────────
+    def test_stopping_does_not_give_back(self):
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+
+        monitor.stop()
+        SharedState.continue_round_end(monitor.st)
+
+        self.assertEqual(self._returned(), [])
+        self.assertIsNone(monitor.st.front_loan, "札は捨てた")
+
+    # ── 9. 同じ窓で二重に借りても、返すのは最初の札の1回だけ ──────────
+    def test_a_second_loan_on_the_same_window_is_not_kept(self):
+        ex, st = self._executor()
+        SharedState.speed_freeze_start(st)
+        ex._focus_for_speed_freeze()                 # 札: EDITOR
+        self.front = 0x901                           # 利用者が別の窓へ
+        SharedState.equip_freeze_start(st)
+        ex._show_item_loss()                         # 札: 0x901（持たない）
+
+        SharedState.speed_freeze_end(st)
+        SharedState.equip_freeze_end(st)
+
+        self.assertEqual(self.events.count(("focus", self.EDITOR)), 1, self.events)
+        self.assertNotIn(("focus", 0x901), self.events)
+        self.assertIsNone(st.front_loan)
+
+    def test_giving_back_takes_the_action_lock(self):
+        """前面化と同じ作法。ロックを持っている間は返しに行かない"""
+        monitor = self._monitor()
+        SharedState.continue_round_start(monitor.st)
+        monitor._focus_this_window_for("続行ラウンド")
+        started = []
+        with patch.object(SharedState, "_start_give_back", side_effect=started.append):
+            SharedState.continue_round_end(monitor.st)
+        self.assertEqual(len(started), 1)
+        self.assertEqual(self._returned(), [], "裏のスレッドに渡しただけ")
+
+        acquired = []
+        real_lock = SharedState._GLOBAL_ACTION_LOCK
+
+        class Lock:
+            def __enter__(self_inner):
+                acquired.append("lock")
+                return real_lock.__enter__()
+
+            def __exit__(self_inner, *exc):
+                return real_lock.__exit__(*exc)
+
+        with patch.object(SharedState, "_GLOBAL_ACTION_LOCK", Lock()):
+            SharedState._give_back(started[0])
+        self.assertEqual(acquired, ["lock"])
+        self.assertEqual(self._returned(), self.RETURNED)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -13438,7 +13703,9 @@ class TestVRChatInFrontFallback(unittest.TestCase):
             enter(patch.object(ActionExecutor.time, "sleep"))
             executor._press_begin()
 
-        self.assertEqual(order, ["front"], "見るだけで、カーソルは触らない")
+        # 2回目の "front" は前面化の直前に元の窓を控える分（WindowOperator.borrow_front）
+        self.assertEqual(order[0], "front", "カーソルより先に前面を見る")
+        self.assertNotIn("cursor", order, "見るだけで、カーソルは触らない")
 
 
 class TestBeginByCursor(unittest.TestCase):

@@ -8,6 +8,52 @@ import config
 # ═══════════════════════════════════════════════
 _GLOBAL_ACTION_LOCK = threading.Lock()
 
+# ── 借りた前面の札 ─────────────────────────────
+# フリーズの理由で VRChat の窓を前面にしたとき（続行・突入・速度検知・アイテムロスト）の
+# 札（WindowOperator.FrontLoan）を窓ごとに1枚だけ持ち、その窓のフリーズが全部
+# 解けたら元の窓へ返す。返すのは裏のスレッドで、_GLOBAL_ACTION_LOCK を取ってから
+# （*_end はロックを持った場所からも呼ばれうる。このロックは再入できない）
+_FRONT_LOAN_LOCK = threading.Lock()
+
+
+def keep_front_loan(st, loan):
+    """札を持つ。同じ窓で二重に借りたら最初の札だけを持つ"""
+    if loan is None:
+        return
+    with _FRONT_LOAN_LOCK:
+        if st.front_loan is None:
+            st.front_loan = loan
+
+
+def discard_front_loan(st):
+    """札を捨てる（監視の停止・終了。返さない）"""
+    with _FRONT_LOAN_LOCK:
+        st.front_loan = None
+
+
+def _holds_any_freeze(st) -> bool:
+    return (st.equip_freeze_held or st.continue_freeze_held
+            or st.speed_freeze_held or st.round_freeze_held)
+
+
+def _return_front_when_free(st):
+    """その窓のフリーズが全部解けていて札があれば、返しに行く"""
+    with _FRONT_LOAN_LOCK:
+        loan = st.front_loan
+        if loan is None or _holds_any_freeze(st):
+            return
+        st.front_loan = None
+    _start_give_back(loan)
+
+
+def _start_give_back(loan):
+    threading.Thread(target=_give_back, args=(loan,), daemon=True).start()
+
+
+def _give_back(loan):
+    with _GLOBAL_ACTION_LOCK:
+        loan.give_back()
+
 # ═══════════════════════════════════════════════
 #  インスタンスタイプ（初期はパブリックを仮定）
 # ═══════════════════════════════════════════════
@@ -179,6 +225,7 @@ def equip_freeze_end(st):
         _EQUIP_QUEUE[:] = [w for w in _EQUIP_QUEUE if w is not st]
         if _EQUIP_FREEZE_COUNT == 0:
             EQUIP_WAIT_EVENT.set()
+    _return_front_when_free(st)
 
 def equip_freeze_reset():
     """停止時など強制リセット（LogMonitor/WindowStateは起動ごとに作り直される前提）"""
@@ -228,6 +275,7 @@ def speed_freeze_end(st):
         _SPEED_FREEZE_COUNT = max(0, _SPEED_FREEZE_COUNT - 1)
         if _SPEED_FREEZE_COUNT == 0:
             SPEED_FREEZE_EVENT.set()
+    _return_front_when_free(st)
 
 def speed_freeze_reset():
     """停止時など強制リセット"""
@@ -271,6 +319,7 @@ def round_freeze_end(st):
         _ROUND_FREEZE_COUNT = max(0, _ROUND_FREEZE_COUNT - 1)
         if _ROUND_FREEZE_COUNT == 0:
             ROUND_FREEZE_EVENT.set()
+    _return_front_when_free(st)
 
 def round_freeze_reset():
     """停止時など強制リセット"""
@@ -317,6 +366,7 @@ def continue_round_end(st):
         _CONTINUE_ROUND_COUNT = max(0, _CONTINUE_ROUND_COUNT - 1)
         if _CONTINUE_ROUND_COUNT == 0:
             CONTINUE_ROUND_EVENT.set()
+    _return_front_when_free(st)
 
 def continue_round_reset():
     """停止時など強制リセット"""

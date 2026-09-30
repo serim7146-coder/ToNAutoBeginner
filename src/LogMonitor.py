@@ -108,6 +108,8 @@ class LogMonitor:
         self._thread = self._start_daemon(self._run)
 
     def stop(self):
+        # 借りた前面は返さない（止めた瞬間に前面が飛ぶと驚くため）。札は捨てる
+        SharedState.discard_front_loan(self.st)
         self._running = False
         self._stop_event.set()
         self._action.stop_velocity_receiver()
@@ -164,7 +166,9 @@ class LogMonitor:
 
     def _focus_this_window_for(self, label: str):
         with SharedState._GLOBAL_ACTION_LOCK:
-            if WindowOperator.focus_window(self.cfg.hwnd):
+            ok, loan = WindowOperator.borrow_front(self.cfg.hwnd)
+            if ok:
+                SharedState.keep_front_loan(self.st, loan)    # フリーズが解けたら返す
                 self._log(f"この窓を前面化しました（{label}）")
             else:
                 self._log(f"⚠ 前面化に失敗（{label}は継続）")
