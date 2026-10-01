@@ -14470,6 +14470,267 @@ class TestHandsFreeSpeedDetectBR(unittest.TestCase):
         self.assertEqual(calls, [1])
 
 
+class TestNullTerrorRounds(unittest.TestCase):
+    """BT: ムーン系4つ・Run・Special（100〜104・106）はラウンド開始の行でテラー無しで1回だけ送る"""
+
+    P = "2026.10.01 12:00:00 Debug      -  "
+
+    def setUp(self):
+        self.send = patch.object(ConnectDB, "register_round").start()
+        self.addCleanup(patch.stopall)
+        patch.object(LogMonitor.threading, "Thread").start()
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.transformed_uid = -13
+        monitor.st.players_known = True          # ソロ（instance_key は None）
+        return monitor
+
+    def _round(self, monitor, round_type, *lines):
+        monitor._process(self.P + f"This round is taking place at Sewers (12) and the round type is {round_type}")
+        for line in lines:
+            monitor._process(self.P + line)
+
+    def test_the_ids(self):
+        self.assertEqual(config.NULL_TERROR_ROUND_IDS, {100, 101, 102, 103, 104, 106})
+        self.assertEqual(ConnectDB.round_type_id("Special"), 106)
+        self.assertEqual(ConnectDB.round_type_id("GIGABYTE"), 106)
+        self.assertEqual(config.ROUND_TYPE_NAMES[106], "Special")
+        self.assertEqual(ConnectDB.round_row({"round": 106})["round"], "Special")
+
+    def test_sent_once_at_the_start_with_no_terrors(self):
+        for name in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Run", "Special"):
+            self.send.reset_mock()
+            monitor = self._monitor()
+            self._round(monitor, name)
+            self.send.assert_called_once_with(name, [], 12, -13, instance_key=None,
+                                              round_time=monitor.st.round_start_time)
+            self.assertTrue(monitor.st.round_start_time)
+            self._round_tail(monitor, name)
+            self.assertEqual(self.send.call_count, 1, f"{name}: 二重に送らない")
+
+    def _round_tail(self, monitor, name):
+        for line in (f"Killers have been set - 0 0 0 // Round type is {name}",
+                     f"Killers have been revealed - 0 0 0 // Round type is {name}",
+                     "You died.", "RoundOver", "Verified Round End"):
+            monitor._process(self.P + line)
+
+    def test_the_next_round_sends_again(self):
+        monitor = self._monitor()
+        self._round(monitor, "Run", "RoundOver")
+        self._round(monitor, "Twilight")
+        self.assertEqual([c.args[0] for c in self.send.call_args_list], ["Run", "Twilight"])
+
+    def test_classic_zero_is_still_sent_as_zero(self):
+        monitor = self._monitor()
+        self._round(monitor, "Classic", "Killers have been set - 0 0 0 // Round type is Classic",
+                    "RoundOver")
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[:2], ("Classic", [0]))
+
+    def test_other_rounds_without_terrors_are_still_not_sent(self):
+        for name in ("Cold Night", "8 Pages", "Mystery"):
+            self.send.reset_mock()
+            monitor = self._monitor()
+            self._round(monitor, name, "RoundOver", "Verified Round End")
+            self.send.assert_not_called()
+
+    def test_the_own_row_is_null_too(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = RoundStore.RoundStore(Path(d) / "r.sqlite")
+            sent = []
+
+            def urlopen(req, timeout=None):
+                sent.append(json.loads(req.data.decode()))
+                res = MagicMock()
+                res.__enter__ = MagicMock(return_value=res)
+                res.__exit__ = MagicMock(return_value=False)
+                res.status = 204
+                return res
+
+            patch.stopall()
+            with patch.object(ConnectDB, "_configured", return_value=True), \
+                 patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+                 patch.object(ConnectDB, "_headers", return_value={}), \
+                 patch.object(ConnectDB.threading, "Thread", TestDbV1.RunNow), \
+                 patch.object(ConnectDB.urllib.request, "urlopen", side_effect=urlopen), \
+                 patch.object(RoundStore, "default_store", return_value=store), \
+                 patch.object(LogMonitor.LogMonitor, "_start_daemon"), \
+                 patch("builtins.print"):
+                monitor = self._monitor()
+                self._round(monitor, "Blood Moon", "Killers have been set - 0 0 0 // Round type is Blood Moon")
+            self.assertEqual(len(sent), 1)
+            self.assertEqual((sent[0]["p_round"], sent[0]["p_t1"], sent[0]["p_t2"], sent[0]["p_t3"]),
+                             (101, None, None, None))
+            [row] = store.rows()
+            self.assertEqual(row[1:6], (101, 12, None, None, None))
+
+
+class TestTerrorDetailQueries(unittest.TestCase):
+    """BT: 選んだテラーの「ラウンドの種類」と「出現ラウンド」の問い合わせ（一時ファイルの RoundStore）"""
+
+    MINE, T = -13, 101
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        self.store.add_own(50, 2, 12, self.T, None, None, self.MINE)          # 自分（1人目）
+        self.rows = [
+            {"time": 100, "round": 1, "map_id": 12, "terror1": self.T, "terror2": 6, "terror3": None,
+             "transformed_uid": 7, "other_uids": [self.MINE, 9]},
+            {"time": 200, "round": 2, "map_id": 3, "terror1": 6, "terror2": None, "terror3": None,
+             "transformed_uid": 7, "other_uids": None},
+            {"time": 300, "round": 2, "map_id": 3, "terror1": self.T, "terror2": None, "terror3": None,
+             "transformed_uid": 8, "other_uids": None},
+            {"time": 400, "round": 7, "map_id": 3, "terror1": self.T, "terror2": self.T, "terror3": None,
+             "transformed_uid": 8, "other_uids": None},
+        ]
+        self.store.sync(lambda _since, _mine: list(self.rows))
+
+    def test_round_counts(self):
+        self.assertEqual(self.store.round_counts_for_terror(RoundStore.Filter(), self.T),
+                         [(2, 2), (7, 2), (1, 1)], "枠の数・多い順（同じ数は番号順）")
+        self.assertEqual(StatisticsGUI.round_kind_rows([(2, 2), (7, 2), (1, 1)]),
+                         [("Fog", 2, "40.0"), ("Double Trouble", 2, "40.0"), ("Classic", 1, "20.0")])
+
+    def test_round_counts_follow_the_filter(self):
+        self.assertEqual(self.store.round_counts_for_terror(RoundStore.Filter(start=150, end=350), self.T),
+                         [(2, 1)])
+        self.assertEqual(self.store.round_counts_for_terror(
+            RoundStore.Filter(rounds=frozenset({1})), self.T), [(1, 1)])
+        self.assertEqual(self.store.round_counts_for_terror(RoundStore.Filter(mine=True), self.T),
+                         [(1, 1), (2, 1)])
+
+    def test_rounds_newest_first(self):
+        total, rows = self.store.rounds_for_terror(RoundStore.Filter(), self.T, 500)
+        self.assertEqual(total, 4)
+        self.assertEqual([r[0] for r in rows], [400, 300, 100, 50])
+        total, rows = self.store.rounds_for_terror(RoundStore.Filter(mine=True), self.T, 500)
+        self.assertEqual((total, [r[0] for r in rows]), (2, [100, 50]), "自分の分")
+        total, rows = self.store.rounds_for_terror(
+            RoundStore.Filter(start=150, end=450, rounds=frozenset({2})), self.T, 500)
+        self.assertEqual((total, [r[0] for r in rows]), (1, [300]), "期間・ラウンド")
+
+    def test_the_limit_keeps_the_total(self):
+        for i in range(12):
+            self.store.add_own(1000 + i, 1, 1, self.T, None, None, self.MINE)
+        total, rows = self.store.rounds_for_terror(RoundStore.Filter(), self.T, 5)
+        self.assertEqual(total, 16)
+        self.assertEqual([r[0] for r in rows], [1011, 1010, 1009, 1008, 1007])
+
+    def test_the_columns(self):
+        _total, rows = self.store.rounds_for_terror(RoundStore.Filter(), self.T, 500)
+        shown = StatisticsGUI.appearance_rows(rows, self.T, self.store.my_uids(), config.TERRORS)
+        name = Statistics.terror_name
+        when = lambda t: datetime.fromtimestamp(config.DB_TIME_EPOCH + t).strftime("%Y-%m-%d %H:%M:%S")
+        self.assertEqual(shown[0], (when(400), "Double Trouble", Statistics.map_name_for_id(3, "Double Trouble"),
+                                    name(self.T, config.TERRORS), 1, ""), "同じテラーが2枠なら1つは一緒に出た扱い")
+        self.assertEqual(shown[1][3:], ("", 1, ""))
+        self.assertEqual(shown[2], (when(100), "Classic", Statistics.map_name_for_id(12, "Classic"),
+                                    name(6, config.TERRORS), 3, "✓"), "other_uids に自分")
+        self.assertEqual(shown[3][4:], (1, "✓"), "1人目が自分")
+
+
+class TestTerrorSearch(unittest.TestCase):
+    """BT: テラーの検索（名前の一部・大文字小文字・ID。分類をまたぐ）"""
+
+    def _row(self, tid, name, p, count=1):
+        return Statistics.TerrorStatistic(tid, name, count, 1.0, p, "")
+
+    def test_matching(self):
+        row = self._row(101, "Immortal Snail", 0.5)
+        for q, hit in (("snail", True), ("SNAIL", True), ("tal Sn", True), ("101", True), (" 101 ", True),
+                       ("10", False), ("1011", False), ("dog", False), ("", True)):
+            self.assertEqual(StatisticsGUI.terror_matches(row, q), hit, q)
+
+    def test_across_categories_in_the_usual_order(self):
+        found = StatisticsGUI.search_terror_rows(
+            [("Classic", [self._row(1, "Huggy", 0.3), self._row(2, "Sonic", 0.1)]),
+             ("Alternate", [self._row(140, "Hug Knight", 0.1, count=5)]),
+             ("Unbound", [self._row(230, "Bug Hug", 0.9)])], "hug")
+        self.assertEqual([(c, r.terror_id) for c, r in found],
+                         [("Alternate", 140), ("Classic", 1), ("Unbound", 230)])
+
+
+class TestStatisticsTerrorTabBT(unittest.TestCase):
+    """BT: 統計画面のテラーのタブ（本物の Tk。通信は差し替え。手元は一時フォルダ）"""
+
+    MINE = -13
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        classic = sorted(int(i) for i in config.TERRORS["classic"])[:3]
+        alternate = sorted(int(i) for i in config.TERRORS["alternate"])[:2]
+        self.ids = classic + alternate
+        for i, tid in enumerate(self.ids):
+            self.store.add_own(100 + i, 6, 12, tid, None, None, self.MINE)    # Bloodbath（既定で選ばれる）
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []), \
+             patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            self.window = StatisticsGUI.StatisticsWindow(self.root, store=self.store)
+            for _ in range(400):
+                self.root.update()
+                if not self.window._rows_loading:
+                    break
+                time.sleep(0.005)
+        self.root.update()
+
+    def _listed(self):
+        tree = self.window.terror_tree
+        return [(tree.item(i, "values")[1], int(tree.item(i, "values")[0])) for i in tree.get_children()]
+
+    def test_search_crosses_categories_and_clearing_goes_back(self):
+        self.window._set_terror_category("classic")
+        before = self._listed()
+        self.assertTrue(all(c == "Classic" for c, _t in before), before)
+
+        alt = self.ids[3]
+        self.window.v_terror_search.set(str(alt))
+        self.assertEqual(self._listed(), [("Alternate", alt)], "分類をまたいで ID で合う")
+        name = Statistics.terror_name(self.ids[0], config.TERRORS)
+        self.window.v_terror_search.set(name[1:4].swapcase())
+        self.assertIn(("Classic", self.ids[0]), self._listed())
+
+        self.window.v_terror_search.set("")
+        self.assertEqual(self._listed(), before)
+
+    def test_selecting_fills_the_three_detail_tabs(self):
+        self.window._set_terror_category("classic")
+        tid = self.ids[0]
+        self.window.terror_tree.selection_set(str(tid))
+        self.window._on_terror_selected()
+        self.assertEqual([self.window.terror_detail_tabs.tab(t, "text")
+                          for t in self.window.terror_detail_tabs.tabs()],
+                         ["マップ", "ラウンドの種類", "出現ラウンド"])
+        kinds = [self.window.round_kind_tree.item(i, "values")
+                 for i in self.window.round_kind_tree.get_children()]
+        self.assertEqual(kinds, [("Bloodbath", "1", "100.0")])
+        rounds = [self.window.terror_rounds_tree.item(i, "values")
+                  for i in self.window.terror_rounds_tree.get_children()]
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0][-1], "✓")
+        self.assertEqual(self.window.v_terror_rounds_note.get(), "")
+
+    def test_more_than_500_shows_the_note(self):
+        tid = self.ids[0]
+        for i in range(StatisticsGUI.TERROR_ROUNDS_LIMIT + 1):
+            self.store.add_own(1000 + i, 6, 12, tid, None, None, self.MINE)
+        self.window._filter = None
+        self.window._analyze()
+        self.window._set_terror_category("classic")
+        self.window.terror_tree.selection_set(str(tid))
+        self.window._on_terror_selected()
+        self.assertEqual(len(self.window.terror_rounds_tree.get_children()),
+                         StatisticsGUI.TERROR_ROUNDS_LIMIT)
+        self.assertEqual(self.window.v_terror_rounds_note.get(),
+                         f"新しい順に500件を表示（全{StatisticsGUI.TERROR_ROUNDS_LIMIT + 2}件）")
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -25524,13 +25785,13 @@ class TestDbV1(unittest.TestCase):
 
     def test_an_unknown_round_is_999_and_noted_in_the_debug_log(self):
         with patch.object(DebugLog, "write") as write:
-            _r, body = self._send("Special", [1], 1, 1, round_time=self.START)
+            _r, body = self._send("Mystery", [1], 1, 1, round_time=self.START)   # BT: Special は 106 になった
             _r, japanese = self._send("クラシック", [1], 1, 1, round_time=self.START)
             self._send("Classic", [1], 1, 1, round_time=self.START)
 
         self.assertEqual((body["p_round"], japanese["p_round"]), (999, 999))
         self.assertEqual(write.call_args_list,
-                         [call("未知のラウンド名: 'Special'"), call("未知のラウンド名: 'クラシック'")])
+                         [call("未知のラウンド名: 'Mystery'"), call("未知のラウンド名: 'クラシック'")])
 
     def test_the_instance_key(self):
         a = ConnectDB.instance_key("wrld_x:123~private(usr_a)~region(jp)")
@@ -26241,6 +26502,7 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window._filter = None
         window._map_counts_cache = {}
         window._clear_tree = MagicMock()
+        window._render_terror_rounds = MagicMock()      # BT: 内訳のほかのタブ（別のテストで見る）
         window.store = MagicMock()
         window.store.map_counts_for_terror.return_value = [(12, 1, 1)]
 

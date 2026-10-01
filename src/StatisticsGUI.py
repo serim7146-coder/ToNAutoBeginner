@@ -25,6 +25,9 @@ ROUND_CHIP_COLUMNS = 6
 ROUND_CHIP_WIDTH = 21
 ROUND_CHIP_MIN_WIDTH = 158
 DEFAULT_EXCLUDED_ROUNDS = {"Classic", "Run"}
+TERROR_CATEGORIES = (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound"))
+# 出現ラウンドのタブに出す行数（新しい順）。多すぎると重い
+TERROR_ROUNDS_LIMIT = 500
 ROUND_CHART_COLORS = (
     "#accdff",
     "#a6e3a1",
@@ -124,6 +127,55 @@ def _round_name(round_id) -> str:
     return config.ROUND_TYPE_NAMES.get(round_id, str(round_id))
 
 
+def terror_matches(row, query: str) -> bool:
+    """検索: 名前の一部（大文字小文字を区別しない）か、ID の数字が完全に同じ"""
+    q = (query or "").strip()
+    if not q:
+        return True
+    return q.casefold() in str(row.name).casefold() or (q.isdigit() and int(q) == row.terror_id)
+
+
+def search_terror_rows(stats_by_category, query: str) -> list[tuple[str, object]]:
+    """分類をまたいで探す。stats_by_category は [(分類の名前, 集計の行...)]。
+    合うものだけを [(分類の名前, 行)] で、今と同じ並び（p値・回数・名前）"""
+    found = [(label, row) for label, rows in stats_by_category for row in rows
+             if terror_matches(row, query)]
+    found.sort(key=lambda item: (item[1].p_value, -item[1].count, item[1].name))
+    return found
+
+
+def round_kind_rows(counts) -> list[tuple[str, int, str]]:
+    """ラウンドの種類のタブ: [(ラウンドの番号, 枠数)] → [(名前, 回数, 割合%)]。多い順"""
+    counts = [(rid, int(n)) for rid, n in counts]
+    total = sum(n for _rid, n in counts)
+    rows = [(_round_name(rid), n, f"{n / total * 100:.1f}" if total else "0.0")
+            for rid, n in counts]
+    rows.sort(key=lambda row: -row[1])
+    return rows
+
+
+def appearance_rows(rows, terror_id: int, my_uids, terror_data) -> list[tuple]:
+    """出現ラウンドのタブ: RoundStore.rounds_for_terror の行 → 表示する列
+    (日時, ラウンド, マップ, 一緒に出たテラー, 見た人数, 自分)"""
+    mine = set(my_uids or ())
+    out = []
+    for time_, rid, map_id, t1, t2, t3, uid, other_uids, _origin in rows:
+        others = [t for t in (t1, t2, t3) if t is not None]
+        if terror_id in others:
+            others.remove(terror_id)
+        uids = RoundStore.uids_list(other_uids)
+        round_name = _round_name(rid)
+        out.append((
+            _local(time_).strftime("%Y-%m-%d %H:%M:%S"),
+            round_name,
+            Statistics.map_name_for_id(map_id, round_name),
+            ", ".join(Statistics.terror_name(t, terror_data) for t in others),
+            1 + len(uids),
+            "✓" if (uid in mine or mine & set(uids)) else "",
+        ))
+    return out
+
+
 def _db_time(dt: datetime) -> int:
     """ローカルの日時 → DB の time（2026-01-01 UTC からの秒）"""
     return int(dt.timestamp()) - config.DB_TIME_EPOCH
@@ -160,6 +212,10 @@ class StatisticsWindow(tk.Toplevel):
         self._filter: RoundStore.Filter | None = None
         self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
         self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
+        self._round_kind_cache: dict[int, list[tuple[str, int, str]]] = {}
+        self._appearance_cache: dict[int, tuple[int, list[tuple]]] = {}
+        self.v_terror_search = tk.StringVar(value="")     # 保存しない
+        self.v_terror_rounds_note = tk.StringVar(value="")
         self._selected_terror: int | None = None
         self.v_status = tk.StringVar(value="統計データ未読み込み")
         self.v_info = tk.StringVar(value="")
@@ -271,22 +327,44 @@ class StatisticsWindow(tk.Toplevel):
         pane.add(terror_frame, weight=3)
         category_bar = tk.Frame(terror_frame, bg=BG)
         category_bar.pack(fill="x", pady=(0, 8))
-        for label, value in (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound")):
+        for label, value in TERROR_CATEGORIES:
             btn = tk.Button(category_bar, text=label, command=lambda v=value: self._set_terror_category(v),
                             padx=14, pady=3, bd=1, relief="raised", bg=SUB, fg=FG,
                             activebackground=ACC, activeforeground=BG, font=(UIFont.UI, 9, "bold"))
             btn.pack(side="left", padx=(0, 6))
             self._category_buttons[value] = btn
         self._refresh_category_buttons()
+        # 検索（名前の一部・ID）。打つたびに絞る。空でないあいだは分類をまたぐ
+        ttk.Label(category_bar, text="検索:").pack(side="left", padx=(12, 4))
+        ttk.Entry(category_bar, textvariable=self.v_terror_search, width=22).pack(side="left")
+        self.v_terror_search.trace_add("write", lambda *_a: self._on_terror_search_changed())
         body = ttk.Frame(terror_frame)
         body.pack(fill="both", expand=True)
-        self.terror_tree = self._tree(body, (("id", "ID", 58, "e"), ("name", "テラー", 260, "w"),
+        self.terror_tree = self._tree(body, (("id", "ID", 58, "e"), ("category", "分類", 86, "center"),
+                                             ("name", "テラー", 240, "w"),
                                              ("count", "回数", 86, "e"), ("expected", "期待", 86, "e"),
                                              ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")))
         self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
-        map_frame = ttk.LabelFrame(pane, text="選択テラーのマップ一覧", padding=8)
-        pane.add(map_frame, weight=2)
-        self.map_tree = self._tree(map_frame, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
+        detail_frame = ttk.LabelFrame(pane, text="選択テラーの内訳", padding=8)
+        pane.add(detail_frame, weight=2)
+        self.terror_detail_tabs = ttk.Notebook(detail_frame)
+        self.terror_detail_tabs.pack(fill="both", expand=True)
+        map_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
+        self.terror_detail_tabs.add(map_tab, text="マップ")
+        self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
+        kind_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
+        self.terror_detail_tabs.add(kind_tab, text="ラウンドの種類")
+        self.round_kind_tree = self._tree(kind_tab, (("round", "ラウンド", 200, "w"),
+                                                     ("count", "回数", 80, "e"),
+                                                     ("percent", "%", 70, "e")))
+        rounds_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
+        self.terror_detail_tabs.add(rounds_tab, text="出現ラウンド")
+        ttk.Label(rounds_tab, textvariable=self.v_terror_rounds_note,
+                  foreground=YLW).pack(fill="x", anchor="w")
+        self.terror_rounds_tree = self._tree(
+            rounds_tab, (("time", "日時", 140, "w"), ("round", "ラウンド", 110, "w"),
+                         ("map", "マップ", 140, "w"), ("others", "一緒に出たテラー", 180, "w"),
+                         ("players", "見た人数", 70, "e"), ("mine", "自分", 48, "center")))
 
     def _build_time_tab(self):
         tab = self._tab("時間の流れ")
@@ -495,20 +573,15 @@ class StatisticsWindow(tk.Toplevel):
             self._filter = flt
             self._terror_stats_cache.clear()
             self._map_counts_cache.clear()
+            self._round_kind_cache.clear()
+            self._appearance_cache.clear()
         round_rows = Statistics.round_summary_from_counts(
             (_round_name(rid), count, slots) for rid, count, slots in self.store.round_summary(flt))
         self._show_round_stats(round_rows)
 
-        category = self.v_terror_category.get()
-        stats = self._terror_stats_cache.get(category)
-        if stats is None:
-            candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
-            stats = Statistics.analyze_terror_counts(self.store.terror_counts(flt), config.TERRORS,
-                                                     candidate_ids)
-            self._terror_stats_cache[category] = stats
-        total_slots, candidate_count, terror_rows = stats
-        self._render_terror_stats(terror_rows)
-        self._clear_tree(self.map_tree)
+        total_slots, candidate_count, _rows = self._terror_stats(self.v_terror_category.get())
+        self._render_terror_list()
+        self._clear_terror_detail()
         self._render_time(flt)
         self._render_combos(flt)
         self._render_multi(flt)
@@ -517,8 +590,9 @@ class StatisticsWindow(tk.Toplevel):
 
     def _clear_all(self):
         self._clear_round_stats()
-        for tree in (self.terror_tree, self.map_tree, self.pair_tree, self.map_terror_tree, self.multi_tree):
+        for tree in (self.terror_tree, self.pair_tree, self.map_terror_tree, self.multi_tree):
             self._clear_tree(tree)
+        self._clear_terror_detail()
         self._day_rows, self._hour_rows = [], []
         self._draw_time_charts()
 
@@ -601,12 +675,44 @@ class StatisticsWindow(tk.Toplevel):
         self._schedule_round_chart_draw()
 
     # ── テラーのタブ ──────────────────────────────
-    def _render_terror_stats(self, rows: list[Statistics.TerrorStatistic]):
+    def _terror_stats(self, category: str):
+        """分類ごとの集計（今の条件。条件が変わるまで使い回す）"""
+        stats = self._terror_stats_cache.get(category)
+        if stats is None:
+            candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
+            stats = Statistics.analyze_terror_counts(self.store.terror_counts(self._filter),
+                                                     config.TERRORS, candidate_ids)
+            self._terror_stats_cache[category] = stats
+        return stats
+
+    def _render_terror_list(self):
+        """検索が空なら今の分類の一覧。空でなければ3つの分類をまたいで合うものだけ"""
+        query = self.v_terror_search.get().strip()
+        if query:
+            found = search_terror_rows(
+                [(label, self._terror_stats(value)[2]) for label, value in TERROR_CATEGORIES], query)
+        else:
+            active = self.v_terror_category.get()
+            label = next((label for label, value in TERROR_CATEGORIES if value == active), active)
+            found = [(label, row) for row in self._terror_stats(active)[2]]
+        self._render_terror_stats(found)
+
+    def _on_terror_search_changed(self):
+        if self._filter is None:
+            return                  # まだ集計していない
+        self._render_terror_list()
+
+    def _render_terror_stats(self, rows: list[tuple[str, Statistics.TerrorStatistic]]):
         self._clear_tree(self.terror_tree)
-        for row in rows:
+        for category, row in rows:
             self.terror_tree.insert("", "end", iid=str(row.terror_id), values=(
-                row.terror_id, row.name, row.count, f"{row.expected:.2f}",
+                row.terror_id, category, row.name, row.count, f"{row.expected:.2f}",
                 self._format_p_value(row.p_value), row.label))
+
+    def _clear_terror_detail(self):
+        for tree in (self.map_tree, self.round_kind_tree, self.terror_rounds_tree):
+            self._clear_tree(tree)
+        self.v_terror_rounds_note.set("")
 
     def _on_terror_selected(self, _event=None):
         selection = self.terror_tree.selection()
@@ -626,8 +732,31 @@ class StatisticsWindow(tk.Toplevel):
             self._map_counts_cache[terror_id] = rows
         for map_name, count in rows:
             self.map_tree.insert("", "end", values=(map_name, count))
+        self._render_terror_rounds(terror_id)
         if self._filter is not None:
             self._render_time(self._filter)
+
+    def _render_terror_rounds(self, terror_id: int):
+        """選んだテラーの「ラウンドの種類」と「出現ラウンド」"""
+        kinds = self._round_kind_cache.get(terror_id)
+        if kinds is None:
+            kinds = round_kind_rows(self.store.round_counts_for_terror(self._filter, terror_id))
+            self._round_kind_cache[terror_id] = kinds
+        self._clear_tree(self.round_kind_tree)
+        for row in kinds:
+            self.round_kind_tree.insert("", "end", values=row)
+
+        appeared = self._appearance_cache.get(terror_id)
+        if appeared is None:
+            total, rows = self.store.rounds_for_terror(self._filter, terror_id, TERROR_ROUNDS_LIMIT)
+            appeared = (total, appearance_rows(rows, terror_id, self.store.my_uids(), config.TERRORS))
+            self._appearance_cache[terror_id] = appeared
+        total, rows = appeared
+        self._clear_tree(self.terror_rounds_tree)
+        for row in rows:
+            self.terror_rounds_tree.insert("", "end", values=row)
+        self.v_terror_rounds_note.set(
+            f"新しい順に{TERROR_ROUNDS_LIMIT}件を表示（全{total}件）" if total > TERROR_ROUNDS_LIMIT else "")
 
     # ── 時間の流れのタブ ───────────────────────────
     def _render_time(self, flt: RoundStore.Filter):

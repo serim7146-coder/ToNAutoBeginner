@@ -1296,6 +1296,10 @@ class LogMonitor:
             st.map_id                      = event.map_id
             st.statistics_sent             = False
             st.statistics_quiet            = False
+            # テラーを持たないラウンドは、この行（開始）でテラー無しで送る。後から
+            # Killers の行（ムーンの 0 0 0 など）が来ても送り直さない（statistics_sent）
+            if ConnectDB.round_type_id(event.round_type) in config.NULL_TERROR_ROUND_IDS:
+                self._send_null_terror_round()
             st.fog_reading                 = False
             st.early_read_hits             = {}
             st.early_read_tid              = None
@@ -1977,6 +1981,21 @@ class LogMonitor:
             st.map_id,
             st.transformed_uid,
             quiet=st.statistics_quiet,
+            instance_key=self._db_instance_key(),
+            round_time=st.round_start_time,
+        )
+
+    def _send_null_terror_round(self):
+        """テラーを持たないラウンド（config.NULL_TERROR_ROUND_IDS）を、テラー無しで1回だけ送る"""
+        st = self.st
+        if st.statistics_sent:
+            return
+        st.statistics_sent = True
+        ConnectDB.register_round(
+            st.round_type,
+            [],
+            st.map_id,
+            st.transformed_uid,
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
         )

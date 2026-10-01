@@ -103,20 +103,25 @@ ITEMS = ItemCatalog.load_items(resource_path("item.json"))
 # ── DB v1: ラウンドの種類の番号（ToN Save Manager の ToNRoundType と同じ）──
 # ログの「round type is X」の X → 番号。観測した 1/2/5/6/9/50/51/102 は一致。
 # Sabotage star / Sabotage murder は1つのラウンドなので 4 にまとめる。
-# 表に無い名前（Special・空・日本語の名前など）は ROUND_TYPE_UNKNOWN_ID（日本語は対象外）
+# 表に無い名前（空・日本語の名前など）は ROUND_TYPE_UNKNOWN_ID（日本語は対象外）。
+# Special（GIGABYTE・Rift Monsters など。ログは「round type is Special」）は 106
 ROUND_TYPE_IDS: dict[str, int] = {
     "Classic": 1, "Fog": 2, "Punished": 3, "Sabotage": 4, "Sabotage star": 4,
     "Sabotage murder": 4, "Cracked": 5, "Bloodbath": 6, "Double Trouble": 7,
     "Bloodbath EX": 8, "Ghost": 9, "Unbound": 10, "Randomizer": 11, "Classic.exe": 12,
     "Midnight": 50, "Alternate": 51, "Fog (Alternate)": 52, "Ghost (Alternate)": 53,
     "Mystic Moon": 100, "Blood Moon": 101, "Twilight": 102, "Solstice": 103, "Run": 104,
-    "8 Pages": 105, "GIGABYTE": 106, "Cold Night": 107,
+    "8 Pages": 105, "Special": 106, "GIGABYTE": 106, "Cold Night": 107,
 }
 ROUND_TYPE_UNKNOWN_ID = 999
 # 逆引き（番号 → 名前）。まとめた名前（Sabotage star/murder）は代表の名前にする
 ROUND_TYPE_NAMES: dict[int, str] = {}
 for _name, _id in ROUND_TYPE_IDS.items():
     ROUND_TYPE_NAMES.setdefault(_id, _name)
+# テラーを持たないラウンド（ムーン系4つ・Run・Special）。ラウンド開始の行でテラーを
+# 空（NULL）にして1回だけ送る。ムーン系はログが毎回 Killers 0 0 0 を出し（0 は Classic の
+# Huggy と同じ番号）、Run は Killers の行を出さない。Special はテラーを集計に入れない（依頼者）
+NULL_TERROR_ROUND_IDS = {100, 101, 102, 103, 104, 106}
 # DB v1 の時刻は 2026-01-01 00:00:00 UTC からの秒（4バイト）
 DB_TIME_EPOCH = 1767225600
 

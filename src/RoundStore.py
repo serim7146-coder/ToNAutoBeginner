@@ -263,6 +263,23 @@ class RoundStore:
         return self._query(flt, f"select map_id, round, count(*) from ({_TERRORS}) where tid = ? "
                                 "group by map_id, round", (int(terror_id),))
 
+    def round_counts_for_terror(self, flt: Filter, terror_id: int) -> list[tuple[int, int]]:
+        """[(ラウンドの番号, そのテラーの枠数)]。多い順"""
+        return self._query(flt, f"select round, count(*) as n from ({_TERRORS}) where tid = ? "
+                                "group by round order by n desc, round", (int(terror_id),))
+
+    def rounds_for_terror(self, flt: Filter, terror_id: int, limit: int) -> tuple[int, list[tuple]]:
+        """そのテラーが出たラウンド。(全件数, 新しい順に limit 件の
+        [(time, round, map_id, t1, t2, t3, transformed_uid, other_uids, origin)])"""
+        tid = int(terror_id)
+        total = self._query(flt, "select count(*) from f where ? in (terror1, terror2, terror3)",
+                            (tid,))
+        rows = self._query(flt, "select time, round, map_id, terror1, terror2, terror3,"
+                                " transformed_uid, other_uids, origin from f"
+                                " where ? in (terror1, terror2, terror3)"
+                                " order by time desc limit ?", (tid, int(limit)))
+        return (int(total[0][0]) if total else 0), rows
+
     def time_series(self, flt: Filter, unit: str, terror_id: int | None = None) -> list[tuple]:
         """日（unit='day'、'YYYY-MM-DD'）か時間帯（unit='hour'、0〜23）ごとの
         [(区切り, ラウンド数, そのテラーの枠数)]。ローカル時刻で区切る"""
