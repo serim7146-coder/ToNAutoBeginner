@@ -183,13 +183,15 @@ class ActionExecutor:
                        "left": "/input/MoveLeft",
                        "right": "/input/MoveRight"}.get(direction)
             if address:
-                self._osc.press(address, seconds)
+                ok = self._osc.press(address, seconds)
                 self._osc.stop_all(repeat=1)
-                return
+                return ok is not False
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
         if key and not WindowOperator.hold_key_background(
                 self._cfg.hwnd, key, seconds):
             self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
+            return False
+        return True
 
     def move_forward_left(self, forward_sec: float, left_sec: float):
         """前進しながら、その前半だけ左にも寄る（斜め → 直進）。
@@ -206,12 +208,12 @@ class ActionExecutor:
         self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
                     f"（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
-            self._osc.press_multi([("/input/MoveForward", forward_sec),
-                                   ("/input/MoveLeft", left_sec)])
+            ok = self._osc.press_multi([("/input/MoveForward", forward_sec),
+                                        ("/input/MoveLeft", left_sec)])
             self._osc.stop_all(repeat=1)
-            return
-        self.move("forward", forward_sec)
-        self.move("left", left_sec)
+            return ok is not False
+        ok = self.move("forward", forward_sec) is not False
+        return (self.move("left", left_sec) is not False) and ok
 
     # ── ヘルパー ──────────────────────────────
 
@@ -931,14 +933,24 @@ class ActionExecutor:
         return False
 
     def _begin_move(self):
-        """Begin前の定位置移動。ラウンド種別で距離が変わる。"""
+        """Begin前の定位置移動。ラウンド種別で距離が変わる。
+        どちらの移動か・最後までやったかを debug.log に必ず残す（後から確かめるため）"""
         st = self._st
-        if st.round_type in config.LATE_ROUND:
-            self.move_forward_left(config.BEGIN_FORWARD_SEC_LATER,
-                                   config.BEGIN_LEFT_SEC_LATER)
+        late = st.round_type in config.LATE_ROUND
+        forward = config.BEGIN_FORWARD_SEC_LATER if late else config.BEGIN_FORWARD_SEC
+        left = config.BEGIN_LEFT_SEC_LATER if late else config.BEGIN_LEFT_SEC
+        head = f"[操作] [窓{st.window_idx}] Begin前の移動"
+        DebugLog.write(f"{head}: {'Punished後' if late else '通常'} 前進{forward}秒・左{left}秒"
+                       f"（round_type={st.round_type}）")
+        try:
+            ok = self.move_forward_left(forward, left)
+        except Exception as e:
+            DebugLog.write(f"{head}: 途中で止めた（{type(e).__name__}）")
+            raise
+        if ok is False:
+            DebugLog.write(f"{head}: 途中で止めた（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
         else:
-            self.move_forward_left(config.BEGIN_FORWARD_SEC,
-                                   config.BEGIN_LEFT_SEC)
+            DebugLog.write(f"{head}: 最後までやった")
         st.begin_move_done = True
 
     def do_begin_again(self, round_seq: int):

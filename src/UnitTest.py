@@ -15236,6 +15236,42 @@ class TestDebugLogTraces(unittest.TestCase):
         self.assertIn("[窓5] [操作] チェイス開始 forward", self.written)
         self.assertIn("[窓5] [操作] チェイス終了", self.written)
 
+    def test_the_begin_move_says_which_one_and_how_it_ended(self):
+        for round_type, kind, fwd, left in (("Punished", "Punished後", config.BEGIN_FORWARD_SEC_LATER,
+                                             config.BEGIN_LEFT_SEC_LATER),
+                                            ("Classic", "通常", config.BEGIN_FORWARD_SEC, config.BEGIN_LEFT_SEC)):
+            self.written.clear()
+            st = WindowState(window_idx=1, round_type=round_type)
+            ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
+                                               lambda: True, lambda _m: None)
+            ex._osc = MagicMock()
+            ex._osc.press_multi.return_value = True
+            ex._begin_move()
+            ex._osc.press_multi.assert_called_once_with([("/input/MoveForward", fwd),
+                                                         ("/input/MoveLeft", left)])
+            self.assertIn(f"[操作] [窓1] Begin前の移動: {kind} 前進{fwd}秒・左{left}秒"
+                          f"（round_type={round_type}）", self.written)
+            self.assertIn("[操作] [窓1] Begin前の移動: 最後までやった", self.written)
+            self.assertTrue(st.begin_move_done)
+
+    def test_a_begin_move_that_could_not_send(self):
+        st = WindowState(window_idx=2, round_type="Classic")
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
+                                           lambda: True, lambda _m: None)
+        ex._osc = MagicMock()
+        ex._osc.press_multi.return_value = False
+        ex._begin_move()
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（OSC を送れない）", self.written)
+        ex._osc = None
+        with patch.object(WindowOperator, "hold_key_background", return_value=False):
+            ex._begin_move()
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（移動キーを送れない）", self.written)
+        ex._osc = MagicMock()
+        ex._osc.press_multi.side_effect = OSError("x")
+        with self.assertRaises(OSError):
+            ex._begin_move()
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（OSError）", self.written)
+
     def test_a_sound(self):
         with tempfile.TemporaryDirectory() as d:
             voice = Path(d) / "continue.mp3"
@@ -17949,8 +17985,10 @@ class TestBeginByCursor(unittest.TestCase):
             self.assertIsNone(executor._start_use_spam(st.round_seq))
 
         executor, st = self._executor(item_id=5)
-        self.assertIsNotNone(executor._start_use_spam(st.round_seq),
-                             "ショップの装備は関係ない")
+        # 本物の連打のスレッドを残さない（後のテストの time.sleep の差し替えに混ざる）
+        with patch.object(ActionExecutor.threading, "Thread"):
+            self.assertIsNotNone(executor._start_use_spam(st.round_seq),
+                                 "ショップの装備は関係ない")
 
     def test_the_round_flow_starts_the_spam_before_waiting(self):
         """Verified Round End を待つ前から連打を回しておく"""
@@ -25806,7 +25844,8 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         over = base + 2 * config.VERIFIED_PERIODIC_SEC + 200
         self._at(monitor, over - 150, "This round is taking place at Facility (12) "
                                       "and the round type is Classic")
-        self._at(monitor, over, "RoundOver")
+        with patch.object(LogMonitor.threading, "Thread"):   # 本物の Begin のスレッドを残さない
+            self._at(monitor, over, "RoundOver")
         monitor.st.begin_done = False
         self._at(monitor, over + 1)
 
@@ -26238,7 +26277,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         monitor.st.round_type = "Run"
         monitor.st.item_id = 7
 
-        with patch.object(PlaySound, "play_sound") as mock_play:
+        with patch.object(PlaySound, "play_sound") as mock_play,              patch.object(LogMonitor.threading, "Thread"):     # 本物の Begin のスレッドを残さない
             monitor._process("You died.")
             monitor._process("RoundOver")
 
