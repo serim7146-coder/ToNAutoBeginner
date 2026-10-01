@@ -46,6 +46,39 @@ ROUND_CHART_COLORS = (
 )
 # ラウンドのチップの組（上の段・区切り線・下の段）。組ごとに選ぶボタンを足すときは、
 # 組の番号で _round_names_in_group() を使う
+# ラウンドごとに決めた色（表示名 → 色。依頼者の指定。円グラフと凡例で同じ）。
+# 表に無いラウンドだけ ROUND_CHART_COLORS から順に使う。凡例の背景は暗い色（BG）
+ROUND_COLORS = {
+    "Bloodbath": "#ff4d4d",
+    "Midnight": "#a8102a",
+    "Bloodbath EX": "#e8607a",
+    "Double Trouble": "#ff7a7a",
+    "Fog": "#9a9a9a",
+    "Fog(Alternate)": "#5f5f5f",
+    "Alternate": "#ffffff",
+    "8 Pages": "#d4d4d4",
+    "Punish": "#ffd43b",
+    "Twilight": "#d9b44a",
+    "Ghost": "#7fdcff",
+    "Ghost(Alternate)": "#2e8fbf",
+    "Run": "#ff9900",
+    "Unbound": "#ff8c1a",
+    "Blood Moon": "#7a1e1e",
+    "Mystic Moon": "#2f55c8",
+    "Solstice": "#4caf50",
+    "Classic": "#efe3c2",
+    # 指定の無いもの（上と紛らわしくない色）
+    "Cracked": "#cba6f7",
+    "Sabotage": "#a6e3a1",
+    "Randomizer": "#f5c2e7",
+    "Classic.exe": "#b4befe",
+    "Special": "#94e2d5",
+}
+LEGEND_STYLE = "Legend.Treeview"
+# テラーの一覧で文字を赤くする Unbound のテラー（内部の番号。依頼者の指定）:
+# Garden Rejects・Me and My Shadow・END OF THE WORLD・Angels・Mopemopemopemopemopemope
+HIGHLIGHT_UNBOUND_TERROR_IDS = frozenset({209, 211, 231, 263, 280})
+HIGHLIGHT_TERROR_COLOR = "#ff4d4d"
 ROUND_ORDER_GROUPS = (
     (
         ("8 Pages", ("8 Pages",)),
@@ -86,9 +119,9 @@ ALWAYS_SHOWN_ROUNDS = frozenset({"Classic", "Run"})
 # まとめて選ぶボタン（依頼者の決定。ログのラウンド名）。押すと今の選択を外して、この組だけを選ぶ。
 # Unbound は Unbound でしか出ないので作らない。Classic出現に Classic と 8 Pages は入れない
 ROUND_SELECT_PRESETS = (
-    ("Classic出現", ("Fog", "Ghost", "Punished", "Sabotage", "Bloodbath", "Double Trouble",
+    ("Classicテラー", ("Fog", "Ghost", "Punished", "Sabotage", "Bloodbath", "Double Trouble",
                      "Bloodbath EX", "Cracked", "Midnight", "Randomizer", "Classic.exe")),
-    ("Alternate出現", ("Alternate", "Fog (Alternate)", "Ghost (Alternate)", "Midnight")),
+    ("Alternateテラー", ("Alternate", "Fog (Alternate)", "Ghost (Alternate)", "Midnight")),
 )
 
 
@@ -129,6 +162,19 @@ def _ordered_round_entries(rounds: list[str]) -> list[tuple[str | None, str | No
 
     entries.extend((round_name, round_name) for round_name in sorted(available - used))
     return entries
+
+
+def round_colors(rows) -> list[str]:
+    """[(ラウンド名, 回数, 枠数)] の行ごとの色。決めた色（ROUND_COLORS）を使い、
+    表に無いものだけ ROUND_CHART_COLORS から順に（回数の順では変わらない）"""
+    colors, spare = [], 0
+    for round_name, _count, _slots in rows:
+        color = ROUND_COLORS.get(_round_display_name(round_name))
+        if color is None:
+            color = ROUND_CHART_COLORS[spare % len(ROUND_CHART_COLORS)]
+            spare += 1
+        colors.append(color)
+    return colors
 
 
 def _round_display_name(round_name: str) -> str:
@@ -340,11 +386,12 @@ class StatisticsWindow(tk.Toplevel):
         self.tabs.add(frame, text=text)
         return frame
 
-    def _tree(self, parent, columns) -> ttk.Treeview:
+    def _tree(self, parent, columns, style: str | None = None) -> ttk.Treeview:
         """[(列, 見出し, 幅, 寄せ)] の表（縦のスクロールつき）"""
         body = ttk.Frame(parent)
         body.pack(side="left", fill="both", expand=True)
-        tree = ttk.Treeview(body, columns=[c[0] for c in columns], show="headings")
+        extra = {"style": style} if style else {}
+        tree = ttk.Treeview(body, columns=[c[0] for c in columns], show="headings", **extra)
         for col, text, width, anchor in columns:
             tree.heading(col, text=text)
             tree.column(col, width=width, minwidth=48, anchor=anchor, stretch=(anchor == "w"))
@@ -364,8 +411,14 @@ class StatisticsWindow(tk.Toplevel):
         self.round_chart.bind("<Configure>", self._schedule_round_chart_draw)
         legend = ttk.Frame(tab)
         legend.grid(row=0, column=1, sticky="nsew")
+        # 凡例だけ暗い背景（ラウンドの色に白・白っぽい灰色があるため）。ほかの表は変えない
+        style = ttk.Style(self)
+        style.configure(LEGEND_STYLE, background=BG, fieldbackground=BG, foreground=FG)
+        style.configure(f"{LEGEND_STYLE}.Heading", background=SUB, foreground=FG)
+        style.map(LEGEND_STYLE, background=[("selected", SUB)], foreground=[("selected", FG)])
         self.round_legend = self._tree(legend, (("mark", "", 34, "center"), ("round", "ラウンド", 260, "w"),
-                                                ("count", "回数", 82, "e"), ("percent", "%", 82, "e")))
+                                                ("count", "回数", 82, "e"), ("percent", "%", 82, "e")),
+                                       style=LEGEND_STYLE)
 
     def _build_terror_tab(self):
         tab = self._tab("テラー")
@@ -683,8 +736,7 @@ class StatisticsWindow(tk.Toplevel):
         total = sum(count for _, count, _ in rows)
         if total <= 0:
             return
-        for index, (round_name, count, _slots) in enumerate(rows):
-            color = ROUND_CHART_COLORS[index % len(ROUND_CHART_COLORS)]
+        for index, ((round_name, count, _slots), color) in enumerate(zip(rows, round_colors(rows))):
             tag = f"round_color_{index}"
             self.round_legend.tag_configure(tag, foreground=color)
             percent = count / total * 100
@@ -725,9 +777,8 @@ class StatisticsWindow(tk.Toplevel):
         cx = width / 2
         cy = height / 2
         start = 90.0
-        for index, (_round_name, count, _slots) in enumerate(rows):
+        for (_round_name, count, _slots), color in zip(rows, round_colors(rows)):
             extent = count / total * 360
-            color = ROUND_CHART_COLORS[index % len(ROUND_CHART_COLORS)]
             slice_start = start - extent
             self._draw_round_slice(canvas, cx, cy, radius, slice_start, extent, color)
             start = slice_start
@@ -772,11 +823,14 @@ class StatisticsWindow(tk.Toplevel):
 
     def _render_terror_stats(self, rows: list[tuple[str, Statistics.TerrorStatistic]]):
         self._clear_tree(self.terror_tree)
+        self.terror_tree.tag_configure("highlight", foreground=HIGHLIGHT_TERROR_COLOR)
         for category, row in rows:
             # iid は中の番号（内訳・キャッシュ用）。見せる ID はゲームの ID
+            highlight = category == "Unbound" and row.terror_id in HIGHLIGHT_UNBOUND_TERROR_IDS
             self.terror_tree.insert("", "end", iid=str(row.terror_id), values=(
                 game_terror_id(category, row.terror_id), row.name, row.count, f"{row.expected:.2f}",
-                self._format_p_value(row.p_value), row.label))
+                self._format_p_value(row.p_value), row.label),
+                tags=("highlight",) if highlight else ())
 
     def _clear_terror_detail(self):
         for tree in (self.map_tree, self.round_kind_tree, self.terror_rounds_tree):

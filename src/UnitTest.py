@@ -15822,7 +15822,7 @@ class TestStatisticsSelectButtonsBZ(unittest.TestCase):
         self.fail(text)
 
     def test_each_button_selects_only_its_group(self):
-        for text, expected in (("Classic出現", self.CLASSIC), ("Alternate出現", self.ALTERNATE)):
+        for text, expected in (("Classicテラー", self.CLASSIC), ("Alternateテラー", self.ALTERNATE)):
             with patch.object(self.window, "_analyze"):
                 self.window._select_all_rounds()
                 self._pump(0.45)                    # 全選択の分の集計は済ませておく
@@ -15851,7 +15851,80 @@ class TestStatisticsSelectButtonsBZ(unittest.TestCase):
 
     def test_the_presets(self):
         self.assertEqual([(label, set(names)) for label, names in StatisticsGUI.ROUND_SELECT_PRESETS],
-                         [("Classic出現", self.CLASSIC), ("Alternate出現", self.ALTERNATE)])
+                         [("Classicテラー", self.CLASSIC), ("Alternateテラー", self.ALTERNATE)])
+
+
+class TestStatisticsColorsCB(unittest.TestCase):
+    """CB: 凡例の背景・ラウンドの色を固定・Unbound の5体を赤・ボタンの名前"""
+
+    _pump = TestStatisticsFixesBY._pump
+
+    def setUp(self):
+        TestStatisticsFixesBY.setUp(self)
+
+    def test_only_the_legend_has_the_dark_background(self):
+        style = ttk.Style(self.root)
+        self.assertEqual(str(self.window.round_legend.cget("style")), StatisticsGUI.LEGEND_STYLE)
+        self.assertEqual(style.lookup(StatisticsGUI.LEGEND_STYLE, "background"), StatisticsGUI.BG)
+        self.assertEqual(style.lookup(StatisticsGUI.LEGEND_STYLE, "fieldbackground"), StatisticsGUI.BG)
+        for tree in (self.window.terror_tree, self.window.map_tree, self.window.multi_tree):
+            self.assertEqual(str(tree.cget("style")), "", "ほかの表は今のまま")
+        self.assertNotEqual(style.lookup("Treeview", "background"), StatisticsGUI.BG)
+
+    def test_the_colors_are_fixed_per_round(self):
+        rows = [("Fog", 9, 9), ("Bloodbath", 5, 5), ("Cold Night", 3, 3), ("Punished", 2, 2), ("Mystery", 1, 1)]
+        colors = dict(zip([r[0] for r in rows], StatisticsGUI.round_colors(rows)))
+        self.assertEqual(colors["Fog"], "#9a9a9a")
+        self.assertEqual(colors["Bloodbath"], "#ff4d4d")
+        self.assertEqual(colors["Punished"], "#ffd43b", "表示名（Punish）で引く")
+        self.assertEqual(colors["Cold Night"], StatisticsGUI.ROUND_CHART_COLORS[0], "表に無いものは今の色から順に")
+        self.assertEqual(colors["Mystery"], StatisticsGUI.ROUND_CHART_COLORS[1])
+        flipped = dict(zip([r[0] for r in reversed(rows)], StatisticsGUI.round_colors(list(reversed(rows)))))
+        for name in ("Fog", "Bloodbath", "Punished"):
+            self.assertEqual(flipped[name], colors[name], "回数の順に関係ない")
+
+    def test_the_table(self):
+        expected = {"Bloodbath": "#ff4d4d", "Midnight": "#a8102a", "Bloodbath EX": "#e8607a",
+                    "Double Trouble": "#ff7a7a", "Fog": "#9a9a9a", "Fog(Alternate)": "#5f5f5f",
+                    "Alternate": "#ffffff", "8 Pages": "#d4d4d4", "Punish": "#ffd43b", "Twilight": "#d9b44a",
+                    "Ghost": "#7fdcff", "Ghost(Alternate)": "#2e8fbf", "Run": "#ff9900", "Unbound": "#ff8c1a",
+                    "Blood Moon": "#7a1e1e", "Mystic Moon": "#2f55c8", "Solstice": "#4caf50",
+                    "Classic": "#efe3c2", "Cracked": "#cba6f7", "Sabotage": "#a6e3a1",
+                    "Randomizer": "#f5c2e7", "Classic.exe": "#b4befe", "Special": "#94e2d5"}
+        self.assertEqual(StatisticsGUI.ROUND_COLORS, expected)
+
+    def test_the_chart_and_the_legend_use_the_same_colors(self):
+        legend = self.window.round_legend
+        legend_colors = {legend.item(i, "values")[1]: str(legend.tag_configure(legend.item(i, "tags")[0], "foreground"))
+                         for i in legend.get_children()}
+        drawn = []
+        chart = self.window.round_chart
+        with patch.object(chart, "winfo_width", return_value=400),              patch.object(chart, "winfo_height", return_value=300),              patch.object(self.window, "_draw_round_slice",
+                          side_effect=lambda *a: drawn.append(a[-1])):
+            self.window._draw_round_chart()
+        names = [StatisticsGUI._round_display_name(r[0]) for r in self.window._round_chart_rows]
+        self.assertTrue(names)
+        self.assertEqual(drawn, [legend_colors[n] for n in names])
+        self.assertEqual(legend_colors.get("Fog"), "#9a9a9a")
+
+    def test_five_unbound_terrors_are_red(self):
+        self.window._set_terror_category("unbound")
+        tree = self.window.terror_tree
+        ids = [int(i) for i in tree.get_children()]
+        self.assertTrue(StatisticsGUI.HIGHLIGHT_UNBOUND_TERROR_IDS <= set(ids), ids)
+        for tid in ids:
+            tags = tree.item(str(tid), "tags")
+            self.assertEqual("highlight" in tags, tid in {209, 211, 231, 263, 280}, tid)
+        self.assertEqual(str(tree.tag_configure("highlight", "foreground")), "#ff4d4d")
+
+    def test_the_same_numbers_elsewhere_are_not_red(self):
+        rows = [("Classic", Statistics.TerrorStatistic(209, "x", 1, 1.0, 0.5, ""))]
+        self.window._render_terror_stats(rows)
+        self.assertEqual(self.window.terror_tree.item("209", "tags"), "")
+
+    def test_the_button_names(self):
+        self.assertEqual([label for label, _n in StatisticsGUI.ROUND_SELECT_PRESETS],
+                         ["Classicテラー", "Alternateテラー"])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
