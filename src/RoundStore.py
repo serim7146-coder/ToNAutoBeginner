@@ -290,20 +290,6 @@ class RoundStore:
         return self._query(flt, f"select {key} as k, count(*), sum((terror1 is ?) + (terror2 is ?)"
                                 " + (terror3 is ?)) from f group by k order by k", (tid, tid, tid))
 
-    def terror_pairs(self, flt: Filter) -> list[tuple[int, int, int]]:
-        """一緒に出たテラーの組 [(小さい方, 大きい方, 回数)]。多い順"""
-        pairs = " union all ".join(
-            f"select min({a}, {b}) as a, max({a}, {b}) as b from f "
-            f"where {a} is not null and {b} is not null"
-            for a, b in (("terror1", "terror2"), ("terror1", "terror3"), ("terror2", "terror3")))
-        return self._query(flt, f"select a, b, count(*) as n from ({pairs}) group by a, b "
-                                "order by n desc, a, b")
-
-    def map_terror_counts(self, flt: Filter) -> list[tuple]:
-        """[(map_id, ラウンドの番号, テラー, 枠数)]"""
-        return self._query(flt, f"select map_id, round, tid, count(*) from ({_TERRORS}) "
-                                "group by map_id, round, tid")
-
     def player_counts(self, flt: Filter) -> dict[int, int]:
         """{見た人数（1人目＋other_uids）: ラウンド数}"""
         return dict(self._query(flt, f"select {_PLAYERS} as n, count(*) from f group by n"))

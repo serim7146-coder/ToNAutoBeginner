@@ -14730,7 +14730,8 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
         self.window._on_terror_selected()
         self.assertEqual([self.window.terror_detail_tabs.tab(t, "text")
                           for t in self.window.terror_detail_tabs.tabs()],
-                         ["マップ", "ラウンドの種類", "出現ラウンド"])
+                         ["出現ラウンド", "ラウンドタイプ", "マップ"])     # CA
+        self.assertEqual(self.window.terror_detail_tabs.index("current"), 0, "最初に見えるのは出現ラウンド")
         kinds = [self.window.round_kind_tree.item(i, "values")
                  for i in self.window.round_kind_tree.get_children()]
         self.assertEqual(kinds, [("Bloodbath", "1", "100.0")])
@@ -14739,6 +14740,8 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
         self.assertEqual(len(rounds), 1)
         self.assertEqual(rounds[0][-1], "✓")
         self.assertEqual(self.window.v_terror_rounds_note.get(), "")
+        maps = [self.window.map_tree.item(i, "values") for i in self.window.map_tree.get_children()]
+        self.assertEqual(len(maps), 1, "マップのタブにも入る")
 
     def test_more_than_500_shows_the_note(self):
         tid = self.ids[0]
@@ -27743,19 +27746,6 @@ class TestRoundStoreAggregation(unittest.TestCase):
         self.assertEqual(Statistics.map_counts_from_entries([(12, "Classic", 1), (12, "Classic", 2)]),
                          [(name, 3)])
 
-    def test_pairs_are_counted_in_either_order(self):
-        pairs = self.store.terror_pairs(RoundStore.Filter())
-        self.assertEqual(pairs[0], (5, 6, 2), "5-6 と 6-5 は同じ組")
-        self.assertIn((5, 7, 1), pairs)
-        self.assertIn((6, 7, 1), pairs)
-
-    def test_map_and_terror(self):
-        counts: dict = {}
-        for m, _r, t, n in self.store.map_terror_counts(RoundStore.Filter()):
-            counts[(m, t)] = counts.get((m, t), 0) + n            # ラウンドをまたいで足す
-        self.assertEqual(counts[(12, 5)], 2)
-        self.assertEqual(counts[(1, 5)], 1)
-
     def test_players_per_round(self):
         self.assertEqual(self.store.player_counts(RoundStore.Filter()), {1: 3, 2: 1, 3: 1})
         self.assertEqual(self.store.player_counts(RoundStore.Filter(mine=True)), {1: 1, 3: 1})
@@ -27801,10 +27791,14 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.root.update()
         return window
 
-    def test_it_has_the_five_tabs(self):
+    def test_it_has_the_four_tabs(self):
+        """CA: 「組み合わせ」のタブは無くした"""
         window = self._open(lambda s, m: [])
         self.assertEqual([window.tabs.tab(t, "text") for t in window.tabs.tabs()],
-                         ["ラウンド", "テラー", "時間の流れ", "組み合わせ", "マルチ"])
+                         ["ラウンド", "テラー", "時間の流れ", "マルチ"])
+        self.assertFalse(hasattr(window, "pair_tree"))
+        self.assertFalse(hasattr(RoundStore.RoundStore, "terror_pairs"))
+        self.assertFalse(hasattr(RoundStore.RoundStore, "map_terror_counts"))
 
     def test_a_failed_update_still_shows_what_is_here(self):
         def offline(_since, _mine):
@@ -27827,13 +27821,6 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.assertIn("ソロ 2", window.v_multi_note.get())
         rows = [window.multi_tree.item(i, "values") for i in window.multi_tree.get_children()]
         self.assertEqual(rows, [("1人", "2", "100.0")])
-
-    def test_the_combos_show_names_not_ids(self):
-        window = self._open(lambda s, m: [])
-        pairs = [window.pair_tree.item(i, "values") for i in window.pair_tree.get_children()]
-        self.assertEqual(len(pairs), 1)
-        self.assertEqual(pairs[0][:2], (Statistics.terror_name(5, config.TERRORS),
-                                        Statistics.terror_name(6, config.TERRORS)))
 
 
 class TestGetTransformedUid(unittest.TestCase):

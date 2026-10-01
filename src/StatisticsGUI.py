@@ -154,9 +154,6 @@ def _round_count_sort_key(row: tuple[str, int, int]) -> tuple[int, tuple[int, in
     return (-count, _round_order_key(round_name))
 
 
-# 組み合わせのタブに出す行数（多い順）
-COMBO_ROWS = 200
-
 
 def _round_name(round_id) -> str:
     """ラウンドの番号 → 名前（表に無い番号はその数字）"""
@@ -193,7 +190,7 @@ def search_terror_rows(stats_by_category, query: str) -> list[tuple[str, object]
 
 
 def round_kind_rows(counts) -> list[tuple[str, int, str]]:
-    """ラウンドの種類のタブ: [(ラウンドの番号, 枠数)] → [(名前, 回数, 割合%)]。多い順"""
+    """ラウンドタイプのタブ: [(ラウンドの番号, 枠数)] → [(名前, 回数, 割合%)]。多い順"""
     counts = [(rid, int(n)) for rid, n in counts]
     total = sum(n for _rid, n in counts)
     rows = [(_round_name(rid), n, f"{n / total * 100:.1f}" if total else "0.0")
@@ -236,7 +233,7 @@ def _local(db_time: int) -> datetime:
 class StatisticsWindow(tk.Toplevel):
     """統計画面 v1。DB から差分だけ手元の SQLite（RoundStore）へ取り込み、集計は手元で行う。
 
-    タブ: ラウンド／テラー／時間の流れ／組み合わせ／マルチ。範囲は「全体」か「自分の分」
+    タブ: ラウンド／テラー／時間の流れ／マルチ。範囲は「全体」か「自分の分」
     （1人目が自分か、other_uids に自分がいる行。ほかの人の uid は表示しない）
     """
 
@@ -330,7 +327,6 @@ class StatisticsWindow(tk.Toplevel):
         self._build_round_tab()
         self._build_terror_tab()
         self._build_time_tab()
-        self._build_combo_tab()
         self._build_multi_tab()
 
         ttk.Label(
@@ -401,14 +397,7 @@ class StatisticsWindow(tk.Toplevel):
         pane.add(detail_frame, weight=2)
         self.terror_detail_tabs = ttk.Notebook(detail_frame)
         self.terror_detail_tabs.pack(fill="both", expand=True)
-        map_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
-        self.terror_detail_tabs.add(map_tab, text="マップ")
-        self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
-        kind_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
-        self.terror_detail_tabs.add(kind_tab, text="ラウンドの種類")
-        self.round_kind_tree = self._tree(kind_tab, (("round", "ラウンド", 200, "w"),
-                                                     ("count", "回数", 80, "e"),
-                                                     ("percent", "%", 70, "e")))
+        # 並びは 出現ラウンド → ラウンドタイプ → マップ（開いたときに見えるのは出現ラウンド）
         rounds_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
         self.terror_detail_tabs.add(rounds_tab, text="出現ラウンド")
         ttk.Label(rounds_tab, textvariable=self.v_terror_rounds_note,
@@ -417,6 +406,14 @@ class StatisticsWindow(tk.Toplevel):
             rounds_tab, (("time", "日時", 140, "w"), ("round", "ラウンド", 110, "w"),
                          ("map", "マップ", 140, "w"), ("others", "一緒に出たテラー", 180, "w"),
                          ("players", "見た人数", 70, "e"), ("mine", "自分", 48, "center")))
+        kind_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
+        self.terror_detail_tabs.add(kind_tab, text="ラウンドタイプ")
+        self.round_kind_tree = self._tree(kind_tab, (("round", "ラウンド", 200, "w"),
+                                                     ("count", "回数", 80, "e"),
+                                                     ("percent", "%", 70, "e")))
+        map_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
+        self.terror_detail_tabs.add(map_tab, text="マップ")
+        self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
 
     def _build_time_tab(self):
         tab = self._tab("時間の流れ")
@@ -430,19 +427,6 @@ class StatisticsWindow(tk.Toplevel):
         self._hour_rows: list[tuple] = []
         for canvas in (self.day_chart, self.hour_chart):
             canvas.bind("<Configure>", lambda _e: self._draw_time_charts())
-
-    def _build_combo_tab(self):
-        tab = self._tab("組み合わせ")
-        pane = ttk.PanedWindow(tab, orient="horizontal")
-        pane.pack(fill="both", expand=True)
-        pairs = ttk.LabelFrame(pane, text="一緒に出たテラーの組（2体以上のラウンド）", padding=8)
-        pane.add(pairs, weight=1)
-        self.pair_tree = self._tree(pairs, (("a", "テラー", 220, "w"), ("b", "テラー", 220, "w"),
-                                            ("count", "回数", 80, "e")))
-        maps = ttk.LabelFrame(pane, text="マップとテラーの組", padding=8)
-        pane.add(maps, weight=1)
-        self.map_terror_tree = self._tree(maps, (("map", "マップ", 220, "w"), ("terror", "テラー", 220, "w"),
-                                                 ("count", "回数", 80, "e")))
 
     def _build_multi_tab(self):
         tab = self._tab("マルチ")
@@ -668,14 +652,13 @@ class StatisticsWindow(tk.Toplevel):
         self._render_terror_list()
         self._clear_terror_detail()
         self._render_time(flt)
-        self._render_combos(flt)
         self._render_multi(flt)
         total_rounds = sum(count for _name, count, _slots in round_rows)
         self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
 
     def _clear_all(self):
         self._clear_round_stats()
-        for tree in (self.terror_tree, self.pair_tree, self.map_terror_tree, self.multi_tree):
+        for tree in (self.terror_tree, self.multi_tree):
             self._clear_tree(tree)
         self._clear_terror_detail()
         self._day_rows, self._hour_rows = [], []
@@ -823,7 +806,7 @@ class StatisticsWindow(tk.Toplevel):
             self._render_time(self._filter)
 
     def _render_terror_rounds(self, terror_id: int):
-        """選んだテラーの「ラウンドの種類」と「出現ラウンド」"""
+        """選んだテラーの「ラウンドタイプ」と「出現ラウンド」"""
         kinds = self._round_kind_cache.get(terror_id)
         if kinds is None:
             kinds = round_kind_rows(self.store.round_counts_for_terror(self._filter, terror_id))
@@ -883,22 +866,6 @@ class StatisticsWindow(tk.Toplevel):
                 text = str(value) if terror_id is None else (
                     f"{value}\n{value / rounds * 100:.0f}%" if rounds else str(value))
                 canvas.create_text((x0 + x1) / 2, y - 12, text=text, fill=FG, font=(UIFont.UI, 7))
-
-    # ── 組み合わせのタブ ───────────────────────────
-    def _render_combos(self, flt: RoundStore.Filter):
-        self._clear_tree(self.pair_tree)
-        for a, b, count in self.store.terror_pairs(flt)[:COMBO_ROWS]:
-            self.pair_tree.insert("", "end", values=(Statistics.terror_name(a, config.TERRORS),
-                                                     Statistics.terror_name(b, config.TERRORS), count))
-        self._clear_tree(self.map_terror_tree)
-        merged: dict[tuple[str, int], int] = {}
-        for map_id, rid, tid, count in self.store.map_terror_counts(flt):
-            key = (Statistics.map_name_for_id(map_id, _round_name(rid)), tid)
-            merged[key] = merged.get(key, 0) + count
-        ordered = sorted(merged.items(), key=lambda item: (-item[1], item[0][0], item[0][1]))
-        for (map_name, tid), count in ordered[:COMBO_ROWS]:
-            self.map_terror_tree.insert("", "end", values=(map_name, Statistics.terror_name(tid, config.TERRORS),
-                                                           count))
 
     # ── マルチのタブ ──────────────────────────────
     def _render_multi(self, flt: RoundStore.Filter):
