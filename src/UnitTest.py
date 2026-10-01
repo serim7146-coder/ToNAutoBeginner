@@ -60,6 +60,9 @@ import BeginDetect
 import RoundStore
 import VerifiedTracker
 import DebugLog
+import random
+import zipfile
+import BugReport
 import ItemCatalog
 import WindowVolume
 import ScreenCapture
@@ -15299,6 +15302,318 @@ class TestDebugLogTraces(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertFalse(any("Supabase" in m or "101" in m or "register_round" in m or "[DB]" in m
                              for m in self.written), self.written)
+
+
+class TestBugReportContent(unittest.TestCase):
+    """BU: 送る中身（本文・zip・伏せる・大きさ）。本物の Discord へは送らない"""
+
+    NOW = datetime(2026, 10, 1, 12, 34, 56)
+    HOME = r"C:\Users\Alice"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.dir = Path(self._dir.name)
+        p = patch.object(BugReport.os.path, "expanduser", return_value=self.HOME)
+        p.start()
+        self.addCleanup(p.stop)
+        self.debug = self.dir / "debug.log"
+        self.debug.write_text("debug line\n", encoding="utf-8")
+        self.vrchat = self.dir / "output_log.txt"
+        self.vrchat.write_text("vrchat line C:/users/alice/AppData\n", encoding="utf-8")
+
+    def _zip(self, include=None, window=2, vrchat=None, settings=None, gui="画面 C:\\USERS\\ALICE\\x\n"):
+        include = include if include is not None else {k: True for k, _l in BugReport.ATTACHMENTS}
+        name, data = BugReport.build_report(
+            "動かない C:\\Users\\Alice\\y", window, include, gui,
+            str(self.vrchat) if vrchat is None else vrchat,
+            settings if settings is not None else {"win_count": 6, "obs_password_dpapi": "QUFB",
+                                                   "obs_password": "plain"},
+            self.NOW, debug_log_path=self.debug, version="v9.9.9")
+        z = zipfile.ZipFile(io.BytesIO(data))
+        return name, data, {n: z.read(n).decode("utf-8") for n in z.namelist()}
+
+    def test_the_content(self):
+        text = BugReport.content("v9.9.9", 2, "止まった", self.NOW)
+        self.assertEqual(text, "🐞 不具合報告 v9.9.9 / 窓2 / 2026-10-01 12:34:56\n止まった")
+        self.assertIn("/ 窓なし /", BugReport.content("v9.9.9", 0, "x", self.NOW))
+        long = BugReport.content("v9.9.9", 1, "あ" * 3000, self.NOW)
+        self.assertEqual(len(long), BugReport.CONTENT_MAX)
+        self.assertTrue(long.endswith("…（続きは report.txt）"))
+
+    def test_everything_selected(self):
+        name, _data, files = self._zip()
+        self.assertEqual(name, "report_20261001_123456.zip")
+        self.assertEqual(set(files), {"report.txt", "gui_log.txt", "debug_log.txt",
+                                      "vrchat_log_window2.txt", "settings.json"})
+        settings = json.loads(files["settings.json"])
+        self.assertEqual(settings, {"win_count": 6})
+        report = files["report.txt"]
+        for part in ("不具合報告 v9.9.9", "窓: 窓2", "時刻: 2026-10-01 12:34:56", "Windows:",
+                     "実行:", "- 画面のログ出力: gui_log.txt", "- 設定: settings.json", "動かない"):
+            self.assertIn(part, report)
+
+    def test_only_the_selected_ones_with_reasons(self):
+        include = {BugReport.GUI_LOG: False, BugReport.DEBUG_LOG: True,
+                   BugReport.VRCHAT_LOG: False, BugReport.SETTINGS: False}
+        _n, _d, files = self._zip(include=include)
+        self.assertEqual(set(files), {"report.txt", "debug_log.txt"})
+        self.assertEqual(files["report.txt"].count("（未選択）"), 3)
+
+    def test_vrchat_log_reasons(self):
+        for window, path, reason in ((0, None, "窓を選んでいない"), (3, "", "窓に未割り当て"),
+                                     (3, str(self.dir / "none.txt"), "ファイルが無い")):
+            _n, _d, files = self._zip(window=window, vrchat=path if path is not None else str(self.vrchat))
+            self.assertNotIn("vrchat_log_window3.txt", files)
+            self.assertIn(f"選んだ窓の VRChat のログ: 入れていません（{reason}）", files["report.txt"])
+        self.debug.unlink()
+        _n, _d, files = self._zip()
+        self.assertIn("debug.log: 入れていません（ファイルが無い）", files["report.txt"])
+
+    def test_the_user_name_is_masked_everywhere(self):
+        _n, _d, files = self._zip()
+        for name, text in files.items():
+            self.assertNotIn("alice", text.lower(), name)
+        self.assertIn("%USERPROFILE%/AppData", files["vrchat_log_window2.txt"])
+        self.assertIn("%USERPROFILE%\\x", files["gui_log.txt"])
+        self.assertIn("%USERPROFILE%\\y", files["report.txt"])
+
+    def test_secrets_are_masked(self):
+        self.addCleanup(DebugLog._secrets.discard, "hook-secret-777")
+        DebugLog.add_secret("hook-secret-777")
+        _n, _d, files = self._zip(gui="送り先 hook-secret-777\n")
+        self.assertNotIn("hook-secret-777", files["gui_log.txt"])
+
+    def _big_log(self, lines=40000):
+        rnd = random.Random(7)
+        with open(self.vrchat, "w", encoding="utf-8") as f:
+            for i in range(lines):
+                f.write(f"LINE-{i:06d} " + "".join(rnd.choice("0123456789abcdef") for _ in range(60)) + "\n")
+
+    def test_a_big_log_is_cut_to_fit_from_a_line_start(self):
+        self._big_log()
+        with patch.object(config, "REPORT_MAX_BYTES", 600 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_START_BYTES", 2 * 1024 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_MIN_BYTES", 64 * 1024):
+            _n, data, files = self._zip()
+        self.assertLessEqual(len(data), 600 * 1024)
+        text = files["vrchat_log_window2.txt"]
+        self.assertTrue(text.startswith("LINE-"), text[:20])
+        self.assertTrue(text.endswith("\n"))
+        self.assertIn("LINE-039999", text, "末尾を入れる")
+        self.assertIn("（末尾）", files["report.txt"])
+
+    def test_too_big_drops_the_vrchat_log(self):
+        self._big_log()
+        with patch.object(config, "REPORT_MAX_BYTES", 40 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_START_BYTES", 2 * 1024 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_MIN_BYTES", 512 * 1024):
+            _n, data, files = self._zip()
+        self.assertNotIn("vrchat_log_window2.txt", files)
+        self.assertIn("入れていません（大きすぎて収まらない）", files["report.txt"])
+
+    def test_the_real_limits(self):
+        self.assertEqual(config.REPORT_MAX_BYTES, int(9.5 * 1024 * 1024))
+        self.assertEqual(config.REPORT_VRCHAT_LOG_START_BYTES, 8 * 1024 * 1024)
+        self.assertEqual(config.REPORT_VRCHAT_LOG_MIN_BYTES, 256 * 1024)
+        self.assertEqual(config.REPORT_DEBUG_LOG_MAX_BYTES, 5 * 1024 * 1024)
+        self.assertEqual(config.REPORT_COOLDOWN_SEC, 60)
+
+    def test_tails_start_at_a_line(self):
+        path = self.dir / "t.txt"
+        path.write_bytes(b"first line\nsecond line\nthird\n")
+        self.assertEqual(BugReport.tail_bytes(path, 15), b"third\n")
+        self.assertEqual(BugReport.tail_bytes(path, 1000), b"first line\nsecond line\nthird\n")
+        self.assertEqual(BugReport.tail_text("aaa\nbbb\nccc\n", 6), "ccc\n")
+
+    def test_the_debug_log_adds_the_older_one(self):
+        self.debug.write_bytes(b"new1\nnew2\n")
+        self.debug.with_name("debug.log.1").write_bytes(b"old1\nold2\nold3\n")
+        self.assertEqual(BugReport.debug_log_tail(self.debug, 18), b"old3\nnew1\nnew2\n")
+        self.assertEqual(BugReport.debug_log_tail(self.debug, 8), b"new2\n", "新しい方で足りれば足さない")
+
+
+class TestBugReportSend(unittest.TestCase):
+    """BU: 送り方（multipart・UA・失敗の文言に URL を出さない）"""
+
+    URL = "https://discord.example/api/webhooks/123/SECRET-TOKEN"
+
+    def _parts(self, body: bytes, ctype: str):
+        boundary = ctype.split("boundary=")[1].encode()
+        return [p for p in body.split(b"--" + boundary) if p.strip() not in (b"", b"--")]
+
+    def test_the_multipart(self):
+        body, ctype = BugReport.multipart("本文 @everyone", "report_x.zip", b"PK\x03\x04zip")
+        self.assertTrue(ctype.startswith("multipart/form-data; boundary="))
+        parts = self._parts(body, ctype)
+        self.assertEqual(len(parts), 2)
+        head, payload = parts[0].split(b"\r\n\r\n", 1)
+        self.assertIn(b'name="payload_json"', head)
+        data = json.loads(payload.rstrip(b"\r\n").decode("utf-8"))
+        self.assertEqual(data, {"content": "本文 @everyone", "allowed_mentions": {"parse": []}})
+        head, file_data = parts[1].split(b"\r\n\r\n", 1)
+        self.assertIn(b'name="files[0]"; filename="report_x.zip"', head)
+        self.assertEqual(file_data.rstrip(b"\r\n"), b"PK\x03\x04zip")
+
+    def test_a_good_send(self):
+        seen = []
+
+        def opener(req, timeout=None):
+            seen.append((req, timeout))
+            res = MagicMock()
+            res.__enter__ = MagicMock(return_value=res)
+            res.__exit__ = MagicMock(return_value=False)
+            res.status = 200
+            return res
+
+        ok, message = BugReport.send(self.URL, "本文", "r.zip", b"zip", opener=opener)
+        self.assertEqual((ok, message), (True, "送信しました"))
+        req, timeout = seen[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(req.get_header("User-agent"), f"ToNAutoBeginner/{config.APP_VERSION}")
+        self.assertEqual(req.get_method(), "POST")
+
+    def test_failures_never_show_the_url(self):
+        errors = (urllib.error.HTTPError(self.URL, 429, f"Too Many {self.URL}", {}, None),
+                  urllib.error.URLError(f"cannot reach {self.URL}"),
+                  OSError(f"boom {self.URL}"))
+        for error in errors:
+            ok, message = BugReport.send(self.URL, "x", "r.zip", b"z",
+                                         opener=MagicMock(side_effect=error))
+            self.assertFalse(ok)
+            self.assertNotIn("discord", message)
+            self.assertNotIn("SECRET", message)
+        self.assertEqual(BugReport.send(self.URL, "x", "r.zip", b"z",
+                                        opener=MagicMock(side_effect=errors[0]))[1],
+                         "送れませんでした（HTTP 429）")
+
+    def test_no_url_does_not_send(self):
+        opener = MagicMock()
+        self.assertEqual(BugReport.send("", "x", "r.zip", b"z", opener=opener),
+                         (False, "送り先が設定されていません"))
+        opener.assert_not_called()
+
+    def test_the_url_comes_from_the_env_and_is_kept_secret(self):
+        self.addCleanup(DebugLog._secrets.discard, self.URL)
+        with patch.dict(os.environ, {"DISCORD_REPORT_WEBHOOK_URL": self.URL}):
+            self.assertEqual(BugReport.webhook_url(), self.URL)
+        self.assertEqual(DebugLog.scrub(f"post {self.URL}"), "post ***")
+        with patch.dict(os.environ, {"DISCORD_REPORT_WEBHOOK_URL": ""}):
+            self.assertEqual(BugReport.webhook_url(), "")
+
+
+class TestBugReportDialog(unittest.TestCase):
+    """BU: 画面（本物の Tk の App。送信は差し替え）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def setUp(self):
+        self.app._report_sent_at = None
+        self.logs = []
+        p = patch.object(mainGUI.App, "_log", lambda _s, m: self.logs.append(m))
+        p.start()
+        self.addCleanup(p.stop)
+        if len(self.app.tabs) < 3:
+            count = len(self.app.tabs)
+            self.app._rebuild_tabs(3)
+            self.addCleanup(self.app._rebuild_tabs, count)
+
+    def _dialog(self):
+        self.app._open_report()
+        dialog = self.app._report_dialog
+        self.addCleanup(lambda: dialog.winfo_exists() and dialog.destroy())
+        return dialog
+
+    def test_the_button_is_last_on_the_row(self):
+        last = self.app.btn_start.master.pack_slaves()[-1]
+        self.assertEqual(last.cget("text"), "報告")
+
+    def test_the_window_defaults_to_the_selected_tab(self):
+        self.app.nb.select(self.app.tabs[1])
+        self.assertEqual(self._dialog().v_window.get(), "窓2")
+
+    def test_all_attachments_are_on_and_the_note_is_shown(self):
+        dialog = self._dialog()
+        self.assertTrue(all(v.get() for v in dialog.v_include.values()))
+        self.assertEqual(set(dialog.v_include), {k for k, _l in BugReport.ATTACHMENTS})
+        self.assertIn("一緒にいた人の名前", dialog.REPORT_NOTE)
+
+    def test_an_empty_requirement_is_not_sent(self):
+        dialog = self._dialog()
+        with patch.object(BugReport, "send") as send, \
+             patch.object(BugReport, "webhook_url", return_value="https://x.example/h"):
+            dialog._send()
+        send.assert_not_called()
+        self.assertEqual(dialog.v_status.get(), "何が起きたかを書いてください")
+
+    def test_no_url_is_explained_and_not_sent(self):
+        dialog = self._dialog()
+        dialog.text.insert("1.0", "止まった")
+        with patch.object(BugReport, "send") as send, \
+             patch.object(BugReport, "webhook_url", return_value=""):
+            dialog._send()
+        send.assert_not_called()
+        self.assertEqual(dialog.v_status.get(), "送り先が設定されていません")
+        self.assertIn("[報告] 送り先が設定されていません", self.logs)
+
+    def _send_ok(self, dialog, result=(True, "送信しました")):
+        built = []
+
+        def build(*args, **kwargs):
+            built.append(args)
+            return "r.zip", b"zip"
+
+        with patch.object(BugReport, "webhook_url", return_value="https://x.example/h"), \
+             patch.object(BugReport, "build_report", side_effect=build), \
+             patch.object(BugReport, "send", return_value=result) as send, \
+             patch.object(mainGUI.threading, "Thread", TestDbV1.RunNow):
+            dialog._send()
+            self.app.update()
+        return built, send
+
+    def test_a_good_send_closes_and_starts_the_cooldown(self):
+        self.app.tabs[2].v_log.set(r"C:\logs\output_log_3.txt")
+        dialog = self._dialog()
+        dialog.text.insert("1.0", "止まった")
+        dialog.v_window.set("窓3")
+        built, send = self._send_ok(dialog)
+        send.assert_called_once()
+        self.assertEqual(built[0][0], "止まった")
+        self.assertEqual(built[0][1], 3)
+        self.assertEqual(built[0][4], r"C:\logs\output_log_3.txt", "選んだ窓のログ")
+        self.assertIn("[報告] 送信しました", self.logs)
+        self.assertFalse(dialog.winfo_exists(), "成功したら閉じる")
+        self.assertGreater(self.app._report_cooldown_remaining(), 59)
+
+        again = self._dialog()
+        again.text.insert("1.0", "もう一度")
+        self.assertEqual(str(again.btn_send.cget("state")), "disabled")
+        with patch.object(BugReport, "send") as send2, \
+             patch.object(BugReport, "webhook_url", return_value="https://x.example/h"):
+            again._send()
+        send2.assert_not_called()
+        self.assertIn("続けては送れません", again.v_status.get())
+
+    def test_the_cooldown_ends_after_60_seconds(self):
+        self.app._report_sent_at = time.monotonic() - config.REPORT_COOLDOWN_SEC - 1
+        dialog = self._dialog()
+        self.assertEqual(str(dialog.btn_send.cget("state")), "normal")
+
+    def test_a_failure_stays_open(self):
+        dialog = self._dialog()
+        dialog.text.insert("1.0", "止まった")
+        self._send_ok(dialog, result=(False, "送れませんでした（HTTP 429）"))
+        self.assertTrue(dialog.winfo_exists())
+        self.assertEqual(dialog.v_status.get(), "送れませんでした（HTTP 429）")
+        self.assertIn("[報告] 送れませんでした（HTTP 429）", self.logs)
+        self.assertEqual(self.app._report_cooldown_remaining(), 0.0)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

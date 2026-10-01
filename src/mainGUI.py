@@ -31,6 +31,7 @@ import OBSClient
 import Recorder
 import SecretStore
 import FogEarlyRead
+import BugReport
 import WindowVolume
 from StatisticsGUI import StatisticsWindow
 
@@ -546,6 +547,119 @@ class CollapsibleFrame(tk.Frame):
         else:
             self.content.pack(fill="x", padx=8, pady=(0, 4))
             self._toggle_btn.config(text="▼")
+
+
+class ReportDialog(tk.Toplevel):
+    """不具合の報告（BU）。要件・窓・添付を選んで Discord の Webhook へ送る"""
+
+    REPORT_NOTE = ("VRChat のログには、一緒にいた人の名前やユーザー ID、あなたの表示名が"
+                   "含まれます。送り先は開発者の Discord です")
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("不具合の報告")
+        self.configure(bg=config.GUI_BG)
+        self.resizable(False, False)
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="何が起きましたか（必須）").pack(anchor="w")
+        self.text = tk.Text(body, width=60, height=8, bg="#181825", fg=config.GUI_FG,
+                            insertbackground=config.GUI_FG, font=(UIFont.UI, 9))
+        self.text.pack(fill="x", pady=(2, 6))
+        row = ttk.Frame(body)
+        row.pack(fill="x", pady=(0, 6))
+        ttk.Label(row, text="窓:").pack(side="left")
+        windows = ["なし"] + [f"窓{tab.idx + 1}" for tab in app.tabs]
+        self.v_window = tk.StringVar(value=app._current_tab_label())
+        ttk.Combobox(row, textvariable=self.v_window, values=windows, state="readonly",
+                     width=8).pack(side="left", padx=(6, 0))
+        self.v_include = {}
+        checks = ttk.Frame(body)
+        checks.pack(fill="x")
+        for key, label in BugReport.ATTACHMENTS:
+            self.v_include[key] = tk.BooleanVar(value=True)
+            ttk.Checkbutton(checks, text=label, variable=self.v_include[key]).pack(side="left", padx=(0, 10))
+        ttk.Label(body, text=self.REPORT_NOTE, foreground=config.GUI_YLW,
+                  wraplength=440).pack(anchor="w", pady=(6, 6))
+        self.v_status = tk.StringVar(value="")
+        ttk.Label(body, textvariable=self.v_status, foreground=config.GUI_ORG,
+                  wraplength=440).pack(anchor="w")
+        self.btn_send = ttk.Button(body, text="送信", command=self._send, width=12)
+        self.btn_send.pack(anchor="e", pady=(6, 0))
+        self._refresh_cooldown()
+
+    def _window_number(self) -> int:
+        label = self.v_window.get()
+        return int(label[1:]) if label.startswith("窓") and label[1:].isdigit() else 0
+
+    def _refresh_cooldown(self):
+        """送れてから REPORT_COOLDOWN_SEC は送信を押せない"""
+        remain = self.app._report_cooldown_remaining()
+        if remain > 0:
+            self.btn_send.config(state="disabled")
+            self.v_status.set(f"続けては送れません（あと{int(remain) + 1}秒）")
+            self.after(1000, self._refresh_cooldown)
+        elif not getattr(self, "_sending", False):
+            self.btn_send.config(state="normal")
+            if self.v_status.get().startswith("続けては送れません"):
+                self.v_status.set("")
+
+    def _send(self):
+        requirement = self.text.get("1.0", "end").strip()
+        if not requirement:
+            self.v_status.set("何が起きたかを書いてください")
+            return
+        if self.app._report_cooldown_remaining() > 0:
+            self._refresh_cooldown()
+            return
+        url = BugReport.webhook_url()
+        if not url:
+            self.v_status.set("送り先が設定されていません")
+            self.app._log("[報告] 送り先が設定されていません")
+            return
+        window = self._window_number()
+        include = {key: var.get() for key, var in self.v_include.items()}
+        # Tk の値はメインスレッドで取っておく
+        gui_log = self.app.log_text.get("1.0", "end")
+        vrchat_log = self.app._tab_log_path(window)
+        settings = load_settings()
+        self._sending = True
+        self.btn_send.config(state="disabled")
+        self.v_status.set("送信中…")
+
+        def worker():
+            try:
+                now = datetime.now()
+                name, data = BugReport.build_report(requirement, window, include, gui_log,
+                                                    vrchat_log, settings, now)
+                ok, message = BugReport.send(url, BugReport.content(config.APP_VERSION, window,
+                                                                    requirement, now), name, data)
+            except Exception as e:
+                DebugLog.exception("mainGUI.ReportDialog.worker")
+                ok, message = False, f"送れませんでした（{type(e).__name__}）"
+            try:
+                self.app.after(0, lambda: self._done(ok, message))
+            except (tk.TclError, RuntimeError):
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _done(self, ok: bool, message: str):
+        self._sending = False
+        self.app._log(f"[報告] {message}")
+        if ok:
+            self.app._report_sent_at = time.monotonic()
+            try:
+                self.destroy()
+            except tk.TclError:
+                pass
+            return
+        try:
+            self.v_status.set(message)
+            self.btn_send.config(state="normal")
+        except tk.TclError:
+            pass
 
 
 class App(tk.Tk):
@@ -1103,6 +1217,8 @@ class App(tk.Tk):
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
+        ttk.Button(fc, text="報告",
+                   command=self._open_report, width=8).pack(side="left", padx=6)
 
         # キー設定の行: 緊急停止のキー、続けてマクロ開始のキー（依頼者の決定）。
         # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
@@ -1960,6 +2076,36 @@ class App(tk.Tk):
             text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
         self._debug_start()
+
+    # ── 不具合の報告（BU）──────────────────────────
+    def _open_report(self):
+        dialog = getattr(self, "_report_dialog", None)
+        try:
+            if dialog is not None and dialog.winfo_exists():
+                dialog.lift()
+                return
+        except tk.TclError:
+            pass
+        self._report_dialog = ReportDialog(self)
+
+    def _current_tab_label(self) -> str:
+        """メイン画面でいま選ばれている窓のタブ（「窓N」）。無ければ「なし」"""
+        try:
+            return f"窓{self.nb.index(self.nb.select()) + 1}" if self.tabs else "なし"
+        except (tk.TclError, AttributeError):
+            return "なし"
+
+    def _tab_log_path(self, window: int) -> str:
+        """その窓に割り当てたログのパス（無ければ空）"""
+        if not window or window > len(self.tabs):
+            return ""
+        return self.tabs[window - 1].v_log.get().strip()
+
+    def _report_cooldown_remaining(self) -> float:
+        sent = getattr(self, "_report_sent_at", None)
+        if sent is None:
+            return 0.0
+        return max(0.0, config.REPORT_COOLDOWN_SEC - (time.monotonic() - sent))
 
     def _debug_environment(self):
         """debug.log へ: 起動時の環境（版・exe か python か・Windows・画面・設定）"""

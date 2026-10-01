@@ -23,6 +23,15 @@ DEBUG_LOG_PATH = SETTINGS_PATH.parent / "debug.log"
 DEBUG_LOG_MAX_BYTES = 20 * 1024 * 1024       # これを超えたら世代を回す（.1〜.3 を残す）
 # 設定を debug.log・不具合の報告へ出すときに抜く項目（OBS のパスワード。暗号化したものも）
 REPORT_SETTINGS_EXCLUDE_KEYS = ("obs_password_dpapi", "obs_password")
+
+# ── 不具合の報告（Discord の Webhook。URL は .env の DISCORD_REPORT_WEBHOOK_URL）──
+REPORT_COOLDOWN_SEC = 60                         # 送れたら、この秒数は続けて送れない
+REPORT_MAX_BYTES = int(9.5 * 1024 * 1024)        # zip の上限（Webhook の添付は 10MB まで）
+REPORT_VRCHAT_LOG_START_BYTES = 8 * 1024 * 1024  # VRChat のログの末尾。超えたら半分ずつ減らす
+REPORT_VRCHAT_LOG_MIN_BYTES = 256 * 1024         # これより減らすなら VRChat のログは外す
+REPORT_GUI_LOG_MAX_BYTES = 2 * 1024 * 1024       # 画面のログ出力の末尾
+REPORT_DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024     # debug.log の末尾（足りなければ .1 から足す）
+REPORT_TIMEOUT_SEC = 30
 # 統計画面 v1 の手元の保存（RoundStore。DB から取った分と自分が送った分）
 ROUND_STORE_PATH = SETTINGS_PATH.parent / "rounds.sqlite"
 
