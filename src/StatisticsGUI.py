@@ -12,6 +12,7 @@ import WindowOperator
 import ConnectDB
 import RoundStore
 import Statistics
+import MatchTNL
 
 BG  = config.GUI_BG
 FG  = config.GUI_FG
@@ -24,7 +25,8 @@ ORG = config.GUI_ORG
 ROUND_CHIP_COLUMNS = 6
 ROUND_CHIP_WIDTH = 21
 ROUND_CHIP_MIN_WIDTH = 158
-DEFAULT_EXCLUDED_ROUNDS = {"Classic", "Run"}
+# ラウンドのチップ・全選択・全解除の後、この時間たったら1回だけ集計し直す（続けて押したら取り直す）
+ROUND_REANALYZE_DELAY_MS = 300
 TERROR_CATEGORIES = (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound"))
 # 出現ラウンドのタブに出す行数（新しい順）。多すぎると重い
 TERROR_ROUNDS_LIMIT = 500
@@ -42,9 +44,10 @@ ROUND_CHART_COLORS = (
     "#f5c2e7",
     "#a6adc8",
 )
+# ラウンドのチップの組（上の段・区切り線・下の段）。組ごとに選ぶボタンを足すときは、
+# 組の番号で _round_names_in_group() を使う
 ROUND_ORDER_GROUPS = (
     (
-        ("Classic", ("Classic",)),
         ("8 Pages", ("8 Pages",)),
         ("Fog", ("Fog",)),
         ("Fog(Alternate)", ("Fog (Alternate)", "Fog(Alternate)", "Fog Alternate")),
@@ -59,22 +62,35 @@ ROUND_ORDER_GROUPS = (
         ("Alternate", ("Alternate",)),
         ("Midnight", ("Midnight",)),
         ("Unbound", ("Unbound",)),
-        ("Run", ("Run",)),
+        ("Randomizer", ("Randomizer",)),
+        ("Classic.exe", ("Classic.exe",)),
     ),
     (
+        ("Classic", ("Classic",)),
+        ("Run", ("Run",)),
         ("Mystic Moon", ("Mystic Moon",)),
         ("Blood Moon", ("Blood Moon",)),
         ("Twilight", ("Twilight",)),
         ("Solstice", ("Solstice",)),
-        ("Randomizer", ("Randomizer",)),
-        ("Classic.exe", ("Classic.exe",)),
+        ("Special", ("Special",)),
     ),
 )
+# 下の段＝「全選択」で選ばれない組。画面を開いたときの最初の選択でも外す（依頼者の決定）
+SELECT_ALL_SKIPPED_GROUP = 1
+DEFAULT_EXCLUDED_ROUNDS = frozenset(name for _label, aliases in ROUND_ORDER_GROUPS[SELECT_ALL_SKIPPED_GROUP]
+                                    for name in aliases)
+# データが無くても一覧に必ず出すラウンド
+ALWAYS_SHOWN_ROUNDS = frozenset({"Classic", "Run"})
+
+
+def _round_names_in_group(group_index: int) -> frozenset:
+    """その組のラウンドの名前（別名も含む）"""
+    return frozenset(name for _label, aliases in ROUND_ORDER_GROUPS[group_index] for name in aliases)
 
 
 def _ordered_round_entries(rounds: list[str]) -> list[tuple[str | None, str | None]]:
     available = {str(round_name).strip() for round_name in rounds if str(round_name).strip()}
-    available.update(DEFAULT_EXCLUDED_ROUNDS)
+    available.update(ALWAYS_SHOWN_ROUNDS)
     used: set[str] = set()
     entries: list[tuple[str | None, str | None]] = []
 
@@ -127,19 +143,31 @@ def _round_name(round_id) -> str:
     return config.ROUND_TYPE_NAMES.get(round_id, str(round_id))
 
 
-def terror_matches(row, query: str) -> bool:
-    """検索: 名前の一部（大文字小文字を区別しない）か、ID の数字が完全に同じ"""
+def game_terror_id(category: str, terror_id: int) -> int:
+    """表示と検索に使うゲームの ID。分類は集計した側（どの分類の一覧の行か）で決める
+    （番号の大きさで推し量らない。Classic にも 134 以上の番号がある）。
+    Alternate は −134・Unbound は −200。中で使う番号（内訳・キャッシュ・SQL）は変えない"""
+    if category == "Alternate":
+        return terror_id - MatchTNL.ALTERNATE_OFFSET
+    if category == "Unbound":
+        return terror_id - MatchTNL.UNBOUND_OFFSET
+    return terror_id
+
+
+def terror_matches(row, query: str, category: str = "Classic") -> bool:
+    """検索: 名前の一部（大文字小文字を区別しない）か、ゲームの ID の数字が完全に同じ"""
     q = (query or "").strip()
     if not q:
         return True
-    return q.casefold() in str(row.name).casefold() or (q.isdigit() and int(q) == row.terror_id)
+    return (q.casefold() in str(row.name).casefold()
+            or (q.isdigit() and int(q) == game_terror_id(category, row.terror_id)))
 
 
 def search_terror_rows(stats_by_category, query: str) -> list[tuple[str, object]]:
     """分類をまたいで探す。stats_by_category は [(分類の名前, 集計の行...)]。
     合うものだけを [(分類の名前, 行)] で、今と同じ並び（p値・回数・名前）"""
     found = [(label, row) for label, rows in stats_by_category for row in rows
-             if terror_matches(row, query)]
+             if terror_matches(row, query, label)]
     found.sort(key=lambda item: (item[1].p_value, -item[1].count, item[1].name))
     return found
 
@@ -207,6 +235,7 @@ class StatisticsWindow(tk.Toplevel):
         self._category_buttons: dict[str, tk.Button] = {}
         self._round_chart_rows: list[tuple[str, int, int]] = []
         self._round_chart_job: str | None = None
+        self._reanalyze_job: str | None = None
         self._rows_loading = False
         self._range_set = False
         self._filter: RoundStore.Filter | None = None
@@ -340,8 +369,8 @@ class StatisticsWindow(tk.Toplevel):
         self.v_terror_search.trace_add("write", lambda *_a: self._on_terror_search_changed())
         body = ttk.Frame(terror_frame)
         body.pack(fill="both", expand=True)
-        self.terror_tree = self._tree(body, (("id", "ID", 58, "e"), ("category", "分類", 86, "center"),
-                                             ("name", "テラー", 240, "w"),
+        self.terror_tree = self._tree(body, (("id", "ID", 58, "e"),
+                                             ("name", "テラー", 260, "w"),
                                              ("count", "回数", 86, "e"), ("expected", "期待", 86, "e"),
                                              ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")))
         self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
@@ -496,7 +525,7 @@ class StatisticsWindow(tk.Toplevel):
             var = tk.BooleanVar(value=previous.get(round_name, round_name not in DEFAULT_EXCLUDED_ROUNDS))
             self.round_vars[round_name] = var
             chip = tk.Checkbutton(self.round_chip_frame, text=display_name, variable=var, indicatoron=False,
-                                  command=self._style_round_chips, bg=SUB, fg=FG, selectcolor=ACC,
+                                  command=self._on_round_chip, bg=SUB, fg=FG, selectcolor=ACC,
                                   activebackground=ACC, activeforeground=BG, font=(UIFont.UI, 9, "bold"),
                                   relief="raised", bd=1, width=ROUND_CHIP_WIDTH, padx=0, pady=4,
                                   anchor="center")
@@ -509,14 +538,40 @@ class StatisticsWindow(tk.Toplevel):
         self._style_round_chips()
 
     def _select_all_rounds(self):
-        for var in self.round_vars.values():
-            var.set(True)
-        self._style_round_chips()
+        """全選択。下の段の組（SELECT_ALL_SKIPPED_GROUP）は選ばない"""
+        skipped = _round_names_in_group(SELECT_ALL_SKIPPED_GROUP)
+        for name, var in self.round_vars.items():
+            var.set(name not in skipped)
+        self._round_selection_changed()
 
     def _clear_round_selection(self):
         for var in self.round_vars.values():
             var.set(False)
+        self._round_selection_changed()
+
+    def _on_round_chip(self):
+        self._round_selection_changed()
+
+    def _round_selection_changed(self):
+        """見た目を直し、少し置いて1回だけ集計し直す（続けて押したら予約を取り直す）"""
         self._style_round_chips()
+        if self._reanalyze_job is not None:
+            self.after_cancel(self._reanalyze_job)
+        self._reanalyze_job = self.after(ROUND_REANALYZE_DELAY_MS, self._reanalyze_now)
+
+    def _reanalyze_now(self):
+        self._reanalyze_job = None
+        self._analyze()
+
+    def destroy(self):
+        """閉じた後に予約が走らないように取り消す"""
+        job, self._reanalyze_job = getattr(self, "_reanalyze_job", None), None
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        super().destroy()
 
     def _selected_rounds(self) -> set[str]:
         return {round_name for round_name, var in self.round_vars.items() if var.get()}
@@ -705,8 +760,9 @@ class StatisticsWindow(tk.Toplevel):
     def _render_terror_stats(self, rows: list[tuple[str, Statistics.TerrorStatistic]]):
         self._clear_tree(self.terror_tree)
         for category, row in rows:
+            # iid は中の番号（内訳・キャッシュ用）。見せる ID はゲームの ID
             self.terror_tree.insert("", "end", iid=str(row.terror_id), values=(
-                row.terror_id, category, row.name, row.count, f"{row.expected:.2f}",
+                game_terror_id(category, row.terror_id), row.name, row.count, f"{row.expected:.2f}",
                 self._format_p_value(row.p_value), row.label))
 
     def _clear_terror_detail(self):

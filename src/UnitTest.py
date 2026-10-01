@@ -14699,20 +14699,26 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
         self.root.update()
 
     def _listed(self):
+        """[(見せている ID, 中の番号)]（BY: 分類の列は無くなり、ID はゲームの ID）"""
         tree = self.window.terror_tree
-        return [(tree.item(i, "values")[1], int(tree.item(i, "values")[0])) for i in tree.get_children()]
+        return [(int(tree.item(i, "values")[0]), int(i)) for i in tree.get_children()]
 
     def test_search_crosses_categories_and_clearing_goes_back(self):
         self.window._set_terror_category("classic")
         before = self._listed()
-        self.assertTrue(all(c == "Classic" for c, _t in before), before)
+        self.assertTrue(all(shown == tid for shown, tid in before), "Classic はそのまま")
 
         alt = self.ids[3]
-        self.window.v_terror_search.set(str(alt))
-        self.assertEqual(self._listed(), [("Alternate", alt)], "分類をまたいで ID で合う")
+        game = alt - MatchTNL.ALTERNATE_OFFSET
+        self.window.v_terror_search.set(str(game))
+        listed = self._listed()
+        self.assertIn((game, alt), listed, "分類をまたいで、ゲームの ID で合う")
+        tree = self.window.terror_tree
+        for shown, tid in listed:     # ゲームの ID が合うか、名前に数字を含む行だけ
+            self.assertTrue(shown == game or str(game) in tree.item(str(tid), "values")[1], (shown, tid))
         name = Statistics.terror_name(self.ids[0], config.TERRORS)
         self.window.v_terror_search.set(name[1:4].swapcase())
-        self.assertIn(("Classic", self.ids[0]), self._listed())
+        self.assertIn((self.ids[0], self.ids[0]), self._listed())
 
         self.window.v_terror_search.set("")
         self.assertEqual(self._listed(), before)
@@ -15650,6 +15656,139 @@ class TestBugReportDialog(unittest.TestCase):
         self.assertEqual(dialog.v_status.get(), "送れませんでした（HTTP 429）")
         self.assertIn("[報告] 送れませんでした（HTTP 429）", self.logs)
         self.assertEqual(self.app._report_cooldown_remaining(), 0.0)
+
+
+class TestStatisticsFixesBY(unittest.TestCase):
+    """BY: 統計画面の直し（選んだらすぐ集計・分類の列なし・ゲームの ID・チップの組）"""
+
+    LOWER = ["Classic", "Run", "Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Special"]
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        for i, rid in enumerate((1, 2, 6, 11, 12, 100, 101, 102, 103, 104, 106, 107)):
+            self.store.add_own(100 + i, rid, 12, None, None, None, -13)
+        self.store.add_own(200, 6, 12, 135, None, None, -13)
+        self.unbound = min(int(i) for i in config.TERRORS["unbound"])
+        self.store.add_own(201, 10, 12, self.unbound, None, None, -13)
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []), \
+             patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            self.window = StatisticsGUI.StatisticsWindow(self.root, store=self.store)
+            self.root.update()
+
+    def _chips(self):
+        """[(並び, 名前)]。区切り線は None"""
+        out = []
+        for child in sorted(self.window.round_chip_frame.grid_slaves(),
+                            key=lambda w: (int(w.grid_info()["row"]), int(w.grid_info()["column"]))):
+            out.append(getattr(child, "round_name", None) if isinstance(child, tk.Checkbutton) else None)
+        return out
+
+    def _pump(self, seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.root.update()
+            time.sleep(0.01)
+
+    # ── 4. チップの組 ───────────────────────────
+    def test_the_lower_group_and_its_order(self):
+        chips = self._chips()
+        line = chips.index(None)
+        self.assertEqual(chips[line + 1:line + 1 + len(self.LOWER)], self.LOWER, "下の段の組と順番")
+        upper = [c for c in chips[:line] if c]
+        self.assertEqual(upper[-2:], ["Randomizer", "Classic.exe"], "上の段の最後")
+        self.assertNotIn("Classic", upper)
+        self.assertEqual(chips[-1], "Cold Night", "どの表にも無い名前は最後")
+
+    def test_the_first_selection_leaves_the_lower_group_out(self):
+        selected = self.window._selected_rounds()
+        self.assertFalse(selected & set(self.LOWER), selected)
+        self.assertIn("Fog", selected)
+        self.assertIn("Cold Night", selected)
+
+    def test_select_all_skips_the_lower_group_and_clear_clears_all(self):
+        with patch.object(self.window, "_analyze"):
+            self.window._clear_round_selection()
+            self.window._select_all_rounds()
+        selected = self.window._selected_rounds()
+        self.assertFalse(selected & set(self.LOWER))
+        self.assertTrue({"Fog", "Bloodbath", "Randomizer", "Classic.exe", "Cold Night"} <= selected)
+        with patch.object(self.window, "_analyze"):
+            self.window._clear_round_selection()
+        self.assertEqual(self.window._selected_rounds(), set())
+
+    def test_only_classic_and_run_are_always_shown(self):
+        entries = StatisticsGUI._ordered_round_entries(["Fog"])
+        names = {name for _label, name in entries if name}
+        self.assertEqual(names, {"Fog", "Classic", "Run"})
+
+    # ── 1. 選んだらすぐ集計 ─────────────────────────
+    def test_chips_and_buttons_reanalyze_once_after_300ms(self):
+        self.assertEqual(StatisticsGUI.ROUND_REANALYZE_DELAY_MS, 300)
+        chip = next(w for w in self.window.round_chip_frame.winfo_children()
+                    if isinstance(w, tk.Checkbutton) and getattr(w, "round_name", "") == "Fog")
+        with patch.object(self.window, "_analyze") as analyze:
+            chip.invoke()
+            self.window._select_all_rounds()
+            self.window._clear_round_selection()
+            self.window._select_all_rounds()
+            self._pump(0.2)
+            analyze.assert_not_called()
+            self._pump(0.4)
+            analyze.assert_called_once()
+
+    def test_each_kind_alone_reanalyzes(self):
+        chip = next(w for w in self.window.round_chip_frame.winfo_children()
+                    if isinstance(w, tk.Checkbutton))
+        for action in (chip.invoke, self.window._select_all_rounds, self.window._clear_round_selection):
+            with patch.object(self.window, "_analyze") as analyze:
+                action()
+                self._pump(0.45)
+                analyze.assert_called_once()
+
+    def test_closing_cancels_the_pending_reanalyze(self):
+        with patch.object(StatisticsGUI.StatisticsWindow, "_analyze") as analyze:
+            self.window._select_all_rounds()
+            job = self.window._reanalyze_job
+            self.assertIn(job, self.root.tk.splitlist(self.root.tk.call("after", "info")))
+            self.window.destroy()
+            self.assertNotIn(job, self.root.tk.splitlist(self.root.tk.call("after", "info")),
+                             "予約を取り消す")
+            self._pump(0.45)
+        analyze.assert_not_called()
+
+    # ── 2・3. 分類の列なし・ゲームの ID ──────────────────
+    def test_no_category_column(self):
+        self.assertNotIn("category", self.window.terror_tree["columns"])
+        self.assertEqual(self.window.terror_tree["columns"][0], "id")
+
+    def test_ids_are_game_ids(self):
+        self.assertEqual(StatisticsGUI.game_terror_id("Classic", 140), 140, "Classic の 134 以上はそのまま")
+        self.assertEqual(StatisticsGUI.game_terror_id("Alternate", 135), 1)
+        self.assertEqual(StatisticsGUI.game_terror_id("Unbound", 205), 5)
+        self.window._set_terror_category("alternate")
+        tree = self.window.terror_tree
+        shown = {int(i): int(tree.item(i, "values")[0]) for i in tree.get_children()}
+        self.assertEqual(shown[135], 1)
+        self.assertTrue(all(v == k - MatchTNL.ALTERNATE_OFFSET for k, v in shown.items()))
+        self.window._set_terror_category("unbound")
+        shown = {int(i): int(tree.item(i, "values")[0]) for i in tree.get_children()}
+        self.assertTrue(shown)
+        self.assertTrue(all(v == k - MatchTNL.UNBOUND_OFFSET for k, v in shown.items()))
+
+    def test_search_by_game_id(self):
+        row = lambda tid: Statistics.TerrorStatistic(tid, "Terror", 1, 1.0, 0.5, "")
+        self.assertTrue(StatisticsGUI.terror_matches(row(205), "5", "Unbound"))
+        self.assertFalse(StatisticsGUI.terror_matches(row(205), "205", "Unbound"))
+        self.assertTrue(StatisticsGUI.terror_matches(row(139), "5", "Alternate"))
+        self.assertTrue(StatisticsGUI.terror_matches(row(140), "140", "Classic"))
+        found = StatisticsGUI.search_terror_rows(
+            [("Classic", [row(5), row(140)]), ("Alternate", [row(139)]), ("Unbound", [row(205)])], "5")
+        self.assertEqual(sorted(r.terror_id for _c, r in found), [5, 139, 205])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -27349,8 +27488,8 @@ class TestGuiRoundHelpers(unittest.TestCase):
         self.assertEqual(
             sorted(rows, key=StatisticsGUI._round_count_sort_key),
             [
+                ("Fog", 5, 5),              # BY: Classic は下の段の組へ移った（同じ回数なら後ろ）
                 ("Classic", 5, 5),
-                ("Fog", 5, 5),
                 ("Unbound", 2, 2),
                 ("Bloodbath", 1, 1),
             ],
