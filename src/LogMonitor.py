@@ -259,6 +259,8 @@ class LogMonitor:
 
         位相を掴む唯一の手段。定期と分かった時刻を覚えて、次からは無視できる
         ようにする（横移動はもう終わっているので、ここでは止めない）。
+        受理と取り違えていたので、Begin は通っていない。begin_done を戻し、
+        ツールが Begin を押す窓なら押し直す（戻さないと誰も押さずに止まる。BW）
         """
         st = self.st
         if not st.pending_verified_time or not st.log_now:
@@ -268,6 +270,12 @@ class LogMonitor:
         self._verified.on_begin_not_followed(st.pending_verified_time)   # 保険
         st.pending_verified_time = 0.0
         self._log("直前の Verified は定期シグナルでした（ラウンド開始が来ない）")
+        if not self._running or st.in_round or not st.begin_done:
+            return
+        st.begin_done = False
+        self._log("Begin が通っていませんでした（定期の Verified でした）→ 押し直します")
+        if self._auto_begin_active():
+            self._start_daemon(self._action.do_begin_again, st.round_seq)
 
     def _release_round_freeze_after_delay(self, round_seq: int):
         """死亡から一定時間後にラウンド突入フリーズを解除する。
@@ -1313,6 +1321,7 @@ class LogMonitor:
             st.speed_round_kind            = ""
             st.speed_probe_done            = False
             st.speed_strafe_done           = False
+            st.begin_move_done             = False
             # 速度検知フリーズは種別に関わらずここで必ず解除する。
             # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
             # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
@@ -1447,6 +1456,7 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ROUND_OVER:
             st.in_round = False
+            st.begin_move_done = False      # 次の Begin 前の移動はこれから
             self._verified.on_round_over(st.log_now)
             if self._action.chase_stop():
                 self._log("チェイス停止（ラウンド終了）")

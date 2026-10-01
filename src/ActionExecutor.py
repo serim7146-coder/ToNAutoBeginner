@@ -922,6 +922,34 @@ class ActionExecutor:
         else:
             self.move_forward_left(config.BEGIN_FORWARD_SEC,
                                    config.BEGIN_LEFT_SEC)
+        st.begin_move_done = True
+
+    def do_begin_again(self, round_seq: int):
+        """定期の Verified を受理と取り違えた後に、Begin をもう一度押す（BW）。
+
+        もう Verified Round End の後なので待ち（BEGIN_WAIT_SEC）は要らない。
+        移動は時間で押す相対の移動なので2回やると行き過ぎる。このラウンドで
+        済んでいれば押すところから、まだなら移動から。押し方・他窓のフリーズ待ち・
+        押し直しの回数の上限は今の Begin と同じ（受理・開始・停止で止まる）
+        """
+        st = self._st
+        if st.instance_type != config.INSTANCE_PRIVATE:
+            return
+        if (not self._is_running() or st.in_round or st.begin_done
+                or st.round_seq != round_seq):
+            return
+        if not st.begin_move_done:
+            if not self._begin_precheck(check_freeze=False):
+                return
+            self._begin_move()
+        if not self._wait_other_windows():
+            return
+        if not self._begin_precheck():
+            return
+        if st.in_round or st.begin_done or st.round_seq != round_seq:
+            return
+        if self._press_begin(again=True):
+            self._confirm_begin(round_seq)
 
     # ── Begin自動操作 ─────────────────────────
 

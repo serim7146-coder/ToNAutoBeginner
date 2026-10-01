@@ -14731,6 +14731,199 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
                          f"新しい順に500件を表示（全{StatisticsGUI.TERROR_ROUNDS_LIMIT + 2}件）")
 
 
+class TestBeginAfterFalseVerified(unittest.TestCase):
+    """BW: 定期の Verified を受理と取り違えたら、15秒後に begin_done を戻して Begin を押し直す"""
+
+    BASE = datetime(2026, 10, 1, 14, 23, 9).timestamp()
+
+    def _stamp(self, at):
+        return datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  "
+
+    def _monitor(self, auto_begin=True, instance_type=config.INSTANCE_PRIVATE):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        self.started = []
+        return monitor
+
+    def _feed(self, monitor, at, body=None, clock=None):
+        """1行読んで、読み取りのループと同じく _check_pending_verified を呼ぶ"""
+        with patch.object(LogMonitor.threading, "Thread") as thread, \
+             patch.object(SharedState, "get_speed_detect", return_value=False), \
+             patch.object(LogMonitor.time, "time", return_value=clock or at + 5000), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process(self._stamp(at) + (body or "[Behaviour] tick"))
+            monitor._check_pending_verified()
+        for c in thread.call_args_list:
+            target = c.kwargs.get("target")
+            if target is not None and hasattr(target, "__func__"):
+                self.started.append((target.__func__.__name__, c.kwargs.get("args", ())))
+
+    def _again(self):
+        return [args for name, args in self.started if name == "do_begin_again"]
+
+    def _false_begin(self, monitor):
+        """位相を知らない起動直後: Verified Round End と同じ秒の定期の Verified を受理と取り違える"""
+        self._feed(monitor, self.BASE, "RoundOver")
+        self._feed(monitor, self.BASE + 13, "Verified Round End")
+        self._feed(monitor, self.BASE + 13, "Verified")
+        self.assertTrue(monitor.st.begin_done, "前提: 受理と判断")
+
+    def test_no_round_start_resets_and_begins_again_once(self):
+        monitor = self._monitor()
+        self._false_begin(monitor)
+        seq = monitor.st.round_seq
+        self._feed(monitor, self.BASE + 13 + config.VERIFIED_ROUND_START_WAIT_SEC)
+        self.assertTrue(monitor.st.begin_done, "15秒ちょうどではまだ待つ")
+        self.assertEqual(self._again(), [])
+
+        self._feed(monitor, self.BASE + 14 + config.VERIFIED_ROUND_START_WAIT_SEC)
+
+        self.assertFalse(monitor.st.begin_done)
+        self.assertEqual(self._again(), [(seq,)])
+        self.assertTrue(any("Begin が通っていませんでした（定期の Verified でした）→ 押し直します" in m
+                            for m in monitor.logs), monitor.logs)
+        self._feed(monitor, self.BASE + 40)
+        self.assertEqual(len(self._again()), 1, "1回だけ")
+
+    def test_a_scheduled_one_right_after_a_press(self):
+        monitor = self._monitor()
+        monitor._verified.last_periodic = self.BASE - 287          # 次の予定は BASE+13
+        self._feed(monitor, self.BASE, "RoundOver")
+        self._feed(monitor, self.BASE + 12, "Verified Round End")
+        monitor.st.last_begin_press_at = 50_000.0
+        self._feed(monitor, self.BASE + 13, "Verified", clock=50_000.5)
+        self.assertTrue(monitor.st.begin_done, "前提: 重なった1回は受理")
+        self._feed(monitor, self.BASE + 30)
+        self.assertFalse(monitor.st.begin_done)
+        self.assertEqual(len(self._again()), 1)
+
+    def test_a_round_start_within_15_seconds_does_nothing(self):
+        monitor = self._monitor()
+        self._false_begin(monitor)
+        self._feed(monitor, self.BASE + 20,
+                   "This round is taking place at Facility (12) and the round type is Classic")
+        self._feed(monitor, self.BASE + 60)
+        self.assertEqual(self._again(), [])
+        self.assertFalse(any("押し直します" in m for m in monitor.logs))
+
+    def test_windows_the_tool_does_not_begin_only_reset(self):
+        for auto_begin, itype in ((False, config.INSTANCE_PRIVATE), (True, config.INSTANCE_PUBLIC)):
+            monitor = self._monitor(auto_begin=auto_begin, instance_type=itype)
+            self._false_begin(monitor)
+            self._feed(monitor, self.BASE + 30)
+            self.assertFalse(monitor.st.begin_done, (auto_begin, itype))
+            self.assertEqual(self._again(), [], (auto_begin, itype))
+
+    def test_stopped_or_in_a_round_does_nothing(self):
+        for spoil in ("stopped", "in_round"):
+            monitor = self._monitor()
+            self._false_begin(monitor)
+            if spoil == "stopped":
+                monitor._running = False
+            else:
+                monitor.st.in_round = True
+            self._feed(monitor, self.BASE + 30)
+            self.assertTrue(monitor.st.begin_done, spoil)
+            self.assertEqual(self._again(), [], spoil)
+
+    def test_nothing_to_redo_when_begin_is_not_marked(self):
+        """受理の印がもう無い（ほかの経路で戻った）なら、押し直さない"""
+        monitor = self._monitor()
+        self._false_begin(monitor)
+        monitor.st.begin_done = False
+        self._feed(monitor, self.BASE + 30)
+        self.assertEqual(self._again(), [])
+        self.assertFalse(any("押し直します" in m for m in monitor.logs))
+
+    def test_window_6(self):
+        """実機の窓6: 14:23:22 Verified Round End と同じ秒の Verified、その後は5分おきの定期だけ"""
+        monitor = self._monitor()
+        t = datetime(2026, 10, 1, 14, 23, 22).timestamp()
+        self._feed(monitor, t - 13, "RoundOver")
+        self._feed(monitor, t, "Verified Round End")
+        self._feed(monitor, t, "Verified")
+        for k in range(1, 5):
+            self._feed(monitor, t + 300 * k + 1, "Verified")
+            self._feed(monitor, t + 300 * k + 20)
+        self.assertFalse(monitor.st.begin_done, "以後の定期は受理にしない")
+        self.assertEqual(len(self._again()), 1, "押し直しが始まる（1回）")
+
+    def test_the_move_mark_is_reset_at_round_over_and_round_start(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor.st.begin_move_done = True
+        self._feed(monitor, self.BASE, "RoundOver")
+        self.assertFalse(monitor.st.begin_move_done)
+        monitor.st.begin_move_done = True
+        self._feed(monitor, self.BASE + 30,
+                   "This round is taking place at Facility (12) and the round type is Classic")
+        self.assertFalse(monitor.st.begin_move_done)
+
+
+class TestDoBeginAgain(unittest.TestCase):
+    """BW: ActionExecutor.do_begin_again（移動がまだなら移動から、済んでいれば押すところから）"""
+
+    def _executor(self, **st_kw):
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, **st_kw)
+        self.running = True
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=123, osc_port=9000), st,
+                                           lambda: self.running, lambda _m: None)
+        self.order = []
+        patches = (
+            patch.object(ex, "move_forward_left", side_effect=lambda *_a: self.order.append("move")),
+            patch.object(ex, "_wait_other_windows", side_effect=lambda: self.order.append("wait") or True),
+            patch.object(ex, "_begin_precheck", side_effect=lambda check_freeze=True: True),
+            patch.object(ex, "_press_begin", side_effect=lambda again=False, click_only=False:
+                         self.order.append(("press", again)) or True),
+            patch.object(ex, "_confirm_begin", side_effect=lambda seq: self.order.append(("confirm", seq))),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return ex, st
+
+    def test_not_moved_yet_moves_once_then_presses(self):
+        ex, st = self._executor()
+        ex.do_begin_again(3)
+        self.assertEqual(self.order, ["move", "wait", ("press", True), ("confirm", 3)])
+        self.assertTrue(st.begin_move_done)
+
+    def test_already_moved_only_presses(self):
+        ex, st = self._executor(begin_move_done=True)
+        ex.do_begin_again(3)
+        self.assertEqual(self.order, ["wait", ("press", True), ("confirm", 3)])
+
+    def test_nothing_when_it_no_longer_makes_sense(self):
+        for name, kw, seq in (("受理済み", {"begin_done": True}, 3), ("ラウンド中", {"in_round": True}, 3),
+                              ("次のラウンド", {}, 2)):
+            ex, _st = self._executor(**kw)
+            ex.do_begin_again(seq)
+            self.assertEqual(self.order, [], name)
+        ex, st = self._executor()
+        st.instance_type = config.INSTANCE_PUBLIC
+        ex.do_begin_again(3)
+        self.assertEqual(self.order, [], "public")
+        ex, _st = self._executor()
+        self.running = False
+        ex.do_begin_again(3)
+        self.assertEqual(self.order, [], "停止中")
+
+    def test_accepted_while_moving_does_not_press(self):
+        ex, st = self._executor()
+        ex.move_forward_left.side_effect = lambda *_a: setattr(st, "begin_done", True)
+        ex.do_begin_again(3)
+        self.assertNotIn(("press", True), self.order)
+
+    def test_the_normal_begin_move_sets_the_mark(self):
+        ex, st = self._executor()
+        ex._begin_move()
+        self.assertTrue(st.begin_move_done)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 

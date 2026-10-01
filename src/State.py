@@ -58,6 +58,9 @@ class WindowState:
     map_id: int = 0
     round_seq: int = 0
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
+    # このラウンドで Begin 前の移動を最後までやったか（押し直しで2回動かさないため）。
+    # ラウンド開始・RoundOver で False
+    begin_move_done: bool = False
     round_end_seen: bool = False   # Verified Round End を受けたか（クリック可の合図）
     # 定期シグナル（約300秒周期のVerified）の追跡。ラウンドをまたぐのでROUND_STARTでは消さない
     # 時刻はどれもログの時刻（壁時計ではない。負荷で処理が遅れてもずれないため）
