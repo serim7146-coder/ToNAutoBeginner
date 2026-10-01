@@ -16,6 +16,7 @@ import threading
 import time
 
 import config
+import DebugLog
 
 # VelocityX/Z は細かく刻んで送られるが加速中の値ばかりで最高速に届かない。
 # VelocityMagnitude は間引かれる代わりに、きっちり定数値（6.6 等）へ到達する。
@@ -42,6 +43,7 @@ def parse_message(data: bytes):
         if tags[:1] in ("T", "F"):
             return address, 1.0 if tags[0] == "T" else 0.0
     except Exception:
+        DebugLog.exception("OSCReceiver.parse_message")
         return None
     return None
 
@@ -74,6 +76,7 @@ class VelocityReceiver:
             sock.bind((self._host, self._port))
             sock.settimeout(0.2)
         except OSError as e:
+            DebugLog.exception("OSCReceiver.start")
             self._log(f"速度受信ポート{self._port}を開けません: {e}")
             return False
         self._sock = sock
@@ -90,6 +93,7 @@ class VelocityReceiver:
             try:
                 sock.close()
             except Exception:
+                DebugLog.exception("OSCReceiver.stop")
                 pass
 
     def _run(self):

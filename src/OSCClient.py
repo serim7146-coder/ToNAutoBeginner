@@ -22,6 +22,7 @@ import subprocess
 import time
 
 import config
+import DebugLog
 
 
 class OSCClient:
@@ -61,6 +62,7 @@ class OSCClient:
             self._sock.sendto(self.build_message(address, value), (self.host, self.port))
             return True
         except Exception:
+            DebugLog.exception("OSCClient.send")
             return False
 
     # ── 入力 ──────────────────────────────────
@@ -152,6 +154,7 @@ class OSCClient:
         try:
             self._sock.close()
         except Exception:
+            DebugLog.exception("OSCClient.close")
             pass
 
 
@@ -182,6 +185,7 @@ def udp_ports_by_pid():
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except Exception:
+        DebugLog.exception("OSCClient.udp_ports_by_pid")
         return None
     for line in out.splitlines():
         parts = line.split()
@@ -218,6 +222,7 @@ def osc_available_for(hwnd: int, window_index: int,
         import win32process
         _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
     except Exception:
+        DebugLog.exception("OSCClient.osc_available_for")
         return False
     if not pid:
         return False

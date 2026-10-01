@@ -80,6 +80,7 @@ class LogMonitor:
         # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
         self.early_read_capable = False
         self.st = WindowState()
+        self.st.window_idx = window_idx
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
         self._stop_event = threading.Event()
@@ -147,6 +148,27 @@ class LogMonitor:
 
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
+
+    def _debug_event(self, event):
+        """debug.log へ: 読んだイベントを1行。[NetworkProcessing] の名前は書かない
+        （NG のインスタンスで看破の材料が漏れないように。呼ぶ側で外している）。
+        入退室の名前・URL も書かない（必要な情報だけ）"""
+        parts = []
+        if event.round_type:
+            parts.append(f"種類={event.round_type}")
+        if event.map_id:
+            parts.append(f"マップ={event.map_id}")
+        if event.terror_ids:
+            parts.append(f"テラー={list(event.terror_ids)}")
+        if event.kind == LogParser.EVENT_ITEM_EQUIP:
+            parts.append(f"アイテム={event.item_id}")
+        if event.kind == LogParser.EVENT_PAGE_COLLECTED:
+            parts.append(f"ページ={event.page}")
+        if event.kind == LogParser.EVENT_JOINING:
+            parts.append(f"公開範囲={LogParser.instance_access(event.suffix)}")
+        if event.kind in (LogParser.EVENT_ENRAGE, LogParser.EVENT_STUNNED):
+            parts.append(f"名前={event.player_name}")       # 通常のログに出る行（公開の情報）
+        self._debug(f"[事象] {event.kind}" + (" " + " ".join(parts) if parts else ""))
 
     def _debug(self, msg: str):
         """デバッグログへ（公開ログ＝logger には出さない）"""
@@ -366,6 +388,7 @@ class LogMonitor:
                 if event and event.kind == LogParser.EVENT_JOINING:
                     return cls._parse_instance_type(event.suffix)
         except Exception:
+            DebugLog.exception("LogMonitor.detect_instance_type_from_log")
             return None
         return None
 
@@ -464,6 +487,7 @@ class LogMonitor:
                 self.st.held_item_id = self._replay_held_item(reversed(item_events))
                 self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
         except Exception as e:
+            DebugLog.exception("LogMonitor._detect_instance_from_log")
             self._log(f"検出エラー: {e}")
         if self.st.players_known:
             self._log(f"インスタンス内の人数を復元: 自分以外 "
@@ -540,6 +564,7 @@ class LogMonitor:
         try:
             self.st.transformed_uid = ConnectDB.send_Users(user_id)
         except Exception as e:
+            DebugLog.exception("LogMonitor._fetch_transformed_uid")
             self._log(f"transformed_uid の取得に失敗: {e}")
             return
         self._log(f"transformed_uid: {self.st.transformed_uid}")
@@ -695,16 +720,19 @@ class LogMonitor:
                             for line in chunk.splitlines():
                                 self._process(line)
                     except Exception as e:
+                        DebugLog.exception("LogMonitor._run")
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
                     try:
                         self._check_group_list_state()
                     except Exception as e:
+                        DebugLog.exception("LogMonitor._run")
                         # 通知に失敗してもログ監視は続ける（通知は補助的なもの）
                         self._log(f"主催リストの確認に失敗: {e}")
                     if self._stop_event.wait(config.LOG_POLL_INTERVAL):
                         break
         except Exception as e:
+            DebugLog.exception("LogMonitor._run")
             self._log(f"読み取りエラー: {e}")
 
     def _mark_sabotage_murder(self):
@@ -1165,6 +1193,7 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_NETWORK_OBJECT:
             self._on_network_object(event.player_name)
             return
+        self._debug_event(event)
 
         if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
             self._mark_replacement("bloodthirsty_creature_variant")

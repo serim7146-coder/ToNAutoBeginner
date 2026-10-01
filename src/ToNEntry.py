@@ -18,6 +18,7 @@ import time
 import win32gui
 
 import config
+import DebugLog
 import OSCClient
 import ScreenCapture
 import SharedState
@@ -93,6 +94,7 @@ class ToNEntry:
                     else:
                         stable = 0
             except Exception:
+                DebugLog.exception("ToNEntry.wait_for_panel")
                 stable = 0
             time.sleep(config.TON_ENTRY_POLL_SEC)
         self._log("⚠ 選択パネルが現れませんでした")
@@ -198,4 +200,5 @@ class ToNEntry:
             self._osc.stop_all()
             self._osc.close()
         except Exception:
+            DebugLog.exception("ToNEntry.close")
             pass

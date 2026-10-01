@@ -1,5 +1,7 @@
 import threading
 
+import DebugLog
+
 import config
 
 # ═══════════════════════════════════════════════
@@ -223,6 +225,12 @@ _EQUIP_FREEZE_LOCK = threading.Lock()
 # 鍵の順に並ぶので、順番は必ず決まる
 _EQUIP_QUEUE: list = []
 
+def _note_freeze(st, kind: str, started: bool, count: int):
+    """debug.log へ: どの窓がフリーズを張った／解いたか、いま何窓が張っているか"""
+    DebugLog.write(f"[状態] 窓{getattr(st, 'window_idx', 0)} {kind}フリーズを"
+                   f"{'張った' if started else '解いた'}（張っている窓: {count}）")
+
+
 def equip_freeze_start(st):
     """窓stを装備待ちフリーズ保持者として登録（登録済みなら何もしない）"""
     global _EQUIP_FREEZE_COUNT
@@ -231,6 +239,7 @@ def equip_freeze_start(st):
             return
         st.equip_freeze_held = True
         _EQUIP_FREEZE_COUNT += 1
+        _note_freeze(st, "装備待ち", True, _EQUIP_FREEZE_COUNT)
         _EQUIP_QUEUE.append(st)
         EQUIP_WAIT_EVENT.clear()
 
@@ -241,6 +250,7 @@ def equip_freeze_end(st):
         if not st.equip_freeze_held:
             return
         st.equip_freeze_held = False
+        _note_freeze(st, "装備待ち", False, max(0, _EQUIP_FREEZE_COUNT - 1))
         st.equip_front_hwnd = 0
         _EQUIP_FREEZE_COUNT = max(0, _EQUIP_FREEZE_COUNT - 1)
         # 同一性で外す。WindowState は dataclass なので == は中身の比較
@@ -286,6 +296,7 @@ def speed_freeze_start(st):
             return
         st.speed_freeze_held = True
         _SPEED_FREEZE_COUNT += 1
+        _note_freeze(st, "速度検知", True, _SPEED_FREEZE_COUNT)
         SPEED_FREEZE_EVENT.clear()
 
 def speed_freeze_end(st):
@@ -295,6 +306,7 @@ def speed_freeze_end(st):
         if not st.speed_freeze_held:
             return
         st.speed_freeze_held = False
+        _note_freeze(st, "速度検知", False, max(0, _SPEED_FREEZE_COUNT - 1))
         _SPEED_FREEZE_COUNT = max(0, _SPEED_FREEZE_COUNT - 1)
         if _SPEED_FREEZE_COUNT == 0:
             SPEED_FREEZE_EVENT.set()
@@ -330,6 +342,7 @@ def round_freeze_start(st):
             return
         st.round_freeze_held = True
         _ROUND_FREEZE_COUNT += 1
+        _note_freeze(st, "ラウンド突入", True, _ROUND_FREEZE_COUNT)
         ROUND_FREEZE_EVENT.clear()
 
 def round_freeze_end(st):
@@ -339,6 +352,7 @@ def round_freeze_end(st):
         if not st.round_freeze_held:
             return
         st.round_freeze_held = False
+        _note_freeze(st, "ラウンド突入", False, max(0, _ROUND_FREEZE_COUNT - 1))
         _ROUND_FREEZE_COUNT = max(0, _ROUND_FREEZE_COUNT - 1)
         if _ROUND_FREEZE_COUNT == 0:
             ROUND_FREEZE_EVENT.set()
@@ -377,6 +391,7 @@ def continue_round_start(st):
             return
         st.continue_freeze_held = True
         _CONTINUE_ROUND_COUNT += 1
+        _note_freeze(st, "続行", True, _CONTINUE_ROUND_COUNT)
         CONTINUE_ROUND_EVENT.clear()
 
 def continue_round_end(st):
@@ -386,6 +401,7 @@ def continue_round_end(st):
         if not st.continue_freeze_held:
             return
         st.continue_freeze_held = False
+        _note_freeze(st, "続行", False, max(0, _CONTINUE_ROUND_COUNT - 1))
         _CONTINUE_ROUND_COUNT = max(0, _CONTINUE_ROUND_COUNT - 1)
         if _CONTINUE_ROUND_COUNT == 0:
             CONTINUE_ROUND_EVENT.set()

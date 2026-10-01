@@ -14,6 +14,7 @@ import threading
 from ctypes import POINTER, byref, c_float, c_int, c_long, c_uint, c_ulong, c_void_p, wintypes
 
 import config
+import DebugLog
 
 # ── 分類 ───────────────────────────────────
 CONTINUE = "continue"
@@ -101,6 +102,7 @@ def _release(obj):
         try:
             _method(obj, 2, restype=c_ulong)(obj)
         except Exception:
+            DebugLog.exception("WindowVolume._release")
             pass
 
 
@@ -215,6 +217,7 @@ def read_volumes(pids) -> dict:
     try:
         _each_volume(visit)
     except Exception as e:
+        DebugLog.exception("WindowVolume.visit")
         _fail(f"音量を読めません（{e}）")
     return out
 
@@ -231,6 +234,7 @@ def set_volume(pid: int, level: float) -> bool:
     try:
         _each_volume(visit)
     except Exception as e:
+        DebugLog.exception("WindowVolume.visit")
         _fail(f"音量を変えられません（{e}）")
     return bool(done)
 
@@ -241,6 +245,7 @@ def pid_of(hwnd: int) -> int:
     try:
         _user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), byref(pid))
     except Exception:
+        DebugLog.exception("WindowVolume.pid_of")
         return 0
     return int(pid.value)
 
@@ -315,6 +320,7 @@ class VolumeController:
         try:
             self.tick()
         except Exception as e:
+            DebugLog.exception("WindowVolume._tick_safely")
             self._warn(str(e))
         self._warn(self._audio.take_error())
 
@@ -322,6 +328,7 @@ class VolumeController:
         try:
             self.restore(prefix)
         except Exception as e:
+            DebugLog.exception("WindowVolume._restore_safely")
             self._warn(str(e))
 
     def _warn(self, error):

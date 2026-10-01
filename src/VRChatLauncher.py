@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+import DebugLog
 
 
 # VRChat.exe を直接起動すると「オフラインテストモード」になり、
@@ -33,6 +34,7 @@ def _steam_root() -> Optional[Path]:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as key:
             return Path(winreg.QueryValueEx(key, "SteamPath")[0])
     except Exception:
+        DebugLog.exception("VRChatLauncher._steam_root")
         return None
 
 
@@ -57,6 +59,7 @@ def steam_library_paths() -> list[Path]:
         try:
             text = vdf.read_text(encoding="utf-8", errors="replace")
         except Exception:
+            DebugLog.exception("VRChatLauncher.steam_library_paths")
             continue
         for raw in RE_LIBRARY_PATH.findall(text):
             path = Path(raw.replace("\\\\", "\\"))
@@ -104,6 +107,7 @@ def joined_world_id(log_path) -> Optional[str]:
             if m:
                 return m.group(1)
     except Exception:
+        DebugLog.exception("VRChatLauncher.joined_world_id")
         pass
     return None
 
@@ -124,6 +128,7 @@ def latest_user_id(log_dir) -> Optional[str]:
             if m:
                 return m.group(1)
     except Exception:
+        DebugLog.exception("VRChatLauncher.latest_user_id")
         pass
     return None
 

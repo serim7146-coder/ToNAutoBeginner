@@ -15,6 +15,7 @@ import struct
 import time
 
 import config
+import DebugLog
 
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"   # RFC 6455 の固定値
@@ -129,6 +130,7 @@ class OBSClient:
             self._identify()
             return True, ""
         except Exception as e:
+            DebugLog.exception("OBSClient.connect")
             self.close()
             return False, self._describe(e)
 
@@ -157,6 +159,7 @@ class OBSClient:
                 comment = status.get("comment") or ""
                 return False, {}, f"{request_type} が失敗（code {status.get('code')}）{comment}"
         except Exception as e:
+            DebugLog.exception("OBSClient.request")
             self.close()
             return False, {}, self._describe(e)
 
@@ -167,10 +170,12 @@ class OBSClient:
         try:
             sock.sendall(encode_frame(struct.pack("!H", 1000), OP_CLOSE))
         except Exception:
+            DebugLog.exception("OBSClient.close")
             pass
         try:
             sock.close()
         except Exception:
+            DebugLog.exception("OBSClient.close")
             pass
 
     # ── WebSocket ──────────────────────────────

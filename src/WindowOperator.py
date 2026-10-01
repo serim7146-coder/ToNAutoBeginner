@@ -10,6 +10,7 @@ import keyboard
 import pydirectinput
 
 import config
+import DebugLog
 import SharedState
 
 
@@ -27,6 +28,7 @@ def _attach_and_raise(hwnd: int) -> None:
         foreground = win32gui.GetForegroundWindow()
         fg_thread = win32process.GetWindowThreadProcessId(foreground)[0] if foreground else 0
     except Exception:
+        DebugLog.exception("WindowOperator._attach_and_raise")
         pass  # 結び付けができなくても前面化自体は試みる
 
     attached = []
@@ -36,21 +38,31 @@ def _attach_and_raise(hwnd: int) -> None:
                 win32process.AttachThreadInput(current, thread, True)
                 attached.append(thread)
             except Exception:
+                DebugLog.exception("WindowOperator._attach_and_raise")
                 pass
     try:
         win32gui.BringWindowToTop(hwnd)
         win32gui.SetForegroundWindow(hwnd)
     except Exception:
+        DebugLog.exception("WindowOperator._attach_and_raise")
         pass
     finally:
         for thread in attached:
             try:
                 win32process.AttachThreadInput(current, thread, False)
             except Exception:
+                DebugLog.exception("WindowOperator._attach_and_raise")
                 pass
 
 
 def focus_window(hwnd: int) -> bool:
+    """ウィンドウを前面化する。成功したら True（debug.log に成否を書く）"""
+    ok = _focus_window(hwnd)
+    DebugLog.write(f"[操作] 前面化 hwnd={int(hwnd):#x} → {'成功' if ok else '失敗'}")
+    return ok
+
+
+def _focus_window(hwnd: int) -> bool:
     """ウィンドウを前面化する。成功したら True。
 
     以前は SetForegroundWindow の失敗を握り潰していたため、フォーカスを
@@ -70,6 +82,7 @@ def focus_window(hwnd: int) -> bool:
             time.sleep(config.FOCUS_RETRY_WAIT_SEC)
         return win32gui.GetForegroundWindow() == hwnd
     except Exception:
+        DebugLog.exception("WindowOperator.focus_window")
         return False
 
 # 背面キー送信で使う定数。pywin32にラッパが無いので ctypes で user32 を直に叩く
@@ -123,11 +136,17 @@ def _background_key(hwnd: int, key: str):
         lparam_down = 1 | (scan << 16) | (ext << 24)
         lparam_up = lparam_down | (1 << 30) | (1 << 31)
     except Exception:
+        DebugLog.exception("WindowOperator._background_key")
         return None
     return target_tid, vk, lparam_down, lparam_up
 
 
 def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
+    DebugLog.write(f"[操作] 背面キー {key} {sec:.2f}秒 hwnd={int(hwnd):#x}")
+    return _hold_key_background(hwnd, key, sec)
+
+
+def _hold_key_background(hwnd: int, key: str, sec: float) -> bool:
     """フォーカスを奪わずにキーを押しっぱなしにする。送り切れたら True。
 
     PostMessage だけでは足りない。Unityは GetKeyState / GetKeyboardState でも
@@ -150,6 +169,7 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
             # 最小化中は送れない。ここで復元すると窓が出てきて背面化の意味が消える
             return False
     except Exception:
+        DebugLog.exception("WindowOperator.hold_key_background")
         return False
 
     self_tid = 0            # finally から参照するので先に置く
@@ -180,6 +200,7 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
             user32.SetKeyboardState(ctypes.byref(restore))
         return True
     except Exception:
+        DebugLog.exception("WindowOperator.hold_key_background")
         return False
     finally:
         # アタッチしたまま抜けると、ユーザーの操作が対象窓へ流れ込む
@@ -188,6 +209,14 @@ def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
 
 
 def hold_keys_background(hwnd: int, keys, stop_event, resend_sec: float) -> bool:
+    DebugLog.write(f"[操作] 背面キー長押しを開始 {'+'.join(keys)} hwnd={int(hwnd):#x}")
+    try:
+        return _hold_keys_background(hwnd, keys, stop_event, resend_sec)
+    finally:
+        DebugLog.write(f"[操作] 背面キー長押しを終了 {'+'.join(keys)}")
+
+
+def _hold_keys_background(hwnd: int, keys, stop_event, resend_sec: float) -> bool:
     """複数のキーを、stop_event が立つまでフォーカスを奪わずに押し続ける。
 
     hold_key_background() と同じ手順（アタッチ・活性化の通知・SetFocus・
@@ -205,6 +234,7 @@ def hold_keys_background(hwnd: int, keys, stop_event, resend_sec: float) -> bool
         if user32.IsIconic(hwnd):
             return False
     except Exception:
+        DebugLog.exception("WindowOperator.hold_keys_background")
         return False
     target_tid = params[0][0]
     vks = [p[1] for p in params]
@@ -216,6 +246,7 @@ def hold_keys_background(hwnd: int, keys, stop_event, resend_sec: float) -> bool
             if stop_event.wait(resend_sec):
                 return True
     except Exception:
+        DebugLog.exception("WindowOperator.hold_keys_background")
         return False
     finally:
         _with_attached(target_tid, lambda: _release_keys(hwnd, params, vks))
@@ -255,6 +286,7 @@ def _release_keys(hwnd: int, params, vks):
         try:
             user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
         except Exception:
+            DebugLog.exception("WindowOperator._release_keys")
             pass
     state = (ctypes.c_ubyte * 256)()
     if user32.GetKeyboardState(ctypes.byref(state)):
@@ -264,6 +296,11 @@ def _release_keys(hwnd: int, params, vks):
 
 
 def release_key_background(hwnd: int, key: str) -> bool:
+    DebugLog.write(f"[操作] 背面キーを離す {key} hwnd={int(hwnd):#x}")
+    return _release_key_background(hwnd, key)
+
+
+def _release_key_background(hwnd: int, key: str) -> bool:
     """押されたままかもしれないキーを、フォーカスを奪わずに離す。
 
     自爆スレッドは daemon なので、長押しの最中にこのツールが終わると
@@ -287,16 +324,23 @@ def release_key_background(hwnd: int, key: str) -> bool:
         user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
         return True
     except Exception:
+        DebugLog.exception("WindowOperator.release_key_background")
         return False
     finally:
         if attached:
             try:
                 user32.AttachThreadInput(self_tid, target_tid, False)
             except Exception:
+                DebugLog.exception("WindowOperator.release_key_background")
                 pass
 
 
 def hold_key(key: str, sec: float):
+    DebugLog.write(f"[操作] 前面キー {key} {sec:.2f}秒")
+    _hold_key(key, sec)
+
+
+def _hold_key(key: str, sec: float):
     if sec <= 0.0:
         return
     keyboard.press(key)
@@ -338,6 +382,7 @@ def cursor_target(hwnd: int) -> tuple:
             return None, (f"カーソルを置けません（画面外: 点 ({x},{y}) "
                           f"画面 ({vx},{vy})-({vx + vw},{vy + vh})）")
     except Exception as e:
+        DebugLog.exception("WindowOperator.cursor_target")
         return None, f"カーソルを置けません（窓の位置が取れません: {e}）"
     return (x, y), ""
 
@@ -363,6 +408,7 @@ def window_at_point(point: tuple) -> int:
             return 0
         return int(user32.GetAncestor(child, GA_ROOT) or child)
     except Exception:
+        DebugLog.exception("WindowOperator.window_at_point")
         return 0
 
 
@@ -370,7 +416,16 @@ def window_title(hwnd: int) -> str:
     try:
         return win32gui.GetWindowText(hwnd) or ""
     except Exception:
+        DebugLog.exception("WindowOperator.window_title")
         return ""
+
+
+def window_rect(hwnd: int) -> tuple | None:
+    """窓の (左, 上, 右, 下)。取れなければ None（debug.log の環境用）"""
+    try:
+        return tuple(win32gui.GetWindowRect(hwnd))
+    except Exception:
+        return None
 
 
 def window_cursor_point(hwnd: int) -> tuple | None:
@@ -405,6 +460,7 @@ def set_capture_excluded(hwnd: int, excluded: bool) -> bool:
         affinity = WDA_EXCLUDEFROMCAPTURE if excluded else WDA_NONE
         return bool(user32.SetWindowDisplayAffinity(int(hwnd), affinity))
     except Exception:
+        DebugLog.exception("WindowOperator.set_capture_excluded")
         return False
 
 
@@ -417,6 +473,7 @@ def own_window_hwnd(widget) -> int:
         widget.update_idletasks()
         return toplevel_hwnd(widget.winfo_id())
     except Exception:
+        DebugLog.exception("WindowOperator.own_window_hwnd")
         return 0
 
 
@@ -436,6 +493,7 @@ def toplevel_hwnd(hwnd: int) -> int:
                 break
             current = int(parent)
     except Exception:
+        DebugLog.exception("WindowOperator.toplevel_hwnd")
         return int(hwnd)
     return current
 
@@ -448,6 +506,7 @@ def foreground_hwnd() -> int:
     try:
         return int(win32gui.GetForegroundWindow() or 0)
     except Exception:
+        DebugLog.exception("WindowOperator.foreground_hwnd")
         return 0
 
 
@@ -494,11 +553,14 @@ def return_front(loan) -> bool:
         if not win32gui.IsWindow(loan.previous):
             return False
     except Exception:
+        DebugLog.exception("WindowOperator.return_front")
         return False
+    DebugLog.write(f"[操作] 前面を返す → hwnd={int(loan.previous):#x}")
     if loan.cursor is not None:
         try:
             user32.SetCursorPos(*loan.cursor)
         except Exception:
+            DebugLog.exception("WindowOperator.return_front")
             pass
     return focus_window(loan.previous)
 
@@ -515,6 +577,7 @@ def aim_in_window_image(hwnd: int) -> tuple | None:
         cx, cy = win32gui.ClientToScreen(hwnd, (0, 0))
         _l, _t, cw, ch = win32gui.GetClientRect(hwnd)
     except Exception:
+        DebugLog.exception("WindowOperator.aim_in_window_image")
         return None
     if cw <= 0 or ch <= 0:
         return None
@@ -527,6 +590,7 @@ def cursor_position() -> tuple | None:
         if not user32.GetCursorPos(ctypes.byref(point)):
             return None
     except Exception:
+        DebugLog.exception("WindowOperator.cursor_position")
         return None
     return (point.x, point.y)
 
@@ -573,6 +637,7 @@ def cursor_over_window(hwnd: int, on_reason=None):
             try:
                 user32.SetCursorPos(*before)      # 例外が出ても必ず戻す
             except Exception:
+                DebugLog.exception("WindowOperator.cursor_over_window")
                 pass
 
 
@@ -600,6 +665,11 @@ def _cursor_landed(point: tuple) -> bool:
 
 
 def click():
+    DebugLog.write("[操作] クリック")
+    _click()
+
+
+def _click():
     """前面の窓のクロスヘア位置をクリックする。必ずフォーカスを取ってから呼ぶ。
 
     OSCが使える窓の Begin は、これではなく「カーソルをその窓の Begin ボタンの

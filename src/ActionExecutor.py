@@ -4,6 +4,7 @@ from typing import Callable
 
 import BeginDetect
 import config
+import DebugLog
 import ScreenCapture
 import SharedState
 import WindowOperator
@@ -120,6 +121,7 @@ class ActionExecutor:
         return self._chase_dir
 
     def _start_chase_locked(self, direction: str):
+        self._trace(f"[操作] チェイス開始 {direction}")
         stop = threading.Event()
         self._chase_dir = direction
         self._chase_stop = stop
@@ -128,6 +130,7 @@ class ActionExecutor:
         self._chase_thread.start()
 
     def _stop_chase_locked(self):
+        self._trace("[操作] チェイス終了")
         stop, thread = self._chase_stop, self._chase_thread
         self._chase_dir = self._chase_stop = self._chase_thread = None
         if stop is not None:
@@ -155,6 +158,10 @@ class ActionExecutor:
                     self._chase_dir = self._chase_stop = self._chase_thread = None
             self._log("⚠ チェイス: キーを送れません（最小化中など）→ 止めました")
 
+    def _trace(self, msg: str):
+        """debug.log へ（公開ログには出さない）。窓の番号を付ける"""
+        DebugLog.write(f"[窓{self._st.window_idx}] {msg}")
+
     def move(self, direction: str, seconds: float):
         """移動する。フォーカスは奪わない。
 
@@ -169,6 +176,7 @@ class ActionExecutor:
         """
         if seconds <= 0:
             return
+        self._trace(f"[操作] 移動 {direction} {seconds:.2f}秒（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
             address = {"forward": "/input/MoveForward",
                        "back": "/input/MoveBackward",
@@ -195,6 +203,8 @@ class ActionExecutor:
         OSCが使えない窓は背面へのキー送信になるため同時押しができない。
         その場合は従来どおり逐次で動かす（前進 → 左）。
         """
+        self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
+                    f"（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
             self._osc.press_multi([("/input/MoveForward", forward_sec),
                                    ("/input/MoveLeft", left_sec)])
@@ -577,12 +587,19 @@ class ActionExecutor:
         if not self._begin_by_cursor():
             return None
         stop = threading.Event()
+        self._trace("[操作] UseRight の連打を開始")
         thread = threading.Thread(target=self._spam_use_right,
                                   args=(stop, round_seq), daemon=True)
         thread.start()
         return stop
 
     def _spam_use_right(self, stop, round_seq: int):
+        try:
+            self._spam_use_right_loop(stop, round_seq)
+        finally:
+            self._trace("[操作] UseRight の連打を終了")
+
+    def _spam_use_right_loop(self, stop, round_seq: int):
         st = self._st
         start = (st.round_over_time or time.time()) + config.BEGIN_USE_SPAM_START_SEC
         while not stop.is_set():
@@ -938,6 +955,7 @@ class ActionExecutor:
         if (not self._is_running() or st.in_round or st.begin_done
                 or st.round_seq != round_seq):
             return
+        self._trace(f"[状態] Begin の押し直しを開始（移動{'済み' if st.begin_move_done else 'から'}）")
         if not st.begin_move_done:
             if not self._begin_precheck(check_freeze=False):
                 return
@@ -963,6 +981,7 @@ class ActionExecutor:
         st = self._st
         round_seq = st.round_seq
         clicked = False
+        self._trace("[状態] Begin 待ちを開始（RoundOver から）")
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
         # Verified Round End が出てクリックできる状態になる想定。

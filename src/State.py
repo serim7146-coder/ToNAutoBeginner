@@ -58,6 +58,8 @@ class WindowState:
     map_id: int = 0
     round_seq: int = 0
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
+    # 窓の番号（debug.log の行に付けるため。判定には使わない）
+    window_idx: int = field(default=0, compare=False)
     # このラウンドで Begin 前の移動を最後までやったか（押し直しで2回動かさないため）。
     # ラウンド開始・RoundOver で False
     begin_move_done: bool = False

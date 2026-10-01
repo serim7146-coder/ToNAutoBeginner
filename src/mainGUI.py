@@ -1,5 +1,7 @@
 import os
 import json
+import platform
+import sys
 import threading
 import time
 import tkinter as tk
@@ -9,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 import config
+import DebugLog
 import UIFont
 from config import resource_path
 import AutoUpdate
@@ -95,6 +98,7 @@ def load_settings() -> dict:
     try:
         return json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
     except Exception:
+        DebugLog.exception("mainGUI.load_settings")
         return {}
 
 
@@ -105,6 +109,7 @@ def save_settings(data: dict):
         config.SETTINGS_PATH.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
+        DebugLog.exception("mainGUI.save_settings")
         pass
 
 
@@ -131,6 +136,7 @@ def load_obs_password(data: dict) -> tuple[str, str]:
 
 def with_obs_password(data: dict, password: str) -> dict:
     """保存する dict に OBS のパスワードを暗号化して入れる。平文は書かない"""
+    DebugLog.add_secret(password)            # debug.log に書かない
     out = {k: v for k, v in data.items() if k != OBS_PASSWORD_PLAIN_KEY}
     # 暗号化できなければ保存しない（平文へ落とさない）。次回は入れ直しになる
     out[OBS_PASSWORD_KEY] = (SecretStore.protect(password) or "") if password else ""
@@ -589,6 +595,8 @@ class App(tk.Tk):
         self._capturing_key = False
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
+        self._stop_reason: str | None = None
+        DebugLog.install_hooks(self)          # 例外をトレースバックごと debug.log へ
         self._build_ui()
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
@@ -601,6 +609,7 @@ class App(tk.Tk):
         Recorder.set_window_hider(self._set_own_windows_hidden)
         self._start_emergency_stop_polling()
         self._start_host_save_polling()
+        self._debug_environment()
         self._start_tool_poll()
 
     def _start_emergency_stop_polling(self):
@@ -627,6 +636,7 @@ class App(tk.Tk):
                     key, lambda _e, k=key: self._chase_keys_down.discard(k),
                     suppress=False))
             except Exception as e:
+                DebugLog.exception("mainGUI._hook_chase_keys")
                 self._log(f"[チェイス] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
 
     def _chase_key_down(self, direction: str, key: str):
@@ -648,6 +658,7 @@ class App(tk.Tk):
             try:
                 keyboard.unhook(hook)
             except Exception:
+                DebugLog.exception("mainGUI._unhook_chase_keys")
                 pass
         self._chase_hooks = []
 
@@ -663,9 +674,11 @@ class App(tk.Tk):
             now = keyboard.is_pressed(key)
             if now and not self._emergency_stop_key_pressed:
                 self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")
+                self._stop_reason = "緊急停止キー"      # debug.log の停止の理由
                 self.after(0, self._stop)
             self._emergency_stop_key_pressed = now
         except Exception:
+            DebugLog.exception("mainGUI._poll_emergency_stop_key")
             # 不正なキーだと is_pressed が投げる。握り潰すと緊急停止が黙って
             # 死ぬので、既定値へ戻して知らせる
             self._fall_back_to_default_key(
@@ -692,6 +705,7 @@ class App(tk.Tk):
         try:
             now = keyboard.is_pressed(key)
         except Exception:
+            DebugLog.exception("mainGUI._poll_start_key")
             self.v_start_key.set("")
             self._start_key_pressed = False
             self._refresh_start_key_label()
@@ -1442,6 +1456,7 @@ class App(tk.Tk):
         try:
             self._refresh_host_source()
         except Exception:
+            DebugLog.exception("mainGUI._poll_host_save")
             pass
         try:
             self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
@@ -1531,6 +1546,7 @@ class App(tk.Tk):
         try:
             keep_on, meta, wishes = load(path, config.USER_SAVE_PATH)
         except Exception as e:
+            DebugLog.exception("mainGUI._refresh_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する
             self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
@@ -1579,6 +1595,7 @@ class App(tk.Tk):
             self._log(f"[TNL] {msg}")
             save_settings({**load_settings(), "tnl_path": p})
         except Exception as e:
+            DebugLog.exception("mainGUI._load_tnl")
             if show_error:
                 messagebox.showerror("TNL読み込みエラー", str(e))
             else:
@@ -1631,6 +1648,7 @@ class App(tk.Tk):
         self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
         self.v_obs_port.set(str(data.get("obs_port") or config.OBS_DEFAULT_PORT))
         password, state = load_obs_password(data)
+        DebugLog.add_secret(password)        # debug.log に書かない
         self.v_obs_password.set(password)
         if state == "undecryptable":
             self._log("[OBS] 保存されたパスワードを復号できません（別のPCや別のユーザーの"
@@ -1710,6 +1728,7 @@ class App(tk.Tk):
             try:
                 WindowOperator.release_key_background(hwnd, key)
             except Exception as e:
+                DebugLog.exception("mainGUI._release_suicide_keys")
                 self._log(f"自爆キーを離せませんでした（{e}）")
 
     def _auto_detect_windows(self):
@@ -1940,8 +1959,48 @@ class App(tk.Tk):
         self.lbl_win_warn.config(
             text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
+        self._debug_start()
+
+    def _debug_environment(self):
+        """debug.log へ: 起動時の環境（版・exe か python か・Windows・画面・設定）"""
+        try:
+            data = {k: v for k, v in load_settings().items()
+                    if k not in config.REPORT_SETTINGS_EXCLUDE_KEYS}
+            DebugLog.write(
+                f"[環境] 起動 版={config.APP_VERSION} 実行={'exe' if '__compiled__' in globals() else 'python'}"
+                f" Windows={platform.platform()} Python={sys.version.split()[0]}"
+                f" 画面={self.winfo_screenwidth()}x{self.winfo_screenheight()}")
+            DebugLog.write("[環境] 設定 " + json.dumps(data, ensure_ascii=False, sort_keys=True))
+        except Exception:
+            DebugLog.exception("mainGUI._debug_environment")
+
+    def _debug_start(self):
+        """debug.log へ: マクロ開始のときの窓ごとの様子と全窓共通の設定"""
+        try:
+            for mon in self.monitors:
+                cfg = mon.cfg
+                DebugLog.write(
+                    f"[環境] 開始 窓{mon.window_idx} hwnd={int(cfg.hwnd):#x}"
+                    f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
+                    f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
+                    f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
+                    f" Intermission={cfg.announce_intermission}"
+                    f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}")
+            DebugLog.write(
+                f"[環境] 開始 共通 放置={SharedState.get_hands_free()}"
+                f" 速度検知={SharedState.get_speed_detect()}"
+                f" アイテム取得→Begin={SharedState.get_item_begin_mode()}"
+                f" 8Pagesフリーズ={SharedState.get_freeze_on_8pages()}"
+                f" Punishedフリーズ={SharedState.get_freeze_on_punish()}"
+                f" 突入フリーズ={sorted(SharedState.get_freeze_rounds())}"
+                f" 霧の即時判定={FogEarlyRead.early_read_enabled()}"
+                f" 音量={self._window_volume_settings()}")
+        except Exception:
+            DebugLog.exception("mainGUI._debug_start")
 
     def _stop(self):
+        reason, self._stop_reason = (getattr(self, "_stop_reason", None) or "ボタン"), None
+        DebugLog.write(f"[環境] 停止（理由: {reason}）")
         self._stop_window_volume()               # 元の音量に戻す（監視を止める前に）
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
@@ -1967,6 +2026,7 @@ class App(tk.Tk):
         self._log("[停止] マクロを停止しました")
 
     def _log(self, msg: str):
+        DebugLog.write(f"[画面] {msg}")          # 画面のログは全部 debug.log にも
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{ts}] {msg}\n"
         def _a():
@@ -2127,6 +2187,7 @@ class App(tk.Tk):
             ToolLauncher.launch(exe)
             self._log(f"[外部ツール] {label} を起動しました")
         except Exception as e:
+            DebugLog.exception("mainGUI._launch_tool")
             self._log(f"[外部ツール] 起動に失敗: {e}")
         self._refresh_tool_row(row)
 
@@ -2138,6 +2199,7 @@ class App(tk.Tk):
             for row in list(self.tool_rows):
                 self._refresh_tool_row(row)
         except Exception:
+            DebugLog.exception("mainGUI._poll_tool_buttons")
             pass
         try:
             self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000),
@@ -2226,6 +2288,7 @@ class App(tk.Tk):
                 n = len(found)
                 self.after(0, lambda: self._on_launch_finished(n, len(launch_plan), existing))
             except Exception as e:
+                DebugLog.exception("mainGUI.worker")
                 msg = str(e)
                 self.after(0, lambda: self._on_launch_error(msg))
 
@@ -2330,6 +2393,7 @@ class App(tk.Tk):
                         if entry.run() and press_begin and not self._entry_stop.is_set():
                             entry.press_begin()
                     except Exception as e:
+                        DebugLog.exception("mainGUI.worker")
                         self._log("[窓%d] 入室操作でエラー: %s" % (window_no, e))
                     finally:
                         entry.close()
@@ -2359,6 +2423,7 @@ class App(tk.Tk):
         try:
             self._save_launch_settings()
         except Exception as e:
+            DebugLog.exception("mainGUI._save_settings_now")
             self._log(f"設定の保存に失敗: {e}")
 
     def _schedule_settings_save(self):
@@ -2506,6 +2571,7 @@ class App(tk.Tk):
         # Tk 変数を読めないので必ず先に、停止が長引いても保存は済ませたいので
         # _stop() より前に書く
         self._save_settings_now()
+        self._stop_reason = "ウィンドウを閉じた"      # debug.log の停止の理由
         self._stop()
         self._unhook_chase_keys()
         self._show_own_windows_again()

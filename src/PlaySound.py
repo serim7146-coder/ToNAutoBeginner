@@ -17,6 +17,7 @@ import threading
 from pathlib import Path
 
 import config
+import DebugLog
 
 # Volume（0.0~1.0）
 sound_volume: float = config.DEFAULT_SOUND_VOLUME
@@ -77,7 +78,7 @@ def _mci_run(command: str) -> bool:
     """MCIコマンドを実行し、失敗したらメッセージを表示してFalseを返す"""
     code = _mci(command)
     if code:
-        print(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
+        _say(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
         return False
     return True
 
@@ -92,7 +93,7 @@ def _warn_once(key: str, message: str):
         if key in _warned:
             return
         _warned.add(key)
-    print(message)
+    _say(message)
 
 
 def _mci_volume_value() -> int:
@@ -134,8 +135,14 @@ def _open_device(path: Path, alias: str) -> bool:
         if not _mci(retry):
             return True
         command = retry
-    print(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
+    _say(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
     return False
+
+
+def _say(message: str):
+    """コンソールへ出し、debug.log にも書く"""
+    print(message)
+    DebugLog.write(f"[音声] {message}")
 
 
 def play_sound(path: str):
@@ -143,7 +150,9 @@ def play_sound(path: str):
         return
     p = Path(path)
     if not p.exists():
+        DebugLog.write(f"[音声] ファイルがありません: {p}")
         return
+    DebugLog.write(f"[音声] 再生 {p.name}")
 
     def _play_sound():
         try:
@@ -165,5 +174,6 @@ def play_sound(path: str):
                 # 閉じ忘れるとデバイスが解放されず、いずれ再生できなくなる
                 _mci_run(f"close {alias}")
         except Exception as e:
-            print(f"音声再生エラー: {e}")
+            DebugLog.exception("PlaySound._play_sound")
+            _say(f"音声再生エラー: {e}")
     threading.Thread(target=_play_sound, daemon=True).start()

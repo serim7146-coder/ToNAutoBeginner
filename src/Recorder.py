@@ -13,6 +13,7 @@ import time
 from typing import Callable, Optional
 
 import config
+import DebugLog
 import OBSClient
 
 
@@ -122,12 +123,14 @@ class RecordPlan:
         try:
             self._hide_windows(hidden)
         except Exception:
+            DebugLog.exception("Recorder._hide_own_windows")
             pass                # 付随機能なので、失敗しても録画は続ける
 
     def _call(self, request_type: str):
         try:
             client = self._client_factory()
         except Exception as e:
+            DebugLog.exception("Recorder._call")
             return False, {}, f"OBSクライアントを作れません（{e}）"
         try:
             ok, reason = client.connect()
@@ -135,11 +138,13 @@ class RecordPlan:
                 return False, {}, reason
             return client.request(request_type)
         except Exception as e:           # 偽物や将来の変更で投げても外へ出さない
+            DebugLog.exception("Recorder._call")
             return False, {}, f"OBSとの通信に失敗しました（{e}）"
         finally:
             try:
                 client.close()
             except Exception:
+                DebugLog.exception("Recorder._call")
                 pass
 
     def _warn(self, window: int, reason: str):
@@ -244,6 +249,7 @@ class Recorder:
                     self._handle(item)
                 self._plan.tick()
             except Exception as e:      # ワーカーが死ぬと以後録画できなくなる
+                DebugLog.exception("Recorder._run")
                 self._emit(f"⚠ OBS録画の処理でエラー: {e}")
 
     def _handle(self, item):
@@ -269,6 +275,7 @@ class Recorder:
         try:
             self._log(msg)
         except Exception:
+            DebugLog.exception("Recorder._emit")
             pass
 
 

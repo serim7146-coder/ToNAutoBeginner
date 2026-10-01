@@ -13,6 +13,7 @@ GUI から切り離して単体テストできるようにしてある。
 import threading
 
 import config
+import DebugLog
 
 try:
     import keyboard
@@ -32,6 +33,7 @@ def is_valid(name) -> bool:
         keyboard.parse_hotkey(name)
         return True
     except Exception:
+        DebugLog.exception("HotKey.is_valid")
         return False
 
 
@@ -65,6 +67,7 @@ def capture(timeout_sec: float = 5.0):
         try:
             result["key"] = keyboard.read_hotkey(suppress=False)
         except Exception:
+            DebugLog.exception("HotKey.read")
             pass
 
     worker = threading.Thread(target=read, daemon=True)

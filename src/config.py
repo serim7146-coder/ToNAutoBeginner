@@ -20,7 +20,9 @@ UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "settings.json"
 # デバッグログ（公開ログとは別。DebugLog）。上限を超えたら .1 へ回す
 DEBUG_LOG_PATH = SETTINGS_PATH.parent / "debug.log"
-DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024
+DEBUG_LOG_MAX_BYTES = 20 * 1024 * 1024       # これを超えたら世代を回す（.1〜.3 を残す）
+# 設定を debug.log・不具合の報告へ出すときに抜く項目（OBS のパスワード。暗号化したものも）
+REPORT_SETTINGS_EXCLUDE_KEYS = ("obs_password_dpapi", "obs_password")
 # 統計画面 v1 の手元の保存（RoundStore。DB から取った分と自分が送った分）
 ROUND_STORE_PATH = SETTINGS_PATH.parent / "rounds.sqlite"
 

@@ -2418,7 +2418,7 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
             self.assertLessEqual(imports, {"base64", "hashlib", "json", "os",
                                            "socket", "struct", "time", "queue",
                                            "threading", "typing", "config",
-                                           "OBSClient"}, name)
+                                           "OBSClient", "DebugLog"}, name)   # BV: 例外を debug.log へ
 
 
 class TestOBSPasswordStorage(unittest.TestCase):
@@ -3028,6 +3028,21 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
 
     # ── NG・看破できる ──────────────────────────
+    def test_ng_writes_no_fog_names_to_the_debug_log(self):
+        """BV: NG のインスタンスでは、公開前に [NetworkProcessing] の名前もテラーの情報も
+        debug.log に出ない（読んだイベントの行・画面の行のどちらにも）"""
+        written = []
+        with patch.object(DebugLog, "write", side_effect=written.append):
+            monitor = self._monitor(access="friends_plus", keep={self.FOG_KEY: {self.SNAIL}})
+            monitor._process(self.SNAIL_LINE)
+            monitor._process(self.SNAIL_AGAIN)
+            monitor._process(self.UNDECIDED_LINE)
+        text = "\n".join(written)
+        for word in ("Snail", "snail", "Knight", "Toren", str(self.SNAIL), "NetworkProcessing",
+                     "network_object", "看破"):
+            self.assertNotIn(word, text, word)
+        self.assertIn("[事象] killers_unknown", text, "ほかのイベントは書いている")
+
     def test_ng_capable_sends_to_the_db_only(self):
         monitor = self._monitor(access="friends_plus",
                                 keep={self.FOG_KEY: {self.SNAIL}})
@@ -14924,6 +14939,368 @@ class TestDoBeginAgain(unittest.TestCase):
         self.assertTrue(st.begin_move_done)
 
 
+class TestDebugLogRich(unittest.TestCase):
+    """BV: debug.log を充実させる（守ること・例外・世代・速さ）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.path = Path(self._dir.name) / "debug.log"
+        p = patch.object(config, "DEBUG_LOG_PATH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        DebugLog._seen.clear()
+        self.addCleanup(DebugLog._seen.clear)
+
+    def _text(self):
+        return self.path.read_text(encoding="utf-8") if self.path.exists() else ""
+
+    # ── 伏せる ───────────────────────────────
+    def test_the_user_name_is_masked(self):
+        with patch.dict(os.environ, {"USERPROFILE": r"C:\Users\alice"}):
+            DebugLog.write(r"ログ=C:\Users\Alice\AppData\LocalLow\x.txt 別=c:/users/alice/y")
+        text = self._text()
+        self.assertNotIn("alice", text.lower())
+        self.assertIn(r"%USERPROFILE%\AppData\LocalLow\x.txt", text)
+        self.assertIn("%USERPROFILE%/y", text)
+
+    def test_secrets_are_masked(self):
+        self.addCleanup(DebugLog._secrets.discard, "s3cr3t-value-xyz")
+        DebugLog.add_secret("s3cr3t-value-xyz")
+        DebugLog.add_secret("ab")                       # 短すぎるものは覚えない
+        DebugLog.write("鍵=s3cr3t-value-xyz ab")
+        self.assertNotIn("s3cr3t", self._text())
+        self.assertIn("鍵=*** ab", self._text())
+
+    def test_the_obs_password_is_never_written(self):
+        password = "obs-pass-9876"
+        self.addCleanup(DebugLog._secrets.discard, password)
+        mainGUI.with_obs_password({}, password)
+        DebugLog.write(f"OBS 接続 {password}")
+        self.assertNotIn(password, self._text())
+
+    def test_env_values_are_never_written(self):
+        env = Path(self._dir.name) / ".env"
+        env.write_text("# comment\nSUPABASE_KEY=env-key-12345\nDISCORD_REPORT_WEBHOOK_URL='https://hook.example/abc'\n",
+                       encoding="utf-8")
+        for value in ("env-key-12345", "https://hook.example/abc"):
+            self.addCleanup(DebugLog._secrets.discard, value)
+        with patch.object(ConnectDB, "env_file_candidates", return_value=[env]):
+            ConnectDB._register_env_secrets()
+        DebugLog.write("送り先 https://hook.example/abc 鍵 env-key-12345")
+        self.assertNotIn("env-key", self._text())
+        self.assertNotIn("hook.example", self._text())
+
+    def test_the_settings_lose_the_obs_items(self):
+        self.assertEqual(config.REPORT_SETTINGS_EXCLUDE_KEYS, ("obs_password_dpapi", "obs_password"))
+        app = type("FakeApp", (), {})()
+        app.winfo_screenwidth = lambda: 2560
+        app.winfo_screenheight = lambda: 1440
+        data = {"obs_password_dpapi": "QUFBQUFBQQ==", "obs_password": "plain-pw", "win_count": 6}
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            mainGUI.App._debug_environment(app)
+        text = self._text()
+        self.assertIn("[環境] 起動 版=", text)
+        self.assertIn("画面=2560x1440", text)
+        self.assertIn('"win_count": 6', text)
+        for word in ("obs_password", "QUFBQUFBQQ", "plain-pw"):
+            self.assertNotIn(word, text)
+
+    # ── 画面のログ ───────────────────────────
+    def test_every_screen_line_goes_to_the_debug_log(self):
+        app = type("FakeApp", (), {})()
+        app.after = lambda _ms, _fn=None: None
+        mainGUI.App._log(app, "[窓2] ✅ Connecting")
+        self.assertIn("] [画面] [窓2] ✅ Connecting", self._text())
+
+    # ── 例外 ─────────────────────────────────
+    def _boom(self, message="boom"):
+        try:
+            raise ValueError(message)
+        except ValueError:
+            return sys.exc_info()
+
+    def test_exception_writes_the_traceback(self):
+        try:
+            raise KeyError("missing")
+        except KeyError:
+            DebugLog.exception("Test.where")
+        text = self._text()
+        self.assertIn("[例外] Test.where\nTraceback (most recent call last):", text)
+        self.assertIn("KeyError: 'missing'", text)
+        self.assertIn("test_exception_writes_the_traceback", text)
+
+    def test_the_same_one_is_written_once_a_minute_with_the_count(self):
+        clock = [1000.0]
+        with patch.object(DebugLog.time, "monotonic", side_effect=lambda: clock[0]):
+            for _ in range(3):
+                DebugLog.report("Test.same", *self._boom())
+            DebugLog.report("Test.other", *self._boom())         # 場所が違えば別
+            DebugLog.report("Test.same", *self._boom("other"))   # メッセージが違えば別
+            clock[0] += DebugLog.EXCEPTION_THROTTLE_SEC - 0.1
+            DebugLog.report("Test.same", *self._boom())
+            clock[0] += 0.2
+            DebugLog.report("Test.same", *self._boom())
+        text = self._text()
+        self.assertEqual(text.count("[例外] Test.same"), 3)
+        self.assertEqual(text.count("[例外] Test.same（同じものを 3 回省略）"), 1)
+        self.assertEqual(text.count("[例外] Test.other"), 1)
+
+    def _restore_hooks(self):
+        sys_hook, thread_hook = sys.excepthook, threading.excepthook
+        self.addCleanup(setattr, sys, "excepthook", sys_hook)
+        self.addCleanup(setattr, threading, "excepthook", thread_hook)
+
+    def test_the_sys_hook(self):
+        self._restore_hooks()
+        previous = MagicMock()
+        sys.excepthook = previous
+        DebugLog.install_hooks()
+        info = self._boom("sys hook")
+        sys.excepthook(*info)
+        previous.assert_called_once_with(*info)
+        self.assertIn("[例外] sys.excepthook\nTraceback", self._text())
+        self.assertIn("ValueError: sys hook", self._text())
+        DebugLog.install_hooks()
+        self.assertIs(sys.excepthook.__closure__ is not None, True)
+        sys.excepthook(*self._boom("again"))
+        self.assertEqual(previous.call_count, 2, "二重に差し替えない")
+
+    def test_the_threading_hook(self):
+        self._restore_hooks()
+        previous = MagicMock()
+        threading.excepthook = previous
+        DebugLog.install_hooks()
+
+        def fail():
+            raise RuntimeError("in a thread")
+
+        th = threading.Thread(target=fail, name="worker-x")
+        th.start()
+        th.join()
+        previous.assert_called_once()
+        self.assertIn("[例外] threading.excepthook（worker-x）\nTraceback", self._text())
+        self.assertIn("RuntimeError: in a thread", self._text())
+
+    def test_the_tk_hook(self):
+        self._restore_hooks()
+        root = type("Root", (), {})()
+        previous = MagicMock()
+        root.report_callback_exception = previous
+        DebugLog.install_hooks(root)
+        info = self._boom("tk")
+        root.report_callback_exception(*info)
+        previous.assert_called_once_with(*info)
+        self.assertIn("[例外] Tk report_callback_exception\nTraceback", self._text())
+
+    def test_a_swallowed_exception_is_now_written(self):
+        """黙って捨てていた所の例: 前面化の失敗"""
+        with patch.object(WindowOperator.win32gui, "IsIconic", side_effect=OSError("gone")):
+            self.assertFalse(WindowOperator.focus_window(0x123))
+        text = self._text()
+        self.assertIn("[例外] WindowOperator.focus_window", text)
+        self.assertIn("OSError: gone", text)
+        self.assertIn("[操作] 前面化 hwnd=0x123 → 失敗", text)
+
+    def test_a_swallowed_osc_failure_is_written(self):
+        client = OSCClient.OSCClient(9)
+        client._sock = MagicMock()
+        client._sock.sendto.side_effect = OSError("no route")
+        self.assertFalse(client.send("/input/Jump", 1))
+        self.assertIn("[例外] OSCClient.send", self._text())
+
+    # ── 世代と速さ ───────────────────────────
+    def test_three_generations_are_kept(self):
+        with patch.object(config, "DEBUG_LOG_MAX_BYTES", 60):
+            for i in range(6):
+                DebugLog.write(f"line{i} " + "x" * 60)
+        names = sorted(p.name for p in self.path.parent.iterdir())
+        self.assertEqual(names, ["debug.log", "debug.log.1", "debug.log.2", "debug.log.3"])
+        newest_first = [self.path] + [self.path.with_name(f"debug.log.{n}") for n in (1, 2, 3)]
+        self.assertEqual([p.read_text(encoding="utf-8").split("] ", 1)[1][:5] for p in newest_first],
+                         ["line5", "line4", "line3", "line2"], "古いものは消える")
+
+    def test_the_limit_is_20_mb(self):
+        self.assertEqual(config.DEBUG_LOG_MAX_BYTES, 20 * 1024 * 1024)
+        self.assertEqual(DebugLog.GENERATIONS, 3)
+
+    def test_ten_thousand_lines_are_fast_enough(self):
+        started = time.perf_counter()
+        for i in range(10000):
+            DebugLog.write(f"[画面] [窓1] line {i}")
+        took = time.perf_counter() - started
+        self.assertLess(took, 15.0, f"{took:.1f}秒（画面のスレッドから書くので遅すぎないこと）")
+        self.assertEqual(len(self._text().splitlines()), 10000)
+
+
+class TestDebugLogTraces(unittest.TestCase):
+    """BV: 読んだイベント・状態の変化・操作の跡"""
+
+    def setUp(self):
+        self.written = []
+        p = patch.object(DebugLog, "write", side_effect=self.written.append)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=3)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def test_events(self):
+        monitor = self._monitor()
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(ConnectDB, "register_round"):
+            for line in ("This round is taking place at Facility (12) and the round type is Classic",
+                         "Killers have been set - 5 0 0 // Round type is Classic",
+                         "Equipping 29.", "You died.", "RoundOver",
+                         "[Behaviour] Joining wrld_x:1~friends(usr_me)~region(jp)",
+                         "[Behaviour] OnPlayerJoined someone (usr_abc)"):
+                monitor._process("2026.10.01 12:00:00 Debug      -  " + line)
+        events = [m for m in self.written if "[事象]" in m]
+        self.assertIn("[窓3] [事象] round_start 種類=Classic マップ=12", events)
+        self.assertIn("[窓3] [事象] killers_set 種類=Classic テラー=[5]", events)
+        self.assertIn("[窓3] [事象] item_equip アイテム=29", events)
+        self.assertIn("[窓3] [事象] you_died", events)
+        self.assertIn("[窓3] [事象] round_over", events)
+        self.assertIn("[窓3] [事象] joining 公開範囲=friends", events)
+        self.assertIn("[窓3] [事象] player_joined", events, "入ってきた人の名前は書かない")
+        self.assertFalse(any("someone" in m or "usr_abc" in m for m in self.written))
+
+    def test_network_object_lines_are_not_events(self):
+        monitor = self._monitor()
+        monitor._process("2026.10.01 12:00:00 Debug      -  [NetworkProcessing] Ignoring TrySetOwner "
+                         "attempt on [20] Immortal Snail because x already owner")
+        self.assertFalse(any("[事象]" in m for m in self.written), self.written)
+
+    def test_freezes(self):
+        st = WindowState(window_idx=2)
+        other = WindowState(window_idx=4)
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.speed_freeze_reset)
+        self.addCleanup(SharedState.round_freeze_reset)
+        SharedState.equip_freeze_start(st)
+        SharedState.equip_freeze_start(other)
+        with patch.object(SharedState, "_return_front_when_free"):
+            SharedState.equip_freeze_end(st)
+        SharedState.continue_round_start(st)
+        SharedState.speed_freeze_start(st)
+        SharedState.round_freeze_start(st)
+        with patch.object(SharedState, "_return_front_when_free"):
+            SharedState.continue_round_end(st)
+            SharedState.speed_freeze_end(st)
+            SharedState.round_freeze_end(st)
+        states = [m for m in self.written if m.startswith("[状態]")]
+        self.assertEqual(states, [
+            "[状態] 窓2 装備待ちフリーズを張った（張っている窓: 1）",
+            "[状態] 窓4 装備待ちフリーズを張った（張っている窓: 2）",
+            "[状態] 窓2 装備待ちフリーズを解いた（張っている窓: 1）",
+            "[状態] 窓2 続行フリーズを張った（張っている窓: 1）",
+            "[状態] 窓2 速度検知フリーズを張った（張っている窓: 1）",
+            "[状態] 窓2 ラウンド突入フリーズを張った（張っている窓: 1）",
+            "[状態] 窓2 続行フリーズを解いた（張っている窓: 0）",
+            "[状態] 窓2 速度検知フリーズを解いた（張っている窓: 0）",
+            "[状態] 窓2 ラウンド突入フリーズを解いた（張っている窓: 0）",
+        ])
+
+    def test_the_monitor_gives_its_number_to_the_state(self):
+        self.assertEqual(self._monitor().st.window_idx, 3)
+
+    def test_operations(self):
+        with patch.object(WindowOperator, "_focus_window", return_value=True), \
+             patch.object(WindowOperator, "_click"), \
+             patch.object(WindowOperator, "_hold_key_background", return_value=True):
+            WindowOperator.focus_window(0x10)
+            WindowOperator.click()
+            WindowOperator.hold_key_background(0x10, "w", 0.5)
+        self.assertIn("[操作] 前面化 hwnd=0x10 → 成功", self.written)
+        self.assertIn("[操作] クリック", self.written)
+        self.assertIn("[操作] 背面キー w 0.50秒 hwnd=0x10", self.written)
+
+    def test_osc_moves_and_the_chase(self):
+        st = WindowState(window_idx=5)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
+                                           lambda: True, lambda _m: None)
+        ex._osc = MagicMock()
+        ex.move("forward", 1.0)
+        ex.move_forward_left(2.0, 0.5)
+        with patch.object(ActionExecutor.threading, "Thread"):
+            ex._start_chase_locked("forward")
+            ex._stop_chase_locked()
+        self.assertIn("[窓5] [操作] 移動 forward 1.00秒（OSC）", self.written)
+        self.assertIn("[窓5] [操作] 前進 2.00秒＋左 0.50秒（OSC）", self.written)
+        self.assertIn("[窓5] [操作] チェイス開始 forward", self.written)
+        self.assertIn("[窓5] [操作] チェイス終了", self.written)
+
+    def test_a_sound(self):
+        with tempfile.TemporaryDirectory() as d:
+            voice = Path(d) / "continue.mp3"
+            voice.write_bytes(b"x")
+            with patch.object(PlaySound.threading, "Thread"):
+                PlaySound.play_sound(str(voice))
+        self.assertTrue(any(m == "[音声] 再生 continue.mp3" for m in self.written), self.written)
+
+    def test_sound_errors_go_to_the_debug_log(self):
+        with patch("builtins.print"):
+            PlaySound._say("音声再生エラー: test")
+        self.assertIn("[音声] 音声再生エラー: test", self.written)
+
+    def test_the_stop_reason(self):
+        for reason, expected in ((None, "ボタン"), ("緊急停止キー", "緊急停止キー")):
+            self.written.clear()
+            app = MagicMock()
+            app._stop_reason = reason
+            app.monitors = []
+            with patch.object(Recorder, "stop_all"):
+                mainGUI.App._stop(app)
+            self.assertIn(f"[環境] 停止（理由: {expected}）", self.written)
+            self.assertIsNone(app._stop_reason, "次の停止に持ち越さない")
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn('self._stop_reason = "緊急停止キー"', src)
+        self.assertIn('self._stop_reason = "ウィンドウを閉じた"', src)
+
+    def test_the_start_environment(self):
+        app = type("FakeApp", (), {})()
+        mon = MagicMock()
+        mon.window_idx = 2
+        mon.cfg = WindowConfig(hwnd=0x20, osc_port=9010, osc_out_port=9011, auto_begin=True,
+                               do_skip=False, skip_rounds={"Fog"})
+        app.monitors = [mon]
+        app._window_volume_settings = lambda: {"window_volume_enabled": False}
+        with patch.object(WindowOperator, "window_rect", return_value=(0, 0, 800, 600)):
+            mainGUI.App._debug_start(app)
+        first = next(m for m in self.written if m.startswith("[環境] 開始 窓2"))
+        for part in ("hwnd=0x20", "位置=(0, 0, 800, 600)", "OSC=9010/9011", "自動Begin=True",
+                     "自爆=False", "自爆ラウンド=['Fog']"):
+            self.assertIn(part, first)
+        self.assertTrue(any(m.startswith("[環境] 開始 共通 放置=") and "霧の即時判定=" in m
+                            for m in self.written))
+
+    def test_db_sends_write_nothing_about_the_round(self):
+        sent = []
+
+        def urlopen(req, timeout=None):
+            sent.append(req)
+            res = MagicMock()
+            res.__enter__ = MagicMock(return_value=res)
+            res.__exit__ = MagicMock(return_value=False)
+            res.status = 204
+            return res
+
+        with patch.object(ConnectDB, "_configured", return_value=True), \
+             patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+             patch.object(ConnectDB, "_headers", return_value={}), \
+             patch.object(ConnectDB.threading, "Thread", TestDbV1.RunNow), \
+             patch.object(ConnectDB.urllib.request, "urlopen", side_effect=urlopen), \
+             patch.object(RoundStore, "default_store", return_value=MagicMock()), \
+             patch("builtins.print"):
+            ConnectDB.register_round("Fog", [101, 7], 12, -13, round_time=1767225610)
+        self.assertEqual(len(sent), 1)
+        self.assertFalse(any("Supabase" in m or "101" in m or "register_round" in m or "[DB]" in m
+                             for m in self.written), self.written)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -23032,7 +23409,7 @@ class TestDebugLog(unittest.TestCase):
     def test_the_real_path_is_under_appdata_next_to_settings(self):
         self.assertEqual(_real_paths["debug"].name, "debug.log")
         self.assertEqual(_real_paths["debug"].parent, _real_paths["settings"].parent)
-        self.assertEqual(config.DEBUG_LOG_MAX_BYTES, 5 * 1024 * 1024)
+        self.assertEqual(config.DEBUG_LOG_MAX_BYTES, 20 * 1024 * 1024)      # BV
 
 
 class TestRoundTypeObservation(unittest.TestCase):
@@ -23079,7 +23456,9 @@ class TestRoundTypeObservation(unittest.TestCase):
             monitor._process("2026.09.30 13:00:00 Debug      -  This round is taking place "
                              "at Facility (12) and the round type is Classic")
 
-        self.assertEqual(self.written, [])
+        # BV からは読んだイベントを [事象] で書く。BG の観測の行（round type =）は書かない
+        self.assertFalse(any("round type =" in m for m in self.written), self.written)
+        self.assertTrue(all("[事象]" in m for m in self.written), self.written)
         self.assertFalse(any("round type =" in m for m in monitor.logs), monitor.logs)
 
     def test_debug_never_calls_the_public_logger(self):

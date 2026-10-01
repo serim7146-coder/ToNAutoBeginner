@@ -55,10 +55,36 @@ def env_file_candidates() -> list[Path]:
 for env_path in env_file_candidates():
     load_dotenv(env_path)
 
+
+def _register_env_secrets():
+    """.env の値（Supabase の鍵・Discord の Webhook の URL など）を debug.log に書かない"""
+    for env_path in env_file_candidates():
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        except OSError:
+            continue
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            DebugLog.add_secret(line.split("=", 1)[1].strip().strip("'\""))
+
+
+_register_env_secrets()
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+DebugLog.add_secret(SUPABASE_URL)
+DebugLog.add_secret(SUPABASE_KEY)
 REQUEST_TIMEOUT = 10
 DEFAULT_EXCLUDED_STAT_ROUNDS = ("Classic", "Run")
+
+def _say_user(message: str):
+    """ユーザー登録・transformed_uid の取得の成否（送ったラウンドの中身は含まない）。
+    debug.log にも書く。register_round の送信まわりは使わない（中身・結果は書かない）"""
+    print(message)
+    DebugLog.write(f"[DB] {message}")
+
 
 def _configured() -> bool:
     return bool(SUPABASE_URL and SUPABASE_KEY)
@@ -90,7 +116,7 @@ def _in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
 # 追加できない時はNoneを返す
 def send_Users(VRChat_uid: str) -> int | None:
     if not _configured():
-        print("Supabase設定がないためユーザー登録をスキップします。")
+        _say_user("Supabase設定がないためユーザー登録をスキップします。")
         return None
     uid = urllib.parse.quote(VRChat_uid, safe="")
     # VRChat_uidが既に存在するか確認
@@ -101,7 +127,7 @@ def send_Users(VRChat_uid: str) -> int | None:
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         existing_user = json.loads(res.read())
     if existing_user:
-        print("既に登録されています。")
+        _say_user("既に登録されています。")
         return existing_user[0]["transformed_uid"]
     
     req = urllib.request.Request(
@@ -111,7 +137,7 @@ def send_Users(VRChat_uid: str) -> int | None:
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
         existing = {row["transformed_uid"] for row in json.loads(res.read())} # 既存のtransformed_uidを取得
     if len(existing) >= 65534:
-        print("これ以上transformed_uidを追加できません。")
+        _say_user("これ以上transformed_uidを追加できません。")
         return
     while True:
         transformed_uid = random.randint(-32768, 32767)
@@ -132,12 +158,12 @@ def send_Users(VRChat_uid: str) -> int | None:
         method="POST"
     )
     with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        print(f"ユーザー登録: {res.status}")
+        _say_user(f"ユーザー登録: {res.status}")
         return transformed_uid
 
 def get_transformed_uid(VRChat_uid: str) -> int | None:
     if not _configured():
-        print("Supabase設定がないためtransformed_uid取得をスキップします。")
+        _say_user("Supabase設定がないためtransformed_uid取得をスキップします。")
         return None
     try:
         uid = urllib.parse.quote(VRChat_uid, safe="")
@@ -152,7 +178,7 @@ def get_transformed_uid(VRChat_uid: str) -> int | None:
         # なければ新規登録
         return send_Users(VRChat_uid)
     except Exception as e:
-        print(f"transformed_uid取得エラー: {e}")
+        _say_user(f"transformed_uid取得エラー: {e}")
         return None
 
 def round_type_id(round_name: str) -> int:
