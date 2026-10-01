@@ -10114,8 +10114,8 @@ class TestRoundFreezeFocus(unittest.TestCase):
     def test_the_two_labels_use_the_same_helper(self):
         src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
 
-        self.assertEqual(src.count('_focus_for_freeze("続行ラウンド")'), 2,
-                         "続行判定の2か所")
+        self.assertEqual(src.count('_focus_for_freeze("続行ラウンド")'), 3,
+                         "続行判定の3か所（CC: Glorbo の続行）")
         self.assertEqual(src.count('_focus_for_freeze("ラウンド突入フリーズ")'), 1)
         self.assertIn('self._log(f"この窓を前面化しました（{label}）")', src)
 
@@ -10787,8 +10787,8 @@ class TestContinueFreezeIsPerWindow(unittest.TestCase):
         self.assertNotIn("SharedState.continue_round_start()", src)
         self.assertEqual(src.count("SharedState.continue_round_end(st)"), 6,
                          "解除は6か所")
-        self.assertEqual(src.count("SharedState.continue_round_start(st)"), 2,
-                         "開始は2か所")
+        self.assertEqual(src.count("SharedState.continue_round_start(st)"), 3,
+                         "開始は3か所（CC: Glorbo の続行）")
 
     def test_the_gui_reset_takes_no_window(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
@@ -14347,9 +14347,9 @@ class TestGuiTweaksBR(unittest.TestCase):
     # ── 8. 緊急停止のキーの行 ───────────────────────
     def test_the_emergency_key_moved_to_the_start_key_row(self):
         row = self.app.lbl_start_key.master
-        self.assertEqual(row.pack_slaves()[:5],
-                         [self.app.lbl_emergency, self.app.btn_capture_key, self.app.lbl_start_key,
-                          self.app.btn_capture_start_key, self.app.btn_clear_start_key])
+        self.assertEqual(row.pack_slaves()[:5],          # CC: マクロ開始が先・緊急停止が後
+                         [self.app.lbl_start_key, self.app.btn_capture_start_key,
+                          self.app.btn_clear_start_key, self.app.lbl_emergency, self.app.btn_capture_key])
         self.assertNotIn(self.app.lbl_emergency, self.app.btn_start.master.pack_slaves())
 
 
@@ -15925,6 +15925,171 @@ class TestStatisticsColorsCB(unittest.TestCase):
     def test_the_button_names(self):
         self.assertEqual([label for label, _n in StatisticsGUI.ROUND_SELECT_PRESETS],
                          ["Classicテラー", "Alternateテラー"])
+
+
+class TestGlorboContinueCC(unittest.TestCase):
+    """CC: Glorbo は続行リストにあれば、放置モード・ラウンド指定の自爆より優先して続行する。
+    フリーズ・アナウンス・録画は普通の続行と同じ。AFK 対策は 3 勝でも回す"""
+
+    PUNISHED_KEY = "Punished/パニッシュ"
+    GLORBO_LINE = "2026.09.27 21:05:11 Debug      -  the real g has appeared"
+
+    def setUp(self):
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.addCleanup(SharedState.continue_round_reset)
+        self._start(patch.object(ConnectDB, "register_round"))
+        self.play = self._start(patch.object(PlaySound, "play_sound"))
+        self.record = self._start(patch.object(Recorder, "on_continue_start"))
+        self.freeze = self._start(patch.object(SharedState, "continue_round_start"))
+        self.thread = self._start(patch.object(LogMonitor.threading, "Thread"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self, glorbo_on_list=True, instance_type=config.INSTANCE_PRIVATE, skip_rounds=()):
+        keep = {self.PUNISHED_KEY: {config.GLORBO_ID}} if glorbo_on_list else {}
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, keep, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Punished"
+        monitor.st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS   # Punished は特殊
+        monitor.st.item_id = 5
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._focus_for_freeze = MagicMock()
+        return monitor
+
+    def _started(self):
+        return [(c.kwargs["target"].__func__.__name__, c.kwargs.get("args", ()))
+                for c in self.thread.call_args_list if "target" in c.kwargs]
+
+    def _glorbo_round(self, monitor):
+        """Killers に Arkus → 合図を待つ → the real g has appeared → 判定"""
+        monitor._on_killers([config.ARKUS_ID], "Punished", revealed=False)
+        waited = [n for n, _a in self._started() if n == "_delayed_decision"]
+        monitor._process(self.GLORBO_LINE)
+        monitor._decide("Punished")                 # 待ちが終わったときの判定
+        return waited
+
+    def _assert_glorbo_continue(self, monitor, hands_free=False):
+        st = monitor.st
+        self.assertTrue(st.is_continue_round)
+        self.assertFalse(st.open_special_continue, "音量は普通の続行")
+        started = self._started()
+        self.assertNotIn("do_skip", [n for n, _a in started])
+        self.assertIn(("do_open_special_round_loop", (True,)), started)
+        self.freeze.assert_called_once_with(st)
+        monitor._focus_for_freeze.assert_called_once_with("続行ラウンド")
+        if hands_free:
+            self.play.assert_not_called()
+            self.record.assert_not_called()
+        else:
+            self.play.assert_called_once_with("continue.mp3")
+            self.record.assert_called_once_with(1)
+        for line in ("判定: Glorbo / Punished 【プレイ(Glorbo)】", "⏸ 続行ラウンド中 → 他窓フリーズ開始",
+                     "AFK解除ループ開始（Glorbo）"):
+            self.assertTrue(any(line in m for m in monitor.logs), (line, monitor.logs))
+
+    def test_glorbo_on_the_list_continues_and_freezes(self):
+        monitor = self._monitor()
+        waited = self._glorbo_round(monitor)
+        self.assertTrue(waited, "Glorbo の行を待つ（自爆しない）")
+        self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
+        self._assert_glorbo_continue(monitor)
+
+    def test_hands_free_still_continues_and_waits_for_the_line(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor()
+        waited = self._glorbo_round(monitor)
+        self.assertTrue(waited, "放置モードでも Glorbo の行を待つ")
+        self._assert_glorbo_continue(monitor, hands_free=True)
+
+    def test_a_round_skip_on_punished_still_continues(self):
+        monitor = self._monitor(skip_rounds={"Punished"})
+        self._glorbo_round(monitor)
+        self._assert_glorbo_continue(monitor)
+
+    def test_off_the_list_is_as_before(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(glorbo_on_list=False)
+        monitor._on_killers([config.ARKUS_ID], "Punished", revealed=False)
+        names = [n for n, _a in self._started()]
+        self.assertIn("do_skip", names, "放置モードは待たずに即自爆")
+        self.assertNotIn("_delayed_decision", names)
+        SharedState.set_hands_free(False)
+        for skip in ((), {"Punished"}):
+            self.thread.reset_mock()
+            monitor = self._monitor(glorbo_on_list=False, skip_rounds=skip)
+            monitor.st.terror_ids = [config.GLORBO_ID]
+            monitor.st.glorbo = True
+            plan = monitor._plan("Punished", monitor.st.terror_ids, False)
+            self.assertEqual(plan[0], "round_skip" if skip else "list", skip)
+            monitor._decide("Punished")
+            self.assertIn("do_skip", [n for n, _a in self._started()])
+            self.assertFalse(monitor.st.is_continue_round)
+
+    def test_public_does_not_operate(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_PUBLIC)
+        monitor.st.terror_ids = [config.GLORBO_ID]
+        monitor.st.glorbo = True
+        self.assertEqual(monitor._plan("Punished", monitor.st.terror_ids, False), ("restricted",))
+        monitor._decide("Punished")
+        self.freeze.assert_not_called()
+        self.assertNotIn("do_open_special_round_loop", [n for n, _a in self._started()])
+
+    def test_the_outcome_is_continue(self):
+        self.assertEqual(LogMonitor.LogMonitor._outcome(("glorbo",)), "continue")
+
+    def test_the_loop_starts_once_and_the_mark_resets_at_round_start(self):
+        monitor = self._monitor()
+        monitor.st.terror_ids = [config.GLORBO_ID]
+        monitor.st.glorbo = True
+        monitor._decide("Punished")
+        monitor._decide("Punished")
+        loops = [a for n, a in self._started() if n == "do_open_special_round_loop"]
+        self.assertEqual(loops, [(True,)], "1回だけ")
+        monitor._process("2026.09.27 21:10:00 Debug      -  This round is taking place at Sewers (3) "
+                         "and the round type is Punished")
+        self.assertFalse(monitor.st.glorbo_afk)
+
+
+class TestGlorboAfkLoopCC(unittest.TestCase):
+    """CC: Glorbo の AFK 対策は 3 勝・cancel_afk に関係なく 60 秒ごとに動き、ラウンド終了で止まる"""
+
+    def _run(self, glorbo, stop_after):
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, in_round=True,
+                         open_special_round_wins=config.OPEN_SPECIAL_ROUND_TARGET_WINS,
+                         is_open_special_round_round=False, glorbo_afk=True)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000, cancel_afk=False), st,
+                                           lambda: True, lambda _m: None)
+        naps = []
+
+        def nap(sec):
+            naps.append(sec)
+            if len(naps) >= stop_after:
+                st.in_round = False
+
+        with patch.object(ActionExecutor.time, "sleep", side_effect=nap), \
+             patch.object(ex, "move") as move:
+            ex.do_open_special_round_loop(glorbo=glorbo)
+        return move, naps
+
+    def test_it_moves_every_60_seconds_even_with_three_wins(self):
+        move, naps = self._run(True, 2 * config.OPEN_SPECIAL_ROUND_INTERVAL_SEC + 5)
+        self.assertEqual(move.call_count, 2)
+        move.assert_called_with("forward", config.OPERATOR_WAIT_SEC)
+        self.assertEqual(len(naps), 2 * config.OPEN_SPECIAL_ROUND_INTERVAL_SEC + 5, "ラウンド終了で止まる")
+
+    def test_dtm_waldo_loop_still_stops_at_three_wins(self):
+        move, naps = self._run(False, 1000)
+        move.assert_not_called()
+        self.assertEqual(naps, [], "今どおり 3 勝で止まる")
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -19721,7 +19886,7 @@ class TestGlorboDetect(unittest.TestCase):
                                    [config.ARKUS_ID])
 
         self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])
-        self.assertEqual(plan, ("list", True, False), "続行")
+        self.assertEqual(plan, ("glorbo",), "続行（CC: Glorbo の手順）")
 
     def test_glorbo_off_the_list_skips(self):
         """Arkus が続行指定でも、Glorbo になったら自爆する"""
@@ -22255,8 +22420,10 @@ class TestStartKeyGui(unittest.TestCase):
         self.assertIs(self.app.btn_capture_key.master, row)
         self.assertIsNot(self.app.btn_start.master, row)
         order = row.pack_slaves()
-        self.assertEqual(order[:3], [self.app.lbl_emergency, self.app.btn_capture_key,
-                                     self.app.lbl_start_key])
+        # CC: マクロ開始が先、緊急停止が後
+        self.assertEqual(order[:5], [self.app.lbl_start_key, self.app.btn_capture_start_key,
+                                     self.app.btn_clear_start_key, self.app.lbl_emergency,
+                                     self.app.btn_capture_key])
 
 
 class TestStartKeySettings(unittest.TestCase):

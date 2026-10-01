@@ -893,6 +893,10 @@ class LogMonitor:
                 if not getattr(st, row.flag)
                 and row.could_apply(ids, st.round_type)]
 
+    def _glorbo_pending(self) -> bool:
+        """Glorbo の置き換えが起こりうるのに、合図がまだ来ていない"""
+        return any(row.flag == "glorbo" for row in self._pending_replacements())
+
     def _waiting_for_terror_replacement(self) -> bool:
         """テラーIDがまだ確定していないか。統計登録の待ち合わせに使う。
 
@@ -1350,6 +1354,7 @@ class LogMonitor:
             st.speed_round_kind            = ""
             st.speed_probe_done            = False
             st.speed_strafe_done           = False
+            st.glorbo_afk                  = False
             st.begin_move_done             = False
             # 速度検知フリーズは種別に関わらずここで必ず解除する。
             # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
@@ -1836,8 +1841,9 @@ class LogMonitor:
         self._report_unmatched_players()
 
         # 置き換えで結論が変わるときだけ待つ（自爆指定の有無に関係なく）。
-        # 放置モードは待たずに即自爆する
-        if (not self._hands_free()
+        # 放置モードは待たずに即自爆する。ただし Glorbo の合図を待つ間は自爆しない
+        # （続行リストに Glorbo の続行があれば、放置モードでも続行するため）
+        if ((not self._hands_free() or self._glorbo_pending())
                 and self._replacement_changes_decision(round_type)):
             wait = self._variant_wait_sec()
             self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
@@ -1858,6 +1864,11 @@ class LogMonitor:
         itype = st.instance_type
         is_private = itype == config.INSTANCE_PRIVATE
         is_group = itype in GroupRound.GROUP_INSTANCES
+        # Glorbo（Punished の Arkus の置き換え）は、続行リストに Glorbo の続行があれば
+        # 放置モードの即自爆・ラウンド指定の自爆より優先して続行する（依頼者の決定）
+        if (is_private and config.GLORBO_ID in ids
+                and self._list_plan(ids, bloodthirsty)[1]):
+            return ("glorbo",)
         if is_group:
             decision = self._group_decision(round_type, ids)
             if decision != GroupRound.NORMAL:
@@ -1906,6 +1917,8 @@ class LogMonitor:
             return "skip"
         if kind in ("restricted", "continue_rounds"):
             return "quiet"
+        if kind == "glorbo":
+            return "continue"
         _kind, is_continue, open_special = plan
         if not is_continue:
             return "skip"
@@ -1958,7 +1971,32 @@ class LogMonitor:
         if kind == "round_skip":
             self._start_round_skip()
             return
+        if kind == "glorbo":
+            self._start_glorbo_continue(round_type)
+            return
         self._decide_with_keep_on_set(round_type, plan)
+
+    def _start_glorbo_continue(self, round_type: str):
+        """Glorbo の続行: 普通の続行と同じくフリーズ・アナウンス・録画（放置モードでは
+        アナウンスと録画なし）。AFK 対策の移動は 3 勝・cancel_afk に関係なく回す"""
+        st = self.st
+        was_continue_round = st.is_continue_round
+        st.is_continue_round = True
+        st.open_special_continue = False         # 音量は普通の続行
+        self._log(f"判定: Glorbo / {round_type} 【プレイ(Glorbo)】")
+        if not was_continue_round:
+            if not self._hands_free():
+                PlaySound.play_sound(self.cfg.voice_continue)
+                self._log("🎙 続行アナウンス再生")
+            self._focus_for_freeze("続行ラウンド")           # 数える前に見る
+            SharedState.continue_round_start(st)
+            if not self._hands_free():          # 放置中は録らない
+                Recorder.on_continue_start(self.window_idx)
+            self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
+        if not st.glorbo_afk:
+            st.glorbo_afk = True
+            self._log("AFK解除ループ開始（Glorbo）")
+            self._start_daemon(self._action.do_open_special_round_loop, True)
 
     # ── 通常判定（続行リスト照合） ──────────────
     def _decide_with_keep_on_set(self, round_type: str, plan: tuple | None = None):

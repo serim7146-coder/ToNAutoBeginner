@@ -1220,19 +1220,12 @@ class App(tk.Tk):
         ttk.Button(fc, text="報告",
                    command=self._open_report, width=8).pack(side="left", padx=6)
 
-        # キー設定の行: 緊急停止のキー、続けてマクロ開始のキー（依頼者の決定）。
+        # キー設定の行: マクロ開始のキー、続けて緊急停止のキー（依頼者の決定）。
         # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
         fsk = ttk.Frame(self)
         fsk.pack(pady=(0, 4))
-        self.lbl_emergency = ttk.Label(fsk, text="",
-                                       foreground=config.GUI_ORG)
-        self.lbl_emergency.pack(side="left")
-        self.btn_capture_key = ttk.Button(fsk, text="キーを押して設定", width=16,
-                                          command=self._begin_capture_key)
-        self.btn_capture_key.pack(side="left", padx=(6, 0))
-        self._refresh_emergency_key_label()
         self.lbl_start_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
-        self.lbl_start_key.pack(side="left", padx=(16, 0))
+        self.lbl_start_key.pack(side="left")
         self.btn_capture_start_key = ttk.Button(
             fsk, text="キーを押して設定", width=16,
             command=lambda: self._begin_capture_key("start"))
@@ -1241,6 +1234,13 @@ class App(tk.Tk):
                                               command=self._clear_start_key)
         self.btn_clear_start_key.pack(side="left", padx=(4, 0))
         self._refresh_start_key_label()
+        self.lbl_emergency = ttk.Label(fsk, text="",
+                                       foreground=config.GUI_ORG)
+        self.lbl_emergency.pack(side="left", padx=(16, 0))
+        self.btn_capture_key = ttk.Button(fsk, text="キーを押して設定", width=16,
+                                          command=self._begin_capture_key)
+        self.btn_capture_key.pack(side="left", padx=(6, 0))
+        self._refresh_emergency_key_label()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)

@@ -1259,13 +1259,15 @@ class ActionExecutor:
 
     # ── AFK防止ループ ─────────────────────────
 
-    def do_open_special_round_loop(self):
+    def do_open_special_round_loop(self, glorbo: bool = False):
         """
         ラウンド中60秒ごとに移動キーをわずかに押す（ジャンプ代替）。
         - フォーカス切り替えは SharedState._GLOBAL_ACTION_LOCK 内でのみ行う
           → 自爆・Begin操作中にフォーカスを奪わない
         - 停止条件: _running=False / in_round=False /
                     is_open_special_round_round=False / open_special_round_wins達成
+        - glorbo=True（Glorbo の続行）は 3 勝・is_open_special_round_round を見ない。
+          止まるのはラウンド終了・停止・st.glorbo_afk が外れたとき
         """
         st = self._st
         self._log(f"AFK解除ループ開始（{config.OPEN_SPECIAL_ROUND_INTERVAL_SEC}秒ごと）")
@@ -1273,10 +1275,12 @@ class ActionExecutor:
         CHECK_INTERVAL = 1.0
 
         def _should_stop() -> bool:
+            if not self._is_running() or not st.in_round:
+                return True
+            if glorbo:
+                return not st.glorbo_afk
             return (
-                not self._is_running()
-                or not st.in_round
-                or not st.is_open_special_round_round
+                not st.is_open_special_round_round
                 or st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS
             )
 

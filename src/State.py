@@ -135,6 +135,7 @@ class WindowState:
     atrached_variant: bool = False
     gigabytes: bool = False
     glorbo: bool = False           # Punished の Arkus が Glorbo に置き換わった
+    glorbo_afk: bool = False       # Glorbo の続行で AFK 対策のループを回している（ラウンド開始で戻す）
     # 置き換えの合図（TerrorReplacement.TABLE の flag）
     foxy: bool = False
     neo_pilot: bool = False
