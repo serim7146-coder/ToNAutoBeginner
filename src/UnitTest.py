@@ -27667,7 +27667,10 @@ class TestGuiRoundHelpers(unittest.TestCase):
         StatisticsGUI.StatisticsWindow._draw_round_chart(window)
 
         colors = [kwargs["fill"] for _args, kwargs in window.round_chart.polygons]
-        self.assertEqual(colors, list(StatisticsGUI.ROUND_CHART_COLORS[:3]))
+        # CB: ラウンドごとに決めた色（回数の順ではない）
+        self.assertEqual(colors, [StatisticsGUI.ROUND_COLORS["Bloodbath"], StatisticsGUI.ROUND_COLORS["Alternate"],
+                                  StatisticsGUI.ROUND_COLORS["Randomizer"]])
+        self.assertEqual(len(set(colors)), 3)
         self.assertTrue(all(len(args) >= 4 for args, _kwargs in window.round_chart.polygons))
 
     def test_the_terror_stats_are_cached_per_filter(self):
