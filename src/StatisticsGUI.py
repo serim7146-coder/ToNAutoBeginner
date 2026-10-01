@@ -83,6 +83,26 @@ DEFAULT_EXCLUDED_ROUNDS = frozenset(name for _label, aliases in ROUND_ORDER_GROU
 ALWAYS_SHOWN_ROUNDS = frozenset({"Classic", "Run"})
 
 
+# まとめて選ぶボタン（依頼者の決定。ログのラウンド名）。押すと今の選択を外して、この組だけを選ぶ。
+# Unbound は Unbound でしか出ないので作らない。Classic出現に Classic と 8 Pages は入れない
+ROUND_SELECT_PRESETS = (
+    ("Classic出現", ("Fog", "Ghost", "Punished", "Sabotage", "Bloodbath", "Double Trouble",
+                     "Bloodbath EX", "Cracked", "Midnight", "Randomizer", "Classic.exe")),
+    ("Alternate出現", ("Alternate", "Fog (Alternate)", "Ghost (Alternate)", "Midnight")),
+)
+
+
+def _with_aliases(names) -> frozenset:
+    """ラウンド名に、ROUND_ORDER_GROUPS の同じ枠の別名（Punish・Fog(Alternate) など）を足す"""
+    out = set(names)
+    for group in ROUND_ORDER_GROUPS:
+        for label, aliases in group:
+            if out & ({label} | set(aliases)):
+                out.update(aliases)
+                out.add(label)
+    return frozenset(out)
+
+
 def _round_names_in_group(group_index: int) -> frozenset:
     """その組のラウンドの名前（別名も含む）"""
     return frozenset(name for _label, aliases in ROUND_ORDER_GROUPS[group_index] for name in aliases)
@@ -301,6 +321,9 @@ class StatisticsWindow(tk.Toplevel):
         round_buttons.pack(side="left", padx=(10, 0), anchor="n")
         ttk.Button(round_buttons, text="全選択", command=self._select_all_rounds).pack(fill="x", pady=(18, 4))
         ttk.Button(round_buttons, text="全解除", command=self._clear_round_selection).pack(fill="x")
+        for label, names in ROUND_SELECT_PRESETS:
+            ttk.Button(round_buttons, text=label,
+                       command=lambda n=names: self._select_only_rounds(n)).pack(fill="x", pady=(4, 0))
 
         self.tabs = ttk.Notebook(self)
         self.tabs.pack(fill="both", expand=True, padx=12, pady=6)
@@ -547,6 +570,13 @@ class StatisticsWindow(tk.Toplevel):
     def _clear_round_selection(self):
         for var in self.round_vars.values():
             var.set(False)
+        self._round_selection_changed()
+
+    def _select_only_rounds(self, names):
+        """今の選択を外して、その組のラウンドだけを選ぶ（一覧に無いものは飛ばす。別名でも合う）"""
+        wanted = _with_aliases(names)
+        for name, var in self.round_vars.items():
+            var.set(name in wanted)
         self._round_selection_changed()
 
     def _on_round_chip(self):

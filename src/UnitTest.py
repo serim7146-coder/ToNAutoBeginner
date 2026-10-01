@@ -15731,15 +15731,16 @@ class TestStatisticsFixesBY(unittest.TestCase):
         self.assertEqual(StatisticsGUI.ROUND_REANALYZE_DELAY_MS, 300)
         chip = next(w for w in self.window.round_chip_frame.winfo_children()
                     if isinstance(w, tk.Checkbutton) and getattr(w, "round_name", "") == "Fog")
-        with patch.object(self.window, "_analyze") as analyze:
+        called = []
+        with patch.object(self.window, "_analyze", side_effect=lambda: called.append(time.monotonic())):
             chip.invoke()
             self.window._select_all_rounds()
             self.window._clear_round_selection()
             self.window._select_all_rounds()
-            self._pump(0.2)
-            analyze.assert_not_called()
-            self._pump(0.4)
-            analyze.assert_called_once()
+            last = time.monotonic()
+            self._pump(0.7)
+        self.assertEqual(len(called), 1, "続けて押しても1回")
+        self.assertGreaterEqual(called[0] - last, 0.28, "最後に押してから 0.3 秒後")
 
     def test_each_kind_alone_reanalyzes(self):
         chip = next(w for w in self.window.round_chip_frame.winfo_children()
@@ -15789,6 +15790,65 @@ class TestStatisticsFixesBY(unittest.TestCase):
         found = StatisticsGUI.search_terror_rows(
             [("Classic", [row(5), row(140)]), ("Alternate", [row(139)]), ("Unbound", [row(205)])], "5")
         self.assertEqual(sorted(r.terror_id for _c, r in found), [5, 139, 205])
+
+
+class TestStatisticsSelectButtonsBZ(unittest.TestCase):
+    """BZ: 「Classic出現」「Alternate出現」で、その組のラウンドだけを選ぶ"""
+
+    CLASSIC = {"Fog", "Ghost", "Punished", "Sabotage", "Bloodbath", "Double Trouble", "Bloodbath EX",
+               "Cracked", "Midnight", "Randomizer", "Classic.exe"}
+    ALTERNATE = {"Alternate", "Fog (Alternate)", "Ghost (Alternate)", "Midnight"}
+
+    _pump = TestStatisticsFixesBY._pump
+
+    def setUp(self):
+        TestStatisticsFixesBY.setUp(self)
+        # すべてのラウンドを一覧に（Unbound・8 Pages・Classic など組に入らないものも）
+        for i, rid in enumerate((3, 4, 5, 7, 8, 9, 10, 50, 51, 52, 53, 105)):
+            self.store.add_own(300 + i, rid, 12, None, None, None, -13)
+        self.window._populate_rounds()
+
+    def _button(self, text):
+        for frame in self.window.winfo_children():
+            stack = [frame]
+            while stack:
+                w = stack.pop()
+                stack.extend(w.winfo_children())
+                if isinstance(w, ttk.Button) and w.cget("text") == text:
+                    return w
+        self.fail(text)
+
+    def test_each_button_selects_only_its_group(self):
+        for text, expected in (("Classic出現", self.CLASSIC), ("Alternate出現", self.ALTERNATE)):
+            with patch.object(self.window, "_analyze"):
+                self.window._select_all_rounds()
+                self._pump(0.45)                    # 全選択の分の集計は済ませておく
+            with patch.object(self.window, "_analyze") as analyze:
+                self._button(text).invoke()
+                self.assertEqual(self.window._selected_rounds(), expected, text)
+                self._pump(0.45)
+                analyze.assert_called_once()
+        self.assertFalse({"Classic", "8 Pages", "Unbound", "Run"} & self.CLASSIC)
+
+    def test_missing_rounds_are_skipped(self):
+        for name in ("Fog (Alternate)", "Ghost (Alternate)"):
+            self.window.round_vars.pop(name, None)
+        with patch.object(self.window, "_analyze"):
+            self.window._select_only_rounds(StatisticsGUI.ROUND_SELECT_PRESETS[1][1])
+        self.assertEqual(self.window._selected_rounds(), {"Alternate", "Midnight"})
+
+    def test_aliases_are_selected_too(self):
+        self.assertIn("Punish", StatisticsGUI._with_aliases({"Punished"}))
+        self.assertIn("Fog(Alternate)", StatisticsGUI._with_aliases({"Fog (Alternate)"}))
+        self.assertIn("Ghost Alternate", StatisticsGUI._with_aliases({"Ghost (Alternate)"}))
+        self.window.round_vars["Punish"] = self.window.round_vars.pop("Punished")
+        with patch.object(self.window, "_analyze"):
+            self.window._select_only_rounds(StatisticsGUI.ROUND_SELECT_PRESETS[0][1])
+        self.assertIn("Punish", self.window._selected_rounds())
+
+    def test_the_presets(self):
+        self.assertEqual([(label, set(names)) for label, names in StatisticsGUI.ROUND_SELECT_PRESETS],
+                         [("Classic出現", self.CLASSIC), ("Alternate出現", self.ALTERNATE)])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
