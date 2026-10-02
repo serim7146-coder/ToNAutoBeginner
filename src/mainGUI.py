@@ -717,6 +717,8 @@ class App(tk.Tk):
         self._auto_detect_windows()
         self._sync_launch_count()
         AutoUpdate.cleanup_old_exe()
+        # 古い版の onefile の展開先を消す（exe のときだけ。消すのに時間がかかるので裏で）
+        threading.Thread(target=AutoUpdate.cleanup_old_extract_dirs, daemon=True).start()
         self._start_update_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _remember_own_window(self)       # 録画中だけキャプチャから外すため

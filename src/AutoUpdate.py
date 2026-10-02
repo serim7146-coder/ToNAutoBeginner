@@ -11,6 +11,8 @@ GitHub Releases を使った自動アップデート
 開発実行時（未コンパイル）は current_exe_path() が None を返し、全体が無効化される。
 """
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +21,7 @@ import urllib.request
 from pathlib import Path
 
 import config
+import DebugLog
 
 
 _API_URL = f"https://api.github.com/repos/{config.GITHUB_REPO}/releases/latest"
@@ -132,6 +135,56 @@ def cleanup_old_exe():
             old.unlink()
     except Exception:
         pass  # 旧EXEがまだ終了しきっていない場合など。次回起動時に再試行される
+
+
+# onefile の展開先（build.py の --onefile-tempdir-spec と同じ。{CACHE_DIR} は %LOCALAPPDATA%）
+EXTRACT_DIR_NAME = "ToNAutoBeginner"
+RE_VERSION_DIR = re.compile(r"v\d+(\.\d+)*")
+
+
+def is_onefile_exe() -> bool:
+    """Nuitka の onefile の exe として動いているか（python で直接動かしているなら False）"""
+    compiled = globals().get("__compiled__")
+    return compiled is not None and bool(getattr(compiled, "onefile", False))
+
+
+def extract_base_dir() -> Path | None:
+    """版ごとの展開先の親（%LOCALAPPDATA%\\ToNAutoBeginner）。LOCALAPPDATA が無ければ None"""
+    local = os.environ.get("LOCALAPPDATA", "")
+    return Path(local) / EXTRACT_DIR_NAME if local else None
+
+
+def cleanup_old_extract_dirs(base: Path | None = None, current: str | None = None,
+                             onefile: bool | None = None) -> list[str]:
+    """onefile の exe で動いているときだけ、今の版以外の版の展開先を消す。消した名前を返す。
+
+    消すのは名前が版の形（v1.2.3）のフォルダだけ。%APPDATA%\\ToNAutoBeginner（設定・debug.log・
+    rounds.sqlite）には触らない（その場所を指していたら何もしない）。使用中で消せないものは
+    飛ばして debug.log に1行。起動時に裏のスレッドで呼ぶ
+    """
+    if not (is_onefile_exe() if onefile is None else onefile):
+        return []
+    base = extract_base_dir() if base is None else Path(base)
+    current = config.APP_VERSION if current is None else current
+    if base is None or not base.is_dir():
+        return []
+    try:
+        if base.resolve() == Path(config.SETTINGS_PATH).parent.resolve():
+            return []                   # 設定の置き場所（APPDATA）は絶対に消さない
+    except OSError:
+        return []
+    removed = []
+    for child in sorted(base.iterdir()):
+        if not child.is_dir() or child.name == current or not RE_VERSION_DIR.fullmatch(child.name):
+            continue
+        try:
+            shutil.rmtree(child)
+            removed.append(child.name)
+        except OSError as e:
+            DebugLog.write(f"[環境] 古い版の展開先を消せません（使用中など）: {child.name}（{type(e).__name__}）")
+    if removed:
+        DebugLog.write(f"[環境] 古い版の展開先を消しました: {', '.join(removed)}")
+    return removed
 
 
 def restart_to_new_exe(exe_path: Path):

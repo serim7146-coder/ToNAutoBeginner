@@ -116,6 +116,7 @@ import BeginDetect
 import RoundStore
 import VerifiedTracker
 import DebugLog
+import shutil
 import random
 import zipfile
 import BugReport
@@ -16425,6 +16426,138 @@ class TestOptimizationCG(unittest.TestCase):
             mainGUI.App._log(app, "[画面] フォント: Meiryo UI")
             mainGUI.App._log(app, "[窓1] ✅ Connecting")
         self.assertEqual(written, ["[画面] フォント: Meiryo UI", "[画面] [窓1] ✅ Connecting"])
+
+
+def _load_build_script():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "build.py"
+    spec = importlib.util.spec_from_file_location("build_script", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestBuildScriptCH(unittest.TestCase):
+    """CH: build.py が組み立てるコマンド（Nuitka は呼ばない）"""
+
+    def setUp(self):
+        self.build = _load_build_script()
+
+    def _main_py_command(self) -> list[str]:
+        src = Path(__file__).resolve().parent.joinpath("main.py").read_text(encoding="utf-8")
+        line = next(l for l in src.splitlines() if l.startswith("python -m nuitka src/main.py"))
+        return line.split()[4:]
+
+    def test_every_current_argument_is_kept_in_order(self):
+        old = self._main_py_command()
+        self.assertEqual(self.build.BASE_ARGS, old, "1つも落とさない・変えない・並びも同じ")
+        cmd = self.build.build_command("v1.2.3")
+        self.assertEqual(cmd[1:4], ["-m", "nuitka", "src/main.py"])
+        self.assertEqual(cmd[4:4 + len(old)], old)
+
+    def test_the_extract_dir_and_version_come_from_app_version(self):
+        cmd = self.build.build_command("v1.2.3")
+        self.assertEqual(cmd[-3:], ["--onefile-tempdir-spec={CACHE_DIR}/ToNAutoBeginner/v1.2.3",
+                                    "--product-version=1.2.3", "--file-version=1.2.3"])
+        self.assertEqual(len(cmd), 4 + len(self.build.BASE_ARGS) + 3, "足すのは3つだけ")
+
+    def test_the_version_is_read_from_config(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "config.py"
+            path.write_text('# x\nAPP_VERSION       = "v2.5.0"\nOTHER = 1\n', encoding="utf-8")
+            self.assertEqual(self.build.read_app_version(path), "v2.5.0")
+            path.write_text("OTHER = 1\n", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                self.build.read_app_version(path)
+        self.assertEqual(self.build.read_app_version(), config.APP_VERSION, "本物の config.py と同じ")
+
+    def test_a_bad_version_stops(self):
+        for bad in ("dev", "v1.2.3.4.5", "v1.x"):
+            with self.assertRaises(SystemExit, msg=bad):
+                self.build.build_command(bad)
+
+    def test_main_runs_nuitka_in_the_repo_root(self):
+        with patch.object(self.build.subprocess, "run") as run, patch("builtins.print"):
+            run.return_value.returncode = 0
+            self.assertEqual(self.build.main(), 0)
+        cmd = run.call_args.args[0]
+        self.assertIn(f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{config.APP_VERSION}", cmd)
+        self.assertEqual(Path(run.call_args.kwargs["cwd"]), Path(__file__).resolve().parent.parent)
+
+
+class TestOldExtractDirsCH(unittest.TestCase):
+    """CH: 古い版の onefile の展開先を消す（一時フォルダで。本物の LOCALAPPDATA・APPDATA には触らない）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.base = Path(self._dir.name) / "ToNAutoBeginner"
+        for name in ("v0.9.0", "v1.0.0", "v0.7.1", "notes", "cache"):
+            (self.base / name).mkdir(parents=True)
+            (self.base / name / "a.txt").write_text("x", encoding="utf-8")
+        (self.base / "v0.8.0").write_text("a file, not a folder", encoding="utf-8")
+        self.written = []
+        p = patch.object(DebugLog, "write", side_effect=self.written.append)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _left(self):
+        return sorted(p.name for p in self.base.iterdir())
+
+    def test_only_other_version_folders_are_removed(self):
+        removed = AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True)
+        self.assertEqual(removed, ["v0.7.1", "v0.9.0"])
+        self.assertEqual(self._left(), ["cache", "notes", "v0.8.0", "v1.0.0"])
+        self.assertIn("[環境] 古い版の展開先を消しました: v0.7.1, v0.9.0", self.written)
+
+    def test_python_runs_do_nothing(self):
+        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=False), [])
+        self.assertFalse(AutoUpdate.is_onefile_exe(), "python で動かしている")
+        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0"), [])
+        self.assertIn("v0.9.0", self._left())
+
+    def test_the_onefile_flag_comes_from_nuitka(self):
+        flag = type("Compiled", (), {"onefile": True})()
+        with patch.object(AutoUpdate, "__compiled__", flag, create=True):
+            self.assertTrue(AutoUpdate.is_onefile_exe())
+        flag.onefile = False
+        with patch.object(AutoUpdate, "__compiled__", flag, create=True):
+            self.assertFalse(AutoUpdate.is_onefile_exe(), "standalone は対象外")
+
+    def test_folders_in_use_are_skipped(self):
+        real = shutil.rmtree
+
+        def rmtree(path, *a, **kw):
+            if Path(path).name == "v0.7.1":
+                raise PermissionError("in use")
+            return real(path, *a, **kw)
+
+        with patch.object(AutoUpdate.shutil, "rmtree", side_effect=rmtree):
+            removed = AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True)
+        self.assertEqual(removed, ["v0.9.0"])
+        self.assertIn("v0.7.1", self._left())
+        self.assertTrue(any("消せません" in m and "v0.7.1" in m for m in self.written), self.written)
+
+    def test_the_settings_folder_is_never_touched(self):
+        with patch.object(config, "SETTINGS_PATH", self.base / "settings.json"):
+            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True), [])
+        self.assertIn("v0.9.0", self._left())
+
+    def test_the_default_place_is_local_appdata(self):
+        with patch.dict(os.environ, {"LOCALAPPDATA": self._dir.name}):
+            self.assertEqual(AutoUpdate.extract_base_dir(), self.base)
+            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(current="v1.0.0", onefile=True),
+                             ["v0.7.1", "v0.9.0"])
+        with patch.dict(os.environ, {"LOCALAPPDATA": ""}):
+            self.assertIsNone(AutoUpdate.extract_base_dir())
+            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(current="v1.0.0", onefile=True), [])
+
+    def test_a_missing_base_is_fine(self):
+        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base / "none", "v1.0.0", onefile=True), [])
+
+    def test_startup_runs_it_in_the_background(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn("threading.Thread(target=AutoUpdate.cleanup_old_extract_dirs, daemon=True).start()", src)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
