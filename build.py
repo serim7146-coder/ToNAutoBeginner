@@ -37,6 +37,7 @@ BASE_ARGS = [
     "--include-data-files=terrors.json=terrors.json",
     "--include-data-dir=voice=voice",
     "--include-data-dir=begin_templates=begin_templates",
+    "--include-data-dir=shop_templates=shop_templates",
     "--enable-plugin=tk-inter",
     "--lto=yes",
     "--clang",

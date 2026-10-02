@@ -143,6 +143,12 @@ class VelocityReceiver:
             return True if self._grounded is None else self._grounded
 
     @property
+    def grounded_or_none(self):
+        """接地しているか。未受信なら None（アイテム自動取得は、分からないと着地を数えない）"""
+        with self._lock:
+            return self._grounded
+
+    @property
     def stable_value(self):
         """張り付いている値。未受信なら None"""
         with self._lock:

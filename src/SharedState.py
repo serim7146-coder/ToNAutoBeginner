@@ -195,6 +195,21 @@ def set_list_source(src):
 # ═══════════════════════════════════════════════
 #  アイテム取得→Beginモード
 # ═══════════════════════════════════════════════
+_ITEM_FETCH = False             # アイテム自動取得（CM。全窓共通・既定 OFF）
+_ITEM_FETCH_LOCK = threading.Lock()
+
+
+def get_item_fetch() -> bool:
+    with _ITEM_FETCH_LOCK:
+        return _ITEM_FETCH
+
+
+def set_item_fetch(val: bool):
+    global _ITEM_FETCH
+    with _ITEM_FETCH_LOCK:
+        _ITEM_FETCH = bool(val)
+
+
 _ITEM_BEGIN_MODE = False
 _ITEM_BEGIN_MODE_LOCK = threading.Lock()
 

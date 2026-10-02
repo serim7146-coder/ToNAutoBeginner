@@ -1394,6 +1394,14 @@ class App(tk.Tk):
         self.btn_speed_detect.pack(side="left", padx=(8, 0))
         self._refresh_speed_detect_button()
 
+        # アイテム自動取得（CM。全窓共通・保存・既定 OFF）
+        self.btn_item_fetch = tk.Button(
+            fhf, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
+            font=(UIFont.UI, 11, "bold"), relief="raised", padx=12, pady=5,
+            command=self._toggle_item_fetch)
+        self.btn_item_fetch.pack(side="left", padx=(8, 0))
+        self._refresh_item_fetch_button()
+
         # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない
         ffz = ttk.Frame(self)
         ffz.pack(pady=(0, 4))
@@ -1629,6 +1637,25 @@ class App(tk.Tk):
             bg="#1a3a2a" if on else config.GUI_SUB,
             fg="#a6e3a1" if on else config.GUI_FG,
             relief="sunken" if on else "raised")
+
+    def _refresh_item_fetch_button(self):
+        on = SharedState.get_item_fetch()
+        try:
+            self.btn_item_fetch.config(
+                text=f"アイテム自動取得: {'ON' if on else 'OFF'}",
+                bg="#1a3a2a" if on else config.GUI_SUB,
+                fg="#a6e3a1" if on else config.GUI_FG,
+                relief="sunken" if on else "raised")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _toggle_item_fetch(self):
+        val = not SharedState.get_item_fetch()
+        SharedState.set_item_fetch(val)
+        self._refresh_item_fetch_button()
+        self._log("[アイテム自動取得] ON: アイテムロストのとき、Begin が通った後に店で装備します"
+                  "（ツールが Begin を押す OSC の窓だけ）" if val else "[アイテム自動取得] OFF")
+        self._schedule_settings_save()
 
     def _toggle_speed_detect(self):
         val = not SharedState.get_speed_detect()
@@ -1890,6 +1917,8 @@ class App(tk.Tk):
                 self._add_tool_row(path, save=False)
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
+        SharedState.set_item_fetch(data.get("item_fetch") is True)    # 無い・壊れた値は OFF（マウスを動かすので true だけ）
+        self._refresh_item_fetch_button()
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
         for name, var in self.v_freeze_rounds.items():
             var.set(name in _as_round_names(data.get("freeze_rounds")))
@@ -2745,6 +2774,7 @@ class App(tk.Tk):
             "start_key":     self.v_start_key.get(),
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
+            "item_fetch":    SharedState.get_item_fetch(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
                                     if var.get()),

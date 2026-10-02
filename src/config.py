@@ -70,6 +70,10 @@ START_KEY = ""
 # 押した瞬間を取りこぼさないよう、チェイスのキーと同じく押した通知（hook_key）で受ける
 SUICIDE_CANCEL_KEY = "^"
 
+# アイテム自動取得（CM）。Begin が通った後に店へ取りに行く。合計でこれを超えたらやめる
+ITEM_FETCH_LIMIT_SEC = 10.0
+ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
+
 # 録画中だけ、当ツールの窓を画面キャプチャから外す。物理モニタには見えたままで、
 # 操作もできる。消えるのは録画・スクリーンショット・画面共有の中だけ。
 # SetWindowDisplayAffinity が要るので Windows 10 2004（build 19041）以降。

@@ -5,6 +5,7 @@ from typing import Callable
 import BeginDetect
 import config
 import DebugLog
+import ItemFetch
 import ScreenCapture
 import SharedState
 import WindowOperator
@@ -1031,8 +1032,8 @@ class ActionExecutor:
         if not st.waiting_for_equip:
             return True
 
-        if SharedState.get_item_begin_mode():
-            # アイテム取得→Beginモード:
+        if SharedState.get_item_begin_mode() and not self.item_fetch_target():
+            # アイテム取得→Beginモード（自動取得の窓は Begin を止めない）:
             # フリーズ発生源は自窓なので他窓の解除待ちはせず、
             # 装備確認 → Begin の順で進む。ここで他窓解除待ちをすると
             # 自分が張ったフリーズを自分で待つデッドロックになる。
@@ -1207,7 +1208,14 @@ class ActionExecutor:
             # カーソルを他の窓へ動かせなくなる（この窓のカーソル方式 Begin が
             # 壊れる）。受理されなかったラウンドでは出さない（依頼者了承済み）
             if st.begin_done:
-                self._attend_to_item_loss()
+                fetch = self.item_fetch_target()
+                outcome = self._fetch_item(round_seq, *fetch) if fetch else None
+                if outcome in (None, "failed", "timeout"):
+                    self._attend_to_item_loss()     # 今のアイテムロストの案内（前面化・音声）
+                elif outcome == "stopped":
+                    return
+                # "round": ラウンドが始まった。今どおり案内は出さない（音声は前面化と一緒の
+                # _show_item_loss からだけ。フリーズはラウンド開始で外れている）
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
                 time.sleep(0.3)
@@ -1217,6 +1225,94 @@ class ActionExecutor:
             self._log("✅ アイテム装備確認 → 続行")
             if st.in_round:
                 return
+
+    # ── アイテム自動取得（CM）────────────────────
+    def item_fetch_target(self) -> tuple | None:
+        """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
+        押さない窓・放置モード・このラウンドにロストしたアイテムが分からない・Others や
+        表に無いアイテム → None（今どおり）"""
+        st = self._st
+        if (not SharedState.get_item_fetch() or self._osc is None
+                or not self._auto_begin_active() or self._hands_free()):
+            return None
+        item_id = st.last_lost_item_id if st.last_lost_round_seq == st.round_seq else 0
+        shop = ItemFetch.shop_for(item_id, config.ITEMS)
+        if shop is None or not ItemFetch.available():
+            return None
+        return shop, item_id
+
+    def _fetch_stopped(self, round_seq: int, deadline: float) -> str | None:
+        st = self._st
+        if not self._is_running():
+            return "stopped"
+        if st.in_round or st.round_seq != round_seq:
+            return "round"
+        if st.item_id and not st.waiting_for_equip:
+            return "equipped"               # 手で装備した
+        if time.time() > deadline:
+            return "timeout"
+        return None
+
+    def _fetch_item(self, round_seq: int, shop: str, item_id: int) -> str:
+        """Begin が通った後に店へ取りに行く。"ok"・"failed"・"timeout"・"round"・"stopped"・"equipped"。
+        移動は OSC（ロック外）。照準とクリックは前面化が要るので排他の中で行い、終わったら前面を返す"""
+        st = self._st
+        head = f"[操作] [窓{st.window_idx}]"
+        deadline = time.time() + config.ITEM_FETCH_LIMIT_SEC
+        receiver = self._receiver
+
+        def grounded():
+            return receiver.grounded_or_none if receiver is not None else None
+
+        def capture():
+            bits, w, h = ScreenCapture.capture_window(self._cfg.hwnd)
+            aim = WindowOperator.aim_in_window_image(self._cfg.hwnd)
+            if not bits or w <= 0 or h <= 0 or len(bits) < w * h * 4 or aim is None:
+                return None
+            import numpy as np
+            bgra = np.frombuffer(bits, dtype=np.uint8)[:w * h * 4].reshape(h, w, 4)
+            return np.ascontiguousarray(bgra[:, :, :3]), aim
+
+        fetcher = ItemFetch.Fetcher(
+            osc=self._osc, grounded=grounded, capture=capture, mouse=_FetchMouse(),
+            equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
+            stopped=lambda: self._fetch_stopped(round_seq, deadline),
+            log=lambda m: DebugLog.write(f"{head} {m}"))
+        name = f"{shop} Shop の id={item_id}"
+        self._log(f"アイテム取得: {name} を取りに行きます")
+        DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
+        outcome = "failed"
+        try:
+            if fetcher.move_to_shop():
+                outcome = self._fetch_in_front(fetcher, shop, item_id)
+        except ItemFetch.Stopped as e:
+            outcome = e.args[0]
+        except Exception:
+            DebugLog.exception("ActionExecutor._fetch_item")
+            outcome = "failed"
+        finally:
+            if self._osc is not None:
+                self._osc.stop_all(repeat=1)
+        DebugLog.write(f"{head} アイテム取得: 結果 {outcome}")
+        if outcome == "ok":
+            self._log("アイテム取得: 装備できました")
+        elif outcome != "equipped":
+            why = {"failed": "取れませんでした", "timeout": f"{config.ITEM_FETCH_LIMIT_SEC:.0f}秒で間に合いません",
+                   "round": "ラウンドが始まりました", "stopped": "停止しました"}.get(outcome, outcome)
+            self._log(f"⚠ アイテム取得: {why} → やめます")
+        return "ok" if outcome == "equipped" else outcome
+
+    def _fetch_in_front(self, fetcher, shop: str, item_id: int) -> str:
+        with SharedState._GLOBAL_ACTION_LOCK:
+            fetcher._check()                # ロックを待つ間にラウンドが始まったら押さない
+            ok, loan = self._borrow_front()
+            if not ok:
+                return "failed"
+            try:
+                fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
+                return "ok" if fetcher.buy(shop, item_id) else "failed"
+            finally:
+                WindowOperator.return_front(loan)
 
     # ── 速度によるラウンド種別の検知 ────────────
     #  判定（do_speed_detect）と横移動（do_speed_strafe）は独立している。
@@ -1454,3 +1550,19 @@ class ActionExecutor:
             self._log("移動キー送信（ジャンプ代替）")
 
         self._log("AFK解除ループ終了")
+
+
+class _FetchMouse:
+    """アイテム自動取得のマウス。前面の窓（この窓）へ相対移動と左クリックを送る"""
+
+    @staticmethod
+    def move_rel(dx: int, dy: int):
+        import pydirectinput
+        pydirectinput.moveRel(dx, dy, relative=True, _pause=False)
+
+    @staticmethod
+    def click():
+        import pydirectinput
+        pydirectinput.mouseDown(_pause=False)
+        time.sleep(ItemFetch.CLICK_SEC)
+        pydirectinput.mouseUp(_pause=False)

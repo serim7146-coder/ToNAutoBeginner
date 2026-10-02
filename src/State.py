@@ -116,6 +116,12 @@ class WindowState:
     # 所持アイテム（0 = 持っていない）。item_id はロスト判定の都合（8 Pages の開始で
     # 0 になるなど）を含むので、別に持つ。ログの表示と今後の判定用
     held_item_id: int = 0
+    # 最後にロストしたアイテムとそのラウンド（アイテム自動取得 CM が取りに行くもの）
+    last_lost_item_id: int = 0
+    last_lost_round_seq: int = -1
+    # Equipping <id> を受けた回数と最後の id（アイテム自動取得が Equip の結果を待つ）
+    equip_seen_seq: int = 0
+    equip_seen_id: int = 0
     waiting_for_equip: bool = False
     equip_freeze_held: bool = False
     # フリーズの理由で前面を借りたときの札（WindowOperator.FrontLoan）。最初の1枚だけ

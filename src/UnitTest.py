@@ -95,6 +95,7 @@ def _visible_windows_of_this_process() -> list:
     return found
 import ToolLauncher
 import HotKey
+import ItemFetch
 import RoundSequence
 import TerrorReplacement
 import GroupRound
@@ -23047,12 +23048,587 @@ class _CancelKeyVar:
 
 
 def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
-    """CL: 偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）"""
+    """CL: 偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）。
+    CM のアイテム自動取得のボタンの表示もここで足す"""
     app.v_suicide_cancel_key = _CancelKeyVar(key)
+    app._refresh_item_fetch_button = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None
     app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)
     return app
+
+
+class TestItemFetchCM(unittest.TestCase):
+    """CM: アイテム自動取得。ツールが Begin を押す OSC の窓でアイテムロストのとき、Begin が通った後に
+    店の前へ移動 → 前面化 → 特徴点で店の画面を見つけて照準を合わせてクリック（店 → Equip）→ ログの
+    Equipping で確かめる。OSC・接地・撮影・マウス・ログは偽物"""
+
+    ITEMS = {29: ItemCatalog.Item("Taser", "Survival", True),
+             70: ItemCatalog.Item("Coil", "Enkephalin", True),
+             81: ItemCatalog.Item("Lantern", "Event", True),
+             5: ItemCatalog.Item("Glove", "Others", True)}
+
+    def setUp(self):
+        for p in (patch.object(config, "ITEMS", self.ITEMS),):
+            p.start()
+            self.addCleanup(p.stop)
+        SharedState.set_item_fetch(False)
+        self.addCleanup(SharedState.set_item_fetch, False)
+        SharedState.set_item_begin_mode(False)
+        self.addCleanup(SharedState.set_item_begin_mode, False)
+        SharedState.set_hands_free(False)
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.now = [0.0]
+
+    # ── 偽物 ──────────────────────────────────
+    def _sleep(self, sec):
+        self.now[0] += sec
+
+    def _clock(self):
+        return self.now[0]
+
+    class FakeOsc:
+        def __init__(self, test):
+            self.test = test
+            self.sent = []
+            self.stopped = 0
+
+        def send(self, address, value):
+            self.sent.append((round(self.test.now[0], 2), address, value))
+
+        def stop_all(self, repeat=2):
+            self.stopped += 1
+
+    class FakeMouse:
+        def __init__(self, world=None):
+            self.world = world
+            self.moves = []
+            self.clicks = 0
+
+        def move_rel(self, dx, dy):
+            self.moves.append((dx, dy))
+            if self.world is not None:
+                self.world["mouse"][0] += dx
+                self.world["mouse"][1] += dy
+
+        def click(self):
+            self.clicks += 1
+            if self.world is not None and self.world.get("on_click"):
+                self.world["on_click"]()
+
+    def _fetcher(self, grounded=lambda: True, stopped=lambda: None, osc=None, mouse=None,
+                 locate=None, equip_seen=lambda: (0, 0), capture=None):
+        self.osc = osc or self.FakeOsc(self)
+        self.mouse = mouse or self.FakeMouse()
+        self.logs = []
+        return ItemFetch.Fetcher(
+            osc=self.osc, grounded=grounded,
+            capture=capture or (lambda: ("shot", (960.0, 540.0))),
+            mouse=self.mouse, equip_seen=equip_seen, stopped=stopped,
+            log=self.logs.append, locate_fn=locate or (lambda _img, _pt: None),
+            sleep=self._sleep, clock=self._clock)
+
+    @staticmethod
+    def _two_landings(t):
+        """柵の上（0.9 秒）と柵の向こう（1.3 秒）に着地する"""
+        if t < 0.6:
+            return True
+        if t < 0.9:
+            return False
+        if t < 1.0:
+            return True
+        if t < 1.295:                   # 0.01 秒刻みの足し算の誤差で 1.30 を越えないよう
+            return False
+        return True
+
+    # ── 1. 移動 ──────────────────────────────
+    def test_the_moves_and_their_timing(self):
+        f = self._fetcher(grounded=lambda: self._two_landings(self.now[0]))
+        self.assertTrue(f.move_to_shop())
+        self.assertEqual(self.osc.sent, [
+            (0.0, "/input/MoveLeft", 1),
+            (0.3, "/input/Jump", 1), (0.36, "/input/Jump", 0),
+            (0.5, "/input/Jump", 1), (0.56, "/input/Jump", 0),
+            (1.3, "/input/MoveLeft", 0),                     # 2回目の着地で左を離す
+            (1.3, "/input/MoveBackward", 1),
+            (1.55, "/input/MoveLeft", 1),                    # 後ろ 0.25 秒の後に左も重ねる
+            (1.95, "/input/MoveBackward", 0), (1.95, "/input/MoveLeft", 0),   # 後ろ＋左 0.40 秒
+            (1.95, "/input/LookLeft", 1), (2.45, "/input/LookLeft", 0),       # 左へ 0.50 秒
+        ])
+        self.assertEqual(self.osc.stopped, 1, "最後に全部離す")
+        self.assertTrue(any("柵を越えた 1.30秒" in m for m in self.logs), self.logs)
+
+    def test_no_landing_fails_and_releases(self):
+        for grounded in (lambda: True, lambda: None, lambda: False):
+            self.now[0] = 0.0
+            f = self._fetcher(grounded=grounded)
+            self.assertFalse(f.move_to_shop())
+            self.assertNotIn("/input/MoveBackward", [a for _t, a, _v in self.osc.sent])
+            self.assertEqual(self.osc.stopped, 1)
+            self.assertLessEqual(self.now[0], 0.56 + 2.5 + 0.02, "上限 2.5 秒")
+
+    def test_one_landing_is_not_enough(self):
+        f = self._fetcher(grounded=lambda: self._two_landings(min(self.now[0], 1.1)))
+        self.assertFalse(f.move_to_shop())
+        self.assertTrue(any("着地 1 回" in m for m in self.logs), self.logs)
+
+    def test_a_stop_while_moving_releases_the_keys(self):
+        f = self._fetcher(grounded=lambda: self._two_landings(self.now[0]),
+                          stopped=lambda: "round" if self.now[0] >= 1.4 else None)
+        with self.assertRaises(ItemFetch.Stopped) as caught:
+            f.move_to_shop()
+        self.assertEqual(caught.exception.args[0], "round")
+        self.assertEqual(self.osc.stopped, 1, "押したままにしない")
+        self.assertNotIn("/input/LookLeft", [a for _t, a, _v in self.osc.sent])
+
+    # ── 2. 照準 ──────────────────────────────
+    def test_the_aimer_tolerance_cap_and_gain(self):
+        aimer = ItemFetch.Aimer()
+        aim = (960.0, 540.0)
+        self.assertIsNone(aimer.move_for((966.0, 544.0), aim), "横 ±6・縦 ±4 なら押す")
+        self.assertEqual(aimer.move_for((967.0, 540.0), aim), (7 / 0.81, 0.0))
+        self.assertEqual(aimer.move_for((960.0, 545.0), aim), (0.0, 5 / 0.59))
+        self.assertEqual(aimer.move_for((1960.0, -460.0), aim), (160, -160), "上限 ±160")
+
+    def test_the_gain_is_measured_again(self):
+        aimer = ItemFetch.Aimer()
+        aimer.move_for((1041.0, 540.0), (960.0, 540.0))     # 送る 100（横）
+        aimer.observe((951.0, 540.0))                        # 90px 動いた → 0.9
+        self.assertAlmostEqual(aimer.gain[0], 0.5 * 0.81 + 0.5 * 0.9)
+        self.assertEqual(aimer.gain[1], 0.59, "送っていない軸は変えない")
+
+    def test_a_wild_gain_is_thrown_away(self):
+        for moved in (200.0, 30.0):                          # 2.0・0.3 は範囲外
+            aimer = ItemFetch.Aimer()
+            aimer.move_for((1041.0, 540.0), (960.0, 540.0))
+            aimer.observe((1041.0 - moved, 540.0))
+            self.assertEqual(aimer.gain[0], 0.81, moved)
+        aimer = ItemFetch.Aimer()
+        aimer.move_for((960.0, 600.0), (960.0, 540.0))       # 縦に 101.7
+        aimer.observe((960.0, 600.0 - 0.9 * 101.69))          # 0.9 は縦の範囲（0.45〜0.8）の外
+        self.assertEqual(aimer.gain[1], 0.59)
+
+    def test_a_small_move_does_not_measure(self):
+        aimer = ItemFetch.Aimer()
+        aimer.move_for((966.4 + 0.5, 540.0), (960.0, 540.0))  # 送る 8 未満
+        aimer.observe((960.0, 540.0))
+        self.assertEqual(aimer.gain[0], 0.81)
+
+    def test_moves_are_split_into_6_pixel_steps(self):
+        steps = ItemFetch.split_move(100.4, -13.0)
+        self.assertTrue(all(abs(dx) <= 6 and abs(dy) <= 6 for dx, dy in steps), steps)
+        self.assertEqual((sum(d for d, _ in steps), sum(d for _, d in steps)), (100, -13))
+        self.assertEqual(ItemFetch.split_move(3.0, 0.0), [(3, 0)])
+
+    def _world(self, start, gain=(0.9, 0.55)):
+        """視点を回すとボタンが逆へ動く世界（本当の gain は初期値と違う）"""
+        world = {"mouse": [0, 0]}
+
+        def locate(_img, _pt):
+            return (start[0] - gain[0] * world["mouse"][0], start[1] - gain[1] * world["mouse"][1])
+        return world, locate
+
+    def test_the_aim_reaches_the_button_and_clicks(self):
+        world, locate = self._world((1300.0, 300.0))
+        mouse = self.FakeMouse(world)
+        f = self._fetcher(mouse=mouse, locate=locate)
+        self.assertTrue(f.aim_click("Survival"))
+        x, y = locate(None, None)
+        self.assertLessEqual(abs(x - 960), 6)
+        self.assertLessEqual(abs(y - 540), 4)
+        self.assertEqual(mouse.clicks, 1)
+        self.assertTrue(all(abs(dx) <= 6 and abs(dy) <= 6 for dx, dy in mouse.moves))
+        self.assertTrue(any("Survival クリック（合わせ" in m for m in self.logs), self.logs)
+
+    def test_no_shop_screen_gives_up_after_6_retakes(self):
+        calls = []
+        f = self._fetcher(locate=lambda _i, _p: calls.append(1))
+        self.assertFalse(f.aim_click("Equip"))
+        self.assertEqual(len(calls), 7, "1回＋撮り直し6回")
+        self.assertEqual(self.mouse.clicks, 0)
+
+    def test_it_gives_up_after_12_aims(self):
+        shots = []
+        f = self._fetcher(locate=lambda _i, _p: shots.append(1) or (1500.0, 540.0))   # 動かない
+        self.assertFalse(f.aim_click("Equip"))
+        self.assertEqual(self.mouse.clicks, 0)
+        self.assertEqual(len(shots), 12, "1つのボタンにつき 12 回まで")
+        self.assertTrue(any("合わせきれません" in m for m in self.logs))
+
+    def test_the_button_points_in_the_template(self):
+        """実機で合った見本の中の座標（仕様書の表）"""
+        self.assertEqual(ItemFetch.BUTTONS, {"Enkephalin": (106, 129), "Survival": (266, 95),
+                                             "Event": (266, 189), "Equip": (174, 172)})
+
+    def test_the_template_itself_maps_onto_the_button_points(self):
+        """見本自身を撮影に見立てると、各ボタンの位置が見本の座標に一致する（本物の SIFT）"""
+        import cv2
+        import numpy as np
+        if not ItemFetch.available():
+            self.skipTest("SIFT か見本が使えない")
+        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_FILE)), dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        canvas = np.zeros((1080, 1920, 3), np.uint8)
+        canvas[245:505, 760:1140] = img
+        for name, (x, y) in ItemFetch.BUTTONS.items():
+            got = ItemFetch.locate(canvas, (x, y))
+            self.assertIsNotNone(got, name)
+            self.assertAlmostEqual(got[0], x + 760, delta=1.0, msg=name)
+            self.assertAlmostEqual(got[1], y + 245, delta=1.0, msg=name)
+        self.assertIsNone(ItemFetch.locate(np.zeros((1080, 1920, 3), np.uint8), (0, 0)))
+
+    # ── 3. 店とアイテム ──────────────────────────
+    def test_the_shop_from_the_category(self):
+        S = ItemFetch.shop_for
+        self.assertEqual(S(29, self.ITEMS), "Survival")
+        self.assertEqual(S(70, self.ITEMS), "Enkephalin")
+        self.assertEqual(S(81, self.ITEMS), "Event")
+        self.assertIsNone(S(5, self.ITEMS), "Others は取らない")
+        self.assertIsNone(S(999, self.ITEMS), "表に無い")
+        self.assertIsNone(S(0, self.ITEMS), "番号が分からない")
+
+    # ── 4. Equip とログ ──────────────────────────
+    def _equip(self, answers, target=29):
+        """Equip を押すたびに answers の次の id の Equipping が来る（None は来ない）"""
+        seen = {"seq": 0, "id": 0}
+        answers = list(answers)
+
+        def on_click():
+            got = answers.pop(0) if answers else None
+            if got is not None:
+                seen["seq"] += 1
+                seen["id"] = got
+        world = {"mouse": [0, 0], "on_click": on_click}
+        mouse = self.FakeMouse(world)
+        f = self._fetcher(mouse=mouse, locate=lambda _i, _p: (960.0, 540.0),
+                          equip_seen=lambda: (seen["seq"], seen["id"]))
+        return f.equip(target), mouse.clicks
+
+    def test_the_target_id_succeeds_at_once(self):
+        self.assertEqual(self._equip([29]), (True, 1))
+        self.assertTrue(any("Equip → Equipping 29" in m for m in self.logs), self.logs)
+
+    def test_zero_or_nothing_or_another_id_presses_again(self):
+        self.assertEqual(self._equip([0, 29]), (True, 2))
+        self.assertEqual(self._equip([None, 29]), (True, 2))
+        self.assertEqual(self._equip([70, 29]), (True, 2))
+
+    def test_three_presses_at_most(self):
+        self.assertEqual(self._equip([0, None, 0, 29]), (False, 3))
+
+    def test_the_equip_wait_is_0_8_seconds(self):
+        self.now[0] = 0.0
+        self._equip([None, None, None])
+        self.assertLess(self.now[0], 3 * (0.8 + 0.1) + 0.1, "1回 0.8 秒ほど")
+        self.assertGreater(self.now[0], 3 * 0.8)
+
+    def test_buy_presses_the_shop_then_equip(self):
+        f = self._fetcher(locate=lambda _i, _p: (960.0, 540.0))
+        with patch.object(f, "equip", return_value=True) as equip:
+            self.assertTrue(f.buy("Event", 81))
+        equip.assert_called_once_with(81)
+        self.assertEqual(self.mouse.clicks, 1)
+        self.assertTrue(any("Event クリック" in m for m in self.logs))
+
+    # ── 5. 組み込み（ActionExecutor）──────────────────
+    def _executor(self, osc_port=9000, auto_begin=True, lost=29, lost_seq=3, **state):
+        cfg = WindowConfig(hwnd=0x55, osc_port=osc_port, voice_item_lost="lost.mp3")
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_end_seen=True, item_id=0,
+                         round_seq=3, last_lost_item_id=lost, last_lost_round_seq=lost_seq,
+                         window_idx=2, **state)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append,
+                                           auto_begin_active=lambda: auto_begin)
+        return ex, st, logs
+
+    def test_the_target_and_when_not_to_fetch(self):
+        ex, _st, _ = self._executor()
+        self.assertIsNone(ex.item_fetch_target(), "設定 OFF（既定）")
+        SharedState.set_item_fetch(True)
+        self.assertEqual(ex.item_fetch_target(), ("Survival", 29))
+        self.assertIsNone(self._executor(osc_port=0)[0].item_fetch_target(), "OSC でない")
+        self.assertIsNone(self._executor(auto_begin=False)[0].item_fetch_target(), "Begin を押さない窓")
+        self.assertIsNone(self._executor(lost=5)[0].item_fetch_target(), "Others")
+        self.assertIsNone(self._executor(lost=999)[0].item_fetch_target(), "表に無い")
+        self.assertIsNone(self._executor(lost_seq=2)[0].item_fetch_target(), "前のラウンドのロスト")
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.assertIsNone(self._executor()[0].item_fetch_target(), "放置モード")
+
+    def _after_round(self, ex, st, outcome, accept=True):
+        """Begin まで回し、受理の後に何が起きるかを見る"""
+        st.waiting_for_equip = True
+        order = []
+
+        def press(*_a, **_kw):
+            order.append("press")
+            if accept:
+                st.begin_done = True
+            return True
+
+        def fetch(round_seq, shop, item_id):
+            order.append(("fetch", shop, item_id))
+            if outcome == "ok":
+                st.item_id = item_id
+                st.waiting_for_equip = False
+            return outcome
+
+        def attend():
+            order.append("attend")
+            st.waiting_for_equip = False
+
+        def sleep(_sec):
+            if "press" in order:
+                st.waiting_for_equip = False
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_fetch_item", side_effect=fetch), \
+             patch.object(ex, "_attend_to_item_loss", side_effect=attend), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            ex.do_after_round()
+        return order
+
+    def test_after_the_begin_it_fetches_instead_of_waiting(self):
+        SharedState.set_item_fetch(True)
+        ex, st, _ = self._executor()
+        self.assertEqual(self._after_round(ex, st, "ok"), ["press", ("fetch", "Survival", 29)])
+
+    def test_a_failure_or_timeout_gives_the_usual_notice(self):
+        SharedState.set_item_fetch(True)
+        for outcome in ("failed", "timeout"):
+            ex, st, _ = self._executor()
+            self.assertEqual(self._after_round(ex, st, outcome),
+                             ["press", ("fetch", "Survival", 29), "attend"], outcome)
+
+    def test_a_round_start_or_stop_gives_no_notice(self):
+        SharedState.set_item_fetch(True)
+        for outcome in ("round", "stopped"):
+            ex, st, logs = self._executor()
+            self.assertEqual(self._after_round(ex, st, outcome),
+                             ["press", ("fetch", "Survival", 29)], outcome)
+            waiting = any("アイテム装備を待っています" in m for m in logs)
+            self.assertEqual(waiting, outcome == "round", f"{outcome}: 停止ならそこで終わる")
+
+    def test_not_accepted_does_not_fetch(self):
+        SharedState.set_item_fetch(True)
+        ex, st, _ = self._executor()
+        self.assertEqual(self._after_round(ex, st, "ok", accept=False), ["press"])
+
+    def test_off_or_others_is_as_before(self):
+        ex, st, _ = self._executor()
+        self.assertEqual(self._after_round(ex, st, "ok"), ["press", "attend"], "OFF")
+        SharedState.set_item_fetch(True)
+        for kw in ({"osc_port": 0}, {"lost": 5}):
+            ex, st, _ = self._executor(**kw)
+            self.assertEqual(self._after_round(ex, st, "ok"), ["press", "attend"], kw)
+
+    def test_the_item_begin_mode_does_not_hold_the_begin(self):
+        """アイテム取得→Begin モードでも、自動取得の窓は装備を待たずに Begin へ進む（フリーズは張る）"""
+        SharedState.set_item_fetch(True)
+        SharedState.set_item_begin_mode(True)
+        ex, st, _ = self._executor()
+        st.waiting_for_equip = True
+        result = []
+        worker = threading.Thread(target=lambda: result.append(ex._handle_item_lost()), daemon=True)
+        worker.start()
+        worker.join(3.0)
+        self.assertEqual(result, [True], "装備を待たない")
+        self.assertTrue(st.equip_freeze_held, "他窓の装備待ちフリーズは張る")
+
+    def test_the_item_begin_mode_still_holds_without_fetch(self):
+        SharedState.set_item_begin_mode(True)
+        ex, st, _ = self._executor()
+        st.waiting_for_equip = True
+        result = []
+        running = [True]
+        ex._is_running = lambda: running[0]
+        worker = threading.Thread(target=lambda: result.append(ex._handle_item_lost()), daemon=True)
+        worker.start()
+        worker.join(0.5)
+        self.assertEqual(result, [], "今どおり装備を待つ")
+        running[0] = False
+        worker.join(3.0)
+
+    def test_the_speed_strafe_does_not_move_while_waiting_for_the_item(self):
+        SharedState.set_speed_detect(True)
+        self.addCleanup(SharedState.set_speed_detect, config.SPEED_DETECT_ENABLED)
+        ex, st, logs = self._executor()
+        st.waiting_for_equip = True
+        with patch.object(ex, "move") as move:
+            ex.do_speed_strafe()
+        move.assert_not_called()
+
+    def _fetch(self, ex, st, move=None, buy=True, front=True):
+        """_fetch_item を回す。move(fetcher) は移動の代わり"""
+        calls = []
+
+        def fake_move(fetcher):
+            calls.append("move")
+            return move(fetcher) if move else True
+
+        def fake_buy(fetcher, shop, item_id):
+            calls.append(("buy", shop, item_id))
+            return buy
+
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, side_effect=fake_move), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=fake_buy), \
+             patch.object(ex, "_borrow_front", side_effect=lambda: calls.append("front") or (front, "loan")), \
+             patch.object(WindowOperator, "return_front", side_effect=lambda loan: calls.append(("back", loan))), \
+             patch.object(ex._osc, "stop_all", side_effect=lambda repeat=2: calls.append("release")), \
+             patch.object(ActionExecutor.time, "sleep"):
+            outcome = ex._fetch_item(st.round_seq, "Survival", 29)
+        return outcome, calls
+
+    def test_fetching_moves_then_fronts_and_gives_the_front_back(self):
+        ex, st, logs = self._executor()
+        outcome, calls = self._fetch(ex, st)
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(calls, ["move", "front", ("buy", "Survival", 29), ("back", "loan"), "release"])
+        self.assertIn("アイテム取得: 装備できました", " ".join(logs))
+
+    def test_a_failed_buy_is_failed(self):
+        ex, st, _ = self._executor()
+        self.assertEqual(self._fetch(ex, st, buy=False)[0], "failed")
+        ex, st, _ = self._executor()
+        outcome, calls = self._fetch(ex, st, front=False)
+        self.assertEqual(outcome, "failed")
+        self.assertNotIn(("buy", "Survival", 29), calls)
+
+    def test_a_round_start_stop_or_timeout_ends_it_and_releases(self):
+        cases = (("round", lambda ex, st: setattr(st, "in_round", True)),
+                 ("stopped", lambda ex, st: setattr(ex, "_is_running", lambda: False)),
+                 ("timeout", None))
+        for expected, happen in cases:
+            ex, st, logs = self._executor()
+
+            def move(fetcher, ex=ex, st=st, happen=happen):
+                if happen:
+                    happen(ex, st)
+                fetcher._check()
+                return True
+            if happen is None:
+                with patch.object(config, "ITEM_FETCH_LIMIT_SEC", -1.0):
+                    outcome, calls = self._fetch(ex, st, move=move)
+            else:
+                outcome, calls = self._fetch(ex, st, move=move)
+            self.assertEqual(outcome, expected)
+            self.assertNotIn("front", calls, "前面化しない")
+            self.assertEqual(calls[-1], "release", "押しているものを離す")
+            self.assertTrue(any("→ やめます" in m for m in logs), logs)
+
+    def test_the_limit_is_10_seconds(self):
+        self.assertEqual(config.ITEM_FETCH_LIMIT_SEC, 10.0)
+
+    def test_equipping_by_hand_while_fetching_is_fine(self):
+        ex, st, _ = self._executor()
+
+        def move(fetcher):
+            st.item_id = 29                     # 手で装備した（ログの流れが解除した）
+            fetcher._check()
+            return True
+        outcome, calls = self._fetch(ex, st, move=move)
+        self.assertEqual(outcome, "ok")
+        self.assertNotIn("front", calls, "もう押しに行かない")
+
+    # ── 6. ログ（LogMonitor）──────────────────────
+    def _monitor(self, **cfg):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10, **cfg), {}, lambda _m: None, window_idx=1)
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def test_the_lost_item_is_remembered_with_its_round(self):
+        monitor = self._monitor()
+        monitor.st.held_item_id = 29
+        monitor.st.round_seq = 4
+        monitor._lose_held_item("リスポーン")
+        self.assertEqual((monitor.st.last_lost_item_id, monitor.st.last_lost_round_seq), (29, 4))
+        monitor.st.held_item_id = 70
+        monitor._lose_held_item(LogMonitor.HELD_LOST_INSTANCE)
+        self.assertEqual(monitor.st.last_lost_item_id, 29, "インスタンス移動は取りに行かない")
+
+    def test_each_equipping_is_counted(self):
+        monitor = self._monitor()
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process("2026.10.03 05:01:26 Debug      -  Equipping 0. Was using 70")
+            monitor._process("2026.10.03 05:01:27 Debug      -  Equipping 29.")
+        self.assertEqual((monitor.st.equip_seen_seq, monitor.st.equip_seen_id), (2, 29))
+
+    def test_the_item_begin_mode_round_over_does_not_front_when_fetching(self):
+        SharedState.set_item_fetch(True)
+        SharedState.set_item_begin_mode(True)
+        monitor = self._monitor(auto_begin=True, osc_port=9000)
+        st = monitor.st
+        st.instance_type = config.INSTANCE_PRIVATE
+        st.in_round = True
+        st.item_id = 29
+        st.held_item_id = 29
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+        monitor._lose_held_item("リスポーン")
+        monitor._start_daemon = lambda *a: None
+        with patch.object(monitor._action, "_attend_to_item_loss") as attend:
+            monitor._process("2026.10.03 05:00:00 Debug      -  RoundOver")
+        attend.assert_not_called()
+        self.assertTrue(st.waiting_for_equip)
+        self.assertTrue(any("Begin の後に自動で取りに行きます" in m for m in monitor.logs), monitor.logs)
+
+    # ── 7. 設定 ──────────────────────────────────
+    def test_the_setting_is_off_by_default_saved_and_restored(self):
+        self.assertFalse(SharedState.get_item_fetch())
+        loader = TestStartKeySettings("test_it_is_saved")
+        loader._load({"item_fetch": True})
+        self.assertTrue(SharedState.get_item_fetch())
+        loader._load({})
+        self.assertFalse(SharedState.get_item_fetch(), "無ければ OFF")
+        loader._load({"item_fetch": "yes"})
+        self.assertFalse(SharedState.get_item_fetch(), "壊れた値は OFF")
+        SharedState.set_item_fetch(True)
+        app = _with_cancel_key(type("FakeApp", (), {})())
+        app.tabs = []
+        app.tool_rows = []
+        app._win_count_pref = None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, _CancelKeyVar(""))
+        app.v_freeze_rounds = {}
+        app._window_volume_settings = lambda: {}
+        app._fog_early_read_setting = lambda: {}
+        app._launch_options_setting = lambda: {}
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+        self.assertIs(saved["item_fetch"], True)
+
+    def test_the_toggle(self):
+        app = type("FakeApp", (), {})()
+        app.btn_item_fetch = MagicMock()
+        app.logs = []
+        app._log = app.logs.append
+        app._schedule_settings_save = MagicMock()
+        app._refresh_item_fetch_button = lambda: mainGUI.App._refresh_item_fetch_button(app)
+        mainGUI.App._toggle_item_fetch(app)
+        self.assertTrue(SharedState.get_item_fetch())
+        self.assertEqual(app.btn_item_fetch.config.call_args.kwargs["text"], "アイテム自動取得: ON")
+        app._schedule_settings_save.assert_called_once_with()
+        mainGUI.App._toggle_item_fetch(app)
+        self.assertEqual(app.btn_item_fetch.config.call_args.kwargs["text"], "アイテム自動取得: OFF")
+
+    def test_the_template_is_built_into_the_exe(self):
+        build = _load_build_script()
+        self.assertIn("--include-data-dir=shop_templates=shop_templates", build.BASE_ARGS)
+        self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_FILE))).is_file())
 
 
 class TestSuicideCancelCL(unittest.TestCase):
@@ -24369,7 +24945,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
-            "suicide_cancel_key",
+            "suicide_cancel_key", "item_fetch",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")

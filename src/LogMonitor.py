@@ -781,6 +781,10 @@ class LogMonitor:
         if not held:
             return
         self.st.held_item_id = 0
+        if reason != HELD_LOST_INSTANCE:
+            # アイテム自動取得（CM）が取りに行く。インスタンス移動は取りに行かない
+            self.st.last_lost_item_id = held
+            self.st.last_lost_round_seq = self.st.round_seq
         if reason == HELD_LOST_INSTANCE:
             self._log(f"所持アイテム: なし（{reason}）")
         else:
@@ -1553,8 +1557,13 @@ class LogMonitor:
                 if self._round_lost_item():
                     st.item_id = 0
                 st.waiting_for_equip = True
-                self._action._attend_to_item_loss()
-                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
+                if self._action.item_fetch_target():
+                    # アイテム自動取得（CM）: Begin を止めずに押し、通った後に取りに行く。
+                    # 前面化・音声は出さない。フリーズは Begin の流れで今どおり張る
+                    self._log("RoundOver 【⚠ アイテムロスト → Begin の後に自動で取りに行きます】")
+                else:
+                    self._action._attend_to_item_loss()
+                    self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
             # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
             # Verified Round End を待ってから行う（RoundOver時点だと
             # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
@@ -1700,6 +1709,8 @@ class LogMonitor:
 
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
             self._track_randomizer_item_change(event)
+            st.equip_seen_id = event.item_id        # アイテム自動取得が Equip の結果を待つ
+            st.equip_seen_seq += 1
             st.item_id = event.item_id
             self._hold_item(event.item_id)
             if st.speed_freeze_kind == "8pages":
