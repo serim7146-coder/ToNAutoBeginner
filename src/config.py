@@ -322,8 +322,11 @@ BEGIN_ADJUST_SETTLE_SEC   = 0.4    # 動いてから撮り直すまでの待ち�
 BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変わらなければ打ち切る（OSC が届いていない等）
 # 前後（CI）。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
 # 後ろへ 0.2秒 0.069・0.4秒 0.044、前へ 0.15秒 0.146。高さはほとんど変わらない）
-BEGIN_ADJUST_TARGET_W        = 0.103  # 目標の w/H
-BEGIN_ADJUST_DEPTH_TOL       = 0.12   # 許容（目標に対する割合。0.091〜0.115 なら動かない）
+# 押せる範囲（実測 2026-10-03 1920x1080: 押せる一番近い 0.404・一番遠い 0.066）の内側に余裕を
+# 持たせた範囲なら前後に動かない。外なら、合わせる先へ向けて動く（合わせる先は秒数の計算にだけ使う）
+BEGIN_ADJUST_DEPTH_OK        = (0.08, 0.33)
+BEGIN_ADJUST_FORWARD_TARGET_W = 0.12  # 遠い（0.08 未満）→ 前へ。ここへ向けて
+BEGIN_ADJUST_BACK_TARGET_W    = 0.25  # 近い（0.33 超）→ 後ろへ。ここへ向けて
 BEGIN_ADJUST_DEPTH_PROBE_SEC = 0.1    # 1回目の前後移動（w/H 毎秒がまだ分からないとき）
 BEGIN_ADJUST_DEPTH_MIN_SEC   = 0.05   # 1回の前後移動の下限・上限
 BEGIN_ADJUST_DEPTH_MAX_SEC   = 0.4
