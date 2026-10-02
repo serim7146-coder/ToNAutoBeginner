@@ -11567,6 +11567,9 @@ class TestItemLossAtRoundOver(unittest.TestCase):
     続行中でも前面を奪っていた）。モードは自動 Begin が機能している窓でだけ効く"""
 
     def setUp(self):
+        # CJ: RoundOver でも装備待ちフリーズを張るので、前のテストの分を残さない
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
         SharedState.set_hands_free(False)
         SharedState.set_item_begin_mode(False)
         SharedState.equip_freeze_reset()
@@ -11647,14 +11650,15 @@ class TestItemLossAtRoundOver(unittest.TestCase):
         self.assertTrue(monitor.st.equip_freeze_held, "フリーズは張っている")
 
     def test_b_is_only_for_windows_the_tool_runs(self):
-        """自動 Begin が機能していない窓は A の扱い（RoundOver で鳴らすだけ）"""
+        """自動 Begin が機能していない窓は A の扱い（CJ からは RoundOver で前面化＋音声＋フリーズ）"""
         SharedState.set_item_begin_mode(True)
         monitor = self._monitor(auto_begin=True, itype=config.INSTANCE_PUBLIC)
         self._lose(monitor)
 
         seen = self._feed(monitor, "RoundOver")
 
-        self.assertEqual(seen, [("sound", "RoundOver")], "A: 前面化はしない")
+        self.assertEqual(seen, [("focus", "RoundOver"), ("sound", "RoundOver")], "CJ: A でも前面化")
+        self.assertTrue(monitor.st.equip_freeze_held, "CJ: 装備待ちフリーズを張る")
 
     def test_b_does_nothing_in_hands_free(self):
         SharedState.set_item_begin_mode(True)
@@ -11730,12 +11734,14 @@ class TestItemLossAtRoundOver(unittest.TestCase):
 
     # ── A: 据え置き ─────────────────────────────
     def test_a_still_speaks_at_round_over(self):
+        """CJ: Begin を押さない窓も RoundOver で前面化＋音声（1回）＋装備待ちフリーズ"""
         monitor = self._monitor(auto_begin=False)
         self._lose(monitor)
 
         seen = self._feed(monitor, "RoundOver")
 
-        self.assertEqual(seen, [("sound", "RoundOver")])
+        self.assertEqual(seen, [("focus", "RoundOver"), ("sound", "RoundOver")])
+        self.assertTrue(monitor.st.equip_freeze_held)
 
     # ── C: RoundOver では何もしない ───────────────────
     def test_c_does_nothing_at_round_over(self):
@@ -13950,6 +13956,9 @@ class TestHeldItem(unittest.TestCase):
     P = "2026.09.20 11:55:47 Debug      -  "
 
     def setUp(self):
+        # CJ: RoundOver でも装備待ちフリーズを張るので、前のテストの分を残さない
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.set_hands_free(False)
         for p in (patch.object(config, "ITEMS", _item_table()),
@@ -14128,19 +14137,21 @@ class TestHeldItem(unittest.TestCase):
         "RoundOver",
         "Verified Round End",
     ]
-    # 変更前（76590e1）の LogMonitor で同じ並びを流して記録した値
+    # 変更前（76590e1）の LogMonitor で同じ並びを流して記録した値。CJ で、Begin を押さない窓は
+    # 装備したら waiting_for_equip を解くようになった（2か所。案内の回数は同じ）
     # (st.item_id, waiting_for_equip, item_lost_this_round, 案内の回数)
     LOSS_BEFORE = [(1, False, False, 0), (29, False, False, 0), (29, False, False, 0),
                    (0, False, True, 0), (0, True, True, 1), (0, True, True, 1),
-                   (29, True, True, 1), (0, False, True, 1), (0, False, True, 1),
+                   (29, False, True, 1), (0, False, True, 1), (0, False, True, 1),   # CJ: 装備で待ちを解く
                    (36, False, True, 1), (36, False, True, 1), (36, False, True, 1),
                    (36, False, True, 1), (36, False, True, 1), (0, False, True, 1),
                    (0, False, True, 1), (0, True, True, 2), (0, True, True, 2),
-                   (5, True, True, 2), (5, True, True, 2), (0, False, True, 2),
+                   (5, False, True, 2), (5, False, True, 2), (0, False, True, 2),   # CJ: 同上
                    (0, True, True, 3), (0, True, True, 3)]
 
     def _loss_trajectory(self):
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.equip_freeze_reset()        # CJ: 前の流しの装備待ちフリーズを残さない
         monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=False, voice_item_lost="lost.mp3"),
                                         {}, lambda _m: None, window_idx=1)
         monitor.st.local_player_name = "serim01"
@@ -16739,6 +16750,166 @@ class TestBeginAdjustDepthCI(unittest.TestCase):
         self.assertEqual(hit["H"], self.H)
 
 
+class TestItemLostFreezeEveryWindowCJ(unittest.TestCase):
+    """CJ: ツールが Begin を押さない窓（グループ・public・自動Begin OFF）でも、アイテムロストの
+    RoundOver で装備待ちフリーズ（前面化・音声1回・他窓を止める）。解除は装備（猶予の後）か
+    ラウンド開始の早い方・インスタンス移動・停止。外れずに全窓が止まり続けないこと"""
+
+    P = "2026.10.02 12:00:00 Debug      -  "
+    KINDS = (("グループ（焼き芋）", config.INSTANCE_YAKIIMO, True),
+             ("public", config.INSTANCE_PUBLIC, True),
+             ("自動Begin OFF の private", config.INSTANCE_PRIVATE, False))
+
+    def setUp(self):
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
+        SharedState.continue_round_reset()
+        self.addCleanup(SharedState.continue_round_reset)
+        SharedState.set_hands_free(False)
+        self.addCleanup(SharedState.set_hands_free, False)
+        SharedState.set_item_begin_mode(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        self.play = patch.object(PlaySound, "play_sound").start()
+        self.front = patch.object(WindowOperator, "borrow_front", return_value=(True, None)).start()
+        patch.object(ConnectDB, "register_round").start()
+        self.thread = patch.object(LogMonitor.threading, "Thread").start()
+        self.addCleanup(patch.stopall)
+
+    def _monitor(self, itype, auto_begin, item_id=0, lost=True):
+        cfg = WindowConfig(hwnd=0x10, auto_begin=auto_begin, voice_item_lost="lost.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = itype
+        monitor.st.in_round = True
+        monitor.st.item_id = item_id or 7
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._start_daemon = lambda target, *args: target(*args)     # 解除の猶予はその場で
+        if lost:
+            monitor._mark_item_lost("リスポーン: アイテムロスト")
+        return monitor
+
+    def _line(self, monitor, body):
+        with patch.object(LogMonitor.time, "sleep") as sleep:
+            monitor._process(self.P + body)
+        return sleep
+
+    def _said(self, monitor, text):
+        return any(text in m for m in monitor.logs)
+
+    def test_round_over_freezes_with_focus_and_one_sound(self):
+        for name, itype, auto in self.KINDS:
+            SharedState.equip_freeze_reset()
+            self.play.reset_mock()
+            self.front.reset_mock()
+            monitor = self._monitor(itype, auto)
+            self._line(monitor, "RoundOver")
+            self._line(monitor, "Verified Round End")
+            self.assertTrue(monitor.st.equip_freeze_held, name)
+            self.assertEqual(SharedState.get_equip_freeze_count(), 1, name)
+            self.assertFalse(SharedState.EQUIP_WAIT_EVENT.is_set(), f"{name}: 他窓を止める")
+            self.front.assert_called_once_with(0x10)
+            self.play.assert_called_once_with("lost.mp3")
+            self.assertTrue(self._said(monitor, "RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】"),
+                            (name, monitor.logs))
+
+    def test_equipping_releases_after_the_delay_even_without_begin(self):
+        for name, itype, auto in self.KINDS:
+            SharedState.equip_freeze_reset()
+            monitor = self._monitor(itype, auto)
+            self._line(monitor, "RoundOver")
+            self.assertFalse(monitor.st.begin_done, "Begin の受理は来ていない")
+            sleep = self._line(monitor, "Equipping 29.")
+            sleep.assert_any_call(config.EQUIP_RELEASE_DELAY_SEC)
+            self.assertFalse(monitor.st.equip_freeze_held, name)
+            self.assertEqual(SharedState.get_equip_freeze_count(), 0, name)
+            self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set(), name)
+            self.assertTrue(self._said(monitor, "✅ アイテム装備 → フリーズ解除"), (name, monitor.logs))
+
+    def test_a_round_start_releases_at_once(self):
+        for name, itype, auto in self.KINDS:
+            SharedState.equip_freeze_reset()
+            monitor = self._monitor(itype, auto)
+            self._line(monitor, "RoundOver")
+            self._line(monitor, "This round is taking place at Sewers (12) and the round type is Classic")
+            self.assertFalse(monitor.st.equip_freeze_held, name)
+            self.assertEqual(SharedState.get_equip_freeze_count(), 0, name)
+            self.assertTrue(self._said(monitor, "ラウンド開始 → 装備待ちフリーズ解除"), (name, monitor.logs))
+
+    def test_a_round_start_during_the_equip_delay_releases_at_once(self):
+        """装備した後の猶予の間にラウンドが始まったら、猶予を待たずに外す（早い方）"""
+        monitor = self._monitor(config.INSTANCE_PUBLIC, True)
+        monitor._start_daemon = lambda target, *args: None          # 猶予はまだ終わらない
+        self._line(monitor, "RoundOver")
+        self._line(monitor, "Equipping 29.")
+        self.assertTrue(monitor.st.equip_freeze_held, "前提: 猶予の間")
+        self._line(monitor, "This round is taking place at Sewers (12) and the round type is Classic")
+        self.assertFalse(monitor.st.equip_freeze_held)
+        with patch.object(LogMonitor.time, "sleep"):
+            monitor._release_equip_freeze_after_equip()     # 猶予が後から終わっても
+        self.assertFalse(self._said(monitor, "✅ アイテム装備 → フリーズ解除"), "二重に外さない")
+
+    def test_moving_instance_releases(self):
+        monitor = self._monitor(config.INSTANCE_YAKIIMO, True)
+        self._line(monitor, "RoundOver")
+        self._line(monitor, "[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
+        self.assertFalse(monitor.st.equip_freeze_held)
+        self.assertEqual(SharedState.get_equip_freeze_count(), 0)
+        self.assertTrue(self._said(monitor, "インスタンス移動 → 装備待ちフリーズ解除"))
+
+    def test_stopping_releases(self):
+        monitor = self._monitor(config.INSTANCE_PUBLIC, True)
+        self._line(monitor, "RoundOver")
+        self.assertEqual(SharedState.get_equip_freeze_count(), 1)
+        app = MagicMock()
+        app._stop_reason = None
+        app.monitors = [monitor]
+        with patch.object(Recorder, "stop_all"):
+            mainGUI.App._stop(app)
+        self.assertEqual(SharedState.get_equip_freeze_count(), 0)
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set())
+
+    def test_keeping_the_item_does_nothing(self):
+        for name, itype, auto in self.KINDS:
+            monitor = self._monitor(itype, auto, lost=False)
+            self._line(monitor, "RoundOver")
+            self.assertFalse(monitor.st.equip_freeze_held, name)
+        self.play.assert_not_called()
+        self.front.assert_not_called()
+
+    def test_hands_free_does_nothing(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(config.INSTANCE_PRIVATE, False)
+        self._line(monitor, "RoundOver")
+        self.assertFalse(monitor.st.equip_freeze_held)
+        self.play.assert_not_called()
+
+    def test_begin_windows_are_as_before(self):
+        """ツールが Begin を押す窓（自動Begin ON の private）は RoundOver では張らず、Begin の流れに任せる"""
+        monitor = self._monitor(config.INSTANCE_PRIVATE, True)
+        monitor._start_daemon = MagicMock()
+        self._line(monitor, "RoundOver")
+        self.assertFalse(monitor.st.equip_freeze_held)
+        self.play.assert_not_called()
+        self.assertEqual(monitor._start_daemon.call_args.args[0].__func__.__name__, "do_after_round")
+        self.assertFalse(self._said(monitor, "全窓フリーズ（装備かラウンド開始で解除）"))
+
+    def test_begin_windows_keep_their_equip_release(self):
+        """Begin を押す窓の装備の解除は今どおり（装備＋Begin 受理）"""
+        monitor = self._monitor(config.INSTANCE_PRIVATE, True)
+        SharedState.equip_freeze_start(monitor.st)
+        monitor.st.waiting_for_equip = True
+        released = []
+        monitor._start_daemon = lambda target, *args: released.append(target.__func__.__name__)
+        self._line(monitor, "Equipping 29.")
+        self.assertEqual(released, [], "Begin の受理がまだなので外さない")
+        monitor.st.begin_done = True
+        monitor.st.item_id = 0
+        self._line(monitor, "Equipping 30.")
+        self.assertEqual(released, ["_release_equip_wait_after_delay"])
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -19187,6 +19358,11 @@ class TestBeginNeverDropsTheItem(unittest.TestCase):
     押す。ロストの扱い（音声・他窓フリーズ・装備待ち）は周回の要なので、
     Begin の前後で失っても見逃さないことを確かめる。
     """
+
+    def setUp(self):
+        # CJ: RoundOver でも装備待ちフリーズを張るので、前のテストの分を残さない
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
 
     def _monitor(self, item_id=5):
         cfg = WindowConfig(hwnd=1, voice_item_lost="lost.mp3", auto_begin=False)
@@ -27047,6 +27223,9 @@ class TestLogMonitorBeginDone(unittest.TestCase):
 
 class TestLogMonitorItemLostVoice(unittest.TestCase):
     def setUp(self):
+        # CJ: RoundOver でも装備待ちフリーズを張るので、前のテストの分を残さない
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
         SharedState.set_instance_type(config.INSTANCE_PRIVATE)
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)

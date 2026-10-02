@@ -329,6 +329,14 @@ class LogMonitor:
         self._log("✅ アイテム取得 → 速度検知フリーズ解除"
                   f"（{config.EQUIP_RELEASE_DELAY_SEC}秒後）")
 
+    def _release_equip_freeze_after_equip(self):
+        """Begin を押さない窓で装備した: 猶予の後に装備待ちフリーズを外す（もう外れていれば何もしない）"""
+        time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
+        if not self.st.equip_freeze_held:
+            return
+        SharedState.equip_freeze_end(self.st)
+        self._log("✅ アイテム装備 → フリーズ解除")
+
     def _release_equip_wait_after_delay(self):
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
         SharedState.equip_freeze_end(self.st)
@@ -1384,7 +1392,14 @@ class LogMonitor:
                 setattr(st, flag, False)
             # アイテムロスト中にラウンドが始まったらフリーズ解除
             # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
-            if st.waiting_for_equip:
+            if not self._auto_begin_active() and (st.waiting_for_equip or st.equip_freeze_held):
+                # ツールが Begin を押さない窓: 装備待ちのまま・装備後の猶予の間でもすぐ外す
+                held = st.equip_freeze_held
+                st.waiting_for_equip = False
+                SharedState.equip_freeze_end(st)
+                if held:
+                    self._log("ラウンド開始 → 装備待ちフリーズ解除")
+            elif st.waiting_for_equip:
                 st.waiting_for_equip = False
                 SharedState.equip_freeze_end(st)
                 self._log("一時的にアイテムロストフリーズを解除")
@@ -1522,8 +1537,11 @@ class LogMonitor:
                     st.waiting_for_equip = True
                 elif not st.item_id:
                     st.waiting_for_equip = True
-            if st.waiting_for_equip and announce_on_round_over:
-                self._action.announce_item_lost_once()
+            if st.waiting_for_equip and announce_on_round_over and not self._hands_free():
+                # ツールが Begin を押さない窓（グループ・public・自動Begin OFF）でも装備待ちで
+                # 全窓を止める（前面化・音声1回）。解除は装備（猶予の後）かラウンド開始の早い方
+                self._action._attend_to_item_loss()
+                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
             if (self._item_begin_mode_active()
                     and self._round_item_warning() and not self._hands_free()):
                 # アイテム取得→Begin モード。RoundOver の時点でもう分かっている
@@ -1641,6 +1659,11 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_JOINING:
             # インスタンスを移動するとアイテムは消える（依頼者）
             self._lose_held_item(HELD_LOST_INSTANCE)
+            if st.equip_freeze_held and not self._auto_begin_active():
+                # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
+                st.waiting_for_equip = False
+                SharedState.equip_freeze_end(st)
+                self._log("インスタンス移動 → 装備待ちフリーズ解除")
             st.instance_id = event.instance
             st.instance_type = self._parse_instance_type(event.suffix)
             st.instance_access = LogParser.instance_access(event.suffix)
@@ -1686,8 +1709,12 @@ class LogMonitor:
             if st.died_this_round and st.item_id:
                 st.item_equipped_after_death = True
             self._log(f"✅ アイテム装備 (id={st.item_id})")
+            if (not self._auto_begin_active() and st.equip_freeze_held and st.item_id):
+                # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
+                st.waiting_for_equip = False
+                self._start_daemon(self._release_equip_freeze_after_equip)
             # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
-            if st.waiting_for_equip and st.begin_done:
+            elif st.waiting_for_equip and st.begin_done:
                 st.waiting_for_equip = False
                 self._start_daemon(self._release_equip_wait_after_delay)
             return
