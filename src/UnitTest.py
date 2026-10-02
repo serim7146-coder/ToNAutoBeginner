@@ -37,6 +37,62 @@ import MatchTNL
 import ProcessCheck
 import tkinter as tk
 from tkinter import ttk
+
+# ── CE: テスト中に作る窓は画面に出さない・フォーカスを取らない（テストの側だけ） ──
+# Windows では新しい窓が作った瞬間に前に出る。流すたびに依頼者の画面の前面に
+# 統計画面・メイン画面が出てきて邪魔だったので、Tk・Toplevel（App・StatisticsWindow・
+# ReportDialog・Overlay などの派生も）を作った直後に withdraw する。製品のコードが呼ぶ
+# deiconify・lift・focus_force・-topmost もテスト中は効かせない
+_ORIGINAL_TK_INIT = tk.Tk.__init__
+_ORIGINAL_TOPLEVEL_INIT = tk.Toplevel.__init__
+_ORIGINAL_WM_ATTRIBUTES = tk.Wm.wm_attributes
+_HIDDEN_WINDOWS: list = []          # 隠した窓（確かめるテストが使う）
+
+
+def _hidden_tk_init(self, *args, **kwargs):
+    _ORIGINAL_TK_INIT(self, *args, **kwargs)
+    self.withdraw()
+    _HIDDEN_WINDOWS.append(self)
+
+
+def _hidden_toplevel_init(self, *args, **kwargs):
+    _ORIGINAL_TOPLEVEL_INIT(self, *args, **kwargs)
+    self.withdraw()
+    _HIDDEN_WINDOWS.append(self)
+
+
+def _attributes_without_topmost(self, *args, **kwargs):
+    """-topmost だけ効かせない（ほかの属性は今のまま）"""
+    if args and str(args[0]) == "-topmost" and len(args) > 1:
+        return None
+    kwargs.pop("topmost", None)
+    return _ORIGINAL_WM_ATTRIBUTES(self, *args, **kwargs)
+
+
+tk.Tk.__init__ = _hidden_tk_init
+tk.Toplevel.__init__ = _hidden_toplevel_init
+tk.Wm.deiconify = tk.Wm.wm_deiconify = lambda self: None
+tk.Misc.lift = tk.Misc.tkraise = lambda self, aboveThis=None: None
+tk.Misc.focus_force = lambda self: None
+tk.Wm.attributes = tk.Wm.wm_attributes = _attributes_without_topmost
+
+
+def _visible_windows_of_this_process() -> list:
+    """このプロセスの、画面に見えているトップレベルの窓（EnumWindows＋IsWindowVisible）"""
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    pid, found = os.getpid(), []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _param):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(visit, 0)
+    return found
 import ToolLauncher
 import HotKey
 import RoundSequence
@@ -16175,6 +16231,34 @@ class TestTerrorColorsCD(unittest.TestCase):
         tabs.select(map_tab)
         self._select("unbound", 209)
         self.assertEqual(str(tabs.select()), str(map_tab))
+
+
+class TestZzNoWindowIsShown(unittest.TestCase):
+    """CE: テスト中に作った窓は画面に出ない（名前で最後に流れる。それまでの分も見る）"""
+
+    def test_no_visible_window_after_all_the_tests(self):
+        self.assertEqual(_visible_windows_of_this_process(), [])
+
+    def test_the_real_windows_stay_hidden_even_when_they_ask(self):
+        self.assertEqual(_visible_windows_of_this_process(), [], "前提: いまは0件")
+        app = mainGUI.App()
+        self.addCleanup(app.destroy)
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []),              patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            stats = StatisticsGUI.StatisticsWindow(app, store=RoundStore.RoundStore(
+                Path(tempfile.mkdtemp()) / "r.sqlite"))
+        app._open_report()
+        app._open_report()                       # 2回目は lift する経路
+        overlay = tk.Toplevel(app)
+        overlay.attributes("-topmost", True)     # メイン画面のオーバーレイと同じ呼び方
+        for w in (app, stats, app._report_dialog, overlay):
+            w.deiconify()
+            w.lift()
+            w.focus_force()
+        app.update()
+        self.assertEqual(_visible_windows_of_this_process(), [])
+        for w in (app, stats, app._report_dialog, overlay):
+            self.assertIn(w, _HIDDEN_WINDOWS)
+            self.assertFalse(w.winfo_viewable(), w)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
