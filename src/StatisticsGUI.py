@@ -75,10 +75,18 @@ ROUND_COLORS = {
     "Special": "#94e2d5",
 }
 LEGEND_STYLE = "Legend.Treeview"
-# テラーの一覧で文字を赤くする Unbound のテラー（内部の番号。依頼者の指定）:
-# Garden Rejects・Me and My Shadow・END OF THE WORLD・Angels・Mopemopemopemopemopemope
-HIGHLIGHT_UNBOUND_TERROR_IDS = frozenset({209, 211, 231, 263, 280})
-HIGHLIGHT_TERROR_COLOR = "#ff4d4d"
+# テラーの一覧の文字色（内部の番号 → (色, 太字か)。依頼者の指定。背景は白のまま）。
+# 内部の番号は分類ごとに範囲が違うので、番号だけで引く
+TERROR_TEXT_COLORS = {
+    164: ("#ffe600", False),     # Joy
+    168: ("#388e3c", False),     # Azrael
+    163: ("#d84315", False),     # Fusion Pilot
+    # Garden Rejects・Me and My Shadow・END OF THE WORLD・Angels・Mopemopemopemopemopemope
+    209: ("#d00000", True), 211: ("#d00000", True), 231: ("#d00000", True),
+    263: ("#d00000", True), 280: ("#d00000", True),
+    # Ordinary Apocalypse Bird・Chomper Trio・Transportation Trio & The Drifter
+    264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False),
+}
 ROUND_ORDER_GROUPS = (
     (
         ("8 Pages", ("8 Pages",)),
@@ -309,6 +317,7 @@ class StatisticsWindow(tk.Toplevel):
         self.v_terror_search = tk.StringVar(value="")     # 保存しない
         self.v_terror_rounds_note = tk.StringVar(value="")
         self._selected_terror: int | None = None
+        self._terror_categories: dict[int, str] = {}     # 一覧の行のテラー → 分類
         self.v_status = tk.StringVar(value="統計データ未読み込み")
         self.v_info = tk.StringVar(value="")
         self._remember_own_window()      # 録画中だけキャプチャから外すため
@@ -458,12 +467,15 @@ class StatisticsWindow(tk.Toplevel):
         self.terror_rounds_tree = self._tree(
             rounds_tab, (("time", "日時", 140, "w"), ("round", "ラウンド", 110, "w"),
                          ("map", "マップ", 140, "w"), ("others", "一緒に出たテラー", 180, "w"),
-                         ("players", "見た人数", 70, "e"), ("mine", "自分", 48, "center")))
+                         ("players", "見た人数", 70, "e"), ("mine", "自分", 48, "center")),
+            style=LEGEND_STYLE)         # ラウンドの色（白・白っぽい灰色もある）が読めるよう暗く
         kind_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
         self.terror_detail_tabs.add(kind_tab, text="ラウンドタイプ")
         self.round_kind_tree = self._tree(kind_tab, (("round", "ラウンド", 200, "w"),
                                                      ("count", "回数", 80, "e"),
-                                                     ("percent", "%", 70, "e")))
+                                                     ("percent", "%", 70, "e")),
+                                          style=LEGEND_STYLE)
+        self._rounds_tab, self._kind_tab = rounds_tab, kind_tab
         map_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
         self.terror_detail_tabs.add(map_tab, text="マップ")
         self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
@@ -823,14 +835,34 @@ class StatisticsWindow(tk.Toplevel):
 
     def _render_terror_stats(self, rows: list[tuple[str, Statistics.TerrorStatistic]]):
         self._clear_tree(self.terror_tree)
-        self.terror_tree.tag_configure("highlight", foreground=HIGHLIGHT_TERROR_COLOR)
         for category, row in rows:
+            self._terror_categories[row.terror_id] = category
             # iid は中の番号（内訳・キャッシュ用）。見せる ID はゲームの ID
-            highlight = category == "Unbound" and row.terror_id in HIGHLIGHT_UNBOUND_TERROR_IDS
             self.terror_tree.insert("", "end", iid=str(row.terror_id), values=(
                 game_terror_id(category, row.terror_id), row.name, row.count, f"{row.expected:.2f}",
                 self._format_p_value(row.p_value), row.label),
-                tags=("highlight",) if highlight else ())
+                tags=self._terror_color_tags(row.terror_id))
+
+    def _terror_color_tags(self, terror_id: int) -> tuple:
+        """TERROR_TEXT_COLORS にあるテラーの行のタグ（色と太字）。無ければ付けない"""
+        found = TERROR_TEXT_COLORS.get(terror_id)
+        if found is None:
+            return ()
+        color, bold = found
+        tag = f"terror_color_{color[1:]}{'_bold' if bold else ''}"
+        options = {"foreground": color}
+        if bold:
+            options["font"] = (UIFont.UI, 9, "bold")
+        self.terror_tree.tag_configure(tag, **options)
+        return (tag,)
+
+    def _insert_round_colored(self, tree, rows, round_column: int):
+        """行の文字をそのラウンドの色に（凡例・円グラフと同じ round_colors の引き方）"""
+        colors = round_colors([(row[round_column], 0, 0) for row in rows])
+        for row, color in zip(rows, colors):
+            tag = f"round_color_{color[1:]}"
+            tree.tag_configure(tag, foreground=color)
+            tree.insert("", "end", values=row, tags=(tag,))
 
     def _clear_terror_detail(self):
         for tree in (self.map_tree, self.round_kind_tree, self.terror_rounds_tree):
@@ -846,6 +878,8 @@ class StatisticsWindow(tk.Toplevel):
         except ValueError:
             return
         self._selected_terror = terror_id
+        # Unbound のテラーは Unbound のラウンドにしか出ないので、ラウンドタイプは出さない
+        self._show_round_type_tab(self._terror_categories.get(terror_id) != "Unbound")
         self._clear_tree(self.map_tree)
         rows = self._map_counts_cache.get(terror_id)
         if rows is None:
@@ -859,6 +893,16 @@ class StatisticsWindow(tk.Toplevel):
         if self._filter is not None:
             self._render_time(self._filter)
 
+    def _show_round_type_tab(self, shown: bool):
+        """「ラウンドタイプ」のタブを出す／隠す。隠すときに選ばれていたら出現ラウンドへ"""
+        tabs = self.terror_detail_tabs
+        if shown:
+            tabs.add(self._kind_tab)        # 隠したタブは元の位置に戻る
+            return
+        if str(tabs.select()) == str(self._kind_tab):
+            tabs.select(self._rounds_tab)
+        tabs.hide(self._kind_tab)
+
     def _render_terror_rounds(self, terror_id: int):
         """選んだテラーの「ラウンドタイプ」と「出現ラウンド」"""
         kinds = self._round_kind_cache.get(terror_id)
@@ -866,8 +910,7 @@ class StatisticsWindow(tk.Toplevel):
             kinds = round_kind_rows(self.store.round_counts_for_terror(self._filter, terror_id))
             self._round_kind_cache[terror_id] = kinds
         self._clear_tree(self.round_kind_tree)
-        for row in kinds:
-            self.round_kind_tree.insert("", "end", values=row)
+        self._insert_round_colored(self.round_kind_tree, kinds, 0)
 
         appeared = self._appearance_cache.get(terror_id)
         if appeared is None:
@@ -876,8 +919,7 @@ class StatisticsWindow(tk.Toplevel):
             self._appearance_cache[terror_id] = appeared
         total, rows = appeared
         self._clear_tree(self.terror_rounds_tree)
-        for row in rows:
-            self.terror_rounds_tree.insert("", "end", values=row)
+        self._insert_round_colored(self.terror_rounds_tree, rows, 1)
         self.v_terror_rounds_note.set(
             f"新しい順に{TERROR_ROUNDS_LIMIT}件を表示（全{total}件）" if total > TERROR_ROUNDS_LIMIT else "")
 

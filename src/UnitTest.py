@@ -15907,21 +15907,6 @@ class TestStatisticsColorsCB(unittest.TestCase):
         self.assertEqual(drawn, [legend_colors[n] for n in names])
         self.assertEqual(legend_colors.get("Fog"), "#9a9a9a")
 
-    def test_five_unbound_terrors_are_red(self):
-        self.window._set_terror_category("unbound")
-        tree = self.window.terror_tree
-        ids = [int(i) for i in tree.get_children()]
-        self.assertTrue(StatisticsGUI.HIGHLIGHT_UNBOUND_TERROR_IDS <= set(ids), ids)
-        for tid in ids:
-            tags = tree.item(str(tid), "tags")
-            self.assertEqual("highlight" in tags, tid in {209, 211, 231, 263, 280}, tid)
-        self.assertEqual(str(tree.tag_configure("highlight", "foreground")), "#ff4d4d")
-
-    def test_the_same_numbers_elsewhere_are_not_red(self):
-        rows = [("Classic", Statistics.TerrorStatistic(209, "x", 1, 1.0, 0.5, ""))]
-        self.window._render_terror_stats(rows)
-        self.assertEqual(self.window.terror_tree.item("209", "tags"), "")
-
     def test_the_button_names(self):
         self.assertEqual([label for label, _n in StatisticsGUI.ROUND_SELECT_PRESETS],
                          ["Classicテラー", "Alternateテラー"])
@@ -16090,6 +16075,106 @@ class TestGlorboAfkLoopCC(unittest.TestCase):
         move, naps = self._run(False, 1000)
         move.assert_not_called()
         self.assertEqual(naps, [], "今どおり 3 勝で止まる")
+
+
+class TestTerrorColorsCD(unittest.TestCase):
+    """CD: テラーの一覧の文字色の表・内訳の2つの表をラウンドの色に・Unbound ではラウンドタイプを隠す"""
+
+    _pump = TestStatisticsFixesBY._pump
+
+    def setUp(self):
+        TestStatisticsFixesBY.setUp(self)
+        for i, tid in enumerate((164, 168, 163)):
+            self.store.add_own(400 + i, 51, 12, tid, None, None, -13)      # Alternate
+        self.store.add_own(410, 2, 12, 135, None, None, -13)
+        self.store.add_own(420, 6, 12, 5, None, None, -13)                 # Classic のテラー（Bloodbath）
+        self.window._filter = None
+        self.window._analyze()
+
+    def _color(self, iid):
+        tree = self.window.terror_tree
+        tags = tree.item(str(iid), "tags")
+        if not tags:
+            return None, False
+        font = str(tree.tag_configure(tags[0], "font"))
+        return str(tree.tag_configure(tags[0], "foreground")), "bold" in font
+
+    def test_the_table(self):
+        self.assertEqual(StatisticsGUI.TERROR_TEXT_COLORS, {
+            164: ("#ffe600", False), 168: ("#388e3c", False), 163: ("#d84315", False),
+            209: ("#d00000", True), 211: ("#d00000", True), 231: ("#d00000", True),
+            263: ("#d00000", True), 280: ("#d00000", True),
+            264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False)})
+        self.assertFalse(hasattr(StatisticsGUI, "HIGHLIGHT_UNBOUND_TERROR_IDS"), "表1つに寄せた")
+
+    def test_alternate_colors_and_others_unchanged(self):
+        self.window._set_terror_category("alternate")
+        self.assertEqual(self._color(164), ("#ffe600", False))
+        self.assertEqual(self._color(168), ("#388e3c", False))
+        self.assertEqual(self._color(163), ("#d84315", False))
+        self.assertEqual(self._color(135), (None, False), "ほかは今のまま")
+
+    def test_unbound_colors_and_bold(self):
+        self.window._set_terror_category("unbound")
+        ids = {int(i) for i in self.window.terror_tree.get_children()}
+        for tid in (209, 211, 231, 263, 280):
+            if tid in ids:
+                self.assertEqual(self._color(tid), ("#d00000", True), tid)
+        for tid in (264, 240, 246):
+            if tid in ids:
+                self.assertEqual(self._color(tid), ("#e57373", False), tid)
+        plain = sorted(ids - set(StatisticsGUI.TERROR_TEXT_COLORS))
+        self.assertTrue(plain)
+        self.assertEqual(self._color(plain[0]), (None, False))
+        self.assertTrue({209, 264} <= ids, ids)
+
+    def test_the_search_results_use_the_same_colors(self):
+        self.window.v_terror_search.set(str(164 - MatchTNL.ALTERNATE_OFFSET))
+        self.assertIn("164", self.window.terror_tree.get_children())
+        self.assertEqual(self._color(164), ("#ffe600", False))
+        self.window.v_terror_search.set(str(209 - MatchTNL.UNBOUND_OFFSET))
+        self.assertEqual(self._color(209), ("#d00000", True))
+
+    def test_the_two_detail_tables_are_dark_with_round_colors(self):
+        for tree in (self.window.terror_rounds_tree, self.window.round_kind_tree):
+            self.assertEqual(str(tree.cget("style")), StatisticsGUI.LEGEND_STYLE)
+        self.assertEqual(str(self.window.map_tree.cget("style")), "", "マップは今のまま")
+        self._select("classic", 5)
+        for tree, column in ((self.window.terror_rounds_tree, 1), (self.window.round_kind_tree, 0)):
+            rows = tree.get_children()
+            self.assertTrue(rows)
+            names = [tree.item(i, "values")[column] for i in rows]
+            colors = [str(tree.tag_configure(tree.item(i, "tags")[0], "foreground")) for i in rows]
+            self.assertEqual(colors, StatisticsGUI.round_colors([(n, 0, 0) for n in names]))
+            self.assertIn(StatisticsGUI.ROUND_COLORS[StatisticsGUI._round_display_name(names[0])], colors)
+
+    def _select(self, category, iid):
+        self.window._set_terror_category(category)
+        self.window.terror_tree.selection_set(str(iid))
+        self.window._on_terror_selected()
+
+    def _tab_texts(self):
+        tabs = self.window.terror_detail_tabs
+        return [tabs.tab(t, "text") for t in tabs.tabs() if tabs.tab(t, "state") != "hidden"]
+
+    def test_unbound_hides_round_type_and_others_bring_it_back(self):
+        tabs = self.window.terror_detail_tabs
+        tabs.select(self.window._kind_tab)
+        self._select("unbound", 209)
+        self.assertEqual(self._tab_texts(), ["出現ラウンド", "マップ"])
+        self.assertEqual(str(tabs.select()), str(self.window._rounds_tab), "隠したら出現ラウンドへ")
+        self._select("alternate", 164)
+        self.assertEqual(self._tab_texts(), ["出現ラウンド", "ラウンドタイプ", "マップ"], "並びはそのまま")
+        self._select("unbound", 209)
+        self._select("classic", 5)
+        self.assertEqual(self._tab_texts(), ["出現ラウンド", "ラウンドタイプ", "マップ"])
+
+    def test_hiding_keeps_another_selected_tab(self):
+        tabs = self.window.terror_detail_tabs
+        map_tab = tabs.tabs()[2]
+        tabs.select(map_tab)
+        self._select("unbound", 209)
+        self.assertEqual(str(tabs.select()), str(map_tab))
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -27874,6 +27959,8 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window._map_counts_cache = {}
         window._clear_tree = MagicMock()
         window._render_terror_rounds = MagicMock()      # BT: 内訳のほかのタブ（別のテストで見る）
+        window._terror_categories = {}
+        window._show_round_type_tab = MagicMock()       # CD: Unbound ではラウンドタイプを隠す（別のテストで見る）
         window.store = MagicMock()
         window.store.map_counts_for_terror.return_value = [(12, 1, 1)]
 
