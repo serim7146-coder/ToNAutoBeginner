@@ -210,6 +210,28 @@ def set_item_fetch(val: bool):
         _ITEM_FETCH = bool(val)
 
 
+_ITEM_FETCH_GAIN = None         # 前にうまくいった視点の感度（横, 縦）。保存して次回の測りに使う
+
+
+def get_item_fetch_gain():
+    with _ITEM_FETCH_LOCK:
+        return _ITEM_FETCH_GAIN
+
+
+def set_item_fetch_gain(gain):
+    """(横, 縦) か None。数でない・範囲（ItemFetch.GAIN_SANE）の外は None"""
+    global _ITEM_FETCH_GAIN
+    value = None
+    try:
+        x, y = (float(g) for g in gain)
+        if all(0.05 <= g <= 20.0 for g in (x, y)):
+            value = (x, y)
+    except (TypeError, ValueError):
+        value = None
+    with _ITEM_FETCH_LOCK:
+        _ITEM_FETCH_GAIN = value
+
+
 _ITEM_BEGIN_MODE = False
 _ITEM_BEGIN_MODE_LOCK = threading.Lock()
 

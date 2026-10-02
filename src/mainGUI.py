@@ -1918,6 +1918,7 @@ class App(tk.Tk):
         # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
         self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         SharedState.set_item_fetch(data.get("item_fetch") is True)    # 無い・壊れた値は OFF（マウスを動かすので true だけ）
+        SharedState.set_item_fetch_gain(data.get("item_fetch_gain"))   # 壊れた値は無し
         self._refresh_item_fetch_button()
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
         for name, var in self.v_freeze_rounds.items():
@@ -2775,6 +2776,8 @@ class App(tk.Tk):
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "item_fetch":    SharedState.get_item_fetch(),
+            "item_fetch_gain": (list(SharedState.get_item_fetch_gain())
+                                if SharedState.get_item_fetch_gain() else None),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
                                     if var.get()),

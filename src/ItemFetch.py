@@ -12,6 +12,7 @@
 OSC・接地・撮影・マウス・ログは差し替えられる（Fetcher の引数）。画面の照準合わせは
 locate()（特徴点）と Aimer（視点を回す量）に分けてある。
 """
+import math
 import threading
 import time
 
@@ -37,8 +38,13 @@ RANSAC_PX = 5.0
 
 # 照準合わせ
 TOL_X, TOL_Y = 6, 4         # 照準とボタンのずれがこの内なら押す（px）
-GAIN = (0.81, 0.59)         # 画面px ／ マウス1（横・縦。実測）
-GAIN_LIMITS = ((0.6, 1.05), (0.45, 0.8))   # 測り直した gain がこの外なら捨てる
+# gain（画面px ／ マウス1）は視点の感度で人によって違う（依頼者の PC で 横0.81・縦0.59）。決め打ちに
+# しない: 最初のボタンを狙う前に、横・縦それぞれ小さく動かして測る（calibrate）
+CALIB_UNITS = 24            # 測りで送る量（保存した gain が無いとき）
+CALIB_PX = 20.0             # 保存した gain があれば、画面でこれくらい動く量を送る
+CALIB_UNITS_RANGE = (6, 160)
+GAIN_SANE = (0.05, 20.0)    # 測った gain がこの外なら1回測り直し、だめなら失敗
+GAIN_KEEP = (0.5, 2.0)      # 以後の測り直しは、測った値のこの倍率の外を捨てる
 GAIN_MIN_SENT = 8           # 送った量がこれ以上の軸だけ gain を測り直す
 MOVE_CAP = 160              # 1回に送る量の上限（マウスの単位）
 STEP = 6                    # 一度に送る量（大きく送ると Windows のマウスの加速で行き過ぎる）
@@ -141,7 +147,7 @@ def locate(bgr, point, template=None):
 
 def split_move(mx: float, my: float, step: int = STEP) -> list:
     """(mx, my) を1回 step 以下の整数の刻みに分ける（合計は四捨五入した mx, my）"""
-    n = int(max(abs(mx), abs(my)) // step) + 1
+    n = max(1, math.ceil(max(abs(mx), abs(my)) / step))   # 24 → 6×4
     out = []
     for i in range(n):
         dx = int(round(mx * (i + 1) / n)) - int(round(mx * i / n))
@@ -151,10 +157,12 @@ def split_move(mx: float, my: float, step: int = STEP) -> list:
 
 
 class Aimer:
-    """照準とボタンのずれから、マウスを送る量を決める。実際に動いた量で gain を測り直す"""
+    """照準とボタンのずれから、マウスを送る量を決める。実際に動いた量で gain を測り直す
+    （最初に測った gain の GAIN_KEEP 倍の外は捨てる）"""
 
-    def __init__(self, gain=GAIN):
+    def __init__(self, gain):
         self.gain = list(gain)
+        self.limits = tuple((GAIN_KEEP[0] * g, GAIN_KEEP[1] * g) for g in gain)
         self._last = None           # (前の位置 x, y, 送った量 mx, my)
 
     def forget(self):
@@ -169,7 +177,7 @@ class Aimer:
                 if abs(sent) < GAIN_MIN_SENT:
                     continue
                 g = (before - now) / sent
-                low, high = GAIN_LIMITS[axis]
+                low, high = self.limits[axis]
                 if low <= g <= high:
                     self.gain[axis] = 0.5 * self.gain[axis] + 0.5 * g
         self._last = None
@@ -201,10 +209,12 @@ class Fetcher:
     equip_seen: () → (Equipping を受けた回数, 最後の id)
     stopped:    () → やめる理由（str）か None
     log:        debug.log へ（窓の番号は呼び出し側が付ける）
+    saved_gain: 前にうまくいった gain（横, 縦）か None。測りで送る量を決めるのに使う
+                （gain そのものは毎回 calibrate で測る）
     """
 
     def __init__(self, osc, grounded, capture, mouse, equip_seen, stopped, log,
-                 locate_fn=locate, sleep=time.sleep, clock=time.time):
+                 locate_fn=locate, sleep=time.sleep, clock=time.time, saved_gain=None):
         self.osc = osc
         self.grounded = grounded
         self.capture = capture
@@ -215,7 +225,8 @@ class Fetcher:
         self.locate = locate_fn
         self.sleep = sleep
         self.clock = clock
-        self.aimer = Aimer()
+        self.saved_gain = saved_gain
+        self.aimer = None           # calibrate で作る
 
     def _check(self):
         reason = self.stopped()
@@ -331,6 +342,61 @@ class Fetcher:
                      f"（{attempt}/{EQUIP_TRIES}回目）")
         return False
 
+    # ── 視点の感度（gain）を測る ──
+    def _find(self, point):
+        """見本の point が写っている位置。見つからなければ撮り直し（MISS_TRIES 回まで）、だめなら None"""
+        for misses in range(MISS_TRIES + 1):
+            self._check()
+            shot = self.capture()
+            pos = self.locate(shot[0], point) if shot is not None else None
+            if pos is not None:
+                return pos
+            if misses < MISS_TRIES:
+                self._wait(MISS_SEC)
+        return None
+
+    def _calib_units(self, axis: int) -> int:
+        """測りで送る量。前にうまくいった gain があれば、画面で約 CALIB_PX 動く量"""
+        if not self.saved_gain:
+            return CALIB_UNITS
+        low, high = CALIB_UNITS_RANGE
+        return int(max(low, min(high, round(CALIB_PX / self.saved_gain[axis]))))
+
+    def calibrate(self, name: str) -> bool:
+        """最初のボタンを狙う前に、横・縦それぞれ小さく動かして撮り直し、実際の動きから gain を
+        測る。GAIN_SANE の外なら1回測り直し、だめなら False。店の画面が見つからなければ False"""
+        point = BUTTONS[name]
+        gain = []
+        for axis, label in ((0, "横"), (1, "縦")):
+            units = self._calib_units(axis)
+            for attempt in (1, 2):
+                before = self._find(point)
+                if before is None:
+                    self.log("アイテム取得: 感度を測れません（店の画面が見つかりません）")
+                    return False
+                for dx, dy in split_move(units if axis == 0 else 0, units if axis == 1 else 0):
+                    self.mouse.move_rel(dx, dy)
+                    self.sleep(STEP_SEC)
+                self._wait(AFTER_MOVE_SEC)
+                after = self._find(point)
+                if after is None:
+                    self.log("アイテム取得: 感度を測れません（店の画面が見つかりません）")
+                    return False
+                g = (before[axis] - after[axis]) / units
+                if GAIN_SANE[0] <= g <= GAIN_SANE[1]:
+                    gain.append(g)
+                    break
+                self.log(f"アイテム取得: {label}の感度 {g:.3f} は範囲外（{attempt}/2回目）")
+            else:
+                if not self.saved_gain:
+                    return False
+                # 2回とも範囲外: 前にうまくいった値があればそれで続ける
+                gain.append(float(self.saved_gain[axis]))
+                self.log(f"アイテム取得: {label}の感度は保存した値 {gain[-1]:.3f} で続けます")
+        self.aimer = Aimer(gain)
+        self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
+        return True
+
     def buy(self, shop: str, target_id: int) -> bool:
-        """店の前で、窓が前に出ている状態から。店のボタン → Equip"""
-        return self.aim_click(shop) and self.equip(target_id)
+        """店の前で、窓が前に出ている状態から。感度を測る → 店のボタン → Equip"""
+        return self.calibrate(shop) and self.aim_click(shop) and self.equip(target_id)

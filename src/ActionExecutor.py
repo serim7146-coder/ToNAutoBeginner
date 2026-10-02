@@ -1277,7 +1277,8 @@ class ActionExecutor:
             osc=self._osc, grounded=grounded, capture=capture, mouse=_FetchMouse(),
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
             stopped=lambda: self._fetch_stopped(round_seq, deadline),
-            log=lambda m: DebugLog.write(f"{head} {m}"))
+            log=lambda m: DebugLog.write(f"{head} {m}"),
+            saved_gain=SharedState.get_item_fetch_gain())
         name = f"{shop} Shop の id={item_id}"
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
@@ -1310,7 +1311,11 @@ class ActionExecutor:
                 return "failed"
             try:
                 fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
-                return "ok" if fetcher.buy(shop, item_id) else "failed"
+                if not fetcher.buy(shop, item_id):
+                    return "failed"
+                if fetcher.aimer is not None:
+                    SharedState.set_item_fetch_gain(fetcher.aimer.gain)   # 次回の測りに使う（保存）
+                return "ok"
             finally:
                 WindowOperator.return_front(loan)
 
