@@ -142,12 +142,30 @@ def _background_key(hwnd: int, key: str):
     return target_tid, vk, lparam_down, lparam_up
 
 
-def hold_key_background(hwnd: int, key: str, sec: float) -> bool:
+def hold_key_background(hwnd: int, key: str, sec: float, stop=None) -> bool:
     DebugLog.write(f"[操作] 背面キー {key} {sec:.2f}秒 hwnd={int(hwnd):#x}")
-    return _hold_key_background(hwnd, key, sec)
+    if stop is None:
+        return _hold_key_background(hwnd, key, sec)
+    return _hold_key_background(hwnd, key, sec, stop)
 
 
-def _hold_key_background(hwnd: int, key: str, sec: float) -> bool:
+def _wait_holding(sec: float, stop) -> None:
+    """長押しの間待つ。stop（呼ぶと True で止める）があれば、待つ間に見て早めに抜ける"""
+    if stop is None:
+        time.sleep(sec)
+        return
+    deadline = time.time() + sec
+    while not stop():
+        left = deadline - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(HOLD_STOP_POLL_SEC, left))
+
+
+HOLD_STOP_POLL_SEC = 0.05       # 長押しの途中で止める合図を見る間隔
+
+
+def _hold_key_background(hwnd: int, key: str, sec: float, stop=None) -> bool:
     """フォーカスを奪わずにキーを押しっぱなしにする。送り切れたら True。
 
     PostMessage だけでは足りない。Unityは GetKeyState / GetKeyboardState でも
@@ -192,7 +210,7 @@ def _hold_key_background(hwnd: int, key: str, sec: float) -> bool:
             user32.SetKeyboardState(ctypes.byref(state))
 
         user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam_down)
-        time.sleep(sec)
+        _wait_holding(sec, stop)        # 止める合図が来たらその場で離す
         user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
 
         if saved is not None:

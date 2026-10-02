@@ -345,6 +345,9 @@ class ActionExecutor:
             self._log("自爆キャンセル（HWND未選択）")
             return
         round_seq = st.round_seq
+        if st.suicide_cancelled_round == round_seq:
+            self._log("自爆キャンセル済み → このラウンドは自爆しません")
+            return
         if st.suicide_seq == round_seq:
             return          # このラウンドの自爆はもう走っている。流れは1本
         st.suicide_seq = round_seq
@@ -371,11 +374,14 @@ class ActionExecutor:
             st._skip_time = time.time()
             self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
             if not WindowOperator.hold_key_background(
-                    self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC):
+                    self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
+                    stop=lambda: self._suicide_cancelled(round_seq)):
                 # 送れないもの（最小化・Shift併用キー）はやり直しても送れない
                 st._skip_time = 0.0
                 self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
                 return
+            if self._suicide_cancelled(round_seq):
+                return              # 長押しの途中で離した。やり直さない
             if self._died_after_skip(round_seq):
                 return
         if self._should_skip(round_seq):
@@ -390,11 +396,28 @@ class ActionExecutor:
             return False            # 次のラウンドになった
         if st.is_continue_round or st.died_this_round:
             return False
+        if self._suicide_cancelled(round_seq):
+            return False            # 自爆キャンセルのキー（CL）
         if st.waiting_for_equip:
             # 自窓のアイテムロスト待ち。他窓の待ちでは止まらない
             self._log("自爆キャンセル（アイテムロスト待ち中）")
             return False
         return True
+
+    def _suicide_cancelled(self, round_seq: int) -> bool:
+        return self._st.suicide_cancelled_round == round_seq
+
+    def cancel_suicide(self) -> str | None:
+        """自爆キャンセルのキー（CL）。ラウンドの中なら、このラウンドはもう自爆しない
+        （長押し中ならその場で離す・やり直さない・後のきっかけでも始めない）。
+        "stopped"＝自爆の途中だった、"marked"＝自爆していなかった、None＝ラウンド外（持ち越さない）"""
+        st = self._st
+        if not st.in_round:
+            return None
+        round_seq = st.round_seq
+        st.suicide_cancelled_round = round_seq
+        self._log("自爆キャンセル → このラウンドは自爆しません")
+        return "stopped" if st.suicide_seq == round_seq else "marked"
 
     def _died_after_skip(self, round_seq: int) -> bool:
         """長押しが終わってから、死亡を少し待つ。死ねば True"""

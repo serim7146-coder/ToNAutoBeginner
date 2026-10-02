@@ -706,6 +706,9 @@ class App(tk.Tk):
         # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
         self.v_emergency_key = tk.StringVar(value=config.EMERGENCY_STOP_KEY)
         self.v_start_key = tk.StringVar(value=config.START_KEY)
+        self.v_suicide_cancel_key = tk.StringVar(value=config.SUICIDE_CANCEL_KEY)
+        self._suicide_cancel_hook = None
+        self._suicide_cancel_down = False
         self._capturing_key = False
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
@@ -730,6 +733,7 @@ class App(tk.Tk):
 
     def _start_emergency_stop_polling(self):
         self._hook_chase_keys()
+        self._hook_suicide_cancel_key()
         if keyboard is None:
             return
         self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
@@ -770,6 +774,64 @@ class App(tk.Tk):
             self.after(0, self._on_chase_key, direction, key)
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
+
+    # ── 自爆キャンセルのキー（CL。押した瞬間の通知で拾う）──────────
+    # ツール自身が背面で送る自爆の ^ は PostMessage なので、低レベルのフックには来ない
+    def _hook_suicide_cancel_key(self):
+        """今のキーで受け直す（起動時と、キーを変えたとき）"""
+        self._unhook_suicide_cancel_key()
+        key = self.v_suicide_cancel_key.get()
+        if keyboard is None or not key:
+            return
+
+        def on_key(event, k=key):
+            if getattr(event, "event_type", None) == "down":
+                self._suicide_cancel_key_down(k)
+            else:
+                self._suicide_cancel_down = False
+        try:
+            self._suicide_cancel_hook = keyboard.hook_key(key, on_key, suppress=False)
+        except Exception as e:
+            DebugLog.exception("mainGUI._hook_suicide_cancel_key")
+            self._log(f"[自爆キャンセル] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
+
+    def _unhook_suicide_cancel_key(self):
+        hook, self._suicide_cancel_hook = getattr(self, "_suicide_cancel_hook", None), None
+        self._suicide_cancel_down = False
+        if hook is None:
+            return
+        try:
+            keyboard.unhook(hook)
+        except KeyError:
+            pass                    # もう外れている
+        except Exception:
+            DebugLog.exception("mainGUI._unhook_suicide_cancel_key")
+
+    def _suicide_cancel_key_down(self, key: str):
+        """keyboard のスレッドから呼ばれる。押しっぱなしの繰り返しは離すまで1回"""
+        if self._suicide_cancel_down:
+            return
+        self._suicide_cancel_down = True
+        if self._capturing_key:
+            return                  # キーの設定中は反応しない
+        try:
+            self.after(0, self._on_suicide_cancel_key, key)
+        except (tk.TclError, RuntimeError):
+            pass                    # 閉じた後に通知が来た
+
+    def _on_suicide_cancel_key(self, key: str):
+        """全部の窓の自爆を止め、そのラウンドはもう自爆しない。ラウンド外の窓は何もしない"""
+        if not self._running or not self.monitors:
+            return
+        results = [monitor.cancel_suicide() for monitor in self.monitors]
+        stopped = results.count("stopped")
+        head = f"[自爆キャンセル] {HotKey.display(key)}キーが押されました"
+        if stopped:
+            self._log(f"{head} → {stopped}窓の自爆を止めました")
+        elif "marked" in results:
+            self._log(f"{head} → 自爆中の窓はありません（このラウンドは自爆しません）")
+        else:
+            self._log(f"{head} → ラウンド中の窓はありません（何もしません）")
 
     def _unhook_chase_keys(self):
         """アプリ終了時に外す"""
@@ -886,6 +948,25 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
+    def _refresh_suicide_cancel_key_label(self):
+        key = self.v_suicide_cancel_key.get()
+        text = ("自爆キャンセル: 未設定" if not key
+                else f"自爆キャンセル: {HotKey.display(key)}キー")
+        try:
+            self.lbl_suicide_cancel_key.config(text=text)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _suicide_cancel_key_conflict(self, key) -> str | None:
+        """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
+        for name, other in (("緊急停止", self.v_emergency_key.get()),
+                            ("マクロ開始", self.v_start_key.get()),
+                            ("チェイス", config.CHASE_CW_KEY),
+                            ("チェイス", config.CHASE_CCW_KEY)):
+            if other and key == other:
+                return name
+        return None
+
     def _refresh_start_key_label(self):
         key = self.v_start_key.get()
         text = ("マクロ開始: 未設定" if not key
@@ -906,6 +987,8 @@ class App(tk.Tk):
         self._log("[マクロ開始] 解除しました")
 
     def _capture_button(self, target: str):
+        if target == "cancel":
+            return self.btn_capture_cancel_key
         return self.btn_capture_start_key if target == "start" else self.btn_capture_key
 
     def _begin_capture_key(self, target: str = "stop"):
@@ -945,6 +1028,9 @@ class App(tk.Tk):
         if target == "start":
             self._finish_capture_start_key(key)
             return
+        if target == "cancel":
+            self._finish_capture_cancel_key(key)
+            return
         if key is None:
             self._log("[緊急停止] ⚠ キーを取れませんでした。設定は変えていません")
             return
@@ -957,6 +1043,10 @@ class App(tk.Tk):
             return
         if key == self.v_start_key.get():
             self._log("[緊急停止] ⚠ マクロ開始キーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
+        if key == self.v_suicide_cancel_key.get():
+            self._log("[緊急停止] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
                       "設定は変えていません")
             return
         self.v_emergency_key.set(key)
@@ -980,10 +1070,32 @@ class App(tk.Tk):
             self._log("[マクロ開始] ⚠ 緊急停止キーと同じキーは使えません。"
                       "設定は変えていません")
             return
+        if key == self.v_suicide_cancel_key.get():
+            self._log("[マクロ開始] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
         self.v_start_key.set(key)
         self._start_key_pressed = False
         self._refresh_start_key_label()
         self._log(f"[マクロ開始] {HotKey.display(key)}キーに変更しました")
+
+    def _finish_capture_cancel_key(self, key):
+        """自爆キャンセルのキーを設定する。取れない・不正・ほかのキーと同じなら今のまま"""
+        if key is None:
+            self._log("[自爆キャンセル] ⚠ キーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[自爆キャンセル] ⚠ {key!r} は使えないキーです。設定は変えていません")
+            return
+        other = self._suicide_cancel_key_conflict(key)
+        if other:
+            self._log(f"[自爆キャンセル] ⚠ {other}のキーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
+        self.v_suicide_cancel_key.set(key)
+        self._refresh_suicide_cancel_key_label()
+        self._hook_suicide_cancel_key()
+        self._log(f"[自爆キャンセル] {HotKey.display(key)}キーに変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -1247,6 +1359,14 @@ class App(tk.Tk):
                                           command=self._begin_capture_key)
         self.btn_capture_key.pack(side="left", padx=(6, 0))
         self._refresh_emergency_key_label()
+        # 自爆キャンセルのキー（CL）は行の最後
+        self.lbl_suicide_cancel_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
+        self.lbl_suicide_cancel_key.pack(side="left", padx=(16, 0))
+        self.btn_capture_cancel_key = ttk.Button(
+            fsk, text="キーを押して設定", width=16,
+            command=lambda: self._begin_capture_key("cancel"))
+        self.btn_capture_cancel_key.pack(side="left", padx=(6, 0))
+        self._refresh_suicide_cancel_key_label()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
@@ -1756,6 +1876,14 @@ class App(tk.Tk):
             start_key = ""
         self.v_start_key.set(start_key)
         self._refresh_start_key_label()
+        # 自爆キャンセルのキー（CL）。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
+        cancel_key = data.get("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
+        if not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
+            cancel_key = config.SUICIDE_CANCEL_KEY
+            if self._suicide_cancel_key_conflict(cancel_key):
+                cancel_key = ""
+        self.v_suicide_cancel_key.set(cancel_key)
+        self._refresh_suicide_cancel_key_label()
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
@@ -2615,6 +2743,7 @@ class App(tk.Tk):
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
             "start_key":     self.v_start_key.get(),
+            "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "freeze_punish": self.v_freeze_punish.get(),
             "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
@@ -2727,5 +2856,6 @@ class App(tk.Tk):
         self._stop_reason = "ウィンドウを閉じた"      # debug.log の停止の理由
         self._stop()
         self._unhook_chase_keys()
+        self._unhook_suicide_cancel_key()
         self._show_own_windows_again()
         self.destroy()

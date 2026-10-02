@@ -2513,7 +2513,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
 
     # ── 保存 ─────────────────────────────────
     def _save(self, password, stored=None):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         app._win_count_pref = None
@@ -2559,7 +2559,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
     # ── 読み込み ─────────────────────────────────
     def _load(self, data):
         """_load_saved_settings を回す（他の項目は既存テストと同じ偽物）"""
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
@@ -9329,7 +9329,7 @@ class TestSuicideRetry(unittest.TestCase):
         """die_on 回目の長押しで死ぬ。before(n) は n 回目の長押しの直前に呼ぶ"""
         sent = []
 
-        def hold(hwnd, key, sec):
+        def hold(hwnd, key, sec, stop=None):
             sent.append(hwnd)
             if before:
                 before(len(sent))
@@ -9413,7 +9413,7 @@ class TestSuicideRetry(unittest.TestCase):
 
         with patch.object(config, "SUICIDE_CONFIRM_SEC", 5.0), \
              patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda *a: sent.append(1) or True), \
+                          side_effect=lambda *a, **_: sent.append(1) or True), \
              patch.object(ActionExecutor.time, "sleep", side_effect=nap):
             ex.do_skip()
 
@@ -9436,7 +9436,7 @@ class TestSuicideRetry(unittest.TestCase):
         ex, st, _logs = self._executor()
         sent = []
 
-        def hold(hwnd, key, sec):
+        def hold(hwnd, key, sec, stop=None):
             sent.append(1)
             if len(sent) == 1:
                 ex.do_skip()             # 1本目の最中に2本目が来た
@@ -9585,7 +9585,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
             self._v = value
 
     def _app(self, pref=None, tabs=4):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_win_count = self.FakeVar(tabs)
         app.tabs = [object()] * tabs
         app._win_count_pref = pref
@@ -9689,7 +9689,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         self.assertIsNone(app._win_count_pref)
 
     def test_the_count_is_written_to_the_file(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
@@ -9738,7 +9738,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         self.assertEqual(app.v_win_count.get(), "", "ここでは窓数を変えない")
 
     def _load(self, data):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
@@ -13156,7 +13156,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
             self.value = value
 
     def _app(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_wvol_enabled = self.Var(False)
         app.v_wvol = {WindowVolume.CONTINUE: self.Var(100), WindowVolume.FREEZE: self.Var(100),
                       WindowVolume.OTHER: self.Var(0)}
@@ -13177,7 +13177,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
     def test_the_save_includes_the_keys(self):
         app = self._app()
         stored = {}
-        fake = type("FakeApp", (), {})()
+        fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
@@ -13757,7 +13757,7 @@ class TestSettingsLive(unittest.TestCase):
 
     # ── 霧看破のボタンの保存と読み込み ─────────────────
     def _fog_app(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_fog_early_read = self.Var(False)
         return app
 
@@ -13791,7 +13791,7 @@ class TestSettingsLive(unittest.TestCase):
 
     def test_the_save_includes_the_key(self):
         stored = {}
-        fake = type("FakeApp", (), {})()
+        fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
@@ -13819,7 +13819,7 @@ class TestSettingsLive(unittest.TestCase):
 
     # ── 窓ごとの設定を動作中も反映 ─────────────────────
     def _live_app(self, running=True):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app._running = running
         self.cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk=True,
                                   announce_intermission=False) for _ in range(2)]
@@ -17052,7 +17052,7 @@ class TestSuicideBackgroundRouting(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_skip()
 
-        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC)
+        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC, stop=ANY)
         mock_focus.assert_not_called()
         mock_hold.assert_not_called()
         self.assertGreater(st._skip_time, 0, "死亡判定用の時刻は残すこと")
@@ -17106,7 +17106,7 @@ class TestSuicideIsolation(unittest.TestCase):
         """別スレッドで回す。止まってしまったら False"""
         sent = []
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda h, k, sec: sent.append(h) or True):
+                          side_effect=lambda h, k, sec, stop=None: sent.append(h) or True):
             t = threading.Thread(target=ex.do_skip, daemon=True)
             t.start()
             t.join(timeout)
@@ -17126,7 +17126,7 @@ class TestSuicideIsolation(unittest.TestCase):
         ex, _st = self._executor()
         held = []
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda *a: held.append(
+                          side_effect=lambda *a, **_: held.append(
                               SharedState._GLOBAL_ACTION_LOCK.locked()) or True):
             ex.do_skip()
 
@@ -17202,7 +17202,7 @@ class TestSuicideIsolation(unittest.TestCase):
         gate = threading.Barrier(2, timeout=2.0)
         lock = threading.Lock()
 
-        def hold(hwnd, key, sec):
+        def hold(hwnd, key, sec, stop=None):
             with lock:
                 inside.append(hwnd)
                 peak.append(len(inside))
@@ -17381,7 +17381,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         SharedState.set_suicide_key("^")
 
     def _app(self, hwnds=(0xA, 0xB)):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.order = []
         app.monitors = []
         for h in hwnds:
@@ -17544,7 +17544,7 @@ class TestActionExecutorSkip(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep") as mock_sleep:
             executor.do_skip()
 
-        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC)
+        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC, stop=ANY)
         mock_focus.assert_not_called()
         mock_sleep.assert_not_called()
 
@@ -20352,7 +20352,7 @@ class TestRoundFreeze(unittest.TestCase):
         held = []
 
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda h, k, sec: held.append(k) or True):
+                          side_effect=lambda h, k, sec, stop=None: held.append(k) or True):
             ex.do_skip()
 
         self.assertTrue(held, "自窓は待たずに自爆すること")
@@ -23035,6 +23035,368 @@ class TestEmergencyKeyGui(unittest.TestCase):
             mainGUI.App._start_emergency_stop_polling(self.app)   # 落ちないこと
 
 
+class _CancelKeyVar:
+    def __init__(self, value):
+        self._v = value
+
+    def get(self):
+        return self._v
+
+    def set(self, value):
+        self._v = value
+
+
+def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
+    """CL: 偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）"""
+    app.v_suicide_cancel_key = _CancelKeyVar(key)
+    app._refresh_suicide_cancel_key_label = lambda: None
+    app._unhook_suicide_cancel_key = lambda: None
+    app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)
+    return app
+
+
+class TestSuicideCancelCL(unittest.TestCase):
+    """CL: 自爆キャンセルのキー（既定 ^）。押すと全部の窓の自爆を止め（長押し中はその場で離す・
+    やり直さない）、そのラウンドはもう自爆しない（後のきっかけでも）。次のラウンドからは今どおり。
+    ロビーで押しても持ち越さない"""
+
+    def setUp(self):
+        SharedState.set_suicide_key("^")
+        for name, value in (("SUICIDE_CONFIRM_SEC", 0.05), ("SUICIDE_RETRY_MAX", 3)):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _executor(self, hwnd=123, **state):
+        state.setdefault("in_round", True)
+        state.setdefault("round_seq", 7)
+        st = WindowState(**state)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=hwnd, do_skip=True), st,
+                                           lambda: True, logs.append)
+        return ex, st, logs
+
+    def _skip(self, ex, during=None):
+        """長押しの回数を返す。during(n, stop) は n 回目の長押しの最中に呼ぶ（死なない）"""
+        sent = []
+
+        def hold(hwnd, key, sec, stop=None):
+            sent.append(key)
+            if during:
+                during(len(sent), stop)
+            return True
+        with patch.object(WindowOperator, "hold_key_background", side_effect=hold):
+            ex.do_skip()
+        return len(sent)
+
+    # ── 止め方 ──────────────────────────────
+    def test_a_cancel_during_the_hold_stops_it_and_does_not_retry(self):
+        ex, st, logs = self._executor()
+        seen = []
+
+        def during(n, stop):
+            seen.append(stop())                 # 押す前は止めない
+            self.assertEqual(ex.cancel_suicide(), "stopped")
+            seen.append(stop())                 # 押した後は止める（その場で離す）
+        with patch.object(ex, "_died_after_skip", return_value=False) as wait:
+            self.assertEqual(self._skip(ex, during), 1, "やり直さない")
+        wait.assert_not_called()                # 死亡を待たずに終わる
+        self.assertEqual(seen, [False, True])
+        self.assertTrue(any("自爆キャンセル → このラウンドは自爆しません" in m for m in logs), logs)
+        self.assertFalse(any("試しましたが" in m for m in logs))
+
+    def test_a_cancel_while_waiting_to_retry_does_not_retry(self):
+        ex, st, _logs = self._executor()
+
+        def died(round_seq):
+            ex.cancel_suicide()                 # 長押しの後、死亡を待っている間に押した
+            return False
+        with patch.object(ex, "_died_after_skip", side_effect=died):
+            self.assertEqual(self._skip(ex), 1)
+
+    def test_the_hold_is_released_at_once(self):
+        """長押しの途中で止める合図が来たら、3秒待たずにキーを離す"""
+        flag = {"stop": False}
+        posted = []
+        user32 = MagicMock()
+        user32.IsIconic.return_value = False
+        user32.GetKeyboardState.return_value = 0
+        user32.PostMessageW.side_effect = lambda h, msg, vk, lp: posted.append(msg)
+        with patch.object(WindowOperator, "_background_key", return_value=(1, 0xDE, 0, 0)), \
+             patch.object(WindowOperator, "user32", user32), \
+             patch.object(WindowOperator, "kernel32", MagicMock()):
+            threading.Timer(0.1, lambda: flag.update(stop=True)).start()
+            started = time.monotonic()
+            ok = WindowOperator.hold_key_background(0x10, "^", 3.0, stop=lambda: flag["stop"])
+            took = time.monotonic() - started
+        self.assertTrue(ok)
+        self.assertLess(took, 1.0, "3秒待たない")
+        self.assertEqual(posted, [WindowOperator.WM_KEYDOWN, WindowOperator.WM_KEYUP], "離した")
+
+    def test_without_a_stop_it_holds_the_whole_time(self):
+        with patch.object(WindowOperator.time, "sleep") as sleep:
+            WindowOperator._wait_holding(3.0, None)
+        sleep.assert_called_once_with(3.0)
+
+    # ── そのラウンドはもう自爆しない・次のラウンドは今どおり ──────────
+    def test_a_later_trigger_in_the_same_round_does_not_suicide(self):
+        ex, st, logs = self._executor()
+        self.assertEqual(ex.cancel_suicide(), "marked")
+        self.assertEqual(self._skip(ex), 0, "8 Pages の公開後などの後のきっかけでも自爆しない")
+        self.assertTrue(any("自爆キャンセル済み → このラウンドは自爆しません" in m for m in logs), logs)
+
+    def test_the_next_round_suicides_as_before(self):
+        ex, st, _logs = self._executor()
+        ex.cancel_suicide()
+        st.round_seq += 1
+        self.assertEqual(self._skip(ex), 3, "次のラウンドは今どおり（死ななければ3回）")
+
+    def test_a_press_in_the_lobby_is_not_carried_over(self):
+        ex, st, _logs = self._executor(in_round=False)
+        self.assertIsNone(ex.cancel_suicide())
+        st.round_seq += 1                       # 次のラウンドが始まる
+        st.in_round = True
+        self.assertEqual(self._skip(ex), 3)
+
+    # ── 全部の窓 ──────────────────────────────
+    def _app(self, monitors, running=True):
+        app = type("FakeApp", (), {})()
+        app._running = running
+        app.monitors = monitors
+        app.logs = []
+        app._log = app.logs.append
+        return app
+
+    def _monitor(self, ex):
+        monitor = type("FakeMonitor", (), {})()
+        monitor._action = ex
+        monitor.cancel_suicide = lambda: LogMonitor.LogMonitor.cancel_suicide(monitor)
+        return monitor
+
+    def test_every_window_is_stopped(self):
+        suiciding, st1, _ = self._executor(hwnd=1, suicide_seq=7)
+        idle, st2, _ = self._executor(hwnd=2)
+        lobby, st3, _ = self._executor(hwnd=3, in_round=False)
+        app = self._app([self._monitor(e) for e in (suiciding, idle, lobby)])
+        mainGUI.App._on_suicide_cancel_key(app, "^")
+        self.assertEqual(st1.suicide_cancelled_round, 7)
+        self.assertEqual(st2.suicide_cancelled_round, 7, "自爆していない窓もこのラウンドは自爆しない")
+        self.assertEqual(st3.suicide_cancelled_round, -1, "ロビーの窓は何もしない")
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → 1窓の自爆を止めました"])
+
+    def test_no_window_suiciding_is_said(self):
+        idle, _st, _ = self._executor()
+        app = self._app([self._monitor(idle)])
+        mainGUI.App._on_suicide_cancel_key(app, "^")
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → "
+                                    "自爆中の窓はありません（このラウンドは自爆しません）"])
+
+    def test_only_the_lobby_does_nothing(self):
+        lobby, st, _ = self._executor(in_round=False)
+        app = self._app([self._monitor(lobby)])
+        mainGUI.App._on_suicide_cancel_key(app, "^")
+        self.assertEqual(st.suicide_cancelled_round, -1)
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → ラウンド中の窓はありません（何もしません）"])
+
+    def test_nothing_when_not_running(self):
+        ex, st, _ = self._executor()
+        app = self._app([self._monitor(ex)], running=False)
+        mainGUI.App._on_suicide_cancel_key(app, "^")
+        self.assertEqual(st.suicide_cancelled_round, -1)
+        self.assertEqual(app.logs, [])
+
+    # ── キーの受け取り ──────────────────────────
+    def _hooked_app(self, key="^"):
+        app = _with_cancel_key(type("FakeApp", (), {})(), key)
+        app._unhook_suicide_cancel_key = lambda: mainGUI.App._unhook_suicide_cancel_key(app)
+        app._suicide_cancel_key_down = lambda k: mainGUI.App._suicide_cancel_key_down(app, k)
+        app._capturing_key = False
+        app._suicide_cancel_down = False
+        app.after_calls = []
+        app.after = lambda ms, fn, *args: app.after_calls.append(args)
+        app._on_suicide_cancel_key = None
+        app.logs = []
+        app._log = app.logs.append
+        return app
+
+    def _event(self, kind):
+        return type("Event", (), {"event_type": kind})()
+
+    def test_the_key_is_hooked_and_a_press_counts_once(self):
+        app = self._hooked_app()
+        hooks = []
+        with patch.object(mainGUI.keyboard, "hook_key",
+                          side_effect=lambda key, cb, suppress: hooks.append((key, cb, suppress)) or "h"):
+            mainGUI.App._hook_suicide_cancel_key(app)
+        self.assertEqual([(k, s) for k, _cb, s in hooks], [("^", False)], "suppress しない")
+        on_key = hooks[0][1]
+        for kind in ("down", "down", "down", "up", "down"):   # 押しっぱなしの繰り返しは1回
+            on_key(self._event(kind))
+        self.assertEqual(app.after_calls, [("^",), ("^",)])
+
+    def test_no_reaction_while_setting_a_key(self):
+        app = self._hooked_app()
+        app._capturing_key = True
+        mainGUI.App._suicide_cancel_key_down(app, "^")
+        self.assertEqual(app.after_calls, [])
+
+    def test_changing_the_key_hooks_the_new_one(self):
+        app = self._hooked_app()
+        app._suicide_cancel_hook = "old"
+        app._refresh_suicide_cancel_key_label = lambda: None
+        app._hook_suicide_cancel_key = lambda: mainGUI.App._hook_suicide_cancel_key(app)
+        app.v_emergency_key = _CancelKeyVar("p")
+        app.v_start_key = _CancelKeyVar("")
+        with patch.object(mainGUI.keyboard, "hook_key", return_value="new") as hook, \
+             patch.object(mainGUI.keyboard, "unhook") as unhook:
+            mainGUI.App._finish_capture_cancel_key(app, "f8")
+        unhook.assert_called_once_with("old")
+        self.assertEqual(hook.call_args.args[0], "f8")
+        self.assertEqual(app._suicide_cancel_hook, "new")
+        self.assertEqual(app.v_suicide_cancel_key.get(), "f8")
+
+    def test_the_tools_own_background_key_does_not_react(self):
+        """ツールが自分で送る背面の ^（PostMessage）は低レベルのフックに来ない。
+        同じフックに入力の通知（実際のキーと同じ通り道）を入れると反応する（対照）"""
+        # このテストの中では keyboard を MagicMock にしてある。本物のフックは別のプロセスで
+        # 掛ける（掛けたまま終わると、Python の終了処理でプロセスがときどき落ちるため。
+        # 子は結果を出してから os._exit で終わり、終了コードではなく出力で判定する）
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run([sys.executable, "-c", self._REAL_HOOK_CHILD, tmp],
+                               cwd=os.path.dirname(os.path.abspath(__file__)),
+                               capture_output=True, text=True, timeout=60,
+                               stdin=subprocess.DEVNULL)
+        lines = [l for l in r.stdout.splitlines() if l.startswith("RESULT ")]
+        if not lines and "NO_KEYBOARD" in r.stdout:
+            self.skipTest("keyboard が無い")
+        self.assertTrue(lines, (r.returncode, r.stdout, r.stderr[-2000:]))
+        result = json.loads(lines[-1][len("RESULT "):])
+        self.assertTrue(result["sent"], "背面で送れた")
+        self.assertEqual(result["background"], [], "背面の ^ では反応しない")
+        self.assertEqual(result["control"], ["down"], "対照: 入力の通知の通り道に入れると届く")
+
+    _REAL_HOOK_CHILD = r"""
+import json, os, sys, time
+from pathlib import Path
+import config
+tmp = Path(sys.argv[1])
+config.DEBUG_LOG_PATH = tmp / "debug.log"       # 本物の %LOCALAPPDATA% に書かない
+config.SETTINGS_PATH = tmp / "settings.json"
+try:
+    import keyboard
+except ImportError:
+    print("NO_KEYBOARD", flush=True)
+    os._exit(0)
+import tkinter as tk
+import WindowOperator
+root = tk.Tk()
+root.withdraw()
+root.update()
+events = []
+keyboard.hook_key("^", lambda e: events.append(e.event_type), suppress=False)
+sent = WindowOperator._hold_key_background(int(root.winfo_id()), "^", 0.1)
+deadline = time.time() + 0.5
+while time.time() < deadline:
+    root.update()
+    time.sleep(0.02)
+background = list(events)
+keyboard._listener.queue.put(keyboard.KeyboardEvent("down", keyboard.key_to_scan_codes("^")[0], "^"))
+deadline = time.time() + 2.0
+while len(events) == len(background) and time.time() < deadline:
+    time.sleep(0.02)
+print("RESULT " + json.dumps({"sent": sent, "background": background,
+                              "control": events[len(background):]}), flush=True)
+os._exit(0)
+"""
+
+    # ── 設定 ──────────────────────────────────
+    def test_the_default_is_caret(self):
+        self.assertEqual(config.SUICIDE_CANCEL_KEY, "^")
+        self.assertTrue(HotKey.is_valid(config.SUICIDE_CANCEL_KEY))
+
+    def _load(self, data):
+        loader = TestStartKeySettings("test_it_is_saved")
+        return loader._load(data)
+
+    def test_it_is_restored(self):
+        app = self._load({"emergency_stop_key": "p", "suicide_cancel_key": "f8"})
+        self.assertEqual(app.v_suicide_cancel_key.get(), "f8")
+
+    def test_a_missing_or_broken_value_is_the_default(self):
+        self.assertEqual(self._load({}).v_suicide_cancel_key.get(), "^")
+        loader = TestStartKeySettings("test_it_is_saved")
+        app = loader._load({"emergency_stop_key": "p", "suicide_cancel_key": "nokey"}, valid=False)
+        self.assertEqual(app.v_suicide_cancel_key.get(), "^")
+
+    def test_a_saved_value_equal_to_another_key_is_the_default(self):
+        for other in ({"emergency_stop_key": "f8"}, {"start_key": "f8"}, {}):
+            data = dict(other, suicide_cancel_key="f8" if other else "f1")
+            self.assertEqual(self._load(data).v_suicide_cancel_key.get(), "^", data)
+
+    def test_it_is_saved(self):
+        app = _with_cancel_key(type("FakeApp", (), {})(), "f8")
+        app.tabs = []
+        app.tool_rows = []
+        app._win_count_pref = None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
+                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, _CancelKeyVar(""))
+        app.v_freeze_rounds = {}
+        app._window_volume_settings = lambda: {}
+        app._fog_early_read_setting = lambda: {}
+        app._launch_options_setting = lambda: {}
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+        self.assertEqual(saved["suicide_cancel_key"], "f8")
+
+    def _capture_app(self, cancel="^", emergency="p", start="f9"):
+        app = _with_cancel_key(type("FakeApp", (), {})(), cancel)
+        app.v_emergency_key = _CancelKeyVar(emergency)
+        app.v_start_key = _CancelKeyVar(start)
+        app._hook_suicide_cancel_key = MagicMock()
+        app._refresh_emergency_key_label = lambda: None
+        app._refresh_start_key_label = lambda: None
+        app._start_key_pressed = False
+        app.logs = []
+        app._log = app.logs.append
+        return app
+
+    def test_the_same_key_as_another_cannot_be_chosen(self):
+        for key, name in (("p", "緊急停止"), ("f9", "マクロ開始"), ("f1", "チェイス"), ("f2", "チェイス")):
+            app = self._capture_app()
+            mainGUI.App._finish_capture_cancel_key(app, key)
+            self.assertEqual(app.v_suicide_cancel_key.get(), "^", key)
+            app._hook_suicide_cancel_key.assert_not_called()
+            self.assertIn(f"[自爆キャンセル] ⚠ {name}のキーと同じキーは使えません", app.logs[-1])
+
+    def test_a_broken_or_missing_key_keeps_the_setting(self):
+        for key in (None, "nokey"):
+            app = self._capture_app()
+            with patch.object(HotKey, "is_valid", side_effect=lambda k: k != "nokey"):
+                mainGUI.App._finish_capture_cancel_key(app, key)
+            self.assertEqual(app.v_suicide_cancel_key.get(), "^", key)
+            app._hook_suicide_cancel_key.assert_not_called()
+
+    def test_a_new_key_is_set_and_hooked(self):
+        app = self._capture_app()
+        mainGUI.App._finish_capture_cancel_key(app, "f8")
+        self.assertEqual(app.v_suicide_cancel_key.get(), "f8")
+        app._hook_suicide_cancel_key.assert_called_once_with()
+        self.assertEqual(app.logs[-1], "[自爆キャンセル] F8キーに変更しました")
+
+    def test_the_other_keys_cannot_take_the_cancel_key(self):
+        app = self._capture_app()
+        mainGUI.App._finish_capture_key(app, "^", "stop")
+        self.assertEqual(app.v_emergency_key.get(), "p")
+        app = self._capture_app()
+        mainGUI.App._finish_capture_start_key(app, "^")
+        self.assertEqual(app.v_start_key.get(), "f9")
+
+
 class TestEmergencyKeySettings(unittest.TestCase):
     """保存と復元。壊れた値で緊急停止を失わないこと"""
 
@@ -23049,7 +23411,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
             self._v = v
 
     def _app(self, key="p"):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_emergency_key = TestEmergencyKeySettings.FakeVar(key)
         app.v_start_key = TestEmergencyKeySettings.FakeVar("")
         app._refresh_emergency_key_label = lambda: None
@@ -23376,7 +23738,7 @@ class TestStartKeySettings(unittest.TestCase):
             self._v = value
 
     def _load(self, data, valid=True):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
@@ -23411,7 +23773,7 @@ class TestStartKeySettings(unittest.TestCase):
         return app
 
     def test_it_is_saved(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         app._win_count_pref = None
@@ -23662,7 +24024,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
             pass
 
     def _app(self, access=None, windows=2, join=True):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app._running = False
         app.v_join_world = self.FakeVar(join)
         app.v_desktop_mode = self.FakeVar(True)
@@ -23782,7 +24144,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
 
     def test_an_old_settings_file_still_loads(self):
         """古い settings.json に残っているキーは無視する（落ちない）"""
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_freeze_8pages",
@@ -23827,7 +24189,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
             self.value = value
 
     def _app(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         app._win_count_pref = None
@@ -23913,7 +24275,7 @@ class TestSettingsArePersisted(unittest.TestCase):
     """
 
     def _app(self, tabs=1, save=None):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = [object()] * tabs
         app.logs = []
         app._log = app.logs.append
@@ -23983,7 +24345,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
     # ── 保存する項目は増減していない ────────────────
     def test_the_saved_keys_are_unchanged(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         app._win_count_pref = None
@@ -24007,12 +24369,13 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
+            "suicide_cancel_key",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
 
     def test_other_keys_in_the_file_survive(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
         app._win_count_pref = None
@@ -24160,7 +24523,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         return row
 
     def _app(self, paths):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = [self._row(p) for p in paths]
         app._win_count_pref = None
@@ -24201,7 +24564,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         self.assertEqual(saved["tool_launchers"], [r"D:\a\one.exe"])
 
     def test_saved_paths_are_restored(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         added = []
         app._add_tool_row = added.append
         app.v_vrchat_exe = TestToolLauncherSettings.FakeVar()
@@ -24210,7 +24573,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         self.assertEqual(added, [r"D:\a\one.exe", r"D:\b\two.exe"])
 
     def test_a_legacy_file_without_the_key_is_fine(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         added = []
         app._add_tool_row = added.append
 
@@ -24219,7 +24582,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         self.assertEqual(added, [])
 
     def test_a_malformed_entry_is_skipped(self):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         added = []
         app._add_tool_row = added.append
 
@@ -26004,7 +26367,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         self.assertEqual(list(made), config.SKIP_ROUND_SELECTABLE)
 
     def _save(self, tabs, stored=None):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = tabs
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
@@ -26060,7 +26423,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
     # ── 復元しない ───────────────────────────
     def test_the_round_lists_are_not_restored(self):
         """古い settings.json に値が残っていても、チェックは付かない"""
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = [self._tab(), self._tab()]
         app._saved_profiles = []
         app._saved_skip_rounds = [["Classic", "Fog"], []]
@@ -26077,7 +26440,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
 
     def test_the_profiles_are_still_restored(self):
         """巻き込んでいないこと"""
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = [self._tab(), self._tab()]
         app._saved_profiles = [3, 5]
 
@@ -26129,7 +26492,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         return tab
 
     def _load(self, data):
-        app = type("FakeApp", (), {})()
+        app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = [self._tab(), self._tab()]
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",

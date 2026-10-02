@@ -146,6 +146,10 @@ class LogMonitor:
         else:
             self._log(f"チェイスの向きを{name}に切り替え")
 
+    def cancel_suicide(self):
+        """自爆キャンセルのキー（CL）。ActionExecutor.cancel_suicide() の結果を返す"""
+        return self._action.cancel_suicide()
+
     def _log(self, msg: str):
         self.logger(f"[窓{self.window_idx}] {msg}")
 

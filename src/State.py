@@ -98,6 +98,8 @@ class WindowState:
     speed_strafe_done: bool = False  # このラウンドで速度検知の横移動をしたか
     # 自爆（リトライ込み）が走っているラウンドの round_seq。流れを1本にするため
     suicide_seq: int = -1
+    # 自爆キャンセルのキーを押したラウンドの round_seq。そのラウンドはもう自爆しない（CL）
+    suicide_cancelled_round: int = -1
     # 入室のたびに進める。インスタンスをまたいで動き続けるものを止めるため
     instance_seq: int = 0
     speed_freeze_held: bool = False  # この窓が速度検知フリーズを張っているか
