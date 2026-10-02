@@ -12597,8 +12597,9 @@ class TestBeginAdjust(unittest.TestCase):
         self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
         self.addCleanup(setattr, ActionExecutor.ActionExecutor, "_detector_unavailable_logged",
                         ActionExecutor.ActionExecutor._detector_unavailable_logged)
+        # CI: 高さ 971px で幅 100px の文字は w/H 0.103（目標）。横のテストで前後は動かない
         self.capture = patch.object(ScreenCapture, "capture_window",
-                                    return_value=(b"\0" * 16, 2, 2))
+                                    return_value=(b"\0" * 16, 2, 971))
         for p in (patch.object(BeginDetect, "available", return_value=True),
                   patch.object(BeginDetect, "find", side_effect=self._find),
                   patch.object(WindowOperator, "aim_in_window_image", return_value=self.AIM),
@@ -12705,11 +12706,13 @@ class TestBeginAdjust(unittest.TestCase):
         self.assertEqual(self.ex._adjust_to_begin(2), "skip", "別のラウンド")
         self.assertEqual(self.moves, [])
 
-    def test_no_begin_on_the_first_shot_is_not_found(self):
-        self.hits = [None]
+    def test_no_begin_anywhere_is_not_found(self):
+        """CI: 見つからなければ探す（後ろ→戻して前へ×4→戻す）。それでも無ければ not_found"""
+        self.hits = [None] * 10
 
         self.assertEqual(self.ex._adjust_to_begin(1), "not_found")
-        self.assertEqual(self.moves, [])
+        self.assertEqual(self.moves, [("back", 0.15), ("forward", 0.15)] + [("forward", 0.3)] * 4
+                         + [("back", 1.2)])
 
     def test_no_capture_is_a_skip(self):
         self.capture.stop()
@@ -16595,6 +16598,145 @@ class TestOldExtractDirsCH(unittest.TestCase):
     def test_startup_runs_it_in_the_background(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("threading.Thread(target=AutoUpdate.cleanup_old_extract_dirs, daemon=True).start()", src)
+
+
+class TestBeginAdjustDepthCI(unittest.TestCase):
+    """CI: Begin の位置合わせの前後（文字の幅÷窓の高さ）と、見つからないときの探し方。
+    撮影は差し替え（BeginDetect の結果を順に返す偽物。窓の高さ 1000px）"""
+
+    AIM = (500.0, 400.0)
+    H = 1000
+
+    def setUp(self):
+        self.moves = []
+        self.logs = []
+        self.hits = []
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        self.st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5, round_seq=1)
+        self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
+        for p in (patch.object(BeginDetect, "available", return_value=True),
+                  patch.object(BeginDetect, "find", side_effect=self._find),
+                  patch.object(WindowOperator, "aim_in_window_image", return_value=self.AIM),
+                  patch.object(ScreenCapture, "capture_window", return_value=(b"\0" * 16, 2, self.H)),
+                  patch.object(ActionExecutor.time, "sleep"),
+                  patch.object(self.ex, "move", side_effect=self._move)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _find(self, _bits, _w, _h):
+        """hits は (横ずれ（文字幅の何倍）, w/H) か None"""
+        if not self.hits:
+            return None
+        item = self.hits.pop(0)
+        if item is None:
+            return None
+        dx_w, ratio = item
+        w = ratio * self.H
+        return {"score": 0.9, "dark": 0.9, "cx": self.AIM[0] + dx_w * w, "cy": 480.0, "w": w, "h": 20}
+
+    def _move(self, direction, sec):
+        self.moves.append((direction, round(sec, 3)))
+
+    def test_the_direction_from_the_width(self):
+        """実測（begin_data 2560x1440）の数値で: 後ろへ0.2秒・0.4秒 → 前へ、前へ0.15秒 → 後ろへ、Begin の位置 → 動かない"""
+        D = ActionExecutor.depth_direction
+        self.assertEqual(D(0.069), "forward")
+        self.assertEqual(D(0.044), "forward")
+        self.assertEqual(D(0.146), "back")
+        for ratio in (0.101, 0.103, 0.105, 0.091, 0.115):
+            self.assertIsNone(D(ratio), ratio)
+        self.assertEqual(D(0.090), "forward", "許容 12% の外")
+        self.assertEqual(D(0.116), "back")
+        self.assertIsNone(D(None), "窓の高さが分からなければ前後は見ない")
+
+    def test_far_moves_forward_then_uses_the_measured_rate(self):
+        """実機1: 0.070 → 前へ0.1秒で 0.086（0.16/秒）→ 残り 0.017 は 0.10秒 → 許容内"""
+        self.hits = [(0.0, 0.070), (0.0, 0.086), (0.0, 0.102)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(self.moves, [("forward", 0.1), ("forward", 0.106)])
+        self.assertTrue(any("位置合わせ（前後: 幅 0.070 → 目標 0.103）→ 前へ 0.10秒" in m for m in self.logs),
+                        self.logs)
+        self.assertTrue(any("位置合わせ済み" in m for m in self.logs))
+
+    def test_near_moves_back(self):
+        self.hits = [(0.0, 0.146), (0.0, 0.104)]
+        self.ex._adjust_to_begin(1)
+        self.assertEqual(self.moves, [("back", 0.1)])
+
+    def test_within_the_tolerance_nothing_moves(self):
+        self.hits = [(0.1, 0.110)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(self.moves, [])
+
+    def test_a_different_walking_speed_still_reaches_the_target(self):
+        """足が速い（Punished の後など）: 0.1秒で 0.04 変わる → 2回目はそれに合わせて短く"""
+        self.hits = [(0.0, 0.040), (0.0, 0.080), (0.0, 0.100)]
+        self.ex._adjust_to_begin(1)
+        self.assertEqual(self.moves, [("forward", 0.1), ("forward", 0.057)])     # 0.023 ÷ 0.4/秒
+
+    def test_horizontal_first_then_depth_then_horizontal_again(self):
+        """実機2: 横ずれ 2.58（幅 0.204）→ 横を合わせ → 前後 → 前後の後に横がずれたら横を直す"""
+        self.hits = [(2.58, 0.204), (1.54, 0.204), (0.09, 0.204), (0.09, 0.121), (0.5, 0.104), (0.05, 0.104)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        kinds = [d for d, _s in self.moves]
+        self.assertEqual(kinds, ["right", "right", "back", "back", "right"])
+
+    def test_the_horizontal_rate_is_in_text_widths(self):
+        """横の速さは文字幅/秒: 1回目 0.1秒で 1.04 減 → 残り 1.54 は 0.148秒"""
+        self.hits = [(2.58, 0.103), (1.54, 0.103), (0.05, 0.103)]
+        self.ex._adjust_to_begin(1)
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.148)])
+
+    def test_the_depth_step_count_and_total_are_capped(self):
+        self.hits = [(0.0, 0.040 + 0.004 * i) for i in range(20)]
+        with patch.object(config, "BEGIN_ADJUST_DEPTH_MAX_TOTAL_SEC", 100):
+            self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(len(self.moves), config.BEGIN_ADJUST_DEPTH_MAX_STEPS)
+        self.assertTrue(any("打ち切り" in m for m in self.logs))
+        self.moves.clear()
+        self.hits = [(0.0, 0.040 + 0.004 * i) for i in range(20)]
+        with patch.object(config, "BEGIN_ADJUST_DEPTH_MAX_STEPS", 100):
+            self.ex._adjust_to_begin(1)
+        self.assertAlmostEqual(sum(s for _d, s in self.moves), config.BEGIN_ADJUST_DEPTH_MAX_TOTAL_SEC)
+        self.assertTrue(all(s <= config.BEGIN_ADJUST_DEPTH_MAX_SEC for _d, s in self.moves))
+
+    def test_no_depth_change_stops_it(self):
+        self.hits = [(0.0, 0.070), (0.0, 0.071)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(self.moves, [("forward", 0.1)])
+        self.assertTrue(any("前後に動いていない" in m for m in self.logs), self.logs)
+
+    # ── 見つからないとき ─────────────────────────────
+    def test_too_near_is_found_by_stepping_back(self):
+        """実機2: 後ろへ 0.15秒で見つかった → そのまま合わせる"""
+        self.hits = [None, (0.0, 0.104)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(self.moves, [("back", 0.15)])
+
+    def test_too_far_is_found_by_stepping_forward(self):
+        """実機1: 前へ 0.3秒×3 で見つかった（幅 0.070）→ 前後を合わせる"""
+        self.hits = [None, None, None, None, (0.0, 0.070), (0.0, 0.086), (0.0, 0.102)]
+        self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
+        self.assertEqual(self.moves, [("back", 0.15), ("forward", 0.15), ("forward", 0.3), ("forward", 0.3),
+                                      ("forward", 0.3), ("forward", 0.1), ("forward", 0.106)])
+
+    def test_nothing_found_goes_back_and_gives_up_as_before(self):
+        self.hits = [None] * 10
+        self.assertEqual(self.ex._adjust_to_begin(1), "not_found")
+        self.assertEqual(self.moves[-1], ("back", 1.2), "前へ動いた分を戻す")
+        net = sum(s if d == "forward" else -s for d, s in self.moves)
+        self.assertAlmostEqual(net, 0.0, msg="元の位置へ戻る")
+
+    def test_a_stop_while_searching_stops(self):
+        self.hits = [None, None]
+        self.ex.move.side_effect = lambda d, s: (self._move(d, s), setattr(self.st, "begin_done", True))
+        self.assertEqual(self.ex._adjust_to_begin(1), "skip")
+        self.assertEqual(self.moves, [("back", 0.15)])
+
+    def test_the_window_height_goes_with_the_hit(self):
+        self.hits = [(0.0, 0.103)]
+        hit, _aim = self.ex._look_for_begin()
+        self.assertEqual(hit["H"], self.H)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

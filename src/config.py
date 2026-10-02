@@ -320,6 +320,21 @@ BEGIN_ADJUST_MAX_STEPS    = 4      # 横移動の回数の上限
 BEGIN_ADJUST_MAX_TOTAL_SEC = 1.2   # 1回の位置合わせで横移動してよい合計
 BEGIN_ADJUST_SETTLE_SEC   = 0.4    # 動いてから撮り直すまでの待ち（減速を待つ）
 BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変わらなければ打ち切る（OSC が届いていない等）
+# 前後（CI）。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
+# 後ろへ 0.2秒 0.069・0.4秒 0.044、前へ 0.15秒 0.146。高さはほとんど変わらない）
+BEGIN_ADJUST_TARGET_W        = 0.103  # 目標の w/H
+BEGIN_ADJUST_DEPTH_TOL       = 0.12   # 許容（目標に対する割合。0.091〜0.115 なら動かない）
+BEGIN_ADJUST_DEPTH_PROBE_SEC = 0.1    # 1回目の前後移動（w/H 毎秒がまだ分からないとき）
+BEGIN_ADJUST_DEPTH_MIN_SEC   = 0.05   # 1回の前後移動の下限・上限
+BEGIN_ADJUST_DEPTH_MAX_SEC   = 0.4
+BEGIN_ADJUST_DEPTH_MAX_STEPS = 4      # 前後移動の回数の上限
+BEGIN_ADJUST_DEPTH_MAX_TOTAL_SEC = 1.2  # 1回の位置合わせで前後に動いてよい合計
+BEGIN_ADJUST_DEPTH_MIN_CHANGE = 0.003 # 前後に動いてこれ以下しか w/H が変わらなければ打ち切る
+# BEGIN が見つからないときの探し方（実機 2026-10-02）: 近すぎる（文字が視界の下に外れる）→
+# 後ろへ 0.15秒。遠すぎる（文字が小さすぎる）→ 前へ 0.3秒ずつ最大4回
+BEGIN_SEARCH_BACK_SEC       = 0.15
+BEGIN_SEARCH_FORWARD_SEC    = 0.3
+BEGIN_SEARCH_FORWARD_TRIES  = 4
 # 押してから受理（Verified）を待つ上限。差し込み後の待ち（_wait_begin_accepted）と、
 # 前面化＋クリック後の押し直し前の待ち（_begin_accepted）で共用する（依頼者の判断）。
 # 押せた回は実測 0.2 秒ほどで受理が来るので、待たずに抜ける（2026-09-27 22:35 は

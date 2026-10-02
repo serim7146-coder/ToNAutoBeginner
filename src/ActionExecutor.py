@@ -39,6 +39,22 @@ def classify_speed(value: float) -> str:
 ITEM_LOSS_WATCH_SEC = 0.2
 
 
+def _width_ratio(hit) -> float | None:
+    """文字の幅÷窓の高さ（w/H）。窓の高さが分からなければ None（前後は見ない）"""
+    height = hit.get("H") if hit else None
+    return hit["w"] / height if height else None
+
+
+def depth_direction(ratio) -> str | None:
+    """w/H から前後の向き: 小さい（遠い）→ "forward"、大きい（近い）→ "back"、許容内 → None"""
+    if ratio is None:
+        return None
+    target = config.BEGIN_ADJUST_TARGET_W
+    if abs(ratio - target) <= target * config.BEGIN_ADJUST_DEPTH_TOL:
+        return None
+    return "forward" if ratio < target else "back"
+
+
 class ActionExecutor:
     # 検出器が使えないことは、アプリ起動中に1回だけ告げる
     _detector_unavailable_logged = False
@@ -448,13 +464,18 @@ class ActionExecutor:
 
     # ── Begin の位置合わせ（画像で BEGIN を探して横移動で照準に寄せる）──
     def _adjust_to_begin(self, round_seq: int) -> str:
-        """照準（クライアント領域の中央）と BEGIN の文字の横のずれを、横移動で詰める。
+        """照準（クライアント領域の中央）と BEGIN の文字のずれを、横移動と前後移動で詰める。
 
-        "aimed": 許容内にした・動かずに済んだ・途中で打ち切った（BEGIN は最初に
-        見えていた）／"not_found": 最初の撮影で BEGIN が無い／"skip": 使えない・
-        撮れない・中止。視点は回さない（回した向きが次のラウンドの Begin 前移動に
-        残ると、明後日の方向へ歩く）。_GLOBAL_ACTION_LOCK は取らない（撮影も
-        横移動も前面を奪わない。検出は1回あたり平均1〜2秒・最大4秒ほどかかる）
+        横: 照準と文字の中心の横のずれ（文字の幅の何倍か）。前後: 文字の幅÷窓の高さ
+        （w/H。小さい＝遠い→前へ、大きい＝近い→後ろへ。目標 BEGIN_ADJUST_TARGET_W）。
+        横を先に合わせ、前後を動かした後に横がずれたら横をもう一度合わせる。どちらも
+        1回目は少し動いて速さを測り（横は文字幅/秒、前後は w/H 毎秒）、2回目からは
+        その速さで秒数を出す。回数・合計時間の上限は横と前後で別々に持つ。
+        最初の撮影で BEGIN が無ければ、後ろ→前の順に探す（_search_for_begin）。
+
+        "aimed": 許容内にした・動かずに済んだ・途中で打ち切った（BEGIN は見えていた）／
+        "not_found": 探しても BEGIN が無い／"skip": 使えない・撮れない・中止。
+        視点は回さない。_GLOBAL_ACTION_LOCK は取らない（撮影も移動も前面を奪わない）
         """
         if not BeginDetect.available():
             if not ActionExecutor._detector_unavailable_logged:
@@ -468,47 +489,118 @@ class ActionExecutor:
             return "skip"
         hit, aim_x = seen
         if hit is None:
-            return "not_found"
-        dx = hit["cx"] - aim_x
-        px_per_sec = None
-        total = 0.0
-        steps = 0
+            seen = self._search_for_begin(round_seq)
+            if seen == "skip":
+                return "skip"
+            if seen is None:
+                return "not_found"
+            hit, aim_x = seen
+        x_rate = None           # 横の速さ（文字幅/秒）
+        d_rate = None           # 前後の速さ（w/H 毎秒）
+        x_total = d_total = 0.0
+        x_steps = d_steps = 0
         while True:
-            if abs(dx) <= hit["w"] * config.BEGIN_ADJUST_TOL:
-                if steps:
-                    self._log(f"Begin: 位置合わせ済み（横 {dx:+.0f}px）")
+            dx = hit["cx"] - aim_x
+            x_ok = abs(dx) <= hit["w"] * config.BEGIN_ADJUST_TOL
+            ratio = _width_ratio(hit)
+            depth = depth_direction(ratio)
+            if x_ok and depth is None:
+                if x_steps or d_steps:
+                    self._log(f"Begin: 位置合わせ済み（横 {dx:+.0f}px"
+                              + (f"・幅 {ratio:.3f}" if d_steps else "") + "）")
                 else:
                     self._log(f"Begin: BEGIN は照準の上にあります（横 {dx:+.0f}px）"
                               "→ そのまま2回目を押します")
                 return "aimed"
-            if steps >= config.BEGIN_ADJUST_MAX_STEPS:
-                return self._adjust_gave_up(f"{steps}回動いた。横 {dx:+.0f}px")
-            sec = (config.BEGIN_ADJUST_PROBE_SEC if px_per_sec is None
-                   else abs(dx) / px_per_sec)
-            sec = min(max(sec, config.BEGIN_ADJUST_MIN_SEC), config.BEGIN_ADJUST_MAX_SEC)
-            sec = min(sec, config.BEGIN_ADJUST_MAX_TOTAL_SEC - total)
-            if sec < config.BEGIN_ADJUST_MIN_SEC:
-                return self._adjust_gave_up(f"合計 {total:.2f}秒動いた。横 {dx:+.0f}px")
+            move = None
+            if not x_ok:
+                sec = (config.BEGIN_ADJUST_PROBE_SEC if x_rate is None
+                       else abs(dx) / hit["w"] / x_rate)
+                sec = min(max(sec, config.BEGIN_ADJUST_MIN_SEC), config.BEGIN_ADJUST_MAX_SEC)
+                sec = min(sec, config.BEGIN_ADJUST_MAX_TOTAL_SEC - x_total)
+                if x_steps < config.BEGIN_ADJUST_MAX_STEPS and sec >= config.BEGIN_ADJUST_MIN_SEC:
+                    move = "x"
+            if move is None and depth is not None:
+                sec = (config.BEGIN_ADJUST_DEPTH_PROBE_SEC if d_rate is None
+                       else abs(ratio - config.BEGIN_ADJUST_TARGET_W) / d_rate)
+                sec = min(max(sec, config.BEGIN_ADJUST_DEPTH_MIN_SEC), config.BEGIN_ADJUST_DEPTH_MAX_SEC)
+                sec = min(sec, config.BEGIN_ADJUST_DEPTH_MAX_TOTAL_SEC - d_total)
+                if (d_steps < config.BEGIN_ADJUST_DEPTH_MAX_STEPS
+                        and sec >= config.BEGIN_ADJUST_DEPTH_MIN_SEC):
+                    move = "depth"
+            if move is None:
+                return self._adjust_gave_up(
+                    f"横 {x_steps}回 {x_total:.2f}秒・前後 {d_steps}回 {d_total:.2f}秒動いた。"
+                    f"横 {dx:+.0f}px" + (f"・幅 {ratio:.3f}" if ratio is not None else ""))
             if self._adjust_stopped(round_seq):
                 return "skip"
-            direction, label = ("right", "右") if dx > 0 else ("left", "左")
-            self._log(f"Begin: 位置合わせ（照準から横 {dx:+.0f}px）→ {label}へ {sec:.2f}秒")
+            if move == "x":
+                direction, label = ("right", "右") if dx > 0 else ("left", "左")
+                self._log(f"Begin: 位置合わせ（照準から横 {dx:+.0f}px）→ {label}へ {sec:.2f}秒")
+                x_total += sec
+                x_steps += 1
+            else:
+                direction, label = ("forward", "前") if depth == "forward" else ("back", "後ろ")
+                self._log(f"Begin: 位置合わせ（前後: 幅 {ratio:.3f} → 目標 "
+                          f"{config.BEGIN_ADJUST_TARGET_W:.3f}）→ {label}へ {sec:.2f}秒")
+                d_total += sec
+                d_steps += 1
             self.move(direction, sec)
-            total += sec
-            steps += 1
             time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
             if self._adjust_stopped(round_seq):
                 return "skip"
             seen = self._look_for_begin()
             if seen is None or seen[0] is None:
                 return self._adjust_gave_up("BEGIN を見失った")
-            hit, aim_x = seen
-            new_dx = hit["cx"] - aim_x
-            moved = abs(dx - new_dx)
-            if moved <= config.BEGIN_ADJUST_MIN_MOVE_PX:
-                return self._adjust_gave_up(f"動いていない（{moved:.0f}px）")
-            px_per_sec = moved / sec
-            dx = new_dx
+            new_hit, aim_x = seen
+            if move == "x":
+                new_dx = new_hit["cx"] - aim_x
+                moved = abs(dx - new_dx)
+                if moved <= config.BEGIN_ADJUST_MIN_MOVE_PX:
+                    return self._adjust_gave_up(f"動いていない（{moved:.0f}px）")
+                x_rate = abs(dx / hit["w"] - new_dx / new_hit["w"]) / sec
+            else:
+                new_ratio = _width_ratio(new_hit)
+                change = abs(new_ratio - ratio) if new_ratio is not None else 0.0
+                if change <= config.BEGIN_ADJUST_DEPTH_MIN_CHANGE:
+                    return self._adjust_gave_up(f"前後に動いていない（幅 {ratio:.3f}）")
+                d_rate = change / sec
+            hit = new_hit
+
+    def _search_for_begin(self, round_seq: int):
+        """最初の撮影で BEGIN が無い。後ろへ（近すぎる）→ 戻して前へ（遠すぎる）の順に探す。
+        見つかれば (文字, 照準の x)、見つからなければ動いた分を戻して None。止めたら「skip」"""
+        def look():
+            time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
+            if self._adjust_stopped(round_seq):
+                return "skip"
+            seen = self._look_for_begin()
+            return seen if seen is not None and seen[0] is not None else None
+
+        back = config.BEGIN_SEARCH_BACK_SEC
+        self._log(f"Begin: BEGIN が見つかりません → 後ろへ {back:.2f}秒動いて探します")
+        self.move("back", back)
+        seen = look()
+        if seen is not None:
+            return seen
+        if self._adjust_stopped(round_seq):
+            return "skip"
+        self.move("forward", back)                  # 戻す
+        forward = 0.0
+        for i in range(config.BEGIN_SEARCH_FORWARD_TRIES):
+            sec = config.BEGIN_SEARCH_FORWARD_SEC
+            self._log(f"Begin: BEGIN が見つかりません → 前へ {sec:.2f}秒動いて探します"
+                      f"（{i + 1}/{config.BEGIN_SEARCH_FORWARD_TRIES}）")
+            self.move("forward", sec)
+            forward += sec
+            seen = look()
+            if seen is not None:
+                return seen
+            if self._adjust_stopped(round_seq):
+                return "skip"
+        self._log(f"Begin: 探しても BEGIN が見つかりません → 後ろへ {forward:.2f}秒戻します")
+        self.move("back", forward)                  # 動いた分を戻す
+        return None
 
     def _adjust_gave_up(self, why: str) -> str:
         self._log(f"Begin: 位置合わせを打ち切り（{why}）→ 2回目を押します")
@@ -528,7 +620,10 @@ class ActionExecutor:
         bits, w, h = ScreenCapture.capture_window(hwnd)
         if not bits or w <= 0 or h <= 0:
             return None
-        return BeginDetect.find(bits, w, h), aim[0]
+        hit = BeginDetect.find(bits, w, h)
+        if hit is not None:
+            hit = {**hit, "H": h}           # 前後は文字の幅÷窓の高さで見る
+        return hit, aim[0]
 
     def _show_window_without_begin(self, round_seq: int):
         """BEGIN が画面に無い。クリックしても当たらないので、窓を前に出すだけにして
