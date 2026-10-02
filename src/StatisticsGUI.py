@@ -86,6 +86,8 @@ TERROR_TEXT_COLORS = {
     263: ("#d00000", True), 280: ("#d00000", True),
     # Ordinary Apocalypse Bird・Chomper Trio・Transportation Trio & The Drifter
     264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False),
+    # Triple Munci・Quadruple Sponge
+    221: ("#e57373", False), 205: ("#e57373", False),
 }
 ROUND_ORDER_GROUPS = (
     (
@@ -287,7 +289,7 @@ def _local(db_time: int) -> datetime:
 class StatisticsWindow(tk.Toplevel):
     """統計画面 v1。DB から差分だけ手元の SQLite（RoundStore）へ取り込み、集計は手元で行う。
 
-    タブ: ラウンド／テラー／時間の流れ／マルチ。範囲は「全体」か「自分の分」
+    タブ: ラウンド／テラー／時間の流れ。範囲は「全体」か「自分の分」
     （1人目が自分か、other_uids に自分がいる行。ほかの人の uid は表示しない）
     """
 
@@ -382,7 +384,6 @@ class StatisticsWindow(tk.Toplevel):
         self._build_round_tab()
         self._build_terror_tab()
         self._build_time_tab()
-        self._build_multi_tab()
 
         ttk.Label(
             self,
@@ -453,7 +454,8 @@ class StatisticsWindow(tk.Toplevel):
         self.terror_tree = self._tree(body, (("id", "ID", 58, "e"),
                                              ("name", "テラー", 260, "w"),
                                              ("count", "回数", 86, "e"), ("expected", "期待", 86, "e"),
-                                             ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")))
+                                             ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")),
+                                      style=LEGEND_STYLE)      # 統計画面の表はすべて暗い背景
         self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
         detail_frame = ttk.LabelFrame(pane, text="選択テラーの内訳", padding=8)
         pane.add(detail_frame, weight=2)
@@ -478,7 +480,8 @@ class StatisticsWindow(tk.Toplevel):
         self._rounds_tab, self._kind_tab = rounds_tab, kind_tab
         map_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
         self.terror_detail_tabs.add(map_tab, text="マップ")
-        self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")))
+        self.map_tree = self._tree(map_tab, (("map", "マップ", 260, "w"), ("count", "回数", 90, "e")),
+                                   style=LEGEND_STYLE)
 
     def _build_time_tab(self):
         tab = self._tab("時間の流れ")
@@ -492,13 +495,6 @@ class StatisticsWindow(tk.Toplevel):
         self._hour_rows: list[tuple] = []
         for canvas in (self.day_chart, self.hour_chart):
             canvas.bind("<Configure>", lambda _e: self._draw_time_charts())
-
-    def _build_multi_tab(self):
-        tab = self._tab("マルチ")
-        self.v_multi_note = tk.StringVar(value="")
-        ttk.Label(tab, textvariable=self.v_multi_note, foreground=YLW).pack(anchor="w", pady=(0, 6))
-        self.multi_tree = self._tree(tab, (("players", "見た人数", 120, "e"), ("count", "ラウンド数", 120, "e"),
-                                           ("percent", "%", 100, "e")))
 
     # ── 期間 ─────────────────────────────────
     def _make_datetime_picker(self, parent, label: str, key: str) -> ttk.Frame:
@@ -717,14 +713,12 @@ class StatisticsWindow(tk.Toplevel):
         self._render_terror_list()
         self._clear_terror_detail()
         self._render_time(flt)
-        self._render_multi(flt)
         total_rounds = sum(count for _name, count, _slots in round_rows)
         self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
 
     def _clear_all(self):
         self._clear_round_stats()
-        for tree in (self.terror_tree, self.multi_tree):
-            self._clear_tree(tree)
+        self._clear_tree(self.terror_tree)
         self._clear_terror_detail()
         self._day_rows, self._hour_rows = [], []
         self._draw_time_charts()
@@ -962,24 +956,6 @@ class StatisticsWindow(tk.Toplevel):
                 text = str(value) if terror_id is None else (
                     f"{value}\n{value / rounds * 100:.0f}%" if rounds else str(value))
                 canvas.create_text((x0 + x1) / 2, y - 12, text=text, fill=FG, font=(UIFont.UI, 7))
-
-    # ── マルチのタブ ──────────────────────────────
-    def _render_multi(self, flt: RoundStore.Filter):
-        self._clear_tree(self.multi_tree)
-        if not flt.mine:
-            self.v_multi_note.set("範囲を「自分の分」にすると表示します")
-            return
-        counts = self.store.player_counts(flt)
-        total = sum(counts.values())
-        if not total:
-            self.v_multi_note.set("自分の分のラウンドがありません")
-            return
-        solo = counts.get(1, 0)
-        self.v_multi_note.set(f"ソロ {solo}（{solo / total * 100:.1f}%） / "
-                              f"マルチ {total - solo}（{(total - solo) / total * 100:.1f}%）")
-        for players in sorted(counts):
-            self.multi_tree.insert("", "end", values=(f"{players}人", counts[players],
-                                                      f"{counts[players] / total * 100:.1f}"))
 
     # ── 共通 ─────────────────────────────────
     def _clear_tree(self, tree: ttk.Treeview):

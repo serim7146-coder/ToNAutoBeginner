@@ -15918,14 +15918,17 @@ class TestStatisticsColorsCB(unittest.TestCase):
     def setUp(self):
         TestStatisticsFixesBY.setUp(self)
 
-    def test_only_the_legend_has_the_dark_background(self):
+    def test_every_table_has_the_dark_background(self):
+        """CB は凡例だけ。CF で統計画面の表はすべて暗い背景（Legend.Treeview）になった"""
         style = ttk.Style(self.root)
-        self.assertEqual(str(self.window.round_legend.cget("style")), StatisticsGUI.LEGEND_STYLE)
         self.assertEqual(style.lookup(StatisticsGUI.LEGEND_STYLE, "background"), StatisticsGUI.BG)
         self.assertEqual(style.lookup(StatisticsGUI.LEGEND_STYLE, "fieldbackground"), StatisticsGUI.BG)
-        for tree in (self.window.terror_tree, self.window.map_tree, self.window.multi_tree):
-            self.assertEqual(str(tree.cget("style")), "", "ほかの表は今のまま")
-        self.assertNotEqual(style.lookup("Treeview", "background"), StatisticsGUI.BG)
+        self.assertEqual(style.lookup(StatisticsGUI.LEGEND_STYLE, "foreground"), StatisticsGUI.FG,
+                         "色の付いていない行は明るい文字")
+        for tree in (self.window.round_legend, self.window.terror_tree, self.window.map_tree,
+                     self.window.terror_rounds_tree, self.window.round_kind_tree):
+            self.assertEqual(str(tree.cget("style")), StatisticsGUI.LEGEND_STYLE, tree)
+        self.assertNotEqual(style.lookup("Treeview", "background"), StatisticsGUI.BG, "既定の Style は変えない")
 
     def test_the_colors_are_fixed_per_round(self):
         rows = [("Fog", 9, 9), ("Bloodbath", 5, 5), ("Cold Night", 3, 3), ("Punished", 2, 2), ("Mystery", 1, 1)]
@@ -16160,7 +16163,8 @@ class TestTerrorColorsCD(unittest.TestCase):
             164: ("#ffe600", False), 168: ("#388e3c", False), 163: ("#d84315", False),
             209: ("#d00000", True), 211: ("#d00000", True), 231: ("#d00000", True),
             263: ("#d00000", True), 280: ("#d00000", True),
-            264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False)})
+            264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False),
+            221: ("#e57373", False), 205: ("#e57373", False)})       # CF: Triple Munci・Quadruple Sponge
         self.assertFalse(hasattr(StatisticsGUI, "HIGHLIGHT_UNBOUND_TERROR_IDS"), "表1つに寄せた")
 
     def test_alternate_colors_and_others_unchanged(self):
@@ -16176,7 +16180,7 @@ class TestTerrorColorsCD(unittest.TestCase):
         for tid in (209, 211, 231, 263, 280):
             if tid in ids:
                 self.assertEqual(self._color(tid), ("#d00000", True), tid)
-        for tid in (264, 240, 246):
+        for tid in (264, 240, 246, 221, 205):
             if tid in ids:
                 self.assertEqual(self._color(tid), ("#e57373", False), tid)
         plain = sorted(ids - set(StatisticsGUI.TERROR_TEXT_COLORS))
@@ -16194,7 +16198,7 @@ class TestTerrorColorsCD(unittest.TestCase):
     def test_the_two_detail_tables_are_dark_with_round_colors(self):
         for tree in (self.window.terror_rounds_tree, self.window.round_kind_tree):
             self.assertEqual(str(tree.cget("style")), StatisticsGUI.LEGEND_STYLE)
-        self.assertEqual(str(self.window.map_tree.cget("style")), "", "マップは今のまま")
+        self.assertEqual(str(self.window.map_tree.cget("style")), StatisticsGUI.LEGEND_STYLE, "CF: マップも暗い")
         self._select("classic", 5)
         for tree, column in ((self.window.terror_rounds_tree, 1), (self.window.round_kind_tree, 0)):
             rows = tree.get_children()
@@ -28160,10 +28164,6 @@ class TestRoundStoreAggregation(unittest.TestCase):
         self.assertEqual(Statistics.map_counts_from_entries([(12, "Classic", 1), (12, "Classic", 2)]),
                          [(name, 3)])
 
-    def test_players_per_round(self):
-        self.assertEqual(self.store.player_counts(RoundStore.Filter()), {1: 3, 2: 1, 3: 1})
-        self.assertEqual(self.store.player_counts(RoundStore.Filter(mine=True)), {1: 1, 3: 1})
-
     def test_the_time_series_in_local_time(self):
         day = self.store.time_series(RoundStore.Filter(), "day", 5)
         first_day = datetime.fromtimestamp(config.DB_TIME_EPOCH + 10).strftime("%Y-%m-%d")
@@ -28205,11 +28205,13 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.root.update()
         return window
 
-    def test_it_has_the_four_tabs(self):
-        """CA: 「組み合わせ」のタブは無くした"""
+    def test_it_has_the_three_tabs(self):
+        """CA: 「組み合わせ」・CF: 「マルチ」のタブは無くした"""
         window = self._open(lambda s, m: [])
         self.assertEqual([window.tabs.tab(t, "text") for t in window.tabs.tabs()],
-                         ["ラウンド", "テラー", "時間の流れ", "マルチ"])
+                         ["ラウンド", "テラー", "時間の流れ"])
+        self.assertFalse(hasattr(window, "multi_tree"))
+        self.assertFalse(hasattr(RoundStore.RoundStore, "player_counts"))
         self.assertFalse(hasattr(window, "pair_tree"))
         self.assertFalse(hasattr(RoundStore.RoundStore, "terror_pairs"))
         self.assertFalse(hasattr(RoundStore.RoundStore, "map_terror_counts"))
@@ -28223,18 +28225,6 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.assertEqual(window.v_status.get(), "更新できませんでした（手元の分を表示）")
         self.assertEqual(len(window.round_legend.get_children()), 2, "手元の2ラウンド")
         self.assertIn("手元 2件", window.v_info.get())
-
-    def test_the_multi_tab_only_for_my_share(self):
-        window = self._open(lambda s, m: [])
-        self.assertIn("自分の分", window.v_multi_note.get())
-        self.assertEqual(window.multi_tree.get_children(), ())
-
-        window.v_scope.set("mine")
-        window._analyze()
-
-        self.assertIn("ソロ 2", window.v_multi_note.get())
-        rows = [window.multi_tree.item(i, "values") for i in window.multi_tree.get_children()]
-        self.assertEqual(rows, [("1人", "2", "100.0")])
 
 
 class TestGetTransformedUid(unittest.TestCase):

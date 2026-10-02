@@ -76,9 +76,6 @@ class Filter:
 _TERRORS = ("select terror1 as tid, map_id, round, time from f where terror1 is not null "
             "union all select terror2, map_id, round, time from f where terror2 is not null "
             "union all select terror3, map_id, round, time from f where terror3 is not null")
-# 見た人数（1人目＋other_uids の数）
-_PLAYERS = ("case when other_uids is null or other_uids = '' then 1 "
-            "else 2 + length(other_uids) - length(replace(other_uids, ',', '')) end")
 # ローカル時刻（time は 2026-01-01 UTC からの秒）
 _LOCAL = "datetime(time + {epoch}, 'unixepoch', 'localtime')"
 
@@ -289,10 +286,6 @@ class RoundStore:
         tid = -1 if terror_id is None else int(terror_id)
         return self._query(flt, f"select {key} as k, count(*), sum((terror1 is ?) + (terror2 is ?)"
                                 " + (terror3 is ?)) from f group by k order by k", (tid, tid, tid))
-
-    def player_counts(self, flt: Filter) -> dict[int, int]:
-        """{見た人数（1人目＋other_uids）: ラウンド数}"""
-        return dict(self._query(flt, f"select {_PLAYERS} as n, count(*) from f group by n"))
 
     def count(self) -> int:
         return int(self._run(lambda con: con.execute("select count(*) from rounds").fetchone()[0], 0))
