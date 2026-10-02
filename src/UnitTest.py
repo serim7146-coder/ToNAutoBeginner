@@ -16456,10 +16456,20 @@ class TestBuildScriptCH(unittest.TestCase):
         self.assertEqual(cmd[4:4 + len(old)], old)
 
     def test_the_extract_dir_and_version_come_from_app_version(self):
-        cmd = self.build.build_command("v1.2.3")
-        self.assertEqual(cmd[-3:], ["--onefile-tempdir-spec={CACHE_DIR}/ToNAutoBeginner/v1.2.3",
+        cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
+        self.assertEqual(cmd[-3:], ["--onefile-tempdir-spec={CACHE_DIR}/ToNAutoBeginner/v1.2.3-20261002123456000001",
                                     "--product-version=1.2.3", "--file-version=1.2.3"])
         self.assertEqual(len(cmd), 4 + len(self.build.BASE_ARGS) + 3, "足すのは3つだけ")
+
+    def test_two_builds_of_the_same_version_get_different_folders(self):
+        first = self.build.build_command("v1.0.0")[-3]
+        time.sleep(0.002)
+        second = self.build.build_command("v1.0.0")[-3]
+        self.assertNotEqual(first, second, "同じ版でもビルドのたびに別のフォルダ")
+        self.assertRegex(first, r"/ToNAutoBeginner/v1\.0\.0-\d{20}$")
+        folder = first.rsplit("/", 1)[1]
+        self.assertTrue(AutoUpdate.RE_EXTRACT_DIR.fullmatch(folder), "掃除の形と合う")
+        self.assertEqual(self.build.build_stamp(datetime(2026, 10, 2, 12, 34, 56, 7)), "20261002123456000007")
 
     def test_the_version_is_read_from_config(self):
         with tempfile.TemporaryDirectory() as d:
@@ -16481,21 +16491,27 @@ class TestBuildScriptCH(unittest.TestCase):
             run.return_value.returncode = 0
             self.assertEqual(self.build.main(), 0)
         cmd = run.call_args.args[0]
-        self.assertIn(f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{config.APP_VERSION}", cmd)
+        self.assertTrue(any(a.startswith(f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{config.APP_VERSION}-")
+                            for a in cmd), cmd)
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), Path(__file__).resolve().parent.parent)
 
 
 class TestOldExtractDirsCH(unittest.TestCase):
-    """CH: 古い版の onefile の展開先を消す（一時フォルダで。本物の LOCALAPPDATA・APPDATA には触らない）"""
+    """CH: 古い onefile の展開先を消す（一時フォルダで。本物の LOCALAPPDATA・APPDATA には触らない）。
+    自分の展開先は版ではなく、動いている自分の場所で決める"""
+
+    OWN = "v1.0.0-20261002120000000001"
 
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
         self.base = Path(self._dir.name) / "ToNAutoBeginner"
-        for name in ("v0.9.0", "v1.0.0", "v0.7.1", "notes", "cache"):
+        for name in (self.OWN, "v1.0.0-20261001090000000000", "v0.9.0-20260901000000000000",
+                     "v1.0.0", "notes", "cache", "v1.x-abc"):
             (self.base / name).mkdir(parents=True)
             (self.base / name / "a.txt").write_text("x", encoding="utf-8")
-        (self.base / "v0.8.0").write_text("a file, not a folder", encoding="utf-8")
+        (self.base / "v0.8.0-20260801000000000000.txt").write_text("a file", encoding="utf-8")
+        self.own = self.base / self.OWN
         self.written = []
         p = patch.object(DebugLog, "write", side_effect=self.written.append)
         p.start()
@@ -16504,17 +16520,38 @@ class TestOldExtractDirsCH(unittest.TestCase):
     def _left(self):
         return sorted(p.name for p in self.base.iterdir())
 
-    def test_only_other_version_folders_are_removed(self):
-        removed = AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True)
-        self.assertEqual(removed, ["v0.7.1", "v0.9.0"])
-        self.assertEqual(self._left(), ["cache", "notes", "v0.8.0", "v1.0.0"])
-        self.assertIn("[環境] 古い版の展開先を消しました: v0.7.1, v0.9.0", self.written)
+    def _clean(self, **kw):
+        kw.setdefault("own", self.own)
+        kw.setdefault("onefile", True)
+        return AutoUpdate.cleanup_old_extract_dirs(self.base, **kw)
+
+    def test_other_builds_are_removed_and_mine_stays(self):
+        removed = self._clean()
+        self.assertEqual(removed, ["v0.9.0-20260901000000000000", "v1.0.0-20261001090000000000"],
+                         "ほかの版も、同じ版の古い印も消す")
+        self.assertEqual(self._left(), sorted([self.OWN, "cache", "notes", "v1.0.0", "v1.x-abc",
+                                               "v0.8.0-20260801000000000000.txt"]),
+                         "自分の展開先・形の違うもの・ファイルは残す")
+        self.assertTrue(any("古い版の展開先を消しました" in m for m in self.written))
+
+    def test_my_place_comes_from_the_running_module(self):
+        # onefile では、動いているモジュールのファイルは展開先にある
+        with patch.object(AutoUpdate, "__file__", str(self.own / "AutoUpdate.py")):
+            self.assertEqual(AutoUpdate.own_extract_dir(), self.own.resolve())
+            self.assertEqual(len(AutoUpdate.cleanup_old_extract_dirs(self.base, onefile=True)), 2)
+        self.assertIn(self.OWN, self._left())
+
+    def test_an_unknown_place_removes_nothing(self):
+        for own in (Path(self._dir.name) / "elsewhere", self.base, self.base / self.OWN / "deeper"):
+            self.assertEqual(self._clean(own=own), [], own)
+        self.assertEqual(len([n for n in self._left() if n.startswith("v")]), 6)
+        self.assertTrue(any("自分の展開先が分からない" in m for m in self.written))
 
     def test_python_runs_do_nothing(self):
-        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=False), [])
+        self.assertEqual(self._clean(onefile=False), [])
         self.assertFalse(AutoUpdate.is_onefile_exe(), "python で動かしている")
-        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0"), [])
-        self.assertIn("v0.9.0", self._left())
+        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, own=self.own), [])
+        self.assertIn("v0.9.0-20260901000000000000", self._left())
 
     def test_the_onefile_flag_comes_from_nuitka(self):
         flag = type("Compiled", (), {"onefile": True})()
@@ -16528,32 +16565,32 @@ class TestOldExtractDirsCH(unittest.TestCase):
         real = shutil.rmtree
 
         def rmtree(path, *a, **kw):
-            if Path(path).name == "v0.7.1":
+            if Path(path).name.startswith("v0.9.0"):
                 raise PermissionError("in use")
             return real(path, *a, **kw)
 
         with patch.object(AutoUpdate.shutil, "rmtree", side_effect=rmtree):
-            removed = AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True)
-        self.assertEqual(removed, ["v0.9.0"])
-        self.assertIn("v0.7.1", self._left())
-        self.assertTrue(any("消せません" in m and "v0.7.1" in m for m in self.written), self.written)
+            removed = self._clean()
+        self.assertEqual(removed, ["v1.0.0-20261001090000000000"])
+        self.assertIn("v0.9.0-20260901000000000000", self._left())
+        self.assertTrue(any("消せません" in m and "v0.9.0" in m for m in self.written), self.written)
 
     def test_the_settings_folder_is_never_touched(self):
         with patch.object(config, "SETTINGS_PATH", self.base / "settings.json"):
-            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base, "v1.0.0", onefile=True), [])
-        self.assertIn("v0.9.0", self._left())
+            self.assertEqual(self._clean(), [])
+        self.assertIn("v0.9.0-20260901000000000000", self._left())
 
     def test_the_default_place_is_local_appdata(self):
         with patch.dict(os.environ, {"LOCALAPPDATA": self._dir.name}):
             self.assertEqual(AutoUpdate.extract_base_dir(), self.base)
-            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(current="v1.0.0", onefile=True),
-                             ["v0.7.1", "v0.9.0"])
+            self.assertEqual(len(AutoUpdate.cleanup_old_extract_dirs(own=self.own, onefile=True)), 2)
         with patch.dict(os.environ, {"LOCALAPPDATA": ""}):
             self.assertIsNone(AutoUpdate.extract_base_dir())
-            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(current="v1.0.0", onefile=True), [])
+            self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(own=self.own, onefile=True), [])
 
     def test_a_missing_base_is_fine(self):
-        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base / "none", "v1.0.0", onefile=True), [])
+        self.assertEqual(AutoUpdate.cleanup_old_extract_dirs(self.base / "none", own=self.own,
+                                                             onefile=True), [])
 
     def test_startup_runs_it_in_the_background(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")

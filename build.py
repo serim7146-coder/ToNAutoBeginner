@@ -3,13 +3,15 @@
     python build.py
 
 src/config.py の APP_VERSION を読んで、展開先（--onefile-tempdir-spec）と exe の版を
-その版にする。展開先を版ごとに固定するので、2回目以降の起動は展開を省いて速くなる
-（Nuitka の cached モード）。版は手で書かない（上げ忘れで古い展開先を使わないため）。
+その版にする。展開先は「版-ビルドの印」（印はビルドした時刻。ビルドのたびに違う）に
+固定するので、2回目以降の起動は展開を省いて速くなり（Nuitka の cached モード）、
+同じ版でビルドし直しても古い中身を使わない。版は手で書かない。
 引数は src/main.py の頭のビルドコマンドと同じ（並びも同じ）で、足すのは展開先と版だけ。
 """
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -60,10 +62,16 @@ def version_numbers(version: str) -> str:
     return numbers
 
 
-def build_command(version: str) -> list[str]:
+def build_stamp(now: datetime | None = None) -> str:
+    """ビルドの印（ビルドした時刻。マイクロ秒まで。ビルドのたびに違う）"""
+    return (now or datetime.now()).strftime("%Y%m%d%H%M%S%f")
+
+
+def build_command(version: str, stamp: str | None = None) -> list[str]:
     numbers = version_numbers(version)
+    stamp = stamp or build_stamp()
     return [sys.executable, "-m", "nuitka", "src/main.py", *BASE_ARGS,
-            f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{version}",
+            f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{version}-{stamp}",
             f"--product-version={numbers}",
             f"--file-version={numbers}"]
 

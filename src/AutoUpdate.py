@@ -137,9 +137,10 @@ def cleanup_old_exe():
         pass  # 旧EXEがまだ終了しきっていない場合など。次回起動時に再試行される
 
 
-# onefile の展開先（build.py の --onefile-tempdir-spec と同じ。{CACHE_DIR} は %LOCALAPPDATA%）
+# onefile の展開先（build.py の --onefile-tempdir-spec と同じ。{CACHE_DIR} は %LOCALAPPDATA%）。
+# フォルダの名前は「版-ビルドの印」（v1.0.0-20261002123456123456）
 EXTRACT_DIR_NAME = "ToNAutoBeginner"
-RE_VERSION_DIR = re.compile(r"v\d+(\.\d+)*")
+RE_EXTRACT_DIR = re.compile(r"v\d+(\.\d+)*-\w+")
 
 
 def is_onefile_exe() -> bool:
@@ -154,28 +155,40 @@ def extract_base_dir() -> Path | None:
     return Path(local) / EXTRACT_DIR_NAME if local else None
 
 
-def cleanup_old_extract_dirs(base: Path | None = None, current: str | None = None,
-                             onefile: bool | None = None) -> list[str]:
-    """onefile の exe で動いているときだけ、今の版以外の版の展開先を消す。消した名前を返す。
+def own_extract_dir() -> Path:
+    """動いている自分の展開先。onefile では、モジュールのファイルは展開先にある"""
+    return Path(__file__).resolve().parent
 
-    消すのは名前が版の形（v1.2.3）のフォルダだけ。%APPDATA%\\ToNAutoBeginner（設定・debug.log・
+
+def cleanup_old_extract_dirs(base: Path | None = None, own: Path | None = None,
+                             onefile: bool | None = None) -> list[str]:
+    """onefile の exe で動いているときだけ、自分の展開先以外の古い展開先を消す。消した名前を返す。
+
+    消すのは名前が「版-ビルドの印」の形（v1.2.3-xxxx）のフォルダだけ。自分の展開先は、版を
+    比べるのではなく、動いている自分の場所（own_extract_dir）で決める。自分の場所が展開先の
+    親の直下でない（分からない）ときは何も消さない。%APPDATA%\\ToNAutoBeginner（設定・debug.log・
     rounds.sqlite）には触らない（その場所を指していたら何もしない）。使用中で消せないものは
     飛ばして debug.log に1行。起動時に裏のスレッドで呼ぶ
     """
     if not (is_onefile_exe() if onefile is None else onefile):
         return []
     base = extract_base_dir() if base is None else Path(base)
-    current = config.APP_VERSION if current is None else current
     if base is None or not base.is_dir():
         return []
     try:
-        if base.resolve() == Path(config.SETTINGS_PATH).parent.resolve():
+        base = base.resolve()
+        if base == Path(config.SETTINGS_PATH).parent.resolve():
             return []                   # 設定の置き場所（APPDATA）は絶対に消さない
+        own = (own_extract_dir() if own is None else Path(own)).resolve()
     except OSError:
+        return []
+    if own.parent != base:
+        DebugLog.write(f"[環境] 自分の展開先が分からないので、古い展開先は消しません")
         return []
     removed = []
     for child in sorted(base.iterdir()):
-        if not child.is_dir() or child.name == current or not RE_VERSION_DIR.fullmatch(child.name):
+        if (not child.is_dir() or child.resolve() == own
+                or not RE_EXTRACT_DIR.fullmatch(child.name)):
             continue
         try:
             shutil.rmtree(child)
