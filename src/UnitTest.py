@@ -13563,14 +13563,15 @@ class TestChaseKeysInTheApp(unittest.TestCase):
         self.keyboard = MagicMock()
         self.handlers = {}
 
-        def hook(kind):
-            def register(key, callback, suppress):
-                self.handlers[(kind, key)] = callback
-                return (kind, key)
-            return register
+        def register(key, callback, suppress):
+            # CG: 1キーに1つのフック（hook_key）。押した・離したは event_type で分かれる
+            self.handlers[("down", key)] = lambda _e: callback(
+                type("Event", (), {"event_type": "down"})())
+            self.handlers[("up", key)] = lambda _e: callback(
+                type("Event", (), {"event_type": "up"})())
+            return ("hook", key)
 
-        self.keyboard.on_press_key.side_effect = hook("down")
-        self.keyboard.on_release_key.side_effect = hook("up")
+        self.keyboard.hook_key.side_effect = register
         with patch.object(mainGUI, "keyboard", self.keyboard):
             mainGUI.App._hook_chase_keys(app)
         return app
@@ -13591,12 +13592,11 @@ class TestChaseKeysInTheApp(unittest.TestCase):
 
     def test_the_keys_are_hooked_once_without_suppressing(self):
         self._app()
-        self.assertEqual([c.args[0] for c in self.keyboard.on_press_key.call_args_list],
-                         ["f1", "f2"])
-        self.assertEqual([c.args[0] for c in self.keyboard.on_release_key.call_args_list],
-                         ["f1", "f2"])
-        for call in (self.keyboard.on_press_key.call_args_list
-                     + self.keyboard.on_release_key.call_args_list):
+        self.assertEqual([c.args[0] for c in self.keyboard.hook_key.call_args_list],
+                         ["f1", "f2"], "CG: 1キーに1つ")
+        self.keyboard.on_press_key.assert_not_called()
+        self.keyboard.on_release_key.assert_not_called()
+        for call in self.keyboard.hook_key.call_args_list:
             self.assertIs(call.kwargs["suppress"], False)
 
     def test_the_front_watched_window_gets_the_key(self):
@@ -13672,7 +13672,7 @@ class TestChaseKeysInTheApp(unittest.TestCase):
         with patch.object(mainGUI, "keyboard", self.keyboard):
             mainGUI.App._unhook_chase_keys(app)
         self.assertEqual([c.args[0] for c in self.keyboard.unhook.call_args_list],
-                         [("down", "f1"), ("up", "f1"), ("down", "f2"), ("up", "f2")])
+                         [("hook", "f1"), ("hook", "f2")])
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         close = src[src.index("    def _on_close(self):"):]
         if "\n    def " in close:              # 最後のメソッドなら末尾まで
@@ -16263,6 +16263,168 @@ class TestZzNoWindowIsShown(unittest.TestCase):
         for w in (app, stats, app._report_dialog, overlay):
             self.assertIn(w, _HIDDEN_WINDOWS)
             self.assertFalse(w.winfo_viewable(), w)
+
+
+class TestOptimizationCG(unittest.TestCase):
+    """CG: 8 Pages はテラーが出てから自爆・チェイスのキーの外し方・管理者権限の窓・[画面] の二重"""
+
+    P = "2026.10.02 12:00:00 Debug      -  "
+
+    def setUp(self):
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        for p in (patch.object(ConnectDB, "register_round"), patch.object(PlaySound, "play_sound")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.thread = patch.object(LogMonitor.threading, "Thread").start()
+        self.addCleanup(patch.stopall)
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(do_skip=True), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.item_id = 5
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _skips(self):
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
+
+    # ── 1. 8 Pages ─────────────────────────────
+    def test_eight_pages_waits_for_the_terror_then_skips(self):
+        monitor = self._monitor()
+        monitor._process(self.P + "This round is taking place at Sewers (12) and the round type is 8 Pages")
+        monitor._process(self.P + "Killers is unknown - ??? // Will be revealed after 40 seconds // Round type is 8 Pages")
+        self.assertEqual(self._skips(), 0, "テラー不明のうちは自爆しない")
+        self.assertTrue(any("開始: 8 Pages 【放置モード→テラーが出てから自爆】" in m for m in monitor.logs),
+                        monitor.logs)
+        monitor._process(self.P + "Killers have been revealed - 50 2 0 // Round type is 8 Pages")
+        self.assertEqual(self._skips(), 1, "テラーが出た後に自爆")
+        self.assertEqual(config.SUICIDE_RETRY_MAX, 3, "やり直しは今の3回")
+
+    def test_fog_still_skips_at_once(self):
+        monitor = self._monitor()
+        monitor._process(self.P + "This round is taking place at Sewers (12) and the round type is Fog")
+        monitor._process(self.P + "Killers is unknown - ??? // Will be revealed after 50 seconds // Round type is Fog")
+        self.assertEqual(self._skips(), 1)
+        self.assertTrue(any("開始: Fog 【放置モード→即自爆】" in m for m in monitor.logs))
+
+    # ── 2. チェイスのキー ───────────────────────────
+    def _keys_app(self, fail_on=None):
+        app = type("FakeApp", (), {})()
+        app.logs = []
+        app._log = app.logs.append
+        keyboard = MagicMock()
+
+        def hook_key(key, callback, suppress):
+            if key == fail_on:
+                raise ValueError("bad key")
+            return ("hook", key)
+
+        keyboard.hook_key.side_effect = hook_key
+        with patch.object(mainGUI, "keyboard", keyboard):
+            mainGUI.App._hook_chase_keys(app)
+        return app, keyboard
+
+    def test_only_registered_hooks_are_removed_and_key_error_is_quiet(self):
+        app, keyboard = self._keys_app(fail_on="f2")
+        self.assertEqual(app._chase_hooks, [("hook", "f1")], "登録できたものだけ")
+        keyboard.unhook.side_effect = KeyError("f1")
+        with patch.object(mainGUI, "keyboard", keyboard), \
+             patch.object(DebugLog, "exception") as exception:
+            mainGUI.App._unhook_chase_keys(app)
+        self.assertEqual([c.args[0] for c in keyboard.unhook.call_args_list], [("hook", "f1")])
+        exception.assert_not_called()
+        self.assertEqual(app._chase_hooks, [])
+
+    def test_other_unhook_errors_are_still_written(self):
+        app, keyboard = self._keys_app()
+        keyboard.unhook.side_effect = OSError("x")
+        with patch.object(mainGUI, "keyboard", keyboard), \
+             patch.object(DebugLog, "exception") as exception:
+            mainGUI.App._unhook_chase_keys(app)
+        self.assertEqual(exception.call_count, 2)
+
+    def test_a_stop_without_hooks_does_nothing(self):
+        app = type("FakeApp", (), {})()
+        keyboard = MagicMock()
+        with patch.object(mainGUI, "keyboard", keyboard):
+            mainGUI.App._unhook_chase_keys(app)
+        keyboard.unhook.assert_not_called()
+
+    def test_the_real_keyboard_shape_unhooks_without_key_error(self):
+        """keyboard の本物と同じく、同じキーの項目は表に1つ（2つ目を外すと KeyError になる形）"""
+        hooks = {}
+
+        def hook_key(key, callback, suppress=False):
+            def remove():
+                del hooks[callback]
+                del hooks[key]
+                del hooks[remove]
+            hooks[callback] = hooks[key] = hooks[remove] = remove
+            return remove
+
+        keyboard = MagicMock()
+        keyboard.hook_key.side_effect = hook_key
+        keyboard.unhook.side_effect = lambda remove: hooks[remove]()
+        app = type("FakeApp", (), {})()
+        app._log = lambda _m: None
+        with patch.object(mainGUI, "keyboard", keyboard), \
+             patch.object(DebugLog, "exception") as exception:
+            mainGUI.App._hook_chase_keys(app)
+            mainGUI.App._unhook_chase_keys(app)
+        exception.assert_not_called()
+        self.assertEqual(hooks, {}, "全部外れる")
+
+    # ── 3. 管理者権限の窓 ────────────────────────────
+    def test_an_elevated_window_is_not_given_back(self):
+        loan = WindowOperator.FrontLoan(hwnd=0x10, previous=0x20, cursor=(1, 2))
+        written = []
+        with patch.object(WindowOperator, "foreground_hwnd", return_value=0x10), \
+             patch.object(WindowOperator.win32gui, "IsWindow", return_value=True), \
+             patch.object(WindowOperator, "can_bring_to_front", return_value=False), \
+             patch.object(WindowOperator, "focus_window") as focus, \
+             patch.object(WindowOperator.user32, "SetCursorPos") as cursor, \
+             patch.object(DebugLog, "write", side_effect=written.append):
+            self.assertFalse(WindowOperator.return_front(loan))
+        focus.assert_not_called()
+        cursor.assert_not_called()
+        self.assertIn("[操作] 前面を返す → 相手が管理者権限のため返しません", written)
+
+    def test_can_bring_to_front(self):
+        def run(me, target):
+            values = {None: me}
+
+            def elevated(pid):
+                return me if pid is None else target
+
+            with patch.object(WindowOperator, "_process_elevated", side_effect=elevated), \
+                 patch.object(WindowOperator.user32, "GetWindowThreadProcessId",
+                              side_effect=lambda _h, ref: setattr(ref._obj, "value", 1234) or 1):
+                return WindowOperator.can_bring_to_front(0x20)
+
+        self.assertFalse(run(False, True), "相手が昇格")
+        self.assertFalse(run(False, None), "相手を開けない")
+        self.assertTrue(run(False, False), "相手もふつう")
+        self.assertTrue(run(True, True), "ツール自身が昇格していれば今のまま")
+
+    def test_the_real_probe_answers(self):
+        self.assertIn(WindowOperator._process_elevated(None), (True, False), "このプロセスは調べられる")
+        self.assertIn(WindowOperator._process_elevated(os.getpid()), (True, False))
+
+    # ── 4. [画面] の二重 ────────────────────────────
+    def test_the_screen_tag_is_not_doubled(self):
+        app = type("FakeApp", (), {})()
+        app.after = lambda _ms, _fn=None: None
+        written = []
+        with patch.object(DebugLog, "write", side_effect=written.append):
+            mainGUI.App._log(app, "[画面] フォント: Meiryo UI")
+            mainGUI.App._log(app, "[窓1] ✅ Connecting")
+        self.assertEqual(written, ["[画面] フォント: Meiryo UI", "[画面] [窓1] ✅ Connecting"])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

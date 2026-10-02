@@ -1603,8 +1603,13 @@ class LogMonitor:
                 st.fog_no_object_deadline = st.log_now + config.FOG_NO_OBJECT_DTM_SEC
             self._log("テラー不明 → revealed待ち")
             if self._hands_free():
-                self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
-                self._start_daemon(self._action.do_skip)
+                if st.round_type == "8 Pages":
+                    # 8 Pages はテラーが出るまで自爆できない（debug.log: 開始時の3回は
+                    # 1度も死なず、テラーが出た後はほぼ成功）。出た後の判定で自爆する
+                    self._log(f"開始: {st.round_type} 【放置モード→テラーが出てから自爆】")
+                else:
+                    self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
+                    self._start_daemon(self._action.do_skip)
             return
 
         if event.kind == LogParser.EVENT_FOXY:

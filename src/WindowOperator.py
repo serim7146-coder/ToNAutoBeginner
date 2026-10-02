@@ -1,5 +1,6 @@
 import contextlib
 import ctypes
+import os
 from ctypes import wintypes
 import time
 import win32gui
@@ -538,6 +539,62 @@ def borrow_front(hwnd: int) -> tuple:
     return ok, FrontLoan(hwnd, previous, cursor)
 
 
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+TOKEN_QUERY = 0x0008
+TOKEN_ELEVATION_CLASS = 20          # TOKEN_INFORMATION_CLASS.TokenElevation
+
+
+def _process_elevated(pid: int | None) -> bool | None:
+    """プロセスが昇格（管理者権限）しているか。pid が None ならこのプロセス。
+    開けない・調べられないときは None。ハンドルは型を決めて渡す（int のままだと
+    64ビットで上位が欠ける）"""
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    a32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    a32.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE))
+    a32.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    process = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False,
+                              os.getpid() if pid is None else int(pid))
+    if not process:
+        return None
+    token = wintypes.HANDLE()
+    try:
+        if not a32.OpenProcessToken(process, TOKEN_QUERY, ctypes.byref(token)):
+            return None
+        try:
+            elevated = wintypes.DWORD()
+            size = wintypes.DWORD()
+            if not a32.GetTokenInformation(token, TOKEN_ELEVATION_CLASS, ctypes.byref(elevated),
+                                           ctypes.sizeof(elevated), ctypes.byref(size)):
+                return None
+            return bool(elevated.value)
+        finally:
+            k32.CloseHandle(token)
+    finally:
+        k32.CloseHandle(process)
+
+
+def can_bring_to_front(hwnd: int) -> bool:
+    """その窓を前面にできるか。相手が昇格（管理者権限）していて、ツール自身は昇格して
+    いなければ前面にできない（AttachThreadInput などが「アクセスが拒否されました」になる）。
+    相手のプロセスを開けないときも、昇格しているとみなす。ツールが昇格していれば今のまま"""
+    try:
+        if _process_elevated(None):
+            return True
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+        if not pid.value:
+            return True                 # 分からない窓は今のまま（返してみる）
+        return _process_elevated(pid.value) is False
+    except Exception:
+        DebugLog.exception("WindowOperator.can_bring_to_front")
+        return True
+
+
 def return_front(loan) -> bool:
     """札の窓へ前面を返す。先にカーソルを戻してから前面にする。返したら True。
 
@@ -554,6 +611,9 @@ def return_front(loan) -> bool:
             return False
     except Exception:
         DebugLog.exception("WindowOperator.return_front")
+        return False
+    if not can_bring_to_front(loan.previous):
+        DebugLog.write("[操作] 前面を返す → 相手が管理者権限のため返しません")
         return False
     DebugLog.write(f"[操作] 前面を返す → hwnd={int(loan.previous):#x}")
     if loan.cursor is not None:

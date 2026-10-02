@@ -742,13 +742,16 @@ class App(tk.Tk):
         if keyboard is None:
             return
         for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
+            # 1キーに1つのフック。keyboard は同じキーのフックを1つの表の項目で持つので、
+            # 押す・離すを別々に登録すると、外すときに2つ目が KeyError になる（離す方が
+            # 外れずに残る）。押した・離したは event_type で分ける
+            def on_key(event, d=direction, k=key):
+                if getattr(event, "event_type", None) == "down":
+                    self._chase_key_down(d, k)
+                else:
+                    self._chase_keys_down.discard(k)
             try:
-                self._chase_hooks.append(keyboard.on_press_key(
-                    key, lambda _e, d=direction, k=key: self._chase_key_down(d, k),
-                    suppress=False))
-                self._chase_hooks.append(keyboard.on_release_key(
-                    key, lambda _e, k=key: self._chase_keys_down.discard(k),
-                    suppress=False))
+                self._chase_hooks.append(keyboard.hook_key(key, on_key, suppress=False))
             except Exception as e:
                 DebugLog.exception("mainGUI._hook_chase_keys")
                 self._log(f"[チェイス] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
@@ -768,12 +771,13 @@ class App(tk.Tk):
 
     def _unhook_chase_keys(self):
         """アプリ終了時に外す"""
-        for hook in getattr(self, "_chase_hooks", []):
+        for hook in getattr(self, "_chase_hooks", []):   # 登録できたものだけ
             try:
                 keyboard.unhook(hook)
+            except KeyError:
+                pass                    # もう外れている。例外として書かない
             except Exception:
                 DebugLog.exception("mainGUI._unhook_chase_keys")
-                pass
         self._chase_hooks = []
 
     def _poll_emergency_stop_key(self):
@@ -2172,7 +2176,8 @@ class App(tk.Tk):
         self._log("[停止] マクロを停止しました")
 
     def _log(self, msg: str):
-        DebugLog.write(f"[画面] {msg}")          # 画面のログは全部 debug.log にも
+        # 画面のログは全部 debug.log にも。もう [画面] で始まる行には二重に付けない
+        DebugLog.write(msg if msg.startswith("[画面]") else f"[画面] {msg}")
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{ts}] {msg}\n"
         def _a():
