@@ -45,10 +45,12 @@ CALIB_PX = 20.0             # 保存した gain があれば、画面でこれ�
 CALIB_UNITS_RANGE = (6, 160)
 GAIN_SANE = (0.05, 20.0)    # 測った gain がこの外なら1回測り直し、だめなら失敗
 GAIN_KEEP = (0.5, 2.0)      # 以後の測り直しは、測った値のこの倍率の外を捨てる
+TRUST_REJECTS = 2           # 保存した感度で合わせる間に、範囲の外がこれだけ出たら測り直す（CW）
 GAIN_MIN_SENT = 8           # 送った量がこれ以上の軸だけ gain を測り直す
 MOVE_CAP = 160              # 1回に送る量の上限（マウスの単位）
 STEP = 6                    # 一度に送る量（大きく送ると Windows のマウスの加速で行き過ぎる）
-STEP_SEC = 0.025
+# 送る間隔（測り・照準合わせ・縦の戻しで共通。変えたら保存した感度は使わず測り直す。CW）
+STEP_SEC = 0.005
 AFTER_MOVE_SEC = 0.06
 AIM_TRIES = 12              # 1つのボタンにつき合わせる回数
 MISS_TRIES = 6              # 店の画面が見つからないときの撮り直し
@@ -164,6 +166,7 @@ class Aimer:
         self.gain = list(gain)
         self.limits = tuple((GAIN_KEEP[0] * g, GAIN_KEEP[1] * g) for g in gain)
         self._last = None           # (前の位置 x, y, 送った量 mx, my)
+        self.rejected = 0           # 範囲の外で捨てた測り直しの数（保存した感度が合わない目安。CW）
 
     def forget(self):
         """ボタンが変わった（前の位置と比べない）"""
@@ -180,6 +183,8 @@ class Aimer:
                 low, high = self.limits[axis]
                 if low <= g <= high:
                     self.gain[axis] = 0.5 * self.gain[axis] + 0.5 * g
+                else:
+                    self.rejected += 1
         self._last = None
 
     def move_for(self, pos, aim) -> tuple | None:
@@ -235,7 +240,6 @@ class Fetcher:
         self.grounded = grounded
         self.capture = capture
         self.mouse = CountingMouse(mouse)   # 測りと照準合わせの動きを全部数える
-        self.turned_sec = 0.0               # LookLeft を押していた秒数（終わったら LookRight で戻す）
         self.equip_seen = equip_seen
         self.stopped = stopped
         self.log = log
@@ -296,40 +300,29 @@ class Fetcher:
             self.osc.send("/input/MoveBackward", 0)
             self.osc.send("/input/MoveLeft", 0)
             self.osc.send("/input/LookLeft", 1)
-            turn_started = self.clock()
-            try:
-                self._wait(TURN_SEC)
-            finally:
-                self.osc.send("/input/LookLeft", 0)
-                self.turned_sec = self.clock() - turn_started
+            self._wait(TURN_SEC)
+            self.osc.send("/input/LookLeft", 0)
             self.log(f"アイテム取得: 店の前に着いた {self.clock() - started:.2f}秒")
             return True
         finally:
             self.osc.stop_all(repeat=1)         # 途中でやめても押したままにしない
 
-    # ── 視点を戻す（CN。どの終わり方でも）──
+    # ── 視点を戻す（CN・CW。どの終わり方でも。縦だけ）──
     def restore_view(self):
-        """送ったマウスの相対移動の合計を逆向きに、同じ刻み（6px・25ms）で送って戻す。止めない"""
-        dx, dy = -self.mouse.total[0], -self.mouse.total[1]
-        if not dx and not dy:
+        """送ったマウスの相対移動の縦の合計を逆向きに、同じ刻み（6px・STEP_SEC）で送って戻す。止めない。
+        横は戻さない（ラウンド突入などマップが変わると向きは強制的にそろう。依頼者）"""
+        dy = -self.mouse.total[1]
+        if not dy:
             return
-        for sx, sy in split_move(dx, dy):
+        for sx, sy in split_move(0, dy):
             self.mouse.move_rel(sx, sy)
             self.sleep(STEP_SEC)
-        self.log(f"アイテム取得: 視点を戻した（横 {dx}・縦 {dy}）")
-
-    def restore_turn(self):
-        """左へ回した分を LookRight で同じ秒数だけ戻す（出現で向きがそろうか確かめられないため）"""
-        sec, self.turned_sec = self.turned_sec, 0.0
-        if sec <= 0:
-            return
-        self.osc.send("/input/LookRight", 1)
-        self.sleep(sec)
-        self.osc.send("/input/LookRight", 0)
-        self.log(f"アイテム取得: 向きを戻した（LookRight {sec:.2f}秒）")
+        self.log(f"アイテム取得: 視点を戻した（縦 {dy}）")
 
     # ── 3. 照準合わせとクリック ──
-    def aim_click(self, name: str) -> bool:
+    def aim_click(self, name: str, trust_check: bool = False) -> bool:
+        """trust_check: 保存した感度で合わせている。実際の動きが感度の 0.5〜2 倍の外に
+        TRUST_REJECTS 回出たら、合わないとみなしてその場でやめる（測り直すため。CW）"""
         point = BUTTONS[name]
         self.aimer.forget()
         misses = 0
@@ -345,6 +338,9 @@ class Fetcher:
                 self._wait(MISS_SEC)
                 continue
             self.aimer.observe(pos)
+            if trust_check and self.aimer.rejected >= TRUST_REJECTS:
+                self.log(f"アイテム取得: {name}: 保存した感度で合いません")
+                return False
             move = self.aimer.move_for(pos, shot[1])
             if move is None:
                 self._check()
@@ -440,5 +436,14 @@ class Fetcher:
         return True
 
     def buy(self, shop: str, target_id: int) -> bool:
-        """店の前で、窓が前に出ている状態から。感度を測る → 店のボタン → Equip"""
+        """店の前で、窓が前に出ている状態から。感度 → 店のボタン → Equip。
+        保存した感度があれば測らずに使う。それで店のボタンに合わなければ、測り直して1回やり直す（CW）"""
+        if self.saved_gain:
+            self.aimer = Aimer(self.saved_gain)
+            self.log(f"アイテム取得: 感度 保存した値を使う（横 {self.saved_gain[0]:.3f}・"
+                     f"縦 {self.saved_gain[1]:.3f}）")
+            if self.aim_click(shop, trust_check=True):
+                return self.equip(target_id)
+            self.log("アイテム取得: 感度 測り直し（保存した値で合わない）")
+            self.saved_gain = None      # 合わなかった値で測りの量を決めない・頼らない
         return self.calibrate(shop) and self.aim_click(shop) and self.equip(target_id)

@@ -1304,7 +1304,7 @@ class ActionExecutor:
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
             stopped=lambda: self._fetch_stopped(round_seq, deadline),
             log=lambda m: DebugLog.write(f"{head} {m}"),
-            saved_gain=SharedState.get_item_fetch_gain())
+            saved_gain=self._saved_fetch_gain())
         name = f"{shop} Shop の id={item_id}"
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
@@ -1318,10 +1318,6 @@ class ActionExecutor:
             DebugLog.exception("ActionExecutor._fetch_item")
             outcome = "failed"
         finally:
-            try:
-                fetcher.restore_turn()          # 左へ回した分を戻す（どの終わり方でも）
-            except Exception:
-                DebugLog.exception("ActionExecutor._fetch_item.restore_turn")
             if self._osc is not None:
                 self._osc.stop_all(repeat=1)
         DebugLog.write(f"{head} アイテム取得: 結果 {outcome}")
@@ -1332,6 +1328,14 @@ class ActionExecutor:
                    "round": "ラウンドが始まりました", "stopped": "停止しました"}.get(outcome, outcome)
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
+
+    @staticmethod
+    def _saved_fetch_gain():
+        """保存した感度 (横, 縦)。今の送る間隔で保存したものだけ（間隔が違えば測る。CW）"""
+        saved = SharedState.get_item_fetch_gain()
+        if saved and abs(saved[2] - ItemFetch.STEP_SEC) < 1e-9:
+            return saved[:2]
+        return None
 
     def _fetch_in_front(self, fetcher, shop: str, item_id: int) -> str:
         with SharedState._GLOBAL_ACTION_LOCK:
@@ -1344,7 +1348,8 @@ class ActionExecutor:
                 if not fetcher.buy(shop, item_id):
                     return "failed"
                 if fetcher.aimer is not None:
-                    SharedState.set_item_fetch_gain(fetcher.aimer.gain)   # 次回の測りに使う（保存）
+                    SharedState.set_item_fetch_gain(              # 次回に使う（送った間隔と一緒に保存）
+                        (*fetcher.aimer.gain, ItemFetch.STEP_SEC))
                 return "ok"
             finally:
                 # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。

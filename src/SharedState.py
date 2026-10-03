@@ -210,7 +210,7 @@ def set_item_fetch(val: bool):
         _ITEM_FETCH = bool(val)
 
 
-_ITEM_FETCH_GAIN = None         # 前にうまくいった視点の感度（横, 縦）。保存して次回の測りに使う
+_ITEM_FETCH_GAIN = None         # 前にうまくいった視点の感度（横, 縦, 送った間隔）。保存して次回に使う
 
 
 def get_item_fetch_gain():
@@ -219,13 +219,14 @@ def get_item_fetch_gain():
 
 
 def set_item_fetch_gain(gain):
-    """(横, 縦) か None。数でない・範囲（ItemFetch.GAIN_SANE）の外は None"""
+    """(横, 縦, 送った間隔の秒) か None。数でない・範囲（ItemFetch.GAIN_SANE）の外・間隔が無い
+    （CW より前の (横, 縦) の形）は None（読み捨てる）"""
     global _ITEM_FETCH_GAIN
     value = None
     try:
-        x, y = (float(g) for g in gain)
-        if all(0.05 <= g <= 20.0 for g in (x, y)):
-            value = (x, y)
+        x, y, step = (float(g) for g in gain)
+        if all(0.05 <= g <= 20.0 for g in (x, y)) and step > 0:
+            value = (x, y, step)
     except (TypeError, ValueError):
         value = None
     with _ITEM_FETCH_LOCK:

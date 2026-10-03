@@ -17194,6 +17194,128 @@ class TestVerifiedPhaseCU(unittest.TestCase):
             self.assertIn("[事象] verified → 受理", self.debug, phase)
 
 
+class TestItemFetchSpeedCW(unittest.TestCase):
+    """CW: 保存した感度（同じ送る間隔）があれば測らない。合わなければ測り直して1回やり直す。
+    送る間隔は 0.005 秒（測り・合わせ・戻し）。感度は間隔と一緒に保存し、間隔が違えば測る"""
+
+    TRUE_GAIN = (0.9, 0.55)
+
+    def setUp(self):
+        self.now = [0.0]
+        self.sleeps = []
+        SharedState.set_item_fetch_gain(None)
+        self.addCleanup(SharedState.set_item_fetch_gain, None)
+
+    def _sleep(self, sec):
+        self.sleeps.append(sec)
+        self.now[0] += sec
+
+    def _fetcher(self, saved_gain=None, gain=TRUE_GAIN, start=(1300.0, 300.0)):
+        world = {"mouse": [0, 0]}
+
+        def locate(_img, _pt):
+            return (start[0] - gain[0] * world["mouse"][0], start[1] - gain[1] * world["mouse"][1])
+        self.mouse = TestItemFetchCM.FakeMouse(world)
+        self.logs = []
+        self.locate = locate
+        return ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: ("shot", (960.0, 540.0)),
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=locate, sleep=self._sleep, clock=lambda: self.now[0], saved_gain=saved_gain)
+
+    def _buy(self, f):
+        with patch.object(f, "calibrate", wraps=f.calibrate) as calibrate, \
+             patch.object(f, "equip", return_value=True) as equip:
+            ok = f.buy("Survival", 29)
+        return ok, calibrate, equip
+
+    def test_a_saved_gain_skips_the_measure(self):
+        f = self._fetcher(saved_gain=(0.85, 0.6))
+        ok, calibrate, equip = self._buy(f)
+        self.assertTrue(ok)
+        calibrate.assert_not_called()
+        equip.assert_called_once_with(29)
+        self.assertIn("アイテム取得: 感度 保存した値を使う（横 0.850・縦 0.600）", self.logs)
+        x, y = self.locate(None, None)
+        self.assertLessEqual(abs(x - 960), 6)
+        self.assertLessEqual(abs(y - 540), 4)
+
+    def test_no_saved_gain_measures(self):
+        ok, calibrate, _equip = self._buy(self._fetcher(saved_gain=None))
+        self.assertTrue(ok)
+        calibrate.assert_called_once_with("Survival")
+
+    def test_a_wrong_saved_gain_measures_again_once(self):
+        f = self._fetcher(saved_gain=(0.3, 0.2))        # 本当は 0.9・0.55（3 倍ずれている）
+        ok, calibrate, equip = self._buy(f)
+        self.assertTrue(ok)
+        calibrate.assert_called_once_with("Survival")
+        equip.assert_called_once_with(29)
+        self.assertIn("アイテム取得: 感度 測り直し（保存した値で合わない）", self.logs)
+        self.assertTrue(any("保存した感度で合いません" in m for m in self.logs), self.logs)
+        self.assertAlmostEqual(f.aimer.gain[0], 0.9, places=1)
+        self.assertIsNone(f.saved_gain, "合わなかった値で測りの量を決めない")
+
+    def test_it_measures_again_only_once(self):
+        f = self._fetcher(saved_gain=(0.3, 0.2))
+        with patch.object(f, "calibrate", return_value=True) as calibrate, \
+             patch.object(f, "aim_click", return_value=False) as aim, \
+             patch.object(f, "equip", return_value=True):
+            self.assertFalse(f.buy("Survival", 29))
+        calibrate.assert_called_once()
+        self.assertEqual(aim.call_count, 2, "保存した値で1回・測り直して1回")
+
+    def test_the_mismatch_is_noticed_early(self):
+        f = self._fetcher(saved_gain=(0.3, 0.2))
+        f.aimer = ItemFetch.Aimer((0.3, 0.2))
+        shots = []
+        real = f.locate
+        f.locate = lambda i, p: shots.append(1) or real(i, p)
+        self.assertFalse(f.aim_click("Survival", trust_check=True))
+        self.assertLess(len(shots), ItemFetch.AIM_TRIES, "12 回やりきる前にやめる")
+        self.assertGreaterEqual(f.aimer.rejected, ItemFetch.TRUST_REJECTS)
+
+    def test_without_the_check_it_keeps_aiming(self):
+        f = self._fetcher()
+        f.aimer = ItemFetch.Aimer((0.3, 0.2))
+        f.aim_click("Survival")
+        self.assertFalse(any("保存した感度で合いません" in m for m in self.logs))
+
+    def test_the_step_is_5ms_everywhere(self):
+        self.assertEqual(ItemFetch.STEP_SEC, 0.005)
+        f = self._fetcher()
+        self.assertTrue(f.calibrate("Survival"))
+        self.assertTrue(f.aim_click("Survival"))
+        f.restore_view()
+        steps = [s for s in self.sleeps if s < 0.05]
+        self.assertTrue(steps)
+        self.assertEqual(set(steps), {0.005}, "測り・合わせ・戻しの刻みはすべて 0.005 秒")
+
+    # ── 保存（ActionExecutor）──
+    def _executor(self):
+        cfg = WindowConfig(hwnd=0x55, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+    def test_only_a_gain_saved_with_the_same_step_is_used(self):
+        ex = self._executor()
+        SharedState.set_item_fetch_gain((0.9, 0.6, ItemFetch.STEP_SEC))
+        self.assertEqual(ex._saved_fetch_gain(), (0.9, 0.6))
+        SharedState.set_item_fetch_gain((0.9, 0.6, 0.025))
+        self.assertIsNone(ex._saved_fetch_gain(), "前の間隔で保存した感度は使わない（測る）")
+        SharedState.set_item_fetch_gain(None)
+        self.assertIsNone(ex._saved_fetch_gain())
+
+    def test_the_rejections_are_counted(self):
+        aimer = ItemFetch.Aimer((0.81, 0.59))
+        aimer.move_for((1041.0, 540.0), (960.0, 540.0))
+        aimer.observe((1041.0 - 300.0, 540.0))              # 3.0 は 2 倍の外
+        self.assertEqual(aimer.rejected, 1)
+        aimer.move_for((1041.0, 540.0), (960.0, 540.0))
+        aimer.observe((1041.0 - 90.0, 540.0))               # 0.9 は内
+        self.assertEqual(aimer.rejected, 1)
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
@@ -23552,9 +23674,10 @@ class TestItemFetchCM(unittest.TestCase):
 
     def test_the_gain_setting_is_checked(self):
         self.addCleanup(SharedState.set_item_fetch_gain, None)
-        SharedState.set_item_fetch_gain([0.9, 0.6])
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6))
-        for broken in (None, "x", [1], [0.01, 0.5], [0.5, 25], ["a", 1]):
+        SharedState.set_item_fetch_gain([0.9, 0.6, 0.005])
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005), "感度と送った間隔（CW）")
+        for broken in (None, "x", [1], [0.9, 0.6], [0.01, 0.5, 0.005], [0.5, 25, 0.005],
+                       ["a", 1, 0.005], [0.9, 0.6, 0]):
             SharedState.set_item_fetch_gain(broken)
             self.assertIsNone(SharedState.get_item_fetch_gain(), broken)
 
@@ -23785,13 +23908,13 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "ok")
-            self.assertEqual(SharedState.get_item_fetch_gain(), (1.5, 0.7))
+            self.assertEqual(SharedState.get_item_fetch_gain(), (1.5, 0.7, ItemFetch.STEP_SEC))
             ex._fetch_item(st.round_seq, "Survival", 29)
         self.assertEqual(seen, [None, (1.5, 0.7)], "次回はうまくいった値を渡す")
 
     def test_a_failed_buy_does_not_keep_the_gain(self):
         self.addCleanup(SharedState.set_item_fetch_gain, None)
-        SharedState.set_item_fetch_gain((0.8, 0.6))
+        SharedState.set_item_fetch_gain((0.8, 0.6, ItemFetch.STEP_SEC))
         ex, st, _ = self._executor()
 
         def buy(fetcher, shop, item_id):
@@ -23803,7 +23926,7 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "failed")
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.8, 0.6))
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.8, 0.6, ItemFetch.STEP_SEC))
 
     def test_fetching_moves_then_fronts_and_gives_the_front_back(self):
         ex, st, logs = self._executor()
@@ -23910,11 +24033,13 @@ class TestItemFetchCM(unittest.TestCase):
         loader._load({"item_fetch": "yes"})
         self.assertFalse(SharedState.get_item_fetch(), "壊れた値は OFF")
         self.addCleanup(SharedState.set_item_fetch_gain, None)
+        loader._load({"item_fetch_gain": [0.9, 0.6, 0.005]})
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005))
         loader._load({"item_fetch_gain": [0.9, 0.6]})
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6))
+        self.assertIsNone(SharedState.get_item_fetch_gain(), "CW より前の形（間隔なし）は読み捨てる")
         loader._load({"item_fetch_gain": "broken"})
         self.assertIsNone(SharedState.get_item_fetch_gain())
-        SharedState.set_item_fetch_gain((1.2, 0.4))
+        SharedState.set_item_fetch_gain((1.2, 0.4, 0.005))
         SharedState.set_item_fetch(True)
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
@@ -23934,7 +24059,7 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(app)
         self.assertIs(saved["item_fetch"], True)
-        self.assertEqual(saved["item_fetch_gain"], [1.2, 0.4])
+        self.assertEqual(saved["item_fetch_gain"], [1.2, 0.4, 0.005])
 
     def test_the_toggle(self):
         app = type("FakeApp", (), {})()
@@ -23957,9 +24082,9 @@ class TestItemFetchCM(unittest.TestCase):
 
 
 class TestItemFetchViewRestoreCN(unittest.TestCase):
-    """CN: 自動取得の後、送ったマウスの相対移動の合計（測り・照準合わせ）を逆向きに同じ刻み（6px・25ms）で
-    送って視点を戻す（成功・失敗・時間切れ・ラウンド開始・停止のどれでも）。前面を返す前・排他の中。
-    左へ回した分は LookRight で同じ秒数戻す"""
+    """CN・CW: 自動取得の後、送ったマウスの相対移動の縦の合計（測り・照準合わせ）を逆向きに同じ刻み
+    （6px・STEP_SEC）で送って視点を戻す（成功・失敗・時間切れ・ラウンド開始・停止のどれでも）。前面を返す前・
+    排他の中。横と、左へ回した向き（LookRight）は戻さない（CW。マップが変わると向きはそろう）"""
 
     def setUp(self):
         self.now = [0.0]
@@ -23989,22 +24114,32 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         sent = (sum(dx for dx, _ in mouse.moves), sum(dy for _, dy in mouse.moves))
         self.assertNotEqual(sent, (0, 0))
         self.assertEqual(tuple(f.mouse.total), sent, "測りの動きも数える")
+        self.assertNotEqual(sent[1], 0)
         before = len(mouse.moves)
         f.restore_view()
         back = mouse.moves[before:]
-        self.assertEqual((sum(dx for dx, _ in back), sum(dy for _, dy in back)), (-sent[0], -sent[1]))
-        self.assertTrue(all(abs(dx) <= 6 and abs(dy) <= 6 for dx, dy in back), "6px 刻み")
-        self.assertEqual(world["mouse"], [0, 0], "元の視点")
-        self.assertIn(f"アイテム取得: 視点を戻した（横 {-sent[0]}・縦 {-sent[1]}）", self.logs)
+        self.assertEqual((sum(dx for dx, _ in back), sum(dy for _, dy in back)), (0, -sent[1]), "縦だけ")
+        self.assertTrue(all(dx == 0 and abs(dy) <= 6 for dx, dy in back), "6px 刻み・横は送らない")
+        self.assertEqual(world["mouse"], [sent[0], 0], "縦は元の高さ・横はそのまま")
+        self.assertIn(f"アイテム取得: 視点を戻した（縦 {-sent[1]}）", self.logs)
 
-    def test_the_steps_are_25ms_apart(self):
+    def test_the_steps_are_5ms_apart(self):
+        self.assertEqual(ItemFetch.STEP_SEC, 0.005)
         mouse = TestItemFetchCM.FakeMouse()
         f = self._fetcher(lambda *_: None, mouse)
-        f.mouse.move_rel(24, -12)
+        f.mouse.move_rel(24, -24)
         self.now[0] = 0.0
         f.restore_view()
-        self.assertEqual(mouse.moves[1:], [(-6, 3)] * 4)
-        self.assertAlmostEqual(self.now[0], 4 * 0.025)
+        self.assertEqual(mouse.moves[1:], [(0, 6)] * 4)
+        self.assertAlmostEqual(self.now[0], 4 * 0.005)
+
+    def test_only_horizontal_sends_nothing_back(self):
+        mouse = TestItemFetchCM.FakeMouse()
+        f = self._fetcher(lambda *_: None, mouse)
+        f.mouse.move_rel(30, 0)
+        f.restore_view()
+        self.assertEqual(mouse.moves, [(30, 0)])
+        self.assertEqual(self.logs, [])
 
     def test_nothing_sent_nothing_back(self):
         mouse = TestItemFetchCM.FakeMouse()
@@ -24025,27 +24160,17 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
             pass
         return f, osc
 
-    def test_the_turn_is_turned_back_with_look_right(self):
+    def test_the_turn_is_not_turned_back(self):
+        """CW: LookLeft の 90 度は戻さない（LookRight を送らない）"""
         f, osc = self._turning()
-        self.assertAlmostEqual(f.turned_sec, 0.5)
-        osc.sent.clear()
-        f.restore_turn()
-        self.assertEqual([(a, v) for _t, a, v in osc.sent], [("/input/LookRight", 1), ("/input/LookRight", 0)])
-        self.assertAlmostEqual(osc.sent[1][0] - osc.sent[0][0], 0.5, places=6)
-        f.restore_turn()
-        self.assertEqual(len(osc.sent), 2, "2回は戻さない")
+        self.assertNotIn("/input/LookRight", [a for _t, a, _v in osc.sent])
+        self.assertFalse(hasattr(f, "restore_turn"))
+        self.assertFalse(hasattr(f, "turned_sec"))
 
-    def test_a_stop_during_the_turn_still_counts_the_turn(self):
+    def test_a_stop_during_the_turn_releases_it(self):
         f, osc = self._turning(stop_at=2.2)             # 回し始め 1.95 → 2.45 の途中で止める合図
-        self.assertIn(("/input/LookLeft", 0), [(a, v) for _t, a, v in osc.sent], "離す")
-        self.assertAlmostEqual(f.turned_sec, 0.5, msg="押していた秒数だけ戻す")
-
-    def test_no_turn_no_turning_back(self):
-        f, osc = self._turning(stop_at=1.0)             # 柵の前でやめた
-        self.assertEqual(f.turned_sec, 0.0)
-        osc.sent.clear()
-        f.restore_turn()
-        self.assertEqual(osc.sent, [])
+        self.assertNotIn("/input/LookRight", [a for _t, a, _v in osc.sent])
+        self.assertEqual(osc.stopped, 1, "離す（stop_all）")
 
     # ── 組み込み（ActionExecutor）──
     def _run(self, buy_does, foreground=True, move_raises=None):
@@ -24060,7 +24185,6 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         order = []
 
         def move(fetcher):
-            fetcher.turned_sec = 0.5            # 左へ回した
             if move_raises:
                 raise ItemFetch.Stopped(move_raises)
             return True
@@ -24103,19 +24227,19 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
             self.assertEqual(outcome, expected)
             give_back = order.index("give back")
             back = [m for m in order[6:give_back] if m != "give back"]
-            self.assertEqual(sum(m[1] for m in back), -33, expected)
+            self.assertEqual(sum(m[1] for m in back), 0, f"{expected}: 横は戻さない")
             self.assertEqual(sum(m[2] for m in back), 20, expected)
-            self.assertTrue(all(abs(m[1]) <= 6 and abs(m[2]) <= 6 for m in back), expected)
+            self.assertTrue(all(m[1] == 0 and abs(m[2]) <= 6 for m in back), expected)
             self.assertEqual(order[-1], "give back", "前面を返すのは戻した後")
-            self.assertEqual(osc_sent[-2:], [("/input/LookRight", 1), ("/input/LookRight", 0)], expected)
+            self.assertNotIn("/input/LookRight", [a for a, _v in osc_sent], expected)
 
     def test_an_error_while_buying_still_sends_the_view_back(self):
         def boom(f):
-            f.mouse.move_rel(6, 0)
+            f.mouse.move_rel(6, -6)
             raise RuntimeError("x")
         outcome, order, _ = self._run(boom)
         self.assertEqual(outcome, "failed")
-        self.assertEqual(order, [("mouse", 6, 0), ("mouse", -6, 0), "give back"])
+        self.assertEqual(order, [("mouse", 6, -6), ("mouse", 0, 6), "give back"])
 
     def test_a_failing_restore_still_gives_the_front_back(self):
         with patch.object(ItemFetch.Fetcher, "restore_view", side_effect=RuntimeError("x")):
@@ -24129,18 +24253,18 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         self.assertEqual(outcome, "stopped")
         self.assertEqual(len([m for m in order if m != "give back"]), 6, "戻しは送らない")
 
-    def test_a_stop_while_moving_turns_back_too(self):
+    def test_a_stop_while_moving_sends_nothing_back(self):
         outcome, order, osc_sent = self._run(lambda f: True, move_raises="round")
         self.assertEqual(outcome, "round")
-        self.assertEqual(osc_sent, [("/input/LookRight", 1), ("/input/LookRight", 0)])
+        self.assertEqual(osc_sent, [], "LookRight も送らない")
         self.assertEqual(order, [], "店へ着く前なのでマウスは送っていない・前面化もしていない")
 
     def test_the_restore_is_logged(self):
         with patch.object(DebugLog, "write") as write:
             self._run(lambda f: self._moves(f))
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[操作] [窓2] アイテム取得: 視点を戻した（横 -33・縦 20）", lines)
-        self.assertIn("[操作] [窓2] アイテム取得: 向きを戻した（LookRight 0.50秒）", lines)
+        self.assertIn("[操作] [窓2] アイテム取得: 視点を戻した（縦 20）", lines)
+        self.assertFalse(any("向きを戻した" in l for l in lines))
 
 
 class TestNoVerifiedBeforePressCO(unittest.TestCase):
