@@ -127,8 +127,9 @@ def available() -> bool:
 
 
 def locate(bgr, point, template=None):
-    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率 (x, y, 横の倍率, 縦の倍率)。
-    倍率は見本の 1px が画面で何 px か（点の ±SCALE_PROBE を写した距離から）。見つからなければ None"""
+    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率と手がかりの数
+    (x, y, 横の倍率, 縦の倍率, インライアの数)。倍率は見本の 1px が画面で何 px か（点の ±SCALE_PROBE を
+    写した距離から）。見つからなければ None"""
     import cv2
     import numpy as np
     template = template or _load_template()
@@ -153,7 +154,7 @@ def locate(bgr, point, template=None):
                                                 (px, py - d), (px, py + d)]]), h)[0]
     sx = float(np.hypot(*(pts[2] - pts[1]))) / (2 * d)
     sy = float(np.hypot(*(pts[4] - pts[3]))) / (2 * d)
-    return float(pts[0][0]), float(pts[0][1]), sx, sy
+    return float(pts[0][0]), float(pts[0][1]), sx, sy, int(mask.sum())
 
 
 # Equip は緑の文字のど真ん中を狙う（DA）。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
@@ -378,19 +379,39 @@ class Fetcher:
         point = BUTTONS[name]
         self.aimer.forget()
         misses = 0
+        last_scale = None               # 前の回の倍率（照準の真下の緑を見るのに使う。DC）
         for tries in range(1, AIM_TRIES + 1):
             self._check()
             shot = self.capture()
             found = self.locate(shot[0], point) if shot is not None else None
             pos = None if found is None else found[:2]
+            scale = (found[2:4] if found is not None and len(found) >= 4
+                     else last_scale if found is None else (1.0, 1.0))
+            inliers = found[4] if found is not None and len(found) >= 5 else None
+            head = f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり {'-' if inliers is None else inliers} 点"
+            if name == "Equip" and shot is not None and scale is not None:
+                # 照準の真下に Equip の緑の文字があれば、locate に関係なく押す（DC。locate はアイテムの
+                # 画面では手がかりが少なく、ときどき大きく外れた位置を出す）
+                under = green_center(shot[0], shot[1], scale)
+                tol = screen_tol(name, scale)
+                if (under is not None and abs(under[0] - shot[1][0]) <= tol[0]
+                        and abs(under[1] - shot[1][1]) <= tol[1]):
+                    self._check()
+                    self.mouse.click()
+                    self.log(self._aim_line(head, under, scale, "照準の真下の緑", shot[1], "押す"))
+                    self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・照準の真下の緑・"
+                             f"ずれ 横 {under[0] - shot[1][0]:.1f}・縦 {under[1] - shot[1][1]:.1f} ／ "
+                             f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
+                    return True
             if pos is None:
+                self.log(f"{head}・見つからない")
                 misses += 1
                 if misses > MISS_TRIES:
                     self.log(f"アイテム取得: {name}: 店の画面が見つかりません")
                     return False
                 self._wait(MISS_SEC)
                 continue
-            scale = found[2:4] if len(found) >= 4 else (1.0, 1.0)
+            last_scale = scale
             how = ""
             if name == "Equip":
                 center = green_center(shot[0], pos, scale)
@@ -402,19 +423,29 @@ class Fetcher:
                 return False
             tol = screen_tol(name, scale)
             move = self.aimer.move_for(pos, shot[1], tol)
+            aim_how = how.rstrip("・") or "座標"
             if move is None:
                 self._check()
                 self.mouse.click()
+                self.log(self._aim_line(head, pos, scale, aim_how, shot[1], "押す"))
                 self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・{how}"
                          f"ずれ 横 {pos[0] - shot[1][0]:.1f}・縦 {pos[1] - shot[1][1]:.1f} ／ "
                          f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
                 return True
+            self.log(self._aim_line(head, pos, scale, aim_how, shot[1],
+                                    f"動かす 横 {move[0]:.1f}・縦 {move[1]:.1f}"))
             for dx, dy in split_move(*move):
                 self.mouse.move_rel(dx, dy)
                 self.sleep(STEP_SEC)
             self._wait(AFTER_MOVE_SEC)
         self.log(f"アイテム取得: {name}: 合わせきれません")
         return False
+
+    @staticmethod
+    def _aim_line(head, pos, scale, how, aim, action) -> str:
+        """照準合わせの1回の記録（DC）"""
+        return (f"{head}・位置 ({pos[0]:.1f}, {pos[1]:.1f})・倍率 {scale[0]:.2f}/{scale[1]:.2f}・"
+                f"狙い {how}・ずれ 横 {pos[0] - aim[0]:.1f}・縦 {pos[1] - aim[1]:.1f}・{action}")
 
     # ── 4. Equip とログ ──
     def _wait_equip(self, seq_before: int):

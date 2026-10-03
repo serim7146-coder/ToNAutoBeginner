@@ -17394,7 +17394,8 @@ class TestItemFetchAimCX(unittest.TestCase):
             small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             canvas = np.zeros((1080, 1920, 3), np.uint8)
             canvas[300:300 + small.shape[0], 700:700 + small.shape[1]] = small
-            x, y, sx, sy = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
+            x, y, sx, sy, inliers = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
+            self.assertGreaterEqual(inliers, ItemFetch.MIN_INLIERS, "手がかりの数も返す（DC）")
             self.assertAlmostEqual(sx, scale, delta=0.05)
             self.assertAlmostEqual(sy, scale, delta=0.05)
             self.assertAlmostEqual(x, 700 + 180 * scale, delta=1.5)
@@ -17644,17 +17645,20 @@ class TestEquipGreenCenterDA(unittest.TestCase):
         self.assertEqual((ItemFetch.GREEN_HSV_LOW, ItemFetch.GREEN_HSV_HIGH), ((40, 80, 90), (90, 255, 255)))
 
     def test_it_aims_at_the_middle_of_the_green_text(self):
-        """狙いの点から右下 (+6, +5)（見本の px）の緑の矩形 → その中心を狙って押す"""
+        """狙いの点から右下 (+6, +5)（見本の px）の緑の矩形 → その中心を狙う
+        （照準は離れた所。照準の真下に緑が無いので、DC の「照準の真下の緑」ではなくこちらで狙う）"""
         for s in (0.44, 1.0, 1.9):
             point = (900.0, 500.0)
             green = (point[0] + 6 * s, point[1] + 5 * s)
             img = self._image((green[0], green[1], 30 * s, 8 * s))
-            f = self._fetcher(img, aim=green, point=point, scale=s)
-            self.assertTrue(f.aim_click("Equip"), s)
-            self.assertEqual(self.mouse.clicks, 1, s)
-            self.assertEqual(self.mouse.moves, [], f"{s}: 緑の文字の中心にもう重なっている")
-            line = [m for m in self.logs if "クリック" in m][0]
-            self.assertIn("合わせ 1 回・緑の文字・", line, s)
+            f = self._fetcher(img, aim=(1300.0, 800.0), point=point, scale=s)
+            f.aim_click("Equip")
+            line = [m for m in self.logs if "合わせ 1 回目" in m][0]
+            x, y = (float(v) for v in re.search(r"位置 \(([\d.]+), ([\d.]+)\)", line).groups())
+            self.assertAlmostEqual(x, green[0], delta=1.0, msg=s)     # 画素に丸めた矩形の中心
+            self.assertAlmostEqual(y, green[1], delta=1.0, msg=s)
+            self.assertIn("狙い 緑の文字", line, s)
+            self.assertIn("動かす", line, s)
 
     def test_without_green_it_aims_at_the_fixed_point(self):
         point = (900.0, 500.0)
@@ -17761,6 +17765,112 @@ class TestOscHoldResendDB(unittest.TestCase):
         client.press("/input/MoveForward", 0.3)
         self.assertEqual([(t, v) for t, _a, v in self.sent],
                          [(0.0, 0), (0.0, 1), (0.1, 1), (0.2, 1), (0.3, 0)], "離す時刻ちょうどには送り直さない")
+
+
+class TestEquipUnderReticleDC(unittest.TestCase):
+    """DC: Equip の合わせの各回で、まず照準の周りの緑の文字を見て、そのずれが Equip の許しに入っていれば
+    locate に関係なく動かさずに押す。照準合わせの1回ごとに debug.log に1行（作った画像・偽の locate）"""
+
+    AIM = (960.0, 540.0)
+    GREEN = (0, 200, 0)
+
+    def setUp(self):
+        self.now = [0.0]
+
+    def _image(self, *rects):
+        import numpy as np
+        img = np.zeros((1080, 1920, 3), np.uint8)
+        for cx, cy, w, h in rects:
+            img[int(round(cy - h / 2)):int(round(cy + h / 2)), int(round(cx - w / 2)):int(round(cx + w / 2))] = self.GREEN
+        return img
+
+    def _fetcher(self, images, found):
+        """images・found は回ごとの撮影と locate の結果（最後のものを繰り返す）"""
+        images, found = list(images), list(found)
+        self.mouse = TestItemFetchCM.FakeMouse()
+        self.logs = []
+        shots = iter(images + [images[-1]] * 20)
+        results = iter(found + [found[-1]] * 20)
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: (next(shots), self.AIM),
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=lambda _i, _p: next(results),
+            sleep=lambda s: self.now.__setitem__(0, self.now[0] + s), clock=lambda: self.now[0])
+        f.aimer = ItemFetch.Aimer((0.9, 0.55))
+        return f
+
+    def _lines(self, n):
+        return [m for m in self.logs if f"合わせ {n} 回目" in m]
+
+    def test_green_under_the_reticle_is_pressed_even_if_locate_is_far(self):
+        """照準の真下に緑・locate は 60 px 離れた点 → 1回目でも動かさずに押す"""
+        img = self._image((self.AIM[0] + 1, self.AIM[1] + 1, 30, 8))
+        f = self._fetcher([img], [(self.AIM[0] + 60, self.AIM[1] - 60, 1.0, 1.0, 14)])
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertEqual(self.mouse.clicks, 1)
+        self.assertEqual(self.mouse.moves, [])
+        line = self._lines(1)[0]
+        self.assertIn("アイテム取得: Equip 合わせ 1 回目: 手がかり 14 点・位置 (960.5, 540.5)・倍率 1.00/1.00・"
+                      "狙い 照準の真下の緑・ずれ 横 0.5・縦 0.5・押す", line)
+        self.assertTrue(any("クリック（合わせ 1 回・照準の真下の緑・" in m for m in self.logs))
+
+    def test_green_under_the_reticle_but_outside_the_tolerance_is_not_pressed(self):
+        img = self._image((self.AIM[0], self.AIM[1] + 6, 30, 4))           # 縦 6 px（許し 3 px の外）
+        f = self._fetcher([img], [(self.AIM[0] + 60, self.AIM[1] - 60, 1.0, 1.0, 14)])
+        f.aim_click("Equip")
+        line = self._lines(1)[0]
+        self.assertIn("狙い 座標", line, "今どおり locate の点（周りに緑が無いので座標）")
+        self.assertIn("・動かす 横", line)
+        self.assertEqual(self.mouse.clicks, 0)
+
+    def test_green_under_the_reticle_but_too_far_sideways_is_not_pressed(self):
+        img = self._image((self.AIM[0] + 12, self.AIM[1], 6, 4))           # 横 12 px（許し 8 px の外・窓 30 の内）
+        f = self._fetcher([img], [(self.AIM[0] + 60, self.AIM[1] - 60, 1.0, 1.0, 14)])
+        f.aim_click("Equip")
+        self.assertIn("・動かす 横", self._lines(1)[0])
+        self.assertEqual(self.mouse.clicks, 0)
+
+    def test_no_green_under_the_reticle_is_as_before(self):
+        point = (self.AIM[0] + 60, self.AIM[1] - 60)
+        img = self._image((point[0], point[1], 30, 8))                      # 緑は locate の点の周りだけ
+        f = self._fetcher([img], [(point[0], point[1], 1.0, 1.0, 20)])
+        f.aim_click("Equip")
+        line = self._lines(1)[0]
+        self.assertIn("手がかり 20 点", line)
+        self.assertIn("狙い 緑の文字・ずれ 横 59.5・縦 -60.5・動かす", line, "矩形の中心（画素に丸めた）")
+        self.assertEqual(self.mouse.clicks, 0)
+
+    def test_the_shop_buttons_do_not_look_under_the_reticle(self):
+        img = self._image((self.AIM[0], self.AIM[1], 30, 8))
+        f = self._fetcher([img], [(self.AIM[0] + 60, self.AIM[1] - 60, 1.0, 1.0, 30)])
+        f.aim_click("Survival")
+        self.assertEqual(self.mouse.clicks, 0, "店のボタンは照準の真下の緑を見ない")
+        self.assertIn("狙い 座標・ずれ 横 60.0・縦 -60.0・動かす", self._lines(1)[0])
+
+    def test_the_first_try_waits_for_locate(self):
+        """倍率がまだ無い 1回目は、照準の真下に緑があっても locate を待つ。2回目からは前の回の倍率で見る"""
+        img = self._image((self.AIM[0], self.AIM[1], 30, 8))
+        f = self._fetcher([img], [None, (self.AIM[0] + 60, self.AIM[1] - 60, 1.0, 1.0, 9)])
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertIn("アイテム取得: Equip 合わせ 1 回目: 手がかり - 点・見つからない", self.logs)
+        self.assertIn("狙い 照準の真下の緑", self._lines(2)[0])
+
+    def test_the_previous_scale_is_used_when_locate_fails(self):
+        far = (self.AIM[0] + 60, self.AIM[1] - 60)
+        empty = self._image()
+        under = self._image((self.AIM[0], self.AIM[1], 30 * 0.5, 8 * 0.5))
+        f = self._fetcher([empty, under], [(far[0], far[1], 0.5, 0.5, 11), None])
+        self.assertTrue(f.aim_click("Equip"))
+        line = self._lines(2)[0]
+        self.assertIn("手がかり - 点", line)
+        self.assertIn("倍率 0.50/0.50・狙い 照準の真下の緑", line)
+
+    def test_an_unknown_count_shows_a_dash(self):
+        img = self._image()
+        f = self._fetcher([img], [(self.AIM[0] + 3, self.AIM[1] + 1, 1.0, 1.0)])
+        f.aim_click("Survival")
+        self.assertIn("アイテム取得: Survival 合わせ 1 回目: 手がかり - 点・位置 (963.0, 541.0)・倍率 1.00/1.00・"
+                      "狙い 座標・ずれ 横 3.0・縦 1.0・押す", self.logs)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
