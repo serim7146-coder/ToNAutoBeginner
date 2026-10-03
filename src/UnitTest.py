@@ -17394,8 +17394,12 @@ class TestItemFetchAimCX(unittest.TestCase):
             small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             canvas = np.zeros((1080, 1920, 3), np.uint8)
             canvas[300:300 + small.shape[0], 700:700 + small.shape[1]] = small
-            x, y, sx, sy, inliers = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
+            x, y, sx, sy, inliers, project = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
             self.assertGreaterEqual(inliers, ItemFetch.MIN_INLIERS, "手がかりの数も返す（DC）")
+            self.assertEqual(project(ItemFetch.BUTTONS["Equip"]), (x, y, sx, sy), "同じ写し方（DD）")
+            px, py, _psx, _psy = project(ItemFetch.BUTTONS["Survival"])
+            self.assertAlmostEqual(px, 700 + 266 * scale, delta=1.5)
+            self.assertAlmostEqual(py, 300 + 95 * scale, delta=1.5)
             self.assertAlmostEqual(sx, scale, delta=0.05)
             self.assertAlmostEqual(sy, scale, delta=0.05)
             self.assertAlmostEqual(x, 700 + 180 * scale, delta=1.5)
@@ -17871,6 +17875,179 @@ class TestEquipUnderReticleDC(unittest.TestCase):
         f.aim_click("Survival")
         self.assertIn("アイテム取得: Survival 合わせ 1 回目: 手がかり - 点・位置 (963.0, 541.0)・倍率 1.00/1.00・"
                       "狙い 座標・ずれ 横 3.0・縦 1.0・押す", self.logs)
+
+
+class TestEquipPredictDD(unittest.TestCase):
+    """DD: 店のボタンを押す回の撮影で Equip の位置（照準からの差 d）と倍率を覚え、店の中では locate を使わず
+    照準の真下の緑 → 予測の近くの緑 → 予測で合わせる。緑が3回続けて無いときだけ locate（倍率がおかしい結果は
+    捨てる）。作った画像（緑の矩形は視点を回すと逆へ動く）と偽の locate"""
+
+    AIM = (960.0, 540.0)
+    GAIN = (0.9, 0.55)
+    S = 0.47                            # 店のボタンの回の倍率（窓2 07:15）
+    GREEN = (0, 200, 0)
+
+    def setUp(self):
+        self.now = [0.0]
+        self.equip_locates = []
+
+    def _world(self, equip_d, green=True, bad=(1100.0, 300.0, 0.74, 1.51, 12)):
+        """equip_d: 店のボタンを押した時点の Equip の照準からの差（本当の値）"""
+        import numpy as np
+        world = {"mouse": [0, 0], "in_shop": False}
+        s = self.S
+
+        def equip_pos():
+            return (self.AIM[0] + equip_d[0] - self.GAIN[0] * world["mouse"][0],
+                    self.AIM[1] + equip_d[1] - self.GAIN[1] * world["mouse"][1])
+
+        def capture():
+            img = np.zeros((1080, 1920, 3), np.uint8)
+            if world["in_shop"] and green:
+                x, y = equip_pos()
+                w, h = 30 * s, 8 * s
+                img[int(round(y - h / 2)):int(round(y + h / 2)), int(round(x - w / 2)):int(round(x + w / 2))] = self.GREEN
+            return img, self.AIM
+
+        def project(pt):
+            assert pt == ItemFetch.BUTTONS["Equip"]
+            x, y = equip_pos()
+            return x, y, s, s
+
+        def locate(_img, pt):
+            if pt == ItemFetch.BUTTONS["Equip"]:
+                self.equip_locates.append(1)
+                return bad                                  # 店の中: 手がかりが少なく外れる
+            return self.AIM[0], self.AIM[1], s, s, 71, project  # 店のボタン: 照準の上（正しい）
+
+        def on_click():
+            world["in_shop"] = True
+        world["on_click"] = on_click
+        self.mouse = TestItemFetchCM.FakeMouse(world)
+        self.logs = []
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=capture,
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=locate, sleep=lambda x: self.now.__setitem__(0, self.now[0] + x),
+            clock=lambda: self.now[0])
+        f.aimer = ItemFetch.Aimer(self.GAIN)
+        self.world = world
+        self.equip_pos = equip_pos
+        return f
+
+    def _equip_lines(self):
+        return [m for m in self.logs if "Equip 合わせ" in m]
+
+    def test_window_2_does_not_follow_a_bad_locate(self):
+        """窓2 07:15: 店のボタンの回は正しい・店の中の locate は外れる → locate を呼ばず、予測の近くの緑で押す"""
+        f = self._world(equip_d=(-38.4, 20.0))
+        self.assertTrue(f.aim_click("Event"))
+        self.assertIsNotNone(f.equip_hint)
+        self.assertAlmostEqual(f.equip_hint["d"][0], -38.4)
+        self.assertEqual(f.equip_hint["scale"], (self.S, self.S))
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertEqual(self.equip_locates, [], "店の中では locate を呼ばない")
+        self.assertEqual(self.mouse.clicks, 2)
+        self.assertTrue(all(abs(dx) <= 6 and abs(dy) <= 6 for dx, dy in self.mouse.moves))
+        self.assertLess(abs(sum(dx for dx, _ in self.mouse.moves)), 50, "外れた位置（横 +140）へ振れない")
+        lines = self._equip_lines()
+        self.assertIn("狙い 予測の近くの緑", lines[0])
+        x, y = self.equip_pos()
+        self.assertLessEqual(abs(x - self.AIM[0]), 8 * self.S + 0.5)
+        self.assertLessEqual(abs(y - self.AIM[1]), 3 * self.S + 0.5)
+
+    def test_without_green_it_moves_to_the_prediction_and_advances_d(self):
+        f = self._world(equip_d=(-38.4, 20.0), green=False)
+        f.aim_click("Event")
+        f.aim_click("Equip")
+        first = self._equip_lines()[0]
+        self.assertIn("位置 (921.6, 560.0)・倍率 0.47/0.47・狙い 予測・ずれ 横 -38.4・縦 20.0・動かす", first)
+        sent = (sum(dx for dx, _ in self.mouse.moves[:20]), sum(dy for _, dy in self.mouse.moves[:20]))
+        self.assertEqual(sent, (-43, 36))
+        second = self._equip_lines()[1]
+        self.assertIn("位置 (960.3, 540.2)", second, "d が 送った量 × 感度 だけ進んだ（-38.4+43×0.9・20-36×0.55）")
+        self.assertIn("狙い 予測", second)
+        self.assertEqual(self.equip_locates, [])
+
+    def test_three_misses_use_locate_and_bad_scales_are_dropped(self):
+        f = self._world(equip_d=(-400.0, 0.0), green=False)
+        f.aim_click("Event")
+        f.aim_click("Equip")
+        lines = self._equip_lines()
+        self.assertIn("狙い 予測", lines[0])
+        self.assertIn("狙い 予測", lines[1])
+        self.assertEqual(len(self.equip_locates) > 0, True, "3回目から locate")
+        self.assertIn("手がかり 12 点", lines[2])
+        self.assertIn("狙い 写真（捨てた: 倍率 0.74/1.51）", lines[2])
+        self.assertEqual(f.equip_hint["d"][0] < 0, True, "捨てた結果の位置（横 +140）は使わない")
+
+    def test_a_sane_locate_is_used_as_the_last_resort(self):
+        f = self._world(equip_d=(-400.0, 0.0), green=False, bad=(1000.0, 540.0, 0.5, 0.45, 16))
+        f.aim_click("Event")
+        f.aim_click("Equip")
+        line = self._equip_lines()[2]
+        self.assertIn("手がかり 16 点・位置 (1000.0, 540.0)・倍率 0.47/0.47・狙い 写真（最後の手段）", line)
+
+    def test_the_sanity_check(self):
+        f = self._world(equip_d=(0, 0))
+        s = (0.47, 0.47)
+        self.assertTrue(f._locate_is_sane((0, 0, 0.52, 0.40), s))
+        self.assertFalse(f._locate_is_sane((0, 0, 0.57, 0.47), s), "2割以上")
+        self.assertFalse(f._locate_is_sane((0, 0, 0.37, 0.47), s), "2割以上（小さい）")
+        self.assertFalse(f._locate_is_sane((0, 0, 0.53, 0.40), s), "横と縦の比が 1.3 超")
+        self.assertFalse(f._locate_is_sane((0, 0, 0.0, 0.0), s))
+        self.assertFalse(f._locate_is_sane(None, s))
+        self.assertEqual((ItemFetch.GREEN_MISSES_FOR_LOCATE, ItemFetch.LOCATE_SCALE_TOL,
+                          ItemFetch.LOCATE_ASPECT_MAX), (3, 0.2, 1.3))
+
+    def test_without_the_shop_buttons_position_locate_is_used_as_before(self):
+        f = self._world(equip_d=(-38.4, 20.0), bad=(960.0, 540.0, 0.47, 0.47, 30))
+        self.assertIsNone(f.equip_hint)
+        f.aim_click("Equip")
+        self.assertTrue(self.equip_locates, "今どおり locate で狙う")
+
+    def test_d_is_from_the_reticle_not_from_the_shop_button(self):
+        f = self._world(equip_d=(-38.4, 20.0))
+        project = f.locate(None, ItemFetch.BUTTONS["Event"])[5]
+        f.locate = lambda _i, _p: (self.AIM[0] + 5, self.AIM[1] + 3, self.S, self.S, 60, project)  # 許しの内
+        self.assertTrue(f.aim_click("Event"))
+        self.assertAlmostEqual(f.equip_hint["d"][0], -38.4, msg="照準からの差（店のボタンの位置からではない）")
+        self.assertAlmostEqual(f.equip_hint["d"][1], 20.0)
+
+    def test_a_found_green_resets_the_miss_count(self):
+        """緑が無い → 無い → ある → 無い → 無い: 続けて3回ではないので locate を呼ばない"""
+        f = self._world(equip_d=(-600.0, 0.0))
+        f.aim_click("Event")
+        shots = {"n": 0}
+        real_capture = f.capture
+
+        def capture():
+            img, aim = real_capture()
+            shots["n"] += 1
+            if shots["n"] != 3:
+                img[:] = 0                  # 3 回目だけ緑が見える
+            return img, aim
+        f.capture = capture
+        f.aim_click("Equip")
+        lines = self._equip_lines()
+        self.assertIn("狙い 予測の近くの緑", lines[2])
+        self.assertNotIn("写真", lines[3])
+        self.assertNotIn("写真", lines[4])
+        self.assertIn("写真", lines[5], "そこから3回続けて無ければ locate")
+
+    def test_green_under_the_reticle_wins_over_a_wrong_prediction(self):
+        f = self._world(equip_d=(1.0, 0.5))
+        f.aim_click("Event")
+        f.equip_hint["d"] = (-200.0, 0.0)          # 予測が外れていても
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertEqual(self.mouse.moves, [], "照準の真下の緑で動かさずに押す")
+        self.assertIn("狙い 照準の真下の緑", self._equip_lines()[0])
+
+    def test_a_locate_without_project_leaves_no_hint(self):
+        f = self._world(equip_d=(0, 0))
+        f.locate = lambda _i, _p: (self.AIM[0], self.AIM[1], 0.5, 0.5, 30)
+        self.assertTrue(f.aim_click("Survival"))
+        self.assertIsNone(f.equip_hint)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

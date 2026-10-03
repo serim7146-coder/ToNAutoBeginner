@@ -127,9 +127,10 @@ def available() -> bool:
 
 
 def locate(bgr, point, template=None):
-    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率と手がかりの数
-    (x, y, 横の倍率, 縦の倍率, インライアの数)。倍率は見本の 1px が画面で何 px か（点の ±SCALE_PROBE を
-    写した距離から）。見つからなければ None"""
+    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率と手がかりの数と写す関数
+    (x, y, 横の倍率, 縦の倍率, インライアの数, project)。倍率は見本の 1px が画面で何 px か（点の
+    ±SCALE_PROBE を写した距離から）。project(見本の点) は同じホモグラフィで別の点を (x, y, 横, 縦の倍率) に
+    写す（店のボタンを押す回に Equip の位置も覚えるため。DD）。見つからなければ None"""
     import cv2
     import numpy as np
     template = template or _load_template()
@@ -148,13 +149,17 @@ def locate(bgr, point, template=None):
     h, mask = cv2.findHomography(src, dst, cv2.RANSAC, RANSAC_PX)
     if h is None or mask is None or int(mask.sum()) < MIN_INLIERS:
         return None
-    px, py = point
-    d = SCALE_PROBE
-    pts = cv2.perspectiveTransform(np.float32([[(px, py), (px - d, py), (px + d, py),
-                                                (px, py - d), (px, py + d)]]), h)[0]
-    sx = float(np.hypot(*(pts[2] - pts[1]))) / (2 * d)
-    sy = float(np.hypot(*(pts[4] - pts[3]))) / (2 * d)
-    return float(pts[0][0]), float(pts[0][1]), sx, sy, int(mask.sum())
+    def project(pt):
+        px, py = pt
+        d = SCALE_PROBE
+        pts = cv2.perspectiveTransform(np.float32([[(px, py), (px - d, py), (px + d, py),
+                                                    (px, py - d), (px, py + d)]]), h)[0]
+        sx = float(np.hypot(*(pts[2] - pts[1]))) / (2 * d)
+        sy = float(np.hypot(*(pts[4] - pts[3]))) / (2 * d)
+        return float(pts[0][0]), float(pts[0][1]), sx, sy
+
+    x, y, sx, sy = project(point)
+    return x, y, sx, sy, int(mask.sum()), project
 
 
 # Equip は緑の文字のど真ん中を狙う（DA）。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
@@ -162,6 +167,11 @@ def locate(bgr, point, template=None):
 GREEN_HSV_LOW = (40, 80, 90)        # OpenCV の HSV（H は 0〜179）
 GREEN_HSV_HIGH = (90, 255, 255)
 GREEN_WINDOW = (30, 15)             # 狙いの点から 横 ±30・縦 ±15（見本の px）
+# 店の中の Equip は locate を使わず、店のボタンを押した回の位置から追う（DD。店の中は見本と中身が違い、
+# 手がかりが 10〜17 点しか取れず倍率が外れる）。locate は緑の文字が続けて見つからないときだけ
+GREEN_MISSES_FOR_LOCATE = 3         # 緑の文字がこの回数続けて見つからなければ locate を使う
+LOCATE_SCALE_TOL = 0.2              # 覚えた倍率からこの割合以上ずれた locate の結果は捨てる
+LOCATE_ASPECT_MAX = 1.3             # 横と縦の倍率の比がこれを超える locate の結果は捨てる
 GREEN_MIN_AREA = 3.0                # 緑の画素がこれ未満（見本の px² に直して）なら見つからない
 
 
@@ -301,6 +311,8 @@ class Fetcher:
         self.saved_gain = saved_gain
         self.aimer = None           # calibrate で作る
         self.measured_gain = None   # calibrate で測った感度（保存するのはこれだけ。CX）
+        # 店のボタンを押した回の撮影で写した Equip: {"d": (照準からの差 x, y), "scale": (横, 縦)}（DD）
+        self.equip_hint = None
 
     def _check(self):
         reason = self.stopped()
@@ -376,6 +388,8 @@ class Fetcher:
     def aim_click(self, name: str, trust_check: bool = False) -> bool:
         """trust_check: 保存した感度で合わせている。実際の動きが感度の 0.5〜2 倍の外に
         TRUST_REJECTS 回出たら、合わないとみなしてその場でやめる（測り直すため。CW）"""
+        if name == "Equip" and self.equip_hint is not None:
+            return self._aim_equip_by_hint()
         point = BUTTONS[name]
         self.aimer.forget()
         misses = 0
@@ -425,6 +439,9 @@ class Fetcher:
             move = self.aimer.move_for(pos, shot[1], tol)
             aim_how = how.rstrip("・") or "座標"
             if move is None:
+                if name != "Equip" and len(found) >= 6 and callable(found[5]):
+                    ex, ey, esx, esy = found[5](BUTTONS["Equip"])     # 押すと決めた撮影の同じ写し方で
+                    self.equip_hint = {"d": (ex - shot[1][0], ey - shot[1][1]), "scale": (esx, esy)}
                 self._check()
                 self.mouse.click()
                 self.log(self._aim_line(head, pos, scale, aim_how, shot[1], "押す"))
@@ -437,6 +454,92 @@ class Fetcher:
             for dx, dy in split_move(*move):
                 self.mouse.move_rel(dx, dy)
                 self.sleep(STEP_SEC)
+            self._wait(AFTER_MOVE_SEC)
+        self.log(f"アイテム取得: {name}: 合わせきれません")
+        return False
+
+    def _locate_is_sane(self, found, scale) -> bool:
+        """locate の倍率が覚えた倍率から LOCATE_SCALE_TOL 以内、横と縦の比が LOCATE_ASPECT_MAX 以内か"""
+        if found is None or len(found) < 4:
+            return False
+        fx, fy = found[2], found[3]
+        if not all(abs(f - s) < LOCATE_SCALE_TOL * s for f, s in ((fx, scale[0]), (fy, scale[1]))):
+            return False
+        return max(fx, fy) / min(fx, fy) <= LOCATE_ASPECT_MAX   # 0 は上の 2 割で弾いている
+
+    def _aim_equip_by_hint(self) -> bool:
+        """店の中の Equip（DD）。locate は使わず、店のボタンを押した回に覚えた位置（照準 + d）から追う:
+        照準の真下の緑（DC）→ 予測の近くの緑 → 予測。緑が GREEN_MISSES_FOR_LOCATE 回続けて無いときだけ
+        locate（倍率がおかしい結果は捨てる）。動かしたら d を「送った量 × 感度」だけ進める"""
+        name = "Equip"
+        hint = self.equip_hint
+        scale = hint["scale"]
+        tol = screen_tol(name, scale)
+        self.aimer.forget()
+        no_green = 0
+        for tries in range(1, AIM_TRIES + 1):
+            self._check()
+            shot = self.capture()
+            head = f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり - 点"
+            if shot is None:
+                self.log(f"{head}・見つからない")
+                self._wait(MISS_SEC)
+                continue
+            img, aim = shot
+            under = green_center(img, aim, scale)
+            if under is not None and abs(under[0] - aim[0]) <= tol[0] and abs(under[1] - aim[1]) <= tol[1]:
+                self._check()
+                self.mouse.click()
+                self.log(self._aim_line(head, under, scale, "照準の真下の緑", aim, "押す"))
+                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・照準の真下の緑・"
+                         f"ずれ 横 {under[0] - aim[0]:.1f}・縦 {under[1] - aim[1]:.1f} ／ "
+                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
+                return True
+            d = hint["d"]
+            predicted = (aim[0] + d[0], aim[1] + d[1])
+            center = green_center(img, predicted, scale)
+            measured = center is not None
+            if center is not None:
+                target, how, no_green = center, "予測の近くの緑", 0
+            else:
+                target, how = predicted, "予測"
+                no_green += 1
+                if no_green >= GREEN_MISSES_FOR_LOCATE:
+                    found = self.locate(img, BUTTONS[name])
+                    if found is not None:
+                        inliers = found[4] if len(found) >= 5 else None
+                        head = (f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり "
+                                f"{'-' if inliers is None else inliers} 点")
+                        if self._locate_is_sane(found, scale):
+                            target, how, measured = found[:2], "写真（最後の手段）", True
+                        else:
+                            how = f"写真（捨てた: 倍率 {found[2]:.2f}/{found[3]:.2f}）" if len(found) >= 4 \
+                                else "写真（捨てた）"
+            hint["d"] = (target[0] - aim[0], target[1] - aim[1])
+            if measured:
+                self.aimer.observe(target)
+            else:
+                self.aimer.forget()     # 予測は確かめていない位置。感度の測り直しに使わない
+            move = self.aimer.move_for(target, aim, tol)
+            if move is None:
+                self._check()
+                self.mouse.click()
+                self.log(self._aim_line(head, target, scale, how, aim, "押す"))
+                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・{how}・"
+                         f"ずれ 横 {target[0] - aim[0]:.1f}・縦 {target[1] - aim[1]:.1f} ／ "
+                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
+                return True
+            self.log(self._aim_line(head, target, scale, how, aim,
+                                    f"動かす 横 {move[0]:.1f}・縦 {move[1]:.1f}"))
+            sent_x = sent_y = 0
+            for dx, dy in split_move(*move):
+                self.mouse.move_rel(dx, dy)
+                sent_x += dx
+                sent_y += dy
+                self.sleep(STEP_SEC)
+            # 視点を回した分だけ、Equip は照準に対して逆へ動く
+            dx0, dy0 = hint["d"]
+            hint["d"] = (dx0 - sent_x * self.aimer.gain[0], dy0 - sent_y * self.aimer.gain[1])
             self._wait(AFTER_MOVE_SEC)
         self.log(f"アイテム取得: {name}: 合わせきれません")
         return False
