@@ -1593,7 +1593,10 @@ class LogMonitor:
                 st.waiting_for_equip = True
                 if self._action.item_fetch_target():
                     # アイテム自動取得（CM）: Begin を止めずに押し、通った後に取りに行く。
-                    # 前面化・音声は出さない。フリーズは Begin の流れで今どおり張る
+                    # 前面化は出さない（カーソルの差し込み・取りに行く前面化の邪魔になる）。音だけ
+                    # いつもの RoundOver のタイミングで鳴らす（CY。「音は前面化と一緒に」の例外）。
+                    # フリーズは Begin の流れで今どおり張る
+                    self._action.announce_item_lost_once()
                     self._log("RoundOver 【⚠ アイテムロスト → Begin の後に自動で取りに行きます】")
                 else:
                     self._action._attend_to_item_loss()

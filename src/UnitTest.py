@@ -11502,14 +11502,18 @@ class TestAttendToItemLoss(unittest.TestCase):
     # ── 13. 音声はここからしか鳴らない ──────────────────
     def test_the_voice_comes_only_from_here(self):
         """B・C の窓の音声は _attend_to_item_loss() だけ。_handle_item_lost() と
-        Begin 直前からは鳴らなくなった"""
+        Begin 直前からは鳴らなくなった。例外はアイテム自動取得で取りに行く前の音だけ（CY）"""
         src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
         callers = [m.start() for m in re.finditer(r"self\.announce_item_lost_once\(\)", src)]
         show = src[src.index("    def _show_item_loss("):]
         show = show[:show.index("\n    def ", 10)]
+        after = src[src.index("    def do_after_round("):]
+        after = after[:after.index("\n    def ", 10)]
 
-        self.assertEqual(len(callers), 1, "呼んでいるのは1か所だけ")
+        self.assertEqual(len(callers), 2, "_show_item_loss と、自動取得で取りに行く前の2か所だけ")
         self.assertIn("self.announce_item_lost_once()", show)
+        self.assertIn("if fetch:", after[:after.index("self.announce_item_lost_once()")][-1200:],
+                      "自動取得で取りに行くときだけ")
         self.assertNotIn("announce_item_lost_if_needed", src, "押す直前の通知は消えた")
 
     def test_the_item_begin_mode_no_longer_speaks_while_waiting_to_equip(self):
@@ -17444,6 +17448,150 @@ class TestItemFetchAimCX(unittest.TestCase):
     def test_an_unmarked_save_is_dropped(self):
         SharedState.set_item_fetch_gain((0.9, 0.6, ItemFetch.STEP_SEC))
         self.assertIsNone(SharedState.get_item_fetch_gain())
+
+
+class TestItemLossVoiceCY(unittest.TestCase):
+    """CY: 自動取得で取りに行くときも、アイテムロストの音はいつものタイミングで（音だけ・前面化なし）。
+    アイテム取得→Begin モードは RoundOver、既定のモードは Begin が通った後（取りに行く前）。1ラウンド1回。
+    取りに行って失敗・時間切れでは何もしない"""
+
+    ITEMS = {29: ItemCatalog.Item("Taser", "Survival", True)}
+
+    def setUp(self):
+        p = patch.object(config, "ITEMS", self.ITEMS)
+        p.start()
+        self.addCleanup(p.stop)
+        SharedState.set_item_fetch(True)
+        self.addCleanup(SharedState.set_item_fetch, False)
+        SharedState.set_item_begin_mode(False)
+        self.addCleanup(SharedState.set_item_begin_mode, False)
+        SharedState.set_hands_free(False)
+        self.addCleanup(SharedState.set_hands_free, False)
+        SharedState.equip_freeze_reset()
+        self.addCleanup(SharedState.equip_freeze_reset)
+        self.sounds = []
+        self.focus = []
+        for p in (patch.object(PlaySound, "play_sound", side_effect=self.sounds.append),
+                  patch.object(WindowOperator, "borrow_front",
+                               side_effect=lambda h: self.focus.append(h) or (True, None)),
+                  patch.object(WindowOperator, "focus_window", side_effect=lambda h: self.focus.append(h) or True)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _monitor(self, lost=True):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10, osc_port=9000, auto_begin=True,
+                                                     voice_item_lost="lost.mp3"),
+                                        {}, lambda _m: None, window_idx=1)
+        st = monitor.st
+        st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._start_daemon = lambda *a: None
+        st.in_round = True
+        st.held_item_id = 29
+        if lost:
+            st.item_id = 29
+            monitor._mark_item_lost("リスポーン: アイテムロスト")
+            monitor._lose_held_item("リスポーン")
+        else:                                   # 前のラウンドでロストして未回収
+            monitor._lose_held_item("リスポーン")
+            st.item_id = 0
+        return monitor
+
+    def _round_over(self, monitor):
+        monitor._process("2026.10.03 22:10:00 Debug      -  RoundOver")
+
+    def test_item_begin_mode_rings_at_round_over_without_fronting(self):
+        SharedState.set_item_begin_mode(True)
+        monitor = self._monitor()
+        with patch.object(monitor._action, "_attend_to_item_loss") as attend:
+            self._round_over(monitor)
+        self.assertEqual(self.sounds, ["lost.mp3"], "音が1回")
+        self.assertEqual(self.focus, [], "前面化しない")
+        attend.assert_not_called()
+        self.assertTrue(monitor.st.waiting_for_equip)
+
+    def test_item_begin_mode_rings_only_once_per_round(self):
+        SharedState.set_item_begin_mode(True)
+        monitor = self._monitor()
+        self._round_over(monitor)
+        monitor._action.announce_item_lost_once()   # 取りに行く前の音（もう鳴った）
+        self.assertEqual(self.sounds, ["lost.mp3"])
+
+    def test_the_default_mode_is_silent_at_round_over(self):
+        """既定のモードは RoundOver では鳴らさない（続行ラウンドの途中で鳴らないように。今どおり）"""
+        monitor = self._monitor()
+        self._round_over(monitor)
+        self.assertEqual(self.sounds, [])
+        self.assertEqual(self.focus, [])
+
+    def _after_round(self, monitor, outcome):
+        ex, st = monitor._action, monitor.st
+        st.in_round = False
+        st.round_end_seen = True
+        st.waiting_for_equip = True
+        order = []
+
+        def press(*_a, **_kw):
+            order.append("press")
+            st.begin_done = True
+            return True
+
+        def fetch(round_seq, shop, item_id):
+            order.append(("fetch", list(self.sounds)))
+            st.waiting_for_equip = False
+            return outcome
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ex, "_begin_move"), patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_fetch_item", side_effect=fetch), \
+             patch.object(ActionExecutor.threading, "Thread"), \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_after_round()
+        return order
+
+    def test_the_default_mode_rings_after_the_begin_before_fetching(self):
+        for lost in (True, False):
+            self.sounds.clear()
+            monitor = self._monitor(lost=lost)
+            order = self._after_round(monitor, "ok")
+            self.assertEqual(order, ["press", ("fetch", ["lost.mp3"])], f"lost={lost}: 取りに行く前に鳴った")
+            self.assertEqual(self.sounds, ["lost.mp3"], "1回")
+            self.assertEqual(self.focus, [], "前面化しない")
+
+    def test_failure_or_timeout_gives_nothing(self):
+        for outcome in ("failed", "timeout", "ok"):
+            self.sounds.clear()
+            monitor = self._monitor()
+            with patch.object(monitor._action, "_attend_to_item_loss") as attend:
+                self._after_round(monitor, outcome)
+            attend.assert_not_called()
+            self.assertEqual(self.sounds, ["lost.mp3"], f"{outcome}: 取りに行く前の1回だけ")
+            self.assertEqual(self.focus, [], outcome)
+            self.assertFalse(monitor.st.equip_freeze_held, f"{outcome}: フリーズも張らない")
+
+    def test_without_fetch_it_is_as_before(self):
+        SharedState.set_item_fetch(False)
+        monitor = self._monitor()
+        with patch.object(monitor._action, "_attend_to_item_loss",
+                          side_effect=lambda: setattr(monitor.st, "waiting_for_equip", False)) as attend:
+            self._after_round(monitor, None)
+        attend.assert_called_once_with()
+        self.assertEqual(self.sounds, [], "音は _attend_to_item_loss（前面化と一緒）から")
+
+    def test_hands_free_rings_nothing(self):
+        SharedState.set_hands_free(True)
+        SharedState.set_item_begin_mode(True)
+        monitor = self._monitor()
+        self._round_over(monitor)
+        monitor._action.announce_item_lost_once()
+        self.assertEqual(self.sounds, [])
+        self.assertEqual(self.focus, [])
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -23930,28 +24078,31 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(ex, "_confirm_begin"), \
              patch.object(ex, "_fetch_item", side_effect=fetch), \
              patch.object(ex, "_attend_to_item_loss", side_effect=attend), \
+             patch.object(PlaySound, "play_sound", side_effect=lambda _p: order.append("sound")), \
              patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
             ex.do_after_round()
         return order
 
     def test_after_the_begin_it_fetches_instead_of_waiting(self):
+        """CY: Begin が通った後（いつもの案内のタイミング）に音だけ鳴らしてから取りに行く"""
         SharedState.set_item_fetch(True)
         ex, st, _ = self._executor()
-        self.assertEqual(self._after_round(ex, st, "ok"), ["press", ("fetch", "Survival", 29)])
+        self.assertEqual(self._after_round(ex, st, "ok"), ["press", "sound", ("fetch", "Survival", 29)])
 
-    def test_a_failure_or_timeout_gives_the_usual_notice(self):
+    def test_a_failure_or_timeout_gives_nothing_more(self):
+        """CY: 取りに行って失敗・時間切れ → 何もしない（前面化・フリーズ・2回目の音なし）"""
         SharedState.set_item_fetch(True)
         for outcome in ("failed", "timeout"):
             ex, st, _ = self._executor()
             self.assertEqual(self._after_round(ex, st, outcome),
-                             ["press", ("fetch", "Survival", 29), "attend"], outcome)
+                             ["press", "sound", ("fetch", "Survival", 29)], outcome)
 
     def test_a_round_start_or_stop_gives_no_notice(self):
         SharedState.set_item_fetch(True)
         for outcome in ("round", "stopped"):
             ex, st, logs = self._executor()
             self.assertEqual(self._after_round(ex, st, outcome),
-                             ["press", ("fetch", "Survival", 29)], outcome)
+                             ["press", "sound", ("fetch", "Survival", 29)], outcome)
             waiting = any("アイテム装備を待っています" in m for m in logs)
             self.assertEqual(waiting, outcome == "round", f"{outcome}: 停止ならそこで終わる")
 

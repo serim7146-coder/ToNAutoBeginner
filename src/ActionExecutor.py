@@ -1235,13 +1235,19 @@ class ActionExecutor:
             # 壊れる）。受理されなかったラウンドでは出さない（依頼者了承済み）
             if st.begin_done:
                 fetch = self.item_fetch_target()
+                if fetch:
+                    # 自動取得: いつもの案内のタイミング（Begin が通った後）で音だけ鳴らし、取りに行く（CY）。
+                    # 「音は前面化と一緒に _show_item_loss からだけ」の例外。前面化すると取りに行く
+                    # 前面化・カーソルの差し込みの邪魔になる。手で装備するならこの音で気づける。
+                    # アイテム取得→Begin モードで RoundOver に鳴らした回は鳴らない（1ラウンド1回）
+                    self.announce_item_lost_once()
                 outcome = self._fetch_item(round_seq, *fetch) if fetch else None
-                if outcome in (None, "failed", "timeout"):
-                    self._attend_to_item_loss()     # 今のアイテムロストの案内（前面化・音声）
+                if outcome is None:
+                    self._attend_to_item_loss()     # 取りに行けない: 今のアイテムロストの案内（前面化・音声）
                 elif outcome == "stopped":
                     return
-                # "round": ラウンドが始まった。今どおり案内は出さない（音声は前面化と一緒の
-                # _show_item_loss からだけ。フリーズはラウンド開始で外れている）
+                # 取りに行って失敗・時間切れ・ラウンド開始: 何もしない（音・前面化・フリーズなし。CY）。
+                # 次のラウンドでまた取りに行く（CS）
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
                 time.sleep(0.3)
