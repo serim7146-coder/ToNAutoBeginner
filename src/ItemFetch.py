@@ -37,7 +37,12 @@ MIN_INLIERS = 10            # ホモグラフィのインライア
 RANSAC_PX = 5.0
 
 # 照準合わせ
-TOL_X, TOL_Y = 6, 4         # 照準とボタンのずれがこの内なら押す（px）
+TOL_X, TOL_Y = 6, 4         # Aimer を許しを渡さずに使うときの既定（画面の px）
+# 押してよいずれ（見本の px）。画面の許しは、見本の 1px が画面で何 px か（locate の倍率）を掛ける（CX）。
+# Equip は枠の高さの真ん中あたり（小さく写ると縦 ±4px 決め打ちではボタンの端で押していた）
+BUTTON_TOL = {"Equip": (8, 3), "Enkephalin": (14, 10), "Survival": (14, 10), "Event": (14, 10)}
+TOL_MIN_PX = 1.0            # 画面の許しの最小
+SCALE_PROBE = 10            # 倍率を測るのに、点の ±この px を写す
 # gain（画面px ／ マウス1）は視点の感度で人によって違う（依頼者の PC で 横0.81・縦0.59）。決め打ちに
 # しない: 最初のボタンを狙う前に、横・縦それぞれ小さく動かして測る（calibrate）
 CALIB_UNITS = 24            # 測りで送る量（保存した gain が無いとき）
@@ -122,7 +127,8 @@ def available() -> bool:
 
 
 def locate(bgr, point, template=None):
-    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置 (x, y)。見つからなければ None"""
+    """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率 (x, y, 横の倍率, 縦の倍率)。
+    倍率は見本の 1px が画面で何 px か（点の ±SCALE_PROBE を写した距離から）。見つからなければ None"""
     import cv2
     import numpy as np
     template = template or _load_template()
@@ -141,8 +147,19 @@ def locate(bgr, point, template=None):
     h, mask = cv2.findHomography(src, dst, cv2.RANSAC, RANSAC_PX)
     if h is None or mask is None or int(mask.sum()) < MIN_INLIERS:
         return None
-    x, y = cv2.perspectiveTransform(np.float32([[point]]), h)[0][0]
-    return float(x), float(y)
+    px, py = point
+    d = SCALE_PROBE
+    pts = cv2.perspectiveTransform(np.float32([[(px, py), (px - d, py), (px + d, py),
+                                                (px, py - d), (px, py + d)]]), h)[0]
+    sx = float(np.hypot(*(pts[2] - pts[1]))) / (2 * d)
+    sy = float(np.hypot(*(pts[4] - pts[3]))) / (2 * d)
+    return float(pts[0][0]), float(pts[0][1]), sx, sy
+
+
+def screen_tol(name: str, scale) -> tuple:
+    """押してよいずれ（画面の px）。見本の許し × 倍率、最小 TOL_MIN_PX"""
+    tx, ty = BUTTON_TOL[name]
+    return max(TOL_MIN_PX, tx * scale[0]), max(TOL_MIN_PX, ty * scale[1])
 
 
 # ── 照準を寄せる量 ──────────────────────────────
@@ -187,10 +204,11 @@ class Aimer:
                     self.rejected += 1
         self._last = None
 
-    def move_for(self, pos, aim) -> tuple | None:
-        """押してよければ None。まだなら送る量 (mx, my)（上限 ±MOVE_CAP）"""
+    def move_for(self, pos, aim, tol=None) -> tuple | None:
+        """押してよければ None。まだなら送る量 (mx, my)（上限 ±MOVE_CAP）。tol は画面の許し (横, 縦)"""
+        tol_x, tol_y = tol or (TOL_X, TOL_Y)
         dx, dy = pos[0] - aim[0], pos[1] - aim[1]
-        if abs(dx) <= TOL_X and abs(dy) <= TOL_Y:
+        if abs(dx) <= tol_x and abs(dy) <= tol_y:
             return None
         mx = max(-MOVE_CAP, min(MOVE_CAP, dx / self.gain[0]))
         my = max(-MOVE_CAP, min(MOVE_CAP, dy / self.gain[1]))
@@ -248,6 +266,7 @@ class Fetcher:
         self.clock = clock or time.time
         self.saved_gain = saved_gain
         self.aimer = None           # calibrate で作る
+        self.measured_gain = None   # calibrate で測った感度（保存するのはこれだけ。CX）
 
     def _check(self):
         reason = self.stopped()
@@ -329,7 +348,8 @@ class Fetcher:
         for tries in range(1, AIM_TRIES + 1):
             self._check()
             shot = self.capture()
-            pos = self.locate(shot[0], point) if shot is not None else None
+            found = self.locate(shot[0], point) if shot is not None else None
+            pos = None if found is None else found[:2]
             if pos is None:
                 misses += 1
                 if misses > MISS_TRIES:
@@ -341,11 +361,14 @@ class Fetcher:
             if trust_check and self.aimer.rejected >= TRUST_REJECTS:
                 self.log(f"アイテム取得: {name}: 保存した感度で合いません")
                 return False
-            move = self.aimer.move_for(pos, shot[1])
+            tol = screen_tol(name, found[2:4] if len(found) >= 4 else (1.0, 1.0))
+            move = self.aimer.move_for(pos, shot[1], tol)
             if move is None:
                 self._check()
                 self.mouse.click()
-                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回）")
+                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・"
+                         f"ずれ 横 {pos[0] - shot[1][0]:.1f}・縦 {pos[1] - shot[1][1]:.1f} ／ "
+                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
                 return True
             for dx, dy in split_move(*move):
                 self.mouse.move_rel(dx, dy)
@@ -386,9 +409,9 @@ class Fetcher:
         for misses in range(MISS_TRIES + 1):
             self._check()
             shot = self.capture()
-            pos = self.locate(shot[0], point) if shot is not None else None
-            if pos is not None:
-                return pos
+            found = self.locate(shot[0], point) if shot is not None else None
+            if found is not None:
+                return found[:2]
             if misses < MISS_TRIES:
                 self._wait(MISS_SEC)
         return None
@@ -432,6 +455,7 @@ class Fetcher:
                 gain.append(float(self.saved_gain[axis]))
                 self.log(f"アイテム取得: {label}の感度は保存した値 {gain[-1]:.3f} で続けます")
         self.aimer = Aimer(gain)
+        self.measured_gain = tuple(gain)    # 保存してよいのは測った値だけ（合わせで直した値は保存しない。CX）
         self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
         return True
 

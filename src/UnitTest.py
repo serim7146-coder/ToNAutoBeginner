@@ -17299,9 +17299,9 @@ class TestItemFetchSpeedCW(unittest.TestCase):
 
     def test_only_a_gain_saved_with_the_same_step_is_used(self):
         ex = self._executor()
-        SharedState.set_item_fetch_gain((0.9, 0.6, ItemFetch.STEP_SEC))
+        SharedState.set_item_fetch_gain((0.9, 0.6, ItemFetch.STEP_SEC, "calib"))
         self.assertEqual(ex._saved_fetch_gain(), (0.9, 0.6))
-        SharedState.set_item_fetch_gain((0.9, 0.6, 0.025))
+        SharedState.set_item_fetch_gain((0.9, 0.6, 0.025, "calib"))
         self.assertIsNone(ex._saved_fetch_gain(), "前の間隔で保存した感度は使わない（測る）")
         SharedState.set_item_fetch_gain(None)
         self.assertIsNone(ex._saved_fetch_gain())
@@ -17314,6 +17314,136 @@ class TestItemFetchSpeedCW(unittest.TestCase):
         aimer.move_for((1041.0, 540.0), (960.0, 540.0))
         aimer.observe((1041.0 - 90.0, 540.0))               # 0.9 は内
         self.assertEqual(aimer.rejected, 1)
+
+
+class TestItemFetchAimCX(unittest.TestCase):
+    """CX: 押してよいずれを見本の px で持ち、locate の倍率で画面の px に写す（Equip 横±8・縦±3、店のボタン
+    横±14・縦±10、最小 1px）。保存する感度は calibrate で測った値だけ"""
+
+    def setUp(self):
+        self.now = [0.0]
+        SharedState.set_item_fetch_gain(None)
+        self.addCleanup(SharedState.set_item_fetch_gain, None)
+
+    def _sleep(self, sec):
+        self.now[0] += sec
+
+    def _fetcher(self, locate, saved_gain=None):
+        self.mouse = TestItemFetchCM.FakeMouse()
+        self.logs = []
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: ("shot", (960.0, 540.0)),
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=locate, sleep=self._sleep, clock=lambda: self.now[0], saved_gain=saved_gain)
+        f.aimer = ItemFetch.Aimer((0.9, 0.55))
+        return f
+
+    def test_the_tolerances(self):
+        self.assertEqual(ItemFetch.BUTTON_TOL["Equip"], (8, 3))
+        for shop in ("Enkephalin", "Survival", "Event"):
+            self.assertEqual(ItemFetch.BUTTON_TOL[shop], (14, 10))
+        equip = ItemFetch.screen_tol("Equip", (0.4, 0.4))
+        self.assertAlmostEqual(equip[0], 3.2)
+        self.assertAlmostEqual(equip[1], 1.2)
+        shop = ItemFetch.screen_tol("Survival", (0.4, 0.4))
+        self.assertGreater(shop[0], equip[0])
+        self.assertGreater(shop[1], equip[1], "店のボタンは同じ倍率で Equip より大きい")
+        self.assertEqual(ItemFetch.screen_tol("Equip", (0.1, 0.1)), (1.0, 1.0), "最小 1px")
+
+    def test_far_and_small_equip_needs_to_be_closer(self):
+        """倍率 0.4（遠い・小さい窓）: 縦ずれ 2px は押さない（許し 1.2px）・0.8px は押す"""
+        f = self._fetcher(lambda _i, _p: (960.0, 542.0, 0.4, 0.4))
+        self.assertFalse(f.aim_click("Equip"))
+        self.assertEqual(self.mouse.clicks, 0)
+        f = self._fetcher(lambda _i, _p: (960.0, 540.8, 0.4, 0.4))
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertEqual(self.mouse.clicks, 1)
+
+    def test_near_equip_allows_2px(self):
+        f = self._fetcher(lambda _i, _p: (960.0, 542.0, 1.0, 1.0))
+        self.assertTrue(f.aim_click("Equip"), "倍率 1.0 なら縦の許しは 3px")
+
+    def test_the_shop_button_is_looser(self):
+        f = self._fetcher(lambda _i, _p: (965.0, 543.0, 0.4, 0.4))   # Equip なら外・店なら内
+        self.assertTrue(f.aim_click("Survival"))
+        f = self._fetcher(lambda _i, _p: (965.0, 543.0, 0.4, 0.4))
+        self.assertFalse(f.aim_click("Equip"))
+
+    def test_the_log_has_the_offset_and_the_tolerance(self):
+        f = self._fetcher(lambda _i, _p: (961.2, 540.8, 0.4, 0.4))
+        f.aim_click("Equip")
+        self.assertIn("アイテム取得: Equip クリック（合わせ 1 回・ずれ 横 1.2・縦 0.8 ／ 許し 横 3.2・縦 1.2）",
+                      self.logs)
+
+    def test_locate_gives_the_scale(self):
+        """本物の SIFT: 見本を半分の大きさで置くと倍率 0.5"""
+        import cv2
+        import numpy as np
+        if not ItemFetch.available():
+            self.skipTest("SIFT か見本が使えない")
+        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_FILE)), dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        for scale in (1.0, 0.5):
+            small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            canvas = np.zeros((1080, 1920, 3), np.uint8)
+            canvas[300:300 + small.shape[0], 700:700 + small.shape[1]] = small
+            x, y, sx, sy = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
+            self.assertAlmostEqual(sx, scale, delta=0.05)
+            self.assertAlmostEqual(sy, scale, delta=0.05)
+            self.assertAlmostEqual(x, 700 + 174 * scale, delta=1.5)
+            self.assertAlmostEqual(y, 300 + 172 * scale, delta=1.5)
+
+    # ── 保存するのは測った値だけ ──
+    def test_the_measured_gain_is_kept_apart_from_the_aim_corrections(self):
+        world = {"mouse": [0, 0]}
+
+        def locate(_img, _pt):
+            # 最初は 0.9/0.55 で動き、合わせの途中から 1.1/0.65 になる（直した値が測った値と違う）
+            g = (0.9, 0.55) if abs(world["mouse"][0]) < 60 else (1.1, 0.65)
+            return (1300.0 - g[0] * world["mouse"][0], 300.0 - g[1] * world["mouse"][1], 1.0, 1.0)
+        self.mouse = TestItemFetchCM.FakeMouse(world)
+        self.logs = []
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: ("shot", (960.0, 540.0)),
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=locate, sleep=self._sleep, clock=lambda: self.now[0])
+        self.assertTrue(f.calibrate("Survival"))
+        measured = f.measured_gain
+        self.assertAlmostEqual(measured[0], 0.9)
+        f.aim_click("Survival")
+        self.assertNotEqual(tuple(f.aimer.gain), measured, "合わせの途中で直した")
+        self.assertEqual(f.measured_gain, measured, "測った値は変わらない")
+
+    def test_using_the_saved_gain_measures_nothing(self):
+        f = self._fetcher(lambda _i, _p: (960.0, 540.0, 1.0, 1.0), saved_gain=(0.9, 0.55))
+        with patch.object(f, "equip", return_value=True):
+            self.assertTrue(f.buy("Survival", 29))
+        self.assertIsNone(f.measured_gain, "測っていない回は保存するものが無い")
+
+    def test_only_the_measured_gain_is_saved(self):
+        SharedState.set_item_fetch_gain((0.8, 0.6, ItemFetch.STEP_SEC, "calib"))
+        cfg = WindowConfig(hwnd=0x55, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, item_id=0,
+                         waiting_for_equip=True)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None,
+                                           auto_begin_active=lambda: True)
+
+        def buy(fetcher, shop, item_id):
+            fetcher.aimer = ItemFetch.Aimer((1.4, 0.9))     # 保存した値で合わせ、途中で直した（測っていない）
+            return True
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(ex, "_borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"), \
+             patch.object(WindowOperator, "foreground_hwnd", return_value=0), \
+             patch.object(ActionExecutor.time, "sleep"):
+            self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "ok")
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.8, 0.6, ItemFetch.STEP_SEC, "calib"),
+                         "合わせで直した値は保存しない")
+
+    def test_an_unmarked_save_is_dropped(self):
+        SharedState.set_item_fetch_gain((0.9, 0.6, ItemFetch.STEP_SEC))
+        self.assertIsNone(SharedState.get_item_fetch_gain())
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -23669,15 +23799,18 @@ class TestItemFetchCM(unittest.TestCase):
         with patch.object(f, "equip", return_value=True):
             self.assertTrue(f.buy("Survival", 29))
         x, y = locate(None, None)
-        self.assertLessEqual(abs(x - 960), 6)
-        self.assertLessEqual(abs(y - 540), 4)
+        tol = ItemFetch.screen_tol("Survival", (1.0, 1.0))
+        self.assertLessEqual(abs(x - 960), tol[0])
+        self.assertLessEqual(abs(y - 540), tol[1])
 
     def test_the_gain_setting_is_checked(self):
         self.addCleanup(SharedState.set_item_fetch_gain, None)
-        SharedState.set_item_fetch_gain([0.9, 0.6, 0.005])
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005), "感度と送った間隔（CW）")
-        for broken in (None, "x", [1], [0.9, 0.6], [0.01, 0.5, 0.005], [0.5, 25, 0.005],
-                       ["a", 1, 0.005], [0.9, 0.6, 0]):
+        SharedState.set_item_fetch_gain([0.9, 0.6, 0.005, "calib"])
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005, "calib"),
+                         "感度・送った間隔・測った値の印（CW・CX）")
+        for broken in (None, "x", [1], [0.9, 0.6], [0.9, 0.6, 0.005], [0.9, 0.6, 0.005, "aim"],
+                       [0.01, 0.5, 0.005, "calib"], [0.5, 25, 0.005, "calib"],
+                       ["a", 1, 0.005, "calib"], [0.9, 0.6, 0, "calib"]):
             SharedState.set_item_fetch_gain(broken)
             self.assertIsNone(SharedState.get_item_fetch_gain(), broken)
 
@@ -23900,7 +24033,8 @@ class TestItemFetchCM(unittest.TestCase):
 
         def buy(fetcher, shop, item_id):
             seen.append(fetcher.saved_gain)
-            fetcher.aimer = ItemFetch.Aimer((1.5, 0.7))
+            fetcher.measured_gain = (1.5, 0.7)                  # calibrate で測った
+            fetcher.aimer = ItemFetch.Aimer((1.6, 0.9))         # 合わせの途中で直した（保存しない）
             return True
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
              patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
@@ -23908,16 +24042,17 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "ok")
-            self.assertEqual(SharedState.get_item_fetch_gain(), (1.5, 0.7, ItemFetch.STEP_SEC))
+            self.assertEqual(SharedState.get_item_fetch_gain(), (1.5, 0.7, ItemFetch.STEP_SEC, "calib"))
             ex._fetch_item(st.round_seq, "Survival", 29)
         self.assertEqual(seen, [None, (1.5, 0.7)], "次回はうまくいった値を渡す")
 
     def test_a_failed_buy_does_not_keep_the_gain(self):
         self.addCleanup(SharedState.set_item_fetch_gain, None)
-        SharedState.set_item_fetch_gain((0.8, 0.6, ItemFetch.STEP_SEC))
+        SharedState.set_item_fetch_gain((0.8, 0.6, ItemFetch.STEP_SEC, "calib"))
         ex, st, _ = self._executor()
 
         def buy(fetcher, shop, item_id):
+            fetcher.measured_gain = (5.0, 5.0)
             fetcher.aimer = ItemFetch.Aimer((5.0, 5.0))
             return False
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
@@ -23926,7 +24061,7 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "failed")
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.8, 0.6, ItemFetch.STEP_SEC))
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.8, 0.6, ItemFetch.STEP_SEC, "calib"))
 
     def test_fetching_moves_then_fronts_and_gives_the_front_back(self):
         ex, st, logs = self._executor()
@@ -24033,13 +24168,15 @@ class TestItemFetchCM(unittest.TestCase):
         loader._load({"item_fetch": "yes"})
         self.assertFalse(SharedState.get_item_fetch(), "壊れた値は OFF")
         self.addCleanup(SharedState.set_item_fetch_gain, None)
-        loader._load({"item_fetch_gain": [0.9, 0.6, 0.005]})
-        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005))
+        loader._load({"item_fetch_gain": [0.9, 0.6, 0.005, "calib"]})
+        self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005, "calib"))
         loader._load({"item_fetch_gain": [0.9, 0.6]})
         self.assertIsNone(SharedState.get_item_fetch_gain(), "CW より前の形（間隔なし）は読み捨てる")
+        loader._load({"item_fetch_gain": [0.9, 0.6, 0.005]})
+        self.assertIsNone(SharedState.get_item_fetch_gain(), "CX より前の形（印なし）は読み捨てる")
         loader._load({"item_fetch_gain": "broken"})
         self.assertIsNone(SharedState.get_item_fetch_gain())
-        SharedState.set_item_fetch_gain((1.2, 0.4, 0.005))
+        SharedState.set_item_fetch_gain((1.2, 0.4, 0.005, "calib"))
         SharedState.set_item_fetch(True)
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
@@ -24059,7 +24196,7 @@ class TestItemFetchCM(unittest.TestCase):
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(app)
         self.assertIs(saved["item_fetch"], True)
-        self.assertEqual(saved["item_fetch_gain"], [1.2, 0.4, 0.005])
+        self.assertEqual(saved["item_fetch_gain"], [1.2, 0.4, 0.005, "calib"])
 
     def test_the_toggle(self):
         app = type("FakeApp", (), {})()

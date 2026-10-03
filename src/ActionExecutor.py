@@ -1347,9 +1347,10 @@ class ActionExecutor:
                 fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
                 if not fetcher.buy(shop, item_id):
                     return "failed"
-                if fetcher.aimer is not None:
-                    SharedState.set_item_fetch_gain(              # 次回に使う（送った間隔と一緒に保存）
-                        (*fetcher.aimer.gain, ItemFetch.STEP_SEC))
+                if fetcher.measured_gain is not None:
+                    # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ。CX）
+                    SharedState.set_item_fetch_gain(
+                        (*fetcher.measured_gain, ItemFetch.STEP_SEC, SharedState.ITEM_FETCH_GAIN_MARK))
                 return "ok"
             finally:
                 # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。
