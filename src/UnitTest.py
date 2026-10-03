@@ -17376,7 +17376,7 @@ class TestItemFetchAimCX(unittest.TestCase):
     def test_the_log_has_the_offset_and_the_tolerance(self):
         f = self._fetcher(lambda _i, _p: (961.2, 540.8, 0.4, 0.4))
         f.aim_click("Equip")
-        self.assertIn("アイテム取得: Equip クリック（合わせ 1 回・ずれ 横 1.2・縦 0.8 ／ 許し 横 3.2・縦 1.2）",
+        self.assertIn("アイテム取得: Equip クリック（合わせ 1 回・座標・ずれ 横 1.2・縦 0.8 ／ 許し 横 3.2・縦 1.2）",
                       self.logs)
 
     def test_locate_gives_the_scale(self):
@@ -17394,8 +17394,8 @@ class TestItemFetchAimCX(unittest.TestCase):
             x, y, sx, sy = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
             self.assertAlmostEqual(sx, scale, delta=0.05)
             self.assertAlmostEqual(sy, scale, delta=0.05)
-            self.assertAlmostEqual(x, 700 + 174 * scale, delta=1.5)
-            self.assertAlmostEqual(y, 300 + 172 * scale, delta=1.5)
+            self.assertAlmostEqual(x, 700 + 180 * scale, delta=1.5)
+            self.assertAlmostEqual(y, 300 + 177 * scale, delta=1.5)
 
     # ── 保存するのは測った値だけ ──
     def test_the_measured_gain_is_kept_apart_from_the_aim_corrections(self):
@@ -17605,6 +17605,101 @@ class TestItemLossVoiceCY(unittest.TestCase):
         monitor._action.announce_item_lost_once()
         self.assertEqual(self.sounds, [])
         self.assertEqual(self.focus, [])
+
+
+class TestEquipGreenCenterDA(unittest.TestCase):
+    """DA: Equip は locate の点の近く（見本の px で 横 ±30・縦 ±15）の緑の画素の重心（緑の文字のど真ん中）を
+    狙う。緑が無ければ座標（直した (180, 177)）。作った画像（黒地に緑の矩形）で確かめる"""
+
+    GREEN = (0, 200, 0)                 # BGR。HSV で H 60・S 255・V 200
+
+    def setUp(self):
+        self.now = [0.0]
+
+    def _image(self, *rects):
+        """rects は (中心 x, 中心 y, 幅, 高さ)"""
+        import numpy as np
+        img = np.zeros((1080, 1920, 3), np.uint8)
+        for cx, cy, w, h in rects:
+            img[int(round(cy - h / 2)):int(round(cy + h / 2)), int(round(cx - w / 2)):int(round(cx + w / 2))] = self.GREEN
+        return img
+
+    def _fetcher(self, img, aim, point, scale):
+        self.mouse = TestItemFetchCM.FakeMouse()
+        self.logs = []
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: (img, aim),
+            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=lambda _i, _p: (point[0], point[1], scale, scale),
+            sleep=lambda s: self.now.__setitem__(0, self.now[0] + s), clock=lambda: self.now[0])
+        f.aimer = ItemFetch.Aimer((0.9, 0.55))
+        return f
+
+    def test_the_constants_and_the_fixed_point(self):
+        self.assertEqual(ItemFetch.BUTTONS["Equip"], (180, 177))
+        self.assertEqual(ItemFetch.GREEN_WINDOW, (30, 15))
+        self.assertEqual((ItemFetch.GREEN_HSV_LOW, ItemFetch.GREEN_HSV_HIGH), ((40, 80, 90), (90, 255, 255)))
+
+    def test_it_aims_at_the_middle_of_the_green_text(self):
+        """狙いの点から右下 (+6, +5)（見本の px）の緑の矩形 → その中心を狙って押す"""
+        for s in (0.44, 1.0, 1.9):
+            point = (900.0, 500.0)
+            green = (point[0] + 6 * s, point[1] + 5 * s)
+            img = self._image((green[0], green[1], 30 * s, 8 * s))
+            f = self._fetcher(img, aim=green, point=point, scale=s)
+            self.assertTrue(f.aim_click("Equip"), s)
+            self.assertEqual(self.mouse.clicks, 1, s)
+            self.assertEqual(self.mouse.moves, [], f"{s}: 緑の文字の中心にもう重なっている")
+            line = [m for m in self.logs if "クリック" in m][0]
+            self.assertIn("合わせ 1 回・緑の文字・", line, s)
+
+    def test_without_green_it_aims_at_the_fixed_point(self):
+        point = (900.0, 500.0)
+        f = self._fetcher(self._image(), aim=point, point=point, scale=1.0)
+        self.assertTrue(f.aim_click("Equip"))
+        self.assertIn("アイテム取得: Equip クリック（合わせ 1 回・座標・ずれ 横 0.0・縦 0.0 ／ 許し 横 8.0・縦 3.0）",
+                      self.logs)
+
+    def test_green_outside_the_window_is_not_used(self):
+        point = (900.0, 500.0)
+        for s in (0.44, 1.9):
+            above = (point[0], point[1] - 25 * s, 40 * s, 8 * s)        # 上のアイテム名
+            left = (point[0] - 45 * s, point[1], 20 * s, 8 * s)         # 左の一覧
+            img = self._image(above, left)
+            self.assertIsNone(ItemFetch.green_center(img, point, (s, s)), s)
+
+    def test_the_window_follows_the_scale(self):
+        point = (900.0, 500.0)
+        for s in (0.44, 1.9):
+            inside = self._image((point[0] + 25 * s, point[1] + 12 * s, 4 * s, 3 * s))   # 見本の px で窓の中
+            outside = self._image((point[0] + 35 * s, point[1], 4 * s, 3 * s))          # 見本の px で窓の外
+            self.assertIsNotNone(ItemFetch.green_center(inside, point, (s, s)), s)
+            self.assertIsNone(ItemFetch.green_center(outside, point, (s, s)), s)
+
+    def test_a_few_green_pixels_are_not_enough(self):
+        point = (900.0, 500.0)
+        img = self._image()
+        img[500, 905:907] = self.GREEN                                  # 2 画素（3 未満）
+        self.assertIsNone(ItemFetch.green_center(img, point, (1.0, 1.0)))
+        img[501, 905] = self.GREEN                                      # 3 画素
+        self.assertEqual(ItemFetch.green_center(img, point, (1.0, 1.0)), (905 + 1 / 3, 500 + 1 / 3))
+
+    def test_not_green_colours_are_not_used(self):
+        import numpy as np
+        point = (900.0, 500.0)
+        for bgr in ((200, 0, 0), (0, 0, 200), (60, 70, 60), (0, 60, 0)):    # 青・赤・灰（S 低）・暗い緑（V 低）
+            img = np.zeros((1080, 1920, 3), np.uint8)
+            img[495:505, 890:910] = bgr
+            self.assertIsNone(ItemFetch.green_center(img, point, (1.0, 1.0)), bgr)
+
+    def test_the_shop_buttons_are_as_before(self):
+        point = (900.0, 500.0)
+        green = (point[0] + 6, point[1] + 5)
+        f = self._fetcher(self._image((green[0], green[1], 30, 8)), aim=point, point=point, scale=1.0)
+        self.assertTrue(f.aim_click("Survival"))
+        line = [m for m in self.logs if "クリック" in m][0]
+        self.assertNotIn("緑の文字", line)
+        self.assertIn("ずれ 横 0.0・縦 0.0", line, "店のボタンは座標のまま")
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -23860,7 +23955,7 @@ class TestItemFetchCM(unittest.TestCase):
     def test_the_button_points_in_the_template(self):
         """実機で合った見本の中の座標（仕様書の表）"""
         self.assertEqual(ItemFetch.BUTTONS, {"Enkephalin": (106, 129), "Survival": (266, 95),
-                                             "Event": (266, 189), "Equip": (174, 172)})
+                                             "Event": (266, 189), "Equip": (180, 177)})
 
     def test_the_template_itself_maps_onto_the_button_points(self):
         """見本自身を撮影に見立てると、各ボタンの位置が見本の座標に一致する（本物の SIFT）"""

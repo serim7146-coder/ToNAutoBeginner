@@ -25,7 +25,7 @@ BUTTONS = {
     "Enkephalin": (106, 129),
     "Survival": (266, 95),
     "Event": (266, 189),
-    "Equip": (174, 172),
+    "Equip": (180, 177),        # 緑の文字の中心（撮影4枚の平均。前の (174, 172) は左上にずれていた。DA）
 }
 # item.json のカテゴリ → 店。Others・表に無いアイテムは取らない
 SHOP_BY_CATEGORY = {"Enkephalin": "Enkephalin", "Survival": "Survival", "Event": "Event"}
@@ -154,6 +154,39 @@ def locate(bgr, point, template=None):
     sx = float(np.hypot(*(pts[2] - pts[1]))) / (2 * d)
     sy = float(np.hypot(*(pts[4] - pts[3]))) / (2 * d)
     return float(pts[0][0]), float(pts[0][1]), sx, sy
+
+
+# Equip は緑の文字のど真ん中を狙う（DA）。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
+# 窓は Equip の近くだけ（左の一覧・上のアイテム名の緑の文字を入れない）
+GREEN_HSV_LOW = (40, 80, 90)        # OpenCV の HSV（H は 0〜179）
+GREEN_HSV_HIGH = (90, 255, 255)
+GREEN_WINDOW = (30, 15)             # 狙いの点から 横 ±30・縦 ±15（見本の px）
+GREEN_MIN_AREA = 3.0                # 緑の画素がこれ未満（見本の px² に直して）なら見つからない
+
+
+def green_center(bgr, pos, scale):
+    """pos（画面の点）の周りの窓の緑の画素の重心 (x, y)。少なければ・撮影が無ければ None"""
+    try:
+        import cv2
+        import numpy as np
+        if not hasattr(bgr, "shape"):
+            return None
+        sx, sy = scale
+        h, w = bgr.shape[:2]
+        x0 = max(0, int(round(pos[0] - GREEN_WINDOW[0] * sx)))
+        x1 = min(w, int(round(pos[0] + GREEN_WINDOW[0] * sx)) + 1)
+        y0 = max(0, int(round(pos[1] - GREEN_WINDOW[1] * sy)))
+        y1 = min(h, int(round(pos[1] + GREEN_WINDOW[1] * sy)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        hsv = cv2.cvtColor(np.ascontiguousarray(bgr[y0:y1, x0:x1]), cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, np.array(GREEN_HSV_LOW, np.uint8), np.array(GREEN_HSV_HIGH, np.uint8))
+        ys, xs = np.nonzero(mask)
+        if len(xs) < max(1.0, GREEN_MIN_AREA * sx * sy):
+            return None
+        return x0 + float(xs.mean()), y0 + float(ys.mean())
+    except Exception:
+        return None
 
 
 def screen_tol(name: str, scale) -> tuple:
@@ -357,16 +390,22 @@ class Fetcher:
                     return False
                 self._wait(MISS_SEC)
                 continue
+            scale = found[2:4] if len(found) >= 4 else (1.0, 1.0)
+            how = ""
+            if name == "Equip":
+                center = green_center(shot[0], pos, scale)
+                how = "緑の文字・" if center is not None else "座標・"
+                pos = center if center is not None else pos
             self.aimer.observe(pos)
             if trust_check and self.aimer.rejected >= TRUST_REJECTS:
                 self.log(f"アイテム取得: {name}: 保存した感度で合いません")
                 return False
-            tol = screen_tol(name, found[2:4] if len(found) >= 4 else (1.0, 1.0))
+            tol = screen_tol(name, scale)
             move = self.aimer.move_for(pos, shot[1], tol)
             if move is None:
                 self._check()
                 self.mouse.click()
-                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・"
+                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・{how}"
                          f"ずれ 横 {pos[0] - shot[1][0]:.1f}・縦 {pos[1] - shot[1][1]:.1f} ／ "
                          f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
                 return True
