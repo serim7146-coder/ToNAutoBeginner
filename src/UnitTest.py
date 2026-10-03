@@ -14500,6 +14500,7 @@ class TestHandsFreeSpeedDetectBR(unittest.TestCase):
         monitor.st.instance_type = instance_type
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)
+        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, call):
@@ -14843,6 +14844,7 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin), {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
+        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
         monitor._running = True
         monitor.logs = []
         monitor.logger = monitor.logs.append
@@ -14947,6 +14949,7 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         self._feed(monitor, t - 13, "RoundOver")
         self._feed(monitor, t, "Verified Round End")
         self._feed(monitor, t, "Verified")
+        monitor.st.last_begin_press_at = 0.0          # 以後はツールが押していない（定期）
         for k in range(1, 5):
             self._feed(monitor, t + 300 * k + 1, "Verified")
             self._feed(monitor, t + 300 * k + 20)
@@ -20910,6 +20913,7 @@ class TestVerifiedStrafe(unittest.TestCase):
         monitor.st.instance_type = instance_type
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
+        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, monitor, line="Verified"):
@@ -20939,6 +20943,7 @@ class TestVerifiedStrafe(unittest.TestCase):
     def test_a_periodic_verified_does_not_strafe(self):
         """不具合の再現: intermission 中の定期で横移動を始めない"""
         monitor = self._monitor()
+        monitor.st.last_begin_press_at = 0.0          # 押していない（定期）
         base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
         monitor._verified.last_periodic = base
         stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
@@ -21340,6 +21345,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
         monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
+        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, monitor, line=None):
@@ -21444,6 +21450,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
 
     def test_verified_periodic_guard_still_works(self):
         monitor = self._monitor()
+        monitor.st.last_begin_press_at = 0.0          # 押していない（定期）
         base = datetime(2026, 9, 26, 12, 0, 0).timestamp()
         monitor._verified.last_periodic = base
         stamp = datetime.fromtimestamp(base + config.VERIFIED_PERIODIC_SEC)
@@ -23965,6 +23972,86 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         lines = [c.args[0] for c in write.call_args_list]
         self.assertIn("[操作] [窓2] アイテム取得: 視点を戻した（横 -33・縦 20）", lines)
         self.assertIn("[操作] [窓2] アイテム取得: 向きを戻した（LookRight 0.50秒）", lines)
+
+
+class TestNoVerifiedBeforePressCO(unittest.TestCase):
+    """CO: ツールが Begin を押す窓では、ツールが直前（BEGIN_PRESS_RECENT_SEC 以内）に押したときの
+    Verified だけを受理にする。押していないのに来たものは定期（VerifiedTracker に覚えさせる・begin_done を
+    立てない・横移動しない）。ツールが押さない窓は今どおり"""
+
+    BASE = datetime(2026, 10, 3, 5, 45, 25).timestamp()
+    NOW = 1_000_000.0           # 壁時計（押した時刻と比べる）
+
+    def _monitor(self, auto_begin=True, instance_type=config.INSTANCE_PRIVATE):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin, osc_port=9000), {},
+                                        lambda _m: None, window_idx=4)
+        monitor.st.instance_type = instance_type
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        self.started = []
+        return monitor
+
+    def _feed(self, monitor, at, body):
+        with patch.object(LogMonitor.threading, "Thread") as thread, \
+             patch.object(SharedState, "get_speed_detect", return_value=True), \
+             patch.object(LogMonitor.time, "time", return_value=self.NOW), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process(datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S")
+                             + " Debug      -  " + body)
+        for c in thread.call_args_list:
+            target = c.kwargs.get("target")
+            if target is not None and hasattr(target, "__func__"):
+                self.started.append(target.__func__.__name__)
+
+    def _window_4(self, monitor):
+        """起動直後（定期の位相を知らない）: RoundOver → Verified Round End → 押す前の Verified"""
+        self._feed(monitor, self.BASE, "RoundOver")
+        self._feed(monitor, self.BASE + 12, "Verified Round End")
+        self._feed(monitor, self.BASE + 12, "Verified")
+
+    def test_window_4_is_not_accepted_but_learned_as_periodic(self):
+        monitor = self._monitor()
+        self._window_4(monitor)
+        self.assertFalse(monitor.st.begin_done)
+        self.assertEqual(monitor._verified.last_periodic, self.BASE + 12, "定期として覚える")
+        self.assertNotIn("do_speed_strafe", self.started, "横移動を始めない")
+        self.assertIn("[窓4] Verified を無視（ツールがまだ押していない → 定期）", monitor.logs)
+
+    def test_after_the_tool_presses_the_verified_is_accepted(self):
+        monitor = self._monitor()
+        self._window_4(monitor)
+        monitor.st.last_begin_press_at = self.NOW - 0.5        # カーソルを差し込んで押した
+        self._feed(monitor, self.BASE + 14, "Verified")
+        self.assertTrue(monitor.st.begin_done)
+        self.assertIn("do_speed_strafe", self.started)
+
+    def test_a_press_within_3_seconds_counts(self):
+        for ago, accepted in ((0.0, True), (config.BEGIN_PRESS_RECENT_SEC, True),
+                              (config.BEGIN_PRESS_RECENT_SEC + 0.5, False)):
+            monitor = self._monitor()
+            self._feed(monitor, self.BASE, "RoundOver")
+            self._feed(monitor, self.BASE + 12, "Verified Round End")
+            monitor.st.last_begin_press_at = self.NOW - ago
+            self._feed(monitor, self.BASE + 13, "Verified")
+            self.assertEqual(monitor.st.begin_done, accepted, ago)
+
+    def test_windows_the_tool_does_not_press_are_as_before(self):
+        for auto_begin, itype in ((False, config.INSTANCE_PRIVATE), (True, config.INSTANCE_PUBLIC),
+                                  (True, config.INSTANCE_YAKIIMO)):
+            monitor = self._monitor(auto_begin=auto_begin, instance_type=itype)
+            self._window_4(monitor)
+            self.assertTrue(monitor.st.begin_done, (auto_begin, itype))
+            self.assertIsNone(monitor._verified.last_periodic)
+
+    def test_the_tracker_learns_the_phase(self):
+        tracker = VerifiedTracker.VerifiedTracker()
+        tracker.mark_periodic(100.0)
+        self.assertEqual(tracker.last_periodic, 100.0)
+        tracker.on_round_over(390.0)
+        self.assertEqual(tracker.on_verified(400.5, False), VerifiedTracker.PERIODIC,
+                         "覚えた位相から 300秒後の予定の1回は定期")
 
 
 class TestSuicideCancelCL(unittest.TestCase):
@@ -28255,8 +28342,9 @@ class TestVerifiedInTheMonitor(unittest.TestCase):
         return datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  "
 
     def _monitor(self, path=None):
-        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path), {}, lambda _m: None,
-                                        window_idx=1)
+        # CO: 規則そのものを見るので、ツールが押さない窓
+        monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path, auto_begin=False), {},
+                                        lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.logs = []
         monitor.logger = monitor.logs.append
@@ -28452,7 +28540,9 @@ class TestLogMonitorBeginDone(unittest.TestCase):
     PREFIX = "2026.09.26 "
 
     def _monitor(self, phase=0.0):
-        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _msg: None, window_idx=1)
+        # CO: 規則そのものを見るので、ツールが押さない窓（押した記録なしでも今どおり受理）
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=False), {}, lambda _msg: None,
+                                        window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）

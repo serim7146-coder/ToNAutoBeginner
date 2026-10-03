@@ -42,6 +42,10 @@ class VerifiedTracker:
         """受理したのに15秒以内にラウンドが始まらなかった → その時刻は定期だった"""
         self.last_periodic = t
 
+    def mark_periodic(self, t):
+        """呼び出し側が定期と分かった（ツールが押していないのに来た Verified。CO）→ 位相の材料にする"""
+        self.last_periodic = t
+
     def on_verified(self, t, pressed_recently: bool) -> str:
         """"begin" / "periodic" / "ignore" を返す。pressed_recently はツールが直前に
         Begin を押したか（予定と重なった1回を見分けるのに使う）"""

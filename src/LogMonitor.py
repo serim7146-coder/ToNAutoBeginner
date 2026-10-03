@@ -1287,6 +1287,12 @@ class LogMonitor:
                 # Begin は Verified Round End の後にしか押せない
                 self._log("Verified を無視（Verified Round End より前）")
                 return
+            if not pressed and self._auto_begin_active():
+                # CO: ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
+                # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
+                self._verified.mark_periodic(now)
+                self._log("Verified を無視（ツールがまだ押していない → 定期）")
+                return
 
             # 本物として採用。Everything recieved が続くかで事後確認する
             st.pending_verified_time = now
