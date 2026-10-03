@@ -1053,8 +1053,8 @@ class ActionExecutor:
         if not st.waiting_for_equip:
             return True
 
-        if SharedState.get_item_begin_mode() and not self.item_fetch_target():
-            # アイテム取得→Beginモード（自動取得の窓は Begin を止めない）:
+        if SharedState.get_item_begin_mode():
+            # アイテム取得→Beginモード（自動取得は動かさない。CY）:
             # フリーズ発生源は自窓なので他窓の解除待ちはせず、
             # 装備確認 → Begin の順で進む。ここで他窓解除待ちをすると
             # 自分が張ったフリーズを自分で待つデッドロックになる。
@@ -1264,6 +1264,8 @@ class ActionExecutor:
         押さない窓・放置モード・このラウンドにロストしたアイテムが分からない・Others や
         表に無いアイテム → None（今どおり）"""
         st = self._st
+        if SharedState.get_item_begin_mode():
+            return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者。CY）
         if (not SharedState.get_item_fetch() or self._osc is None
                 or not self._auto_begin_active() or self._hands_free()):
             return None

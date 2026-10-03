@@ -17502,22 +17502,29 @@ class TestItemLossVoiceCY(unittest.TestCase):
     def _round_over(self, monitor):
         monitor._process("2026.10.03 22:10:00 Debug      -  RoundOver")
 
-    def test_item_begin_mode_rings_at_round_over_without_fronting(self):
+    def test_item_begin_mode_is_as_before_without_fetching(self):
+        """アイテム取得→Begin モード＋自動取得 ON: 自動取得を動かさない。RoundOver は昔どおり
+        音・前面化・フリーズ（依頼者「このモードで自動取得が動くのは明らかなミス」）"""
         SharedState.set_item_begin_mode(True)
         monitor = self._monitor()
-        with patch.object(monitor._action, "_attend_to_item_loss") as attend:
-            self._round_over(monitor)
-        self.assertEqual(self.sounds, ["lost.mp3"], "音が1回")
-        self.assertEqual(self.focus, [], "前面化しない")
-        attend.assert_not_called()
-        self.assertTrue(monitor.st.waiting_for_equip)
-
-    def test_item_begin_mode_rings_only_once_per_round(self):
-        SharedState.set_item_begin_mode(True)
-        monitor = self._monitor()
+        self.assertIsNone(monitor._action.item_fetch_target(), "取りに行かない")
         self._round_over(monitor)
-        monitor._action.announce_item_lost_once()   # 取りに行く前の音（もう鳴った）
-        self.assertEqual(self.sounds, ["lost.mp3"])
+        self.assertEqual(self.sounds, ["lost.mp3"], "音")
+        self.assertEqual(self.focus, [0x10], "前面化")
+        self.assertTrue(monitor.st.equip_freeze_held, "フリーズ")
+        self.assertTrue(any("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】" in m for m in monitor.logs),
+                        monitor.logs)
+
+    def test_item_begin_mode_does_not_fetch_an_unrecovered_item_either(self):
+        SharedState.set_item_begin_mode(True)
+        monitor = self._monitor(lost=False)
+        self.assertIsNone(monitor._action.item_fetch_target())
+        with patch.object(monitor._action, "_fetch_item") as fetch, \
+             patch.object(monitor._action, "_attend_to_item_loss",
+                          side_effect=lambda: setattr(monitor.st, "waiting_for_equip", False)) as attend:
+            self._after_round(monitor, "ok")
+        fetch.assert_not_called()
+        attend.assert_called_once_with()
 
     def test_the_default_mode_is_silent_at_round_over(self):
         """既定のモードは RoundOver では鳴らさない（続行ラウンドの途中で鳴らないように。今どおり）"""
@@ -17527,6 +17534,7 @@ class TestItemLossVoiceCY(unittest.TestCase):
         self.assertEqual(self.focus, [])
 
     def _after_round(self, monitor, outcome):
+        """Begin まで回す（_fetch_item は偽物。呼ばれたら order に残す）"""
         ex, st = monitor._action, monitor.st
         st.in_round = False
         st.round_end_seen = True
@@ -17584,9 +17592,14 @@ class TestItemLossVoiceCY(unittest.TestCase):
         attend.assert_called_once_with()
         self.assertEqual(self.sounds, [], "音は _attend_to_item_loss（前面化と一緒）から")
 
+    def test_it_rings_once_per_round(self):
+        monitor = self._monitor()
+        self._after_round(monitor, "failed")
+        monitor._action.announce_item_lost_once()     # 同じラウンドでもう一度
+        self.assertEqual(self.sounds, ["lost.mp3"], "1ラウンド1回")
+
     def test_hands_free_rings_nothing(self):
         SharedState.set_hands_free(True)
-        SharedState.set_item_begin_mode(True)
         monitor = self._monitor()
         self._round_over(monitor)
         monitor._action.announce_item_lost_once()
@@ -24119,18 +24132,22 @@ class TestItemFetchCM(unittest.TestCase):
             ex, st, _ = self._executor(**kw)
             self.assertEqual(self._after_round(ex, st, "ok"), ["press", "attend"], kw)
 
-    def test_the_item_begin_mode_does_not_hold_the_begin(self):
-        """アイテム取得→Begin モードでも、自動取得の窓は装備を待たずに Begin へ進む（フリーズは張る）"""
+    def test_the_item_begin_mode_does_not_fetch(self):
+        """CY: アイテム取得→Begin モードでは自動取得を動かさない（自動取得 ON でも今どおり装備を待つ）"""
         SharedState.set_item_fetch(True)
         SharedState.set_item_begin_mode(True)
         ex, st, _ = self._executor()
+        self.assertIsNone(ex.item_fetch_target())
         st.waiting_for_equip = True
         result = []
+        running = [True]
+        ex._is_running = lambda: running[0]
         worker = threading.Thread(target=lambda: result.append(ex._handle_item_lost()), daemon=True)
         worker.start()
+        worker.join(0.5)
+        self.assertEqual(result, [], "今どおり装備を待つ")
+        running[0] = False
         worker.join(3.0)
-        self.assertEqual(result, [True], "装備を待たない")
-        self.assertTrue(st.equip_freeze_held, "他窓の装備待ちフリーズは張る")
 
     def test_the_item_begin_mode_still_holds_without_fetch(self):
         SharedState.set_item_begin_mode(True)
@@ -24290,7 +24307,8 @@ class TestItemFetchCM(unittest.TestCase):
             monitor._process("2026.10.03 05:01:27 Debug      -  Equipping 29.")
         self.assertEqual((monitor.st.equip_seen_seq, monitor.st.equip_seen_id), (2, 29))
 
-    def test_the_item_begin_mode_round_over_does_not_front_when_fetching(self):
+    def test_the_item_begin_mode_round_over_is_as_before(self):
+        """CY: アイテム取得→Begin モードでは自動取得 ON でも、RoundOver は昔どおり _attend_to_item_loss"""
         SharedState.set_item_fetch(True)
         SharedState.set_item_begin_mode(True)
         monitor = self._monitor(auto_begin=True, osc_port=9000)
@@ -24304,9 +24322,11 @@ class TestItemFetchCM(unittest.TestCase):
         monitor._start_daemon = lambda *a: None
         with patch.object(monitor._action, "_attend_to_item_loss") as attend:
             monitor._process("2026.10.03 05:00:00 Debug      -  RoundOver")
-        attend.assert_not_called()
+        attend.assert_called_once_with()
         self.assertTrue(st.waiting_for_equip)
-        self.assertTrue(any("Begin の後に自動で取りに行きます" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(any("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】" in m for m in monitor.logs),
+                        monitor.logs)
+        self.assertFalse(any("自動で取りに行きます" in m for m in monitor.logs))
 
     # ── 7. 設定 ──────────────────────────────────
     def test_the_setting_is_off_by_default_saved_and_restored(self):
