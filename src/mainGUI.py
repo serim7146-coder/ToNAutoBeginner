@@ -553,7 +553,8 @@ class ReportDialog(tk.Toplevel):
     """不具合の報告（BU）。要件・窓・添付を選んで Discord の Webhook へ送る"""
 
     REPORT_NOTE = ("VRChat のログには、一緒にいた人の名前やユーザー ID、あなたの表示名が"
-                   "含まれます。送り先は開発者の Discord です")
+                   "含まれます。画面の撮影には一緒にいた人の名前が写ることがあります。"
+                   "送り先は開発者の Discord です")
 
     def __init__(self, app):
         super().__init__(app)

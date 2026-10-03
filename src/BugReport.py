@@ -19,6 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+import BeginMiss
 import config
 import ConnectDB            # .env を読み込む（同じ候補）。値は debug.log に書かないよう覚えている
 import DebugLog
@@ -32,8 +33,10 @@ GUI_LOG = "gui_log"
 DEBUG_LOG = "debug_log"
 VRCHAT_LOG = "vrchat_log"
 SETTINGS = "settings"
+BEGIN_MISS = "begin_miss"       # CR: Begin の位置合わせで見つからなかった撮影
 ATTACHMENTS = ((GUI_LOG, "画面のログ出力"), (DEBUG_LOG, "debug.log"),
-               (VRCHAT_LOG, "選んだ窓の VRChat のログ"), (SETTINGS, "設定"))
+               (VRCHAT_LOG, "選んだ窓の VRChat のログ"), (SETTINGS, "設定"),
+               (BEGIN_MISS, "Begin の撮影（見つからなかったとき）"))
 
 
 def webhook_url() -> str:
@@ -148,6 +151,16 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
     add(SETTINGS, "設定", "settings.json",
         json.dumps(settings_for_report(settings), ensure_ascii=False, indent=2, sort_keys=True), "")
 
+    # Begin の撮影（窓を選べばその窓の2枚、窓なしなら全部の窓の分）。PNG なのでそのまま入れる
+    images: dict[str, bytes] = {}
+    if not include.get(BEGIN_MISS, False):
+        notes.append("- Begin の撮影（見つからなかったとき）: 入れていません（未選択）")
+    else:
+        images = BeginMiss.files_for(window)
+        if not images:
+            notes.append("- Begin の撮影（見つからなかったとき）: 無し")
+    dropped: list[str] = []
+
     vrchat_name = f"vrchat_log_window{window}.txt" if window else ""
     limit = config.REPORT_VRCHAT_LOG_START_BYTES
     while True:
@@ -169,11 +182,20 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
                 vr_files[vrchat_name] = _clean(data.decode("utf-8", errors="replace")).encode("utf-8")
                 cut = "（末尾）" if _size(vrchat_log_path) > limit else ""
                 vr_notes.append(f"- 選んだ窓の VRChat のログ: {vrchat_name}{cut}")
-        report = _report_txt(requirement, window, now, version, notes + vr_notes)
-        data = _zip({"report.txt": report.encode("utf-8"), **files, **vr_files})
-        if len(data) <= config.REPORT_MAX_BYTES or not vr_files:
+        image_notes = ([f"- Begin の撮影（見つからなかったとき）: {', '.join(images)}"] if images else [])
+        image_notes += [f"- Begin の撮影 {name}: 入れていません（大きすぎて収まらない）" for name in dropped]
+        report = _report_txt(requirement, window, now, version, notes + image_notes + vr_notes)
+        data = _zip({"report.txt": report.encode("utf-8"), **files, **images, **vr_files})
+        if len(data) <= config.REPORT_MAX_BYTES:
             return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
-        limit //= 2
+        if vr_files:
+            limit //= 2                 # 先に VRChat のログを削る（今の順番のまま）
+        elif images:
+            name = list(images)[-1]     # それでも収まらなければ撮影を新しい方から外す
+            images.pop(name)
+            dropped.append(name)
+        else:
+            return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
 
 
 def _report_txt(requirement, window, now, version, notes) -> str:

@@ -114,6 +114,7 @@ import Recorder
 import SecretStore
 import FogEarlyRead
 import BeginDetect
+import BeginMiss
 import RoundStore
 import VerifiedTracker
 import DebugLog
@@ -15442,6 +15443,9 @@ class TestBugReportContent(unittest.TestCase):
         self.debug.write_text("debug line\n", encoding="utf-8")
         self.vrchat = self.dir / "output_log.txt"
         self.vrchat.write_text("vrchat line C:/users/alice/AppData\n", encoding="utf-8")
+        p = patch.object(BeginMiss, "folder", return_value=self.dir / "begin_miss")   # CR: 撮影はこのテストの場所
+        p.start()
+        self.addCleanup(p.stop)
 
     def _zip(self, include=None, window=2, vrchat=None, settings=None, gui="画面 C:\\USERS\\ALICE\\x\n"):
         include = include if include is not None else {k: True for k, _l in BugReport.ATTACHMENTS}
@@ -15476,10 +15480,10 @@ class TestBugReportContent(unittest.TestCase):
 
     def test_only_the_selected_ones_with_reasons(self):
         include = {BugReport.GUI_LOG: False, BugReport.DEBUG_LOG: True,
-                   BugReport.VRCHAT_LOG: False, BugReport.SETTINGS: False}
+                   BugReport.VRCHAT_LOG: False, BugReport.SETTINGS: False, BugReport.BEGIN_MISS: False}
         _n, _d, files = self._zip(include=include)
         self.assertEqual(set(files), {"report.txt", "debug_log.txt"})
-        self.assertEqual(files["report.txt"].count("（未選択）"), 3)
+        self.assertEqual(files["report.txt"].count("（未選択）"), 4)
 
     def test_vrchat_log_reasons(self):
         for window, path, reason in ((0, None, "窓を選んでいない"), (3, "", "窓に未割り当て"),
@@ -24259,6 +24263,176 @@ class TestVerifiedDebugLineCQ(unittest.TestCase):
         monitor.st.last_begin_press_at = 1_000_000.0
         self._debug_lines(monitor, [(self.BASE + 12, "Verified Round End"), (self.BASE + 13, "Verified")])
         self.assertIn("[窓3] ✅ Connecting", monitor.logs)
+
+
+class TestBeginMissCR(unittest.TestCase):
+    """CR: 位置合わせで BEGIN が見つからなかった撮影を、窓ごとに最新2枚 begin_miss\窓N_1.png・窓N_2.png に
+    残し（古い方から上書き）、不具合報告の zip の begin_miss/ に入れる（選んだ窓の分・窓なしなら全部）"""
+
+    NOW = datetime(2026, 10, 3, 7, 0, 1)
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.dir = Path(self._dir.name)
+        p = patch.object(BeginMiss, "folder", return_value=self.dir / "begin_miss")
+        p.start()
+        self.addCleanup(p.stop)
+
+    @staticmethod
+    def _shot(value, w=4, h=3):
+        return bytes([value, value, value, 255]) * (w * h), w, h
+
+    def _save(self, window, value, stage="探す"):
+        bits, w, h = self._shot(value)
+        path = BeginMiss.save(window, bits, w, h, stage)
+        time.sleep(0.02)                    # 古い・新しいは更新時刻で見る
+        return path
+
+    @staticmethod
+    def _value(path):
+        import cv2
+        import numpy as np
+        img = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+        return int(img[0, 0, 0])
+
+    def test_two_per_window_and_the_third_overwrites_the_oldest(self):
+        first = self._save(3, 10)
+        second = self._save(3, 20)
+        self.assertEqual((first.name, second.name), ("窓3_1.png", "窓3_2.png"))
+        third = self._save(3, 30)
+        self.assertEqual(third.name, "窓3_1.png", "古い方から上書き")
+        fourth = self._save(3, 40)
+        self.assertEqual(fourth.name, "窓3_2.png")
+        files = sorted(p.name for p in (self.dir / "begin_miss").iterdir())
+        self.assertEqual(files, ["窓3_1.png", "窓3_2.png"])
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓3_1.png"), 30)
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓3_2.png"), 40)
+
+    def test_other_windows_are_not_touched(self):
+        self._save(1, 11)
+        for v in (20, 21, 22):
+            self._save(2, v)
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓1_1.png"), 11)
+        self.assertFalse((self.dir / "begin_miss" / "窓1_2.png").exists())
+
+    def test_the_debug_line(self):
+        with patch.object(DebugLog, "write") as write:
+            self._save(4, 50, stage="動いた後")
+        write.assert_called_once_with("[操作] [窓4] Begin: 見つからなかった撮影を保存 窓4_1.png（動いた後・4x3）")
+
+    def test_a_failing_save_does_not_raise(self):
+        (self.dir / "begin_miss").write_text("ファイルがあってフォルダを作れない")
+        with patch.object(DebugLog, "exception") as exc:
+            self.assertIsNone(BeginMiss.save(1, *self._shot(1), "探す"))
+        exc.assert_called_once_with("BeginMiss.save")
+        (self.dir / "begin_miss").unlink()
+        with patch.object(DebugLog, "exception") as exc:
+            self.assertIsNone(BeginMiss.save(1, b"\0" * 8, 4, 3, "探す"), "大きさが合わない撮影は残さない")
+        exc.assert_not_called()                     # 例外にせず、黙って残さない
+
+    # ── 位置合わせから ──
+    def _executor(self, window_idx=2):
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, window_idx=window_idx)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+    def _look(self, ex, hit, stage="探す"):
+        bits, w, h = self._shot(60)
+        with patch.object(WindowOperator, "aim_in_window_image", return_value=(2.0, 1.5)), \
+             patch.object(ScreenCapture, "capture_window", return_value=(bits, w, h)), \
+             patch.object(BeginDetect, "find", return_value=hit), \
+             patch.object(BeginMiss, "save", wraps=BeginMiss.save) as save:
+            seen = ex._look_for_begin(stage)
+        return seen, save
+
+    def test_a_miss_is_saved_with_its_stage(self):
+        seen, save = self._look(self._executor(), None, "撮り直し")
+        self.assertEqual(seen, (None, 2.0))
+        save.assert_called_once()
+        self.assertEqual(save.call_args.args[0], 2)
+        self.assertEqual(save.call_args.args[4], "撮り直し")
+        self.assertTrue((self.dir / "begin_miss" / "窓2_1.png").is_file())
+
+    def test_a_hit_is_not_saved(self):
+        seen, save = self._look(self._executor(), {"score": 0.9, "cx": 1, "w": 1})
+        save.assert_not_called()
+        self.assertIsNotNone(seen[0])
+
+    def test_a_failing_save_does_not_stop_the_look(self):
+        (self.dir / "begin_miss").write_text("x")
+        with patch.object(DebugLog, "exception"):
+            seen, _save = self._look(self._executor(), None)
+        self.assertEqual(seen, (None, 2.0))
+
+    def test_every_look_names_its_stage(self):
+        src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
+        for stage in ("最初", "動いた後", "撮り直し", "探す"):
+            self.assertIn(f'self._look_for_begin("{stage}")', src)
+        self.assertNotIn("self._look_for_begin()", src)
+
+    # ── 不具合報告 ──
+    def _report(self, window, include=None, limit=None):
+        include = include if include is not None else {k: True for k, _l in BugReport.ATTACHMENTS}
+        debug = self.dir / "debug.log"
+        debug.write_text("d\n", encoding="utf-8")
+        with patch.object(config, "REPORT_MAX_BYTES", limit or config.REPORT_MAX_BYTES):
+            _n, data = BugReport.build_report("止まった", window, include, "", "", {}, self.NOW,
+                                              debug_log_path=debug, version="v9.9.9")
+        z = zipfile.ZipFile(io.BytesIO(data))
+        return {n: z.read(n) for n in z.namelist()}
+
+    def _three_windows(self):
+        for window, values in ((1, (1, 2)), (2, (3, 4)), (3, (5,))):
+            for v in values:
+                self._save(window, v)
+
+    def test_the_selected_window_only(self):
+        self._three_windows()
+        files = self._report(2)
+        self.assertEqual(sorted(n for n in files if n.startswith("begin_miss/")),
+                         ["begin_miss/窓2_1.png", "begin_miss/窓2_2.png"])
+        self.assertEqual(files["begin_miss/窓2_1.png"],
+                         (self.dir / "begin_miss" / "窓2_1.png").read_bytes(), "そのまま入れる")
+        report = files["report.txt"].decode("utf-8")
+        self.assertIn("- Begin の撮影（見つからなかったとき）: begin_miss/窓2_1.png, begin_miss/窓2_2.png", report)
+
+    def test_no_window_means_every_window(self):
+        self._three_windows()
+        files = self._report(0)
+        self.assertEqual(len([n for n in files if n.startswith("begin_miss/")]), 5)
+
+    def test_unchecked_is_not_included(self):
+        self._three_windows()
+        include = {k: True for k, _l in BugReport.ATTACHMENTS}
+        include[BugReport.BEGIN_MISS] = False
+        files = self._report(2, include)
+        self.assertFalse([n for n in files if n.startswith("begin_miss/")])
+        self.assertIn("- Begin の撮影（見つからなかったとき）: 入れていません（未選択）",
+                      files["report.txt"].decode("utf-8"))
+
+    def test_none_says_none(self):
+        self._save(1, 1)
+        files = self._report(4)
+        self.assertIn("- Begin の撮影（見つからなかったとき）: 無し", files["report.txt"].decode("utf-8"))
+
+    def test_too_big_drops_pictures_with_a_note(self):
+        import numpy as np
+        rng = np.random.default_rng(0)
+        for window in (1, 2):
+            noise = rng.integers(0, 255, 200 * 200 * 4, dtype=np.uint8).tobytes()
+            BeginMiss.save(window, noise, 200, 200, "探す")
+            time.sleep(0.02)
+        one = len((self.dir / "begin_miss" / "窓1_1.png").read_bytes())
+        files = self._report(0, limit=one + 3000)
+        pictures = [n for n in files if n.startswith("begin_miss/")]
+        self.assertEqual(pictures, ["begin_miss/窓1_1.png"], "新しい方から外す")
+        self.assertIn("- Begin の撮影 begin_miss/窓2_1.png: 入れていません（大きすぎて収まらない）",
+                      files["report.txt"].decode("utf-8"))
+
+    def test_the_checkbox_and_the_note(self):
+        self.assertIn((BugReport.BEGIN_MISS, "Begin の撮影（見つからなかったとき）"), BugReport.ATTACHMENTS)
+        self.assertIn("画面の撮影には一緒にいた人の名前が写ることがあります", mainGUI.ReportDialog.REPORT_NOTE)
 
 
 class TestSuicideCancelCL(unittest.TestCase):

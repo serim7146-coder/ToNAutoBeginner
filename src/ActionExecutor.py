@@ -3,6 +3,7 @@ import time
 from typing import Callable
 
 import BeginDetect
+import BeginMiss
 import config
 import DebugLog
 import ItemFetch
@@ -519,7 +520,7 @@ class ActionExecutor:
             return "skip"
         if self._adjust_stopped(round_seq):
             return "skip"
-        seen = self._look_for_begin()
+        seen = self._look_for_begin("最初")
         if seen is None:
             return "skip"
         hit, aim_x = seen
@@ -585,12 +586,12 @@ class ActionExecutor:
             time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
             if self._adjust_stopped(round_seq):
                 return "skip"
-            seen = self._look_for_begin()
+            seen = self._look_for_begin("動いた後")
             if self._adjust_stopped(round_seq):
                 return "skip"
             if seen is None or seen[0] is None:
                 # 見失った: 同じ位置でもう1回撮る。それでも無ければ探し直す（1度だけ）
-                seen = self._look_for_begin()
+                seen = self._look_for_begin("撮り直し")
                 if self._adjust_stopped(round_seq):
                     return "skip"
                 if seen is None or seen[0] is None:
@@ -631,7 +632,7 @@ class ActionExecutor:
             time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
             if stopped():
                 return "skip"
-            seen = self._look_for_begin()
+            seen = self._look_for_begin("探す")
             if stopped():
                 return "skip"
             return seen if seen is not None and seen[0] is not None else None
@@ -674,8 +675,9 @@ class ActionExecutor:
         return (not self._is_running() or st.in_round or st.round_seq != round_seq
                 or st.begin_done)
 
-    def _look_for_begin(self):
-        """撮って BEGIN を探す。(見つけた文字 or None, 照準の x)。撮れなければ None"""
+    def _look_for_begin(self, stage: str = ""):
+        """撮って BEGIN を探す。(見つけた文字 or None, 照準の x)。撮れなければ None。
+        見つからなかった撮影は窓ごとに最新2枚を残す（CR。stage はどの段の撮影か）"""
         hwnd = self._cfg.hwnd
         aim = WindowOperator.aim_in_window_image(hwnd)
         if aim is None:
@@ -686,6 +688,8 @@ class ActionExecutor:
         hit = BeginDetect.find(bits, w, h)
         if hit is not None:
             hit = {**hit, "H": h}           # 前後は文字の幅÷窓の高さで見る
+        else:
+            BeginMiss.save(self._st.window_idx, bits, w, h, stage or "位置合わせ")
         return hit, aim[0]
 
     def _show_window_without_begin(self, round_seq: int):
