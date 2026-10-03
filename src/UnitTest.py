@@ -132,6 +132,78 @@ import UIFont
 import AutoUpdate
 import config
 from State import WindowConfig, WindowState
+import OSCControl
+
+
+# ── テストから本物の OSC を送らない・本物の受け口を開かない（DE）─────────
+# 127.0.0.1:9000 は依頼者の窓1 の VRChat が待っている。テストが本物のソケットで送ると、窓1 が勝手に
+# 動く・止まる（1回流すごとに約27万通送っていた）。OSC を使うモジュールの socket を、送ったもの・
+# 開こうとした受け口を記録するだけの偽物に差し替える（読み込み時に。どのテストより前）。
+# 記録が1つでもあれば tearDownModule で失敗にする（テストの並び順に左右されない）
+def _module_time(sleep):
+    """そのモジュールの time に差し替える偽物（DE）。patch.object(<モジュール>.time, "sleep") は time.sleep
+    そのもの（全モジュール共通）を偽物にするので、ほかのモジュールの「時計を見ながら待つ」処理（OSC の
+    送り直しなど）が時間の進まないまま空回りする。時計は本物のまま、sleep だけ偽物"""
+    fake = type(sys)("time_for_test")
+    fake.time = time.time
+    fake.monotonic = time.monotonic
+    fake.sleep = sleep
+    return fake
+
+
+class _OscSocketTrap:
+    sends = []              # (送り先, 先頭のバイト)
+    binds = []              # 開こうとした受け口
+
+    class Socket:
+        def __init__(self, *args, **kwargs):
+            self._timeout = 0.2
+
+        def sendto(self, data, addr):
+            _OscSocketTrap.sends.append((addr, bytes(data[:32])))
+            return len(data)
+
+        def bind(self, addr):
+            _OscSocketTrap.binds.append(addr)
+
+        def settimeout(self, sec):
+            self._timeout = sec
+
+        def setsockopt(self, *args):
+            pass
+
+        def recvfrom(self, _size):
+            # 何も届かない。time.sleep を偽物にしているテストでも空回りしないよう Event で待つ
+            threading.Event().wait(self._timeout or 0.2)
+            raise socket.timeout()
+
+        def close(self):
+            pass
+
+    module = type(sys)("socket_trap")
+    module.socket = Socket
+    module.timeout = socket.timeout
+    module.error = socket.error
+    module.AF_INET = socket.AF_INET
+    module.SOCK_DGRAM = socket.SOCK_DGRAM
+    module.SOL_SOCKET = socket.SOL_SOCKET
+    module.SO_REUSEADDR = socket.SO_REUSEADDR
+
+    @classmethod
+    def install(cls):
+        for mod in (OSCClient, OSCReceiver, OSCControl):
+            mod.socket = cls.module
+
+    @classmethod
+    def check(cls):
+        """本物なら OSC を送っていた・受け口を開いていたテストがあれば失敗（tearDownModule から）"""
+        if cls.sends or cls.binds:
+            raise AssertionError(
+                f"テストが OSC のソケットに届いた（本物なら送っていた）: 送信 {len(cls.sends)} 通"
+                f"（先頭 {cls.sends[:3]}）・受け口 {cls.binds[:5]}。send を偽物にするか、移動を偽物にすること")
+
+
+_OscSocketTrap.install()
 
 
 # ── テストで本物の設定を書き換えない ─────────────────────
@@ -179,6 +251,38 @@ def tearDownModule():
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
     _sandbox.cleanup()
+    _OscSocketTrap.check()
+
+
+class TestNoRealOscDE(unittest.TestCase):
+    """DE: テストから本物の OSC を送らない・本物の受け口を開かない（窓1 の VRChat が 9000 で待っている）"""
+
+    def setUp(self):
+        self.sends, self.binds = list(_OscSocketTrap.sends), list(_OscSocketTrap.binds)
+
+    def tearDown(self):
+        _OscSocketTrap.sends[:] = self.sends                # このテストで足した分は全体の見張りに残さない
+        _OscSocketTrap.binds[:] = self.binds
+
+    def test_the_modules_use_the_trap(self):
+        for mod in (OSCClient, OSCReceiver, OSCControl):
+            self.assertIs(mod.socket, _OscSocketTrap.module, mod.__name__)
+
+    def test_a_send_is_caught_not_sent(self):
+        client = OSCClient.OSCClient(9000)
+        self.assertTrue(client.send("/input/Jump", 0))
+        self.assertEqual(len(_OscSocketTrap.sends), len(self.sends) + 1)
+        self.assertEqual(_OscSocketTrap.sends[-1][0], ("127.0.0.1", 9000))
+        with self.assertRaises(AssertionError):
+            _OscSocketTrap.check()
+
+    def test_a_bind_is_caught_not_opened(self):
+        receiver = OSCReceiver.VelocityReceiver(9001)
+        self.assertTrue(receiver.start())
+        receiver.stop()
+        self.assertEqual(_OscSocketTrap.binds[-1], ("127.0.0.1", 9001))
+        with self.assertRaises(AssertionError):
+            _OscSocketTrap.check()
 
 
 class TestNoRealSettings(unittest.TestCase):
@@ -17446,6 +17550,7 @@ class TestItemFetchAimCX(unittest.TestCase):
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
              patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
              patch.object(ex, "_borrow_front", return_value=(True, None)), \
+             patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "return_front"), \
              patch.object(WindowOperator, "foreground_hwnd", return_value=0), \
              patch.object(ActionExecutor.time, "sleep"):
@@ -18683,7 +18788,7 @@ class TestActionExecutorSkip(unittest.TestCase):
         _real_freeze_start = SharedState.equip_freeze_start
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(fake_sleep)),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
                           side_effect=fake_freeze_start),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_sound,              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "hold_key"),              patch.object(WindowOperator, "click",
                           side_effect=lambda: order.append("click")):
             executor.do_after_round()
@@ -20628,7 +20733,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
 
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(fake_sleep)),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
                           side_effect=lambda state: order.append("freeze")),              patch.object(ActionExecutor.PlaySound, "play_sound",
                           side_effect=lambda _p: order.append("sound")),              patch.object(executor, "move",
                           side_effect=lambda d, sec: order.append("move")),              patch.object(executor, "move_forward_left",
@@ -20662,7 +20767,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
                          round_end_seen=True, item_id=5)
         executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep"),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_play,              patch.object(executor, "move"),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click") as mock_click:
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(lambda _s: None)),              patch.object(ActionExecutor.PlaySound, "play_sound") as mock_play,              patch.object(executor, "move"),              patch.object(executor, "move_forward_left"),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
         mock_click.assert_called_once()
@@ -20686,11 +20791,11 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
             if sleeps["n"] >= 3:
                 st.item_id = 5      # プレイヤーが装備した
 
-        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep),              patch.object(ActionExecutor.PlaySound, "play_sound",
+        with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(fake_sleep)),              patch.object(ActionExecutor.PlaySound, "play_sound",
                           side_effect=lambda _p: order.append("sound")),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click",
                           side_effect=lambda: order.append("click")):
             executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
-            with patch.object(executor, "move"):
+            with patch.object(executor, "move"), patch.object(executor, "move_forward_left"):
                 executor.do_after_round()
 
         self.assertEqual(order, ["click"], "装備待ちからは鳴らさない")
@@ -24650,6 +24755,7 @@ class TestItemFetchCM(unittest.TestCase):
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
              patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
              patch.object(ex, "_borrow_front", return_value=(True, None)), \
+             patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "ok")
@@ -24669,6 +24775,7 @@ class TestItemFetchCM(unittest.TestCase):
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
              patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
              patch.object(ex, "_borrow_front", return_value=(True, None)), \
+             patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "return_front"), \
              patch.object(ActionExecutor.time, "sleep"):
             self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "failed")
