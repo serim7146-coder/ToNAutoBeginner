@@ -14952,6 +14952,9 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         self._feed(monitor, t, "Verified Round End")
         self._feed(monitor, t, "Verified")
         monitor.st.last_begin_press_at = 0.0          # 以後はツールが押していない（定期）
+        # CU: 実機ではログの行が絶えず来るので、受理から15秒過ぎた最初の行で「始まらなかった」が決まる
+        # （次の Verified の300秒後より前）。その行が無いと、後で決まった位相が先に覚えた位相を上書きする
+        self._feed(monitor, t + 20)
         for k in range(1, 5):
             self._feed(monitor, t + 300 * k + 1, "Verified")
             self._feed(monitor, t + 300 * k + 20)
@@ -17078,6 +17081,117 @@ class TestBeginStrongScoreCT(unittest.TestCase):
         self.assertEqual(hit["score"], 0.62, "受け入れられない 0.74 より、受け入れられる 0.62")
         hit = self._find((0.60, 0.80), (0.86, 0.50), (0.81, 0.30))
         self.assertEqual((hit["score"], hit["cx"]), (0.86, 200.0), "先に来た弱いものより、後の強いもの")
+
+
+class TestVerifiedPhaseCU(unittest.TestCase):
+    """CU: ツールが Begin を押す窓で、押した記録の無い Verified が Verified Round End の後に来たとき、定期の
+    位相を知っていて予定（±TOL）に重ならなければ受理する。位相を知らない・予定に重なるなら今どおり無視。
+    無視した Verified の後 15 秒以内にラウンドが始まったら、覚えた位相を元に戻す"""
+
+    BASE = datetime(2026, 10, 3, 20, 8, 30).timestamp()
+    NOW = 1_000_000.0
+    START = "This round is taking place at Sewers (12) and the round type is Classic"
+
+    def _monitor(self, auto_begin=True, phase=None):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin, osc_port=9000), {},
+                                        lambda _m: None, window_idx=5)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._verified.last_periodic = phase
+        self.debug = []
+        monitor._debug = self.debug.append
+        return monitor
+
+    def _feed(self, monitor, at, body):
+        with patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(SharedState, "get_speed_detect", return_value=False), \
+             patch.object(LogMonitor.time, "time", return_value=self.NOW), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            monitor._process(datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S")
+                             + " Debug      -  " + body)
+
+    def _verified_after_round_end(self, monitor, at=None):
+        """窓5 20:08:43: Verified Round End の 0.3 秒後に Verified（ツールが押した記録なし）"""
+        self._feed(monitor, self.BASE, "RoundOver")
+        self._feed(monitor, self.BASE + 13, "Verified Round End")
+        self._feed(monitor, at or self.BASE + 13, "Verified")
+
+    def test_window_5_off_schedule_is_accepted(self):
+        monitor = self._monitor(phase=self.BASE - 100)      # 予定は BASE+200
+        self._verified_after_round_end(monitor)
+        self.assertTrue(monitor.st.begin_done)
+        self.assertIn("[事象] verified → 受理（予定の外）", self.debug)
+        self.assertEqual(monitor._verified.last_periodic, self.BASE - 100, "位相は動かさない")
+        ex = monitor._action
+        with patch.object(ex, "_adjust_to_begin") as adjust, \
+             patch.object(BeginMiss, "save") as save:
+            ex._confirm_begin(monitor.st.round_seq)
+        adjust.assert_not_called()
+        save.assert_not_called()
+
+    def test_on_schedule_is_periodic(self):
+        monitor = self._monitor(phase=self.BASE + 13 - 300)  # ちょうど予定
+        self._verified_after_round_end(monitor)
+        self.assertFalse(monitor.st.begin_done)
+        self.assertIn("[事象] verified → 無視（定期）", self.debug)
+        self.assertEqual(monitor._verified.last_periodic, self.BASE + 13)
+
+    def test_within_the_tolerance_is_periodic(self):
+        monitor = self._monitor(phase=self.BASE + 13 - 300 - config.VERIFIED_PERIODIC_TOL_SEC)
+        self._verified_after_round_end(monitor)
+        self.assertFalse(monitor.st.begin_done)
+
+    def test_an_unknown_phase_is_ignored_as_in_co(self):
+        monitor = self._monitor(phase=None)
+        self._verified_after_round_end(monitor)
+        self.assertFalse(monitor.st.begin_done)
+        self.assertIn("[事象] verified → 無視（ツールがまだ押していない）", self.debug)
+        self.assertEqual(monitor._verified.last_periodic, self.BASE + 13)
+
+    def test_a_round_start_12s_later_undoes_the_learned_phase(self):
+        for phase, name in ((None, "位相を知らなかった"), (self.BASE + 13 - 300, "予定と重なった")):
+            monitor = self._monitor(phase=phase)
+            self._verified_after_round_end(monitor)
+            self._feed(monitor, self.BASE + 25, self.START)
+            self.assertEqual(monitor._verified.last_periodic, phase, name)
+            self.assertTrue(any("無視した Verified の 12.0秒後にラウンド開始" in m for m in self.debug), name)
+
+    def test_no_round_start_keeps_it(self):
+        monitor = self._monitor(phase=None)
+        self._verified_after_round_end(monitor)
+        self._feed(monitor, self.BASE + 40, "[Behaviour] tick")
+        self.assertEqual(monitor._verified.last_periodic, self.BASE + 13)
+
+    def test_a_late_round_start_keeps_it(self):
+        monitor = self._monitor(phase=None)
+        self._verified_after_round_end(monitor)
+        self._feed(monitor, self.BASE + 13 + config.VERIFIED_ROUND_START_WAIT_SEC + 1, self.START)
+        self.assertEqual(monitor._verified.last_periodic, self.BASE + 13, "15 秒より後は本物とは言えない")
+
+    def test_it_is_undone_only_once(self):
+        monitor = self._monitor(phase=None)
+        self._verified_after_round_end(monitor)
+        self._feed(monitor, self.BASE + 25, self.START)
+        monitor._verified.last_periodic = 123.0
+        self._feed(monitor, self.BASE + 26, self.START)
+        self.assertEqual(monitor._verified.last_periodic, 123.0)
+
+    def test_a_pressed_one_is_accepted_as_before(self):
+        monitor = self._monitor(phase=None)
+        monitor.st.last_begin_press_at = self.NOW - 1
+        self._verified_after_round_end(monitor)
+        self.assertTrue(monitor.st.begin_done)
+        self.assertIn("[事象] verified → 受理", self.debug)
+
+    def test_windows_the_tool_does_not_press_are_as_before(self):
+        for phase in (None, self.BASE - 100):
+            monitor = self._monitor(auto_begin=False, phase=phase)
+            self._verified_after_round_end(monitor)
+            self.assertTrue(monitor.st.begin_done, phase)
+            self.assertIn("[事象] verified → 受理", self.debug, phase)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):

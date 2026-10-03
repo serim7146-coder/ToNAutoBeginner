@@ -87,6 +87,9 @@ class LogMonitor:
         self._thread: Optional[threading.Thread] = None
         # 定期の Verified を見分ける（窓ごと。起動時の遡りで位相を取り戻す）
         self._verified = VerifiedTracker.VerifiedTracker()
+        # 定期として無視した Verified（ログの時刻, 覚える前の定期の時刻）。すぐラウンドが始まったら
+        # 本物の Begin だったので、覚えた位相を元に戻す（CU）
+        self._ignored_verified = None
         self._action = ActionExecutor(
             cfg=cfg,
             st=self.st,
@@ -285,6 +288,18 @@ class LogMonitor:
                 "Midnight": self.cfg.voice_midnight,
                 "Alternate": self.cfg.voice_alternate,
                 "Ghost": self.cfg.voice_ghost}.get(round_type, "")
+
+    def _undo_ignored_verified(self):
+        """ラウンド開始: 定期として無視した Verified の後 VERIFIED_ROUND_START_WAIT_SEC 以内なら、それは
+        本物の Begin だった。定期として覚えた分を取り消す（CU）"""
+        ignored, self._ignored_verified = self._ignored_verified, None
+        if ignored is None or not self.st.log_now:
+            return
+        at, phase_before = ignored
+        if 0 <= self.st.log_now - at <= config.VERIFIED_ROUND_START_WAIT_SEC:
+            self._verified.last_periodic = phase_before
+            self._debug(f"[状態] 無視した Verified の {self.st.log_now - at:.1f}秒後にラウンド開始"
+                        f" → 本物の Begin だった。定期の位相を戻す")
 
     def _check_pending_verified(self):
         """採用したVerifiedにラウンド開始が続かなければ、定期シグナルだった。
@@ -1284,8 +1299,10 @@ class LogMonitor:
             now = st.log_now
             pressed = (st.last_begin_press_at > 0 and time.time() - st.last_begin_press_at
                        <= config.BEGIN_PRESS_RECENT_SEC)
+            phase_before = self._verified.last_periodic
             kind = self._verified.on_verified(now, pressed)
             if kind == VerifiedTracker.PERIODIC:
+                self._ignored_verified = (now, phase_before)
                 self._debug_verified("無視（定期）")
                 self._log("Verified を無視（定期シグナル）")
                 return
@@ -1294,18 +1311,24 @@ class LogMonitor:
                 self._debug_verified("無視（Verified Round End より前）")
                 self._log("Verified を無視（Verified Round End より前）")
                 return
+            off_schedule = False
             if not pressed and self._auto_begin_active():
-                # CO: ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
-                # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
-                self._verified.mark_periodic(now)
-                self._debug_verified("無視（ツールがまだ押していない）")
-                self._log("Verified を無視（ツールがまだ押していない → 定期）")
-                return
+                if phase_before is None:
+                    # CO: ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
+                    # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
+                    self._verified.mark_periodic(now)
+                    self._ignored_verified = (now, phase_before)
+                    self._debug_verified("無視（ツールがまだ押していない）")
+                    self._log("Verified を無視（ツールがまだ押していない → 定期）")
+                    return
+                # CU: 位相を知っていて予定（±TOL）に重ならない。定期は300秒に1回なので Begin
+                # （背面でカーソルも外でも、連打の UseRight で押せていることがある）
+                off_schedule = True
 
             # 本物として採用。Everything recieved が続くかで事後確認する
             st.pending_verified_time = now
             st.begin_done = True
-            self._debug_verified("受理")
+            self._debug_verified("受理（予定の外）" if off_schedule else "受理")
             self._log("✅ Connecting")
             # 速度検知そのものは Verified Round End 側で始めている（Verified は
             # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
@@ -1344,6 +1367,7 @@ class LogMonitor:
             # 採用した Verified にラウンド開始が続いた＝Begin 由来で確定。
             # 位相は動かさない（定期ではなかったため）
             st.pending_verified_time = 0.0
+            self._undo_ignored_verified()
             if st.is_continue_round:
                 st.is_continue_round = False
                 st.open_special_continue = False
