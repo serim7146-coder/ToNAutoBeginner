@@ -17032,6 +17032,54 @@ class TestBeginScoreMinCK(unittest.TestCase):
         self.assertIsNone(self._find_with(0.59, dark=0.5), "周りが黒くなければ拾わない（今のまま）")
 
 
+class TestBeginStrongScoreCT(unittest.TestCase):
+    """CT: 近さ ≥ SCORE_STRONG（0.75）なら周りの黒さを見ない（実機で BEGIN を 0.79〜0.87 で見つけているのに
+    黒さ 0.31〜0.64 で捨てていた）。今の「近さ ≥ 0.57 かつ 黒さ ≥ 0.65」も残す"""
+
+    def _find(self, *candidates):
+        """candidates は (近さ, 黒さ)。候補ごとに位置をずらす"""
+        import numpy as np
+        bgr = np.zeros((1080, 1920, 3), dtype=np.uint8)
+        fine = [(sc, 100.0 + 100 * i, 300.0, 120.0, 30.0) for i, (sc, _d) in enumerate(candidates)]
+        dark = [d for _sc, d in candidates]
+        with patch.object(BeginDetect, "_coarse", return_value=[object()] * len(candidates)), \
+             patch.object(BeginDetect, "_fine", side_effect=fine), \
+             patch.object(BeginDetect, "_darkness", side_effect=dark), \
+             patch.object(BeginDetect, "_redness", side_effect=lambda img: img[:, :, 0]):
+            return BeginDetect._find(bgr, {"x": 1})
+
+    def test_the_threshold(self):
+        self.assertEqual(BeginDetect.SCORE_STRONG, 0.75)
+
+    def test_clear_begins_in_a_bright_lobby_are_taken(self):
+        for score, dark, name in ((0.805, 0.586, "窓5"), (0.793, 0.306, "窓6"), (0.869, 0.522, "窓4"),
+                                  (0.75, 0.0, "ちょうど")):
+            hit = self._find((score, dark))
+            self.assertIsNotNone(hit, name)
+            self.assertEqual((hit["score"], hit["dark"], hit["rule"]), (score, dark, "strong"), name)
+
+    def test_walls_and_weak_ones_are_not(self):
+        for score, dark, name in ((0.64, 0.43, "壁"), (0.74, 0.50, "強くない・黒くない"),
+                                  (0.749, 0.649, "どちらもわずかに足りない")):
+            self.assertIsNone(self._find((score, dark)), name)
+
+    def test_the_old_rule_stays(self):
+        hit = self._find((0.58, 0.70))
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["rule"], "dark")
+        self.assertEqual(self._find((0.80, 0.90))["rule"], "dark", "両方満たすなら今の規則の名前")
+        self.assertIsNone(self._find((0.56, 0.90)), "近さが足りなければ黒くても拾わない")
+
+    def test_the_closest_acceptable_one_wins(self):
+        hit = self._find((0.64, 0.43), (0.79, 0.30), (0.60, 0.80), (0.70, 0.40))
+        self.assertEqual(hit["score"], 0.79, "受け入れられるものの中で近さが最大")
+        self.assertEqual(hit["cx"], 200.0)
+        hit = self._find((0.62, 0.90), (0.74, 0.60))
+        self.assertEqual(hit["score"], 0.62, "受け入れられない 0.74 より、受け入れられる 0.62")
+        hit = self._find((0.60, 0.80), (0.86, 0.50), (0.81, 0.30))
+        self.assertEqual((hit["score"], hit["cx"]), (0.86, 200.0), "先に来た弱いものより、後の強いもの")
+
+
 class TestSuicideBackgroundRouting(unittest.TestCase):
     """do_skip の送信経路（背面だけ。フォーカス方式への落とし先は廃止）"""
 
