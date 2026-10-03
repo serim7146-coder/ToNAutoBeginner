@@ -21354,11 +21354,11 @@ class TestStringDownloadTrigger(unittest.TestCase):
         return [c.kwargs["target"].__func__.__name__
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
-    def test_download_line_is_parsed(self):
-        event = LogParser.parse("2026.08.23 17:53:12 Debug      -  " + self.DL)
-
-        self.assertEqual(event.kind, LogParser.EVENT_STRING_DOWNLOAD)
-        self.assertEqual(event.url, "https://pastebin.com/raw/E36sLedn")
+    def test_download_line_is_no_event(self):
+        """CQ: 使っていないので読まない（debug.log の行の約 9% を占めていた）"""
+        for line in (self.DL, self.DL_ALT):
+            self.assertIsNone(LogParser.parse("2026.08.23 17:53:12 Debug      -  " + line), line)
+        self.assertFalse(hasattr(LogParser, "EVENT_STRING_DOWNLOAD"))
 
     def test_clearing_queue_line_does_not_match(self):
         """同じ [String Download] で始まる別の行を拾わないこと"""
@@ -24187,6 +24187,78 @@ class TestBeginMoveMeasureCP(unittest.TestCase):
              patch.object(DebugLog, "write") as write:
             ex.do_begin_again(3)
             self.assertTrue(self._wait_for(write, "Begin前の移動: 実測"))
+
+
+class TestVerifiedDebugLineCQ(unittest.TestCase):
+    """CQ: debug.log の `Verified` の行の記録は `[事象] verified → 受理／無視（理由）`（判定の後に1行）。
+    `begin_done` という名前で出さない（読んだだけで Begin が通ったように見えた）"""
+
+    BASE = datetime(2026, 10, 3, 5, 45, 25).timestamp()
+
+    def _monitor(self, auto_begin=True):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin), {}, lambda _m: None,
+                                        window_idx=3)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _debug_lines(self, monitor, lines):
+        with patch.object(DebugLog, "write") as write, \
+             patch.object(LogMonitor.threading, "Thread"), \
+             patch.object(LogMonitor.time, "time", return_value=1_000_000.0), \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_round_over"):
+            for at, body in lines:
+                monitor._process(datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S")
+                                 + " Debug      -  " + body)
+        return [c.args[0] for c in write.call_args_list if "[事象]" in c.args[0]]
+
+    def test_the_event_is_named_verified(self):
+        self.assertEqual(LogParser.parse("2026.10.03 05:45:37 Debug      -  Verified").kind, "verified")
+        self.assertEqual(LogParser.EVENT_VERIFIED, "verified")
+        self.assertFalse(hasattr(LogParser, "EVENT_BEGIN_DONE"))
+
+    def test_accepted(self):
+        monitor = self._monitor()
+        monitor.st.last_begin_press_at = 1_000_000.0 - 1.0
+        lines = self._debug_lines(monitor, [(self.BASE, "RoundOver"),
+                                            (self.BASE + 12, "Verified Round End"),
+                                            (self.BASE + 13, "Verified")])
+        self.assertIn("[窓3] [事象] verified → 受理", lines)
+        self.assertFalse(any("begin_done" in l for l in lines), lines)
+        self.assertEqual(sum(bool(re.search(r"\[事象\] verified( |$)", l)) for l in lines), 1,
+                         "1行だけ（判定の後。verified_end は別の事象）")
+
+    def test_not_pressed_yet(self):
+        lines = self._debug_lines(self._monitor(), [(self.BASE, "RoundOver"),
+                                                    (self.BASE + 12, "Verified Round End"),
+                                                    (self.BASE + 12, "Verified")])
+        self.assertIn("[窓3] [事象] verified → 無視（ツールがまだ押していない）", lines)
+
+    def test_periodic(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor._verified.last_periodic = self.BASE
+        lines = self._debug_lines(monitor, [(self.BASE + 290, "RoundOver"),
+                                            (self.BASE + 300.5, "Verified Round End"),
+                                            (self.BASE + 300, "Verified")])
+        self.assertIn("[窓3] [事象] verified → 無視（定期）", lines)
+
+    def test_before_the_round_end(self):
+        monitor = self._monitor(auto_begin=False)
+        monitor._verified.last_periodic = self.BASE - 1000
+        lines = self._debug_lines(monitor, [(self.BASE, "This round is taking place at Sewers (12) "
+                                                         "and the round type is Classic"),
+                                            (self.BASE + 60, "RoundOver"),
+                                            (self.BASE + 64, "Verified")])
+        self.assertIn("[窓3] [事象] verified → 無視（Verified Round End より前）", lines)
+
+    def test_the_screen_log_is_as_before(self):
+        monitor = self._monitor()
+        monitor.st.last_begin_press_at = 1_000_000.0
+        self._debug_lines(monitor, [(self.BASE + 12, "Verified Round End"), (self.BASE + 13, "Verified")])
+        self.assertIn("[窓3] ✅ Connecting", monitor.logs)
 
 
 class TestSuicideCancelCL(unittest.TestCase):

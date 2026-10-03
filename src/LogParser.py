@@ -5,7 +5,7 @@ from datetime import datetime
 import MatchTNL
 
 
-EVENT_BEGIN_DONE = "begin_done"
+EVENT_VERIFIED = "verified"      # `Verified` の行（受理か定期かは LogMonitor が決める）
 EVENT_ROUND_START = "round_start"
 EVENT_KILLERS_SET = "killers_set"
 EVENT_YOU_DIED = "you_died"
@@ -23,7 +23,6 @@ EVENT_CREATURE_BLOODTHIRSTY = "creature_bloodthirsty"
 EVENT_HUNGRY_HOME_INVADER = "hungry_home_invader"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
-EVENT_STRING_DOWNLOAD = "string_download"
 EVENT_GIGABYTES = "gigabytes"
 EVENT_GLORBO = "glorbo"
 EVENT_ATRACHED = "atrached"
@@ -48,14 +47,11 @@ LIVED_MARK = "Lived in round"
 RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
-RE_BEGIN_DONE = re.compile(r"^Verified$")
+RE_VERIFIED = re.compile(r"^Verified$")
 VERIFIED_MARK = "Verified"      # 前絞りの印（Verified Round End も含む）
 ROUND_OVER_MARK = "RoundOver"
 # ToN側の綴りどおり（recieved）。本物のVerifiedにだけ続く行
 RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!$")
-# Beginが押されるとラウンドデータの取得が始まる。誰が押しても出る。
-# 同じ [String Download] で始まる "Clearing string download queue" と区別するため、
-# "Attempting to load String from URL" まで含めてマッチさせる。
 # The Gigabytes はテラーIDでは判別できない（実測6件でIDが毎回異なる）。
 # この行だけが固有の手がかり。Killers have been set と同じ秒に出る。
 RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
@@ -65,8 +61,6 @@ RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
 RE_GLORBO = re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE)
 # Sonic(classic 40)のVariant。同IDで稀に差し替わるためIDでは判別できない。
 RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
-RE_STRING_DOWNLOAD = re.compile(
-    r"^\[String Download\] Attempting to load String from URL '(.+)'")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 ITEM_EQUIP_MARK = "Equipping "
 # 8 Pages でページを取った（n 枚目）。持ち込めないアイテムはここでなくなる
@@ -111,7 +105,6 @@ RE_JOY = re.compile(r"^JOY WILL SOON AWAKEN[.][.][.]$")
 class LogEvent:
     kind: str = ""
     round_type: str = ""
-    url: str = ""
     terror_ids: list[int] | None = None
     raw_map: str = ""
     map_id: int = 0
@@ -224,8 +217,8 @@ def parse(line: str) -> LogEvent | None:
         name = network_object_name(line)
         return LogEvent(EVENT_NETWORK_OBJECT, player_name=name) if name else None
 
-    if RE_BEGIN_DONE.match(line):
-        return LogEvent(EVENT_BEGIN_DONE)
+    if RE_VERIFIED.match(line):
+        return LogEvent(EVENT_VERIFIED)
 
     if RE_EVERYTHING_RECEIVED.match(line):
         return LogEvent(EVENT_EVERYTHING_RECEIVED)
@@ -241,11 +234,6 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_MASTER_SWITCHED.match(line):
         return LogEvent(EVENT_MASTER_SWITCHED)
-
-    m = RE_STRING_DOWNLOAD.match(line)
-    if m:
-        # URLはログ用。判定には使わない（ラウンドデータのURLは複数あるため）
-        return LogEvent(EVENT_STRING_DOWNLOAD, url=m.group(1))
 
     m = RE_ROUND_START.match(line)
     if m:

@@ -157,6 +157,8 @@ class LogMonitor:
         """debug.log へ: 読んだイベントを1行。[NetworkProcessing] の名前は書かない
         （NG のインスタンスで看破の材料が漏れないように。呼ぶ側で外している）。
         入退室の名前・URL も書かない（必要な情報だけ）"""
+        if event.kind == LogParser.EVENT_VERIFIED:
+            return          # 受理か無視かが決まってから1行（_debug_verified）
         parts = []
         if event.round_type:
             parts.append(f"種類={event.round_type}")
@@ -173,6 +175,10 @@ class LogMonitor:
         if event.kind in (LogParser.EVENT_ENRAGE, LogParser.EVENT_STUNNED):
             parts.append(f"名前={event.player_name}")       # 通常のログに出る行（公開の情報）
         self._debug(f"[事象] {event.kind}" + (" " + " ".join(parts) if parts else ""))
+
+    def _debug_verified(self, result: str):
+        """debug.log へ: `Verified` の行を読んだ記録に、判定の結果を付ける（CQ）"""
+        self._debug(f"[事象] verified → {result}")
 
     def _debug(self, msg: str):
         """デバッグログへ（公開ログ＝logger には出さない）"""
@@ -419,7 +425,7 @@ class LogMonitor:
                                LogParser.EVENT_RESPAWN, LogParser.EVENT_YOU_DIED,
                                LogParser.EVENT_SUS_PLAYER)
     # 定期の Verified の位相を取り戻すために集める行
-    _VERIFIED_LEARN_KINDS = (LogParser.EVENT_BEGIN_DONE, LogParser.EVENT_ROUND_START,
+    _VERIFIED_LEARN_KINDS = (LogParser.EVENT_VERIFIED, LogParser.EVENT_ROUND_START,
                              LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END)
 
     def _detect_instance_from_log(self, end: Optional[int] = None):
@@ -1272,7 +1278,7 @@ class LogMonitor:
                 self._log(f"Sus player一致: {event.player_name}")
             return
 
-        if event.kind == LogParser.EVENT_BEGIN_DONE:
+        if event.kind == LogParser.EVENT_VERIFIED:
             # `Verified` はBegin受理専用のログではない。定期シグナルでも同じ行が出る
             # （後ろの行では見分けられない）。見分けは VerifiedTracker（ログの時刻と、
             # 予定と重なった1回だけツールが直前に押したか）
@@ -1281,24 +1287,28 @@ class LogMonitor:
                        <= config.BEGIN_PRESS_RECENT_SEC)
             kind = self._verified.on_verified(now, pressed)
             if kind == VerifiedTracker.PERIODIC:
+                self._debug_verified("無視（定期）")
                 self._log("Verified を無視（定期シグナル）")
                 return
             if kind == VerifiedTracker.IGNORE:
                 # Begin は Verified Round End の後にしか押せない
+                self._debug_verified("無視（Verified Round End より前）")
                 self._log("Verified を無視（Verified Round End より前）")
                 return
             if not pressed and self._auto_begin_active():
                 # CO: ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
                 # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
                 self._verified.mark_periodic(now)
+                self._debug_verified("無視（ツールがまだ押していない）")
                 self._log("Verified を無視（ツールがまだ押していない → 定期）")
                 return
 
             # 本物として採用。Everything recieved が続くかで事後確認する
             st.pending_verified_time = now
             st.begin_done = True
+            self._debug_verified("受理")
             self._log("✅ Connecting")
-            # 速度検知そのものは EVENT_STRING_DOWNLOAD 側で始めている（Verified は
+            # 速度検知そのものは Verified Round End 側で始めている（Verified は
             # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
             # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
             # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
@@ -1329,11 +1339,6 @@ class LogMonitor:
             # SonicのVariant
             self._log("🎮 Atrached 出現（SonicのVariant）")
             self._mark_replacement("atrached_variant")
-            return
-
-        if event.kind == LogParser.EVENT_STRING_DOWNLOAD:
-            # 速度検知の起点にはしない。Begin 以外でも定期的に出るので、
-            # 「区間の最初の1件」という前提が崩れる。起点は Verified Round End
             return
 
         if event.kind == LogParser.EVENT_ROUND_START:
