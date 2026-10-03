@@ -1100,11 +1100,16 @@ class ActionExecutor:
         head = f"[操作] [窓{st.window_idx}] Begin前の移動"
         DebugLog.write(f"{head}: {'Punished後' if late else '通常'} 前進{forward}秒・左{left}秒"
                        f"（round_type={st.round_type}）")
+        # 実際に動いた量を debug.log へ（CP。記録だけ。離してから少し後まで別スレッドで読む）
+        sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head}: {m}"))
+        sampler.start()
         try:
             ok = self.move_forward_left(forward, left)
         except Exception as e:
             DebugLog.write(f"{head}: 途中で止めた（{type(e).__name__}）")
             raise
+        finally:
+            sampler.release()
         if ok is False:
             DebugLog.write(f"{head}: 途中で止めた（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
         else:
@@ -1585,3 +1590,112 @@ class _FetchMouse:
         pydirectinput.mouseDown(_pause=False)
         time.sleep(ItemFetch.CLICK_SEC)
         pydirectinput.mouseUp(_pause=False)
+
+
+# ── Begin 前の移動の実測（CP。記録だけ）──────────────────
+MOTION_INTERVAL_SEC = 0.05      # 速さと接地を読む間隔
+MOTION_TAIL_SEC = 0.6           # 離してからこれだけ後まで読む
+MOTION_START_SPEED = 1.0        # 動き出し（これを超えた最初の時刻）
+MOTION_STALL_SPEED = 0.3        # 止まり（入力中にこれ未満）
+MOTION_SERIES_STEP = 0.1        # 速さの列の間隔
+MOTION_SERIES_MAX = 40
+
+
+def summarize_motion(samples, released_at) -> str:
+    """samples は [(送り始めからの秒, 速さ or None, 接地 or None)]、released_at は離した時刻（同じ基準）。
+    debug.log の1行の「実測 …」を返す"""
+    got = [(t, s, g) for t, s, g in samples if s is not None]
+    if not got:
+        return "実測なし（速さを受信していません）"
+    distance = 0.0
+    for (t0, s0, _), (t1, _s1, _) in zip(got, got[1:]):
+        distance += s0 * (t1 - t0)
+    top = max(s for _, s, _ in got)
+    start = next((t for t, s, _ in got if s > MOTION_START_SPEED), None)
+    stalls = []
+    if start is not None:
+        begun = None
+        for t, s, _ in got:
+            if t <= start or t > released_at:
+                continue
+            if s < MOTION_STALL_SPEED:
+                begun = t if begun is None else begun
+            elif begun is not None:
+                stalls.append((begun, t))
+                begun = None
+        if begun is not None:
+            stalls.append((begun, released_at))
+    changes = []
+    last = None
+    for t, _s, g in samples:
+        if g is None:
+            continue
+        if last is not None and g != last:
+            changes.append(f"{t:.2f}秒→{'1' if g else '0'}")
+        last = g
+    series = []
+    next_t = 0.0
+    for t, s, _ in got:
+        if t + 1e-9 >= next_t and len(series) < MOTION_SERIES_MAX:
+            series.append(round(float(s), 1))
+            next_t += MOTION_SERIES_STEP
+            while next_t <= t:
+                next_t += MOTION_SERIES_STEP
+    return (f"実測 距離 {distance:.2f}・最高 {top:.2f}・"
+            f"動き出し {'なし' if start is None else f'{start:.2f}秒'}・"
+            f"止まり {'、'.join(f'{a:.2f}〜{b:.2f}秒' for a, b in stalls) or 'なし'}・"
+            f"接地 {'、'.join(changes) or 'なし'}・"
+            f"速さ {series}")
+
+
+class MotionSampler:
+    """移動の間、速度受信器から速さと接地を読み、離してから MOTION_TAIL_SEC 後に1行書く。
+    移動のスレッドは待たせない（start / release を呼ぶだけ）"""
+
+    def __init__(self, receiver, write, clock=time.monotonic, sleep=time.sleep,
+                 interval=None, tail=None):
+        self._receiver = receiver
+        self._write = write
+        self._clock = clock
+        self._sleep = sleep
+        self._interval = MOTION_INTERVAL_SEC if interval is None else interval
+        self._tail = MOTION_TAIL_SEC if tail is None else tail
+        self._started = None
+        self._released = None
+        self.samples = []
+        self.thread = None
+
+    def start(self):
+        self._started = self._clock()
+        if self._receiver is None:
+            return              # OSC の窓でない（release で「実測なし」を書く）
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def release(self):
+        self._released = self._clock()
+        if self.thread is None:
+            self._write(summarize_motion([], 0.0))
+
+    def _read(self):
+        try:
+            return self._receiver.speed, self._receiver.grounded_or_none
+        except Exception:
+            return None, None
+
+    def _run(self):
+        try:
+            while True:
+                now = self._clock()
+                speed, grounded = self._read()
+                self.samples.append((now - self._started, speed, grounded))
+                released = self._released
+                if released is not None and now >= released + self._tail:
+                    break
+                if now - self._started > 60:
+                    break           # 離した記録が来ないまま（念のため）
+                self._sleep(self._interval)
+            released = self._released if self._released is not None else self._clock()
+            self._write(summarize_motion(self.samples, released - self._started))
+        except Exception:
+            DebugLog.exception("ActionExecutor.MotionSampler")

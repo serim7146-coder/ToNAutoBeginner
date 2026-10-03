@@ -24054,6 +24054,141 @@ class TestNoVerifiedBeforePressCO(unittest.TestCase):
                          "覚えた位相から 300秒後の予定の1回は定期")
 
 
+class TestBeginMoveMeasureCP(unittest.TestCase):
+    """CP: Begin 前の移動（と押し直しの移動）で、実際に動いた量を debug.log に1行残す（記録だけ）"""
+
+    S = ActionExecutor.summarize_motion
+
+    @staticmethod
+    def _series(speeds, grounded=None, step=0.05):
+        grounded = grounded or [None] * len(speeds)
+        return [(round(i * step, 4), s, g) for i, (s, g) in enumerate(zip(speeds, grounded))]
+
+    def test_distance_top_start_and_series(self):
+        speeds = [0.0, 0.0, 3.3] + [6.6] * 37        # 2.0 秒
+        line = ActionExecutor.summarize_motion(self._series(speeds), released_at=1.4)
+        distance = float(line.split("距離 ")[1].split("・")[0])
+        self.assertAlmostEqual(distance, (3.3 + 6.6 * 36) * 0.05, delta=0.006)   # 2 桁に丸めた値
+        self.assertIn("最高 6.60", line)
+        self.assertIn("動き出し 0.10秒", line)
+        self.assertIn("止まり なし", line)
+        self.assertIn("接地 なし", line)
+        self.assertIn("速さ [0.0, 3.3, 6.6, 6.6,", line)
+        self.assertEqual(line.count(", ") + 1, 20, "0.1 秒ごと")
+
+    def test_a_reset_like_drop_is_a_stall(self):
+        """移動が途中でリセットされたような列（速さが 0 に落ちて戻る）→ 止まりに出る"""
+        speeds = [0.0, 6.6, 6.6, 6.6, 0.0, 0.0, 0.0, 6.6, 6.6, 6.6, 0.0, 0.0]
+        line = ActionExecutor.summarize_motion(self._series(speeds), released_at=0.45)
+        self.assertIn("止まり 0.20〜0.35秒", line)
+        self.assertNotIn("0.50", line.split("止まり")[1].split("・")[0], "離した後の減速は止まりではない")
+
+    def test_stopped_until_release(self):
+        speeds = [6.6, 6.6, 0.1, 0.1, 0.1]
+        line = ActionExecutor.summarize_motion(self._series(speeds), released_at=0.2)
+        self.assertIn("止まり 0.10〜0.20秒", line)
+
+    def test_never_moving(self):
+        line = ActionExecutor.summarize_motion(self._series([0.0] * 10), released_at=0.3)
+        self.assertIn("距離 0.00・最高 0.00・動き出し なし・止まり なし", line)
+
+    def test_grounded_changes(self):
+        line = ActionExecutor.summarize_motion(
+            self._series([6.6] * 5, [True, True, False, False, True]), released_at=0.2)
+        self.assertIn("接地 0.10秒→0、0.20秒→1", line)
+
+    def test_the_series_is_capped_at_40(self):
+        line = ActionExecutor.summarize_motion(self._series([6.6] * 200), released_at=9.0)
+        self.assertEqual(line.split("速さ ")[1].count("6.6"), 40)
+
+    def test_no_speed_received(self):
+        self.assertEqual(ActionExecutor.summarize_motion([], 0.0), "実測なし（速さを受信していません）")
+        self.assertEqual(ActionExecutor.summarize_motion(self._series([None] * 5), 0.1),
+                         "実測なし（速さを受信していません）")
+
+    # ── 読み方 ──
+    def test_it_reads_every_0_05s_until_0_6s_after_release(self):
+        now = [0.0]
+        lines = []
+        receiver = type("R", (), {"speed": 6.6, "grounded_or_none": True})()
+        sampler = ActionExecutor.MotionSampler(receiver, lines.append, clock=lambda: now[0],
+                                               sleep=lambda s: now.__setitem__(0, now[0] + s))
+        sampler._started = 0.0                      # start は呼ばず（スレッドを使わず）、その場で回す
+        sampler._released = 1.0
+        sampler._run()
+        times = [t for t, _s, _g in sampler.samples]
+        self.assertAlmostEqual(times[1] - times[0], 0.05)
+        self.assertGreaterEqual(times[-1], 1.6 - 1e-9)
+        self.assertLess(times[-1], 1.6 + 0.05)
+        self.assertTrue(lines[-1].startswith("実測 距離 "), lines)
+
+    def test_no_receiver_writes_no_measure_at_release(self):
+        lines = []
+        sampler = ActionExecutor.MotionSampler(None, lines.append)
+        sampler.start()
+        self.assertIsNone(sampler.thread)
+        sampler.release()
+        self.assertEqual(lines, ["実測なし（速さを受信していません）"])
+
+    def _executor(self, receiver):
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, window_idx=1)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=123, osc_port=9000), st,
+                                           lambda: True, lambda _m: None)
+        ex._receiver = receiver
+        return ex, st
+
+    def _wait_for(self, write, text, sec=3.0):
+        deadline = time.time() + sec
+        while time.time() < deadline:
+            lines = [c.args[0] for c in write.call_args_list]
+            hit = [l for l in lines if text in l]
+            if hit:
+                return hit
+            time.sleep(0.02)
+        return []
+
+    def test_the_begin_move_logs_the_measure_and_keeps_its_length(self):
+        receiver = type("R", (), {"speed": 6.6, "grounded_or_none": True})()
+        ex, st = self._executor(receiver)
+        with patch.object(ex, "move_forward_left", return_value=True) as move, \
+             patch.object(ActionExecutor, "MOTION_TAIL_SEC", 0.1), \
+             patch.object(DebugLog, "write") as write:
+            ex._begin_move()
+            move.assert_called_once_with(config.BEGIN_FORWARD_SEC, config.BEGIN_LEFT_SEC)
+            hit = self._wait_for(write, "実測")
+        self.assertTrue(hit)
+        self.assertTrue(hit[0].startswith("[操作] [窓1] Begin前の移動: 実測 距離 "), hit)
+        self.assertIn("最高 6.60", hit[0])
+
+    def test_without_a_receiver_it_says_so(self):
+        ex, st = self._executor(None)
+        with patch.object(ex, "move_forward_left", return_value=True), \
+             patch.object(DebugLog, "write") as write:
+            ex._begin_move()
+        lines = [c.args[0] for c in write.call_args_list]
+        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速さを受信していません）", lines)
+
+    def test_a_failing_move_still_releases(self):
+        ex, st = self._executor(None)
+        with patch.object(ex, "move_forward_left", side_effect=RuntimeError("x")), \
+             patch.object(DebugLog, "write") as write:
+            with self.assertRaises(RuntimeError):
+                ex._begin_move()
+        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速さを受信していません）",
+                      [c.args[0] for c in write.call_args_list])
+
+    def test_the_move_of_the_second_press_logs_too(self):
+        receiver = type("R", (), {"speed": 6.6, "grounded_or_none": None})()
+        ex, st = self._executor(receiver)
+        with patch.object(ex, "move_forward_left", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=False), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ActionExecutor, "MOTION_TAIL_SEC", 0.1), \
+             patch.object(DebugLog, "write") as write:
+            ex.do_begin_again(3)
+            self.assertTrue(self._wait_for(write, "Begin前の移動: 実測"))
+
+
 class TestSuicideCancelCL(unittest.TestCase):
     """CL: 自爆キャンセルのキー（既定 ^）。押すと全部の窓の自爆を止め（長押し中はその場で離す・
     やり直さない）、そのラウンドはもう自爆しない（後のきっかけでも）。次のラウンドからは今どおり。
