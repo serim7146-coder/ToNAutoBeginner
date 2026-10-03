@@ -69,11 +69,28 @@ class OSCClient:
 
     def press(self, address: str, hold_sec: float) -> bool:
         """ボタン系入力を押して離す。0→1の変化で反応する入力があるため
-        押す前に0を送ってから1にする。"""
+        押す前に0を送ってから1にする。押している間は 1 を送り直す（_hold_and_release）"""
         ok = self.send(address, 0)
         ok = self.send(address, 1) and ok
-        time.sleep(max(0.0, hold_sec))
-        return self.send(address, 0) and ok
+        return self._hold_and_release([(address, time.time() + max(0.0, hold_sec))]) and ok
+
+    def _hold_and_release(self, ends) -> bool:
+        """ends は [(アドレス, 離す時刻)]。離す時刻の早い順に 0 を送る。待つ間は OSC_HOLD_RESEND_SEC ごとに、
+        まだ押しているアドレスへ 1 を送り直す（DB。押している途中で VRChat 側で入力が消えて止まることが
+        あった。途中で消えても次の送り直しで戻る）。離す時刻は送り直しで変わらない"""
+        ok = True
+        ends = sorted(ends, key=lambda e: e[1])
+        for i, (address, end) in enumerate(ends):
+            while True:
+                remain = end - time.time()
+                if remain <= 0:
+                    break
+                time.sleep(min(remain, config.OSC_HOLD_RESEND_SEC))
+                if time.time() < end:
+                    for held, _end in ends[i:]:     # まだ離していないもの
+                        ok = self.send(held, 1) and ok
+            ok = self.send(address, 0) and ok
+        return ok
 
     def press_multi(self, holds) -> bool:
         """複数の入力を同時に押し、それぞれの秒数で個別に離す。
@@ -95,12 +112,7 @@ class OSCClient:
         for address, _ in holds:
             ok = self.send(address, 1) and ok
         start = time.time()
-        for address, sec in sorted(holds, key=lambda h: h[1]):
-            remain = sec - (time.time() - start)
-            if remain > 0:
-                time.sleep(remain)
-            ok = self.send(address, 0) and ok
-        return ok
+        return self._hold_and_release([(address, start + sec) for address, sec in holds]) and ok
 
     def move_forward(self, sec: float) -> bool:
         return self.press("/input/MoveForward", sec)

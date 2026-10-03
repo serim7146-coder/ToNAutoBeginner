@@ -307,6 +307,8 @@ BEGIN_USE_SPAM_START_SEC = 12.9
 BEGIN_USE_PULSE_SEC    = 0.025
 # 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔（CS）
 BEGIN_USE_REACH_CHECK_SEC = 0.5
+# OSC で押している間、1 を送り直す間隔（DB。途中で VRChat 側で入力が消えて止まることがあった）
+OSC_HOLD_RESEND_SEC = 0.1
 # カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
 BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
 BEGIN_CURSOR_GAP_SEC   = 0.3        # 置けなかったときに、次を試すまでの間

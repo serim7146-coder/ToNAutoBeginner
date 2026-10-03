@@ -374,10 +374,13 @@ class TestOSCClient(unittest.TestCase):
         """0→1→0 で送る。0から1への変化で反応する入力があるため"""
         client = OSCClient.OSCClient(9000)
         sent = []
+        now = [1000.0]
         with patch.object(client, "send", side_effect=lambda a, v: sent.append((a, v)) or True), \
-             patch.object(OSCClient.time, "sleep"):
+             patch.object(OSCClient.time, "time", side_effect=lambda: now[0]), \
+             patch.object(OSCClient.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)):
             client.press("/input/MoveForward", 0.5)
-        self.assertEqual([v for _a, v in sent], [0, 1, 0])
+        # DB: 押している間は 0.1 秒ごとに 1 を送り直す（0.1・0.2・0.3・0.4 の4回）
+        self.assertEqual([v for _a, v in sent], [0, 1, 1, 1, 1, 1, 0])
 
     def test_launch_args_include_osc_when_index_given(self):
         args = VRChatLauncher.build_launch_args(
@@ -17700,6 +17703,64 @@ class TestEquipGreenCenterDA(unittest.TestCase):
         line = [m for m in self.logs if "クリック" in m][0]
         self.assertNotIn("緑の文字", line)
         self.assertIn("ずれ 横 0.0・縦 0.0", line, "店のボタンは座標のまま")
+
+
+class TestOscHoldResendDB(unittest.TestCase):
+    """DB: OSC で押している間、まだ押しているアドレスへ 1 を OSC_HOLD_RESEND_SEC ごとに送り直す。
+    押す長さ・最初の 0→1・最後の 0 は今どおり（偽の送信と時計）"""
+
+    def _client(self):
+        client = OSCClient.OSCClient(9000)
+        self.addCleanup(client.close)
+        self.sent = []
+        self.now = [1000.0]
+        for p in (patch.object(client, "send", side_effect=lambda a, v: self.sent.append(
+                      (round(self.now[0] - 1000.0, 3), a.split("/")[-1], v)) or True),
+                  patch.object(OSCClient.time, "time", side_effect=lambda: self.now[0]),
+                  patch.object(OSCClient.time, "sleep",
+                               side_effect=lambda s: self.now.__setitem__(0, self.now[0] + s))):
+            p.start()
+            self.addCleanup(p.stop)
+        return client
+
+    def test_the_interval(self):
+        self.assertEqual(config.OSC_HOLD_RESEND_SEC, 0.1)
+
+    def test_press_resends_and_keeps_its_length(self):
+        client = self._client()
+        self.assertTrue(client.press("/input/MoveForward", 2.08))
+        self.assertEqual(self.sent[:2], [(0.0, "MoveForward", 0), (0.0, "MoveForward", 1)], "最初の 0→1")
+        resends = self.sent[2:-1]
+        self.assertEqual([t for t, _a, _v in resends], [round(0.1 * k, 3) for k in range(1, 21)],
+                         "0.1 秒ごと（2.0 秒まで）")
+        self.assertTrue(all(v == 1 for _t, _a, v in resends))
+        self.assertEqual(self.sent[-1], (2.08, "MoveForward", 0), "2.08 秒で離す（長さは変わらない）")
+
+    def test_press_multi_stops_resending_what_was_released(self):
+        client = self._client()
+        self.assertTrue(client.press_multi([("/input/MoveForward", 2.08), ("/input/MoveLeft", 0.15)]))
+        self.assertEqual(self.sent[:4], [(0.0, "MoveForward", 0), (0.0, "MoveLeft", 0),
+                                         (0.0, "MoveForward", 1), (0.0, "MoveLeft", 1)])
+        self.assertIn((0.1, "MoveForward", 1), self.sent)
+        self.assertIn((0.1, "MoveLeft", 1), self.sent, "左も離すまでは送り直す")
+        self.assertIn((0.15, "MoveLeft", 0), self.sent, "0.15 秒で左を離す")
+        after = [s for s in self.sent if s[0] > 0.15]
+        self.assertTrue(after)
+        self.assertFalse([s for s in after if s[1] == "MoveLeft"], "離した左は送り直さない")
+        self.assertEqual(after[-1], (2.08, "MoveForward", 0))
+        forward = [t for t, a, v in after[:-1] if a == "MoveForward" and v == 1]
+        self.assertEqual(forward, [round(0.25 + 0.1 * k, 3) for k in range(19)], "左を離した後も 0.1 秒ごと")
+
+    def test_a_short_pulse_is_not_resent(self):
+        client = self._client()
+        client.press("/input/UseRight", 0.025)
+        self.assertEqual([v for _t, _a, v in self.sent], [0, 1, 0])
+
+    def test_no_resend_after_the_release_time(self):
+        client = self._client()
+        client.press("/input/MoveForward", 0.3)
+        self.assertEqual([(t, v) for t, _a, v in self.sent],
+                         [(0.0, 0), (0.0, 1), (0.1, 1), (0.2, 1), (0.3, 0)], "離す時刻ちょうどには送り直さない")
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
