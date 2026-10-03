@@ -11279,31 +11279,56 @@ class TestContinueRoundFocus(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round, "続行の判定自体は通る")
         focus.assert_not_called()
 
-    def test_another_windows_speed_freeze_blocks_it(self):
-        """8 Pages の検知でフリーズしている窓の前面を奪わない（実機で出た経路）"""
+    def test_another_windows_speed_freeze_does_not_block_it(self):
+        """CZ: 続行ラウンドは何よりも優先して前面化する（速度検知のフリーズでは止めない）"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.SPEED_FREEZE_EVENT.clear()
 
         focus = self._judge(monitor)
 
-        focus.assert_not_called()
+        focus.assert_called_once_with(777)
 
-    def test_another_windows_equip_wait_blocks_it(self):
+    def test_another_windows_equip_wait_does_not_block_it(self):
+        """CZ: 窓6 22:23 の並び（ほかの窓が装備待ち）でもすぐ前面化する"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.EQUIP_WAIT_EVENT.clear()
 
         focus = self._judge(monitor)
 
-        focus.assert_not_called()
+        focus.assert_called_once_with(777)
 
-    def test_a_round_freeze_blocks_it(self):
-        """ラウンド突入での全窓停止。霧はこちら側"""
+    def test_a_round_freeze_does_not_block_it(self):
+        """CZ: ラウンド突入のフリーズでも止めない"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.ROUND_FREEZE_EVENT.clear()
 
         focus = self._judge(monitor)
 
+        focus.assert_called_once_with(777)
+
+    def test_another_windows_continue_round_blocks_it(self):
+        """CZ: 止めるのは、ほかの窓が続行ラウンドをやっているときだけ（今どおり前面化しない）"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        other = WindowState()
+        SharedState.continue_round_start(other)
+        self.addCleanup(SharedState.continue_round_reset)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+
+        focus = self._judge(monitor)
+
         focus.assert_not_called()
+        self.assertTrue(any("ほかの窓が続行ラウンド中なので前面化しません" in m for m in monitor.logs))
+
+    def test_the_round_freeze_focus_still_waits_for_other_freezes(self):
+        """続行ラウンドでない前面化（ラウンド突入フリーズ）は今どおり、ほかの窓のフリーズ中は奪わない"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        SharedState.EQUIP_WAIT_EVENT.clear()
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        with patch.object(monitor, "_start_daemon") as start:
+            monitor._focus_for_freeze("ラウンド突入フリーズ")
+        start.assert_not_called()
 
     # ── 7〜8. 放置モードとスキップ ───────────────────
     def test_hands_free_does_not_focus(self):
@@ -18153,6 +18178,233 @@ class TestEquipPredictDD(unittest.TestCase):
         f.locate = lambda _i, _p: (self.AIM[0], self.AIM[1], 0.5, 0.5, 30)
         self.assertTrue(f.aim_click("Survival"))
         self.assertIsNone(f.equip_hint)
+
+
+class TestFetchYieldCZ(unittest.TestCase):
+    """CZ: 自動取得は、ほかの窓の続行・速度検知・突入のフリーズが張られたらその場でやめる（frozen）。
+    マウスを送る前・クリックの前に前面がこの窓かを確かめ、違えばやめる（front_lost）。戻せなかった縦の視点は、
+    次にツールがこの窓を前面にしたとき最初に戻す"""
+
+    HWND = 0x55
+    AIM = (960.0, 540.0)
+
+    def setUp(self):
+        for reset in (SharedState.equip_freeze_reset, SharedState.continue_round_reset,
+                      SharedState.speed_freeze_reset, SharedState.round_freeze_reset):
+            reset()
+            self.addCleanup(reset)
+        SharedState.set_item_fetch_gain(None)
+        self.addCleanup(SharedState.set_item_fetch_gain, None)
+        self.front = {"hwnd": self.HWND}
+        self.sent = []
+        self.clicks = []
+        self.world = {"mouse": [0, 0]}
+
+        def move(dx, dy):
+            self.sent.append((dx, dy))
+            self.world["mouse"][0] += dx
+            self.world["mouse"][1] += dy
+            if self.on_move:
+                self.on_move(len(self.sent))
+        self.on_move = None
+        for p in (patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front["hwnd"]),
+                  patch.object(ActionExecutor._FetchMouse, "move_rel", side_effect=move),
+                  patch.object(ActionExecutor._FetchMouse, "click", side_effect=lambda: self.clicks.append(1)),
+                  patch.object(ActionExecutor.time, "sleep"),
+                  patch.object(ItemFetch.time, "sleep")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _executor(self):
+        cfg = WindowConfig(hwnd=self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, window_idx=3,
+                         item_id=0, waiting_for_equip=True)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None,
+                                           auto_begin_active=lambda: True)
+        ex._osc.stop_all = lambda repeat=2: None
+        return ex, st
+
+    @staticmethod
+    def _other_continue():
+        SharedState.continue_round_start(WindowState())
+
+    # ── 1・2. ほかの窓のフリーズで止まる・前面化しない ──
+    def test_window_3_stops_when_another_window_starts_a_continue_round(self):
+        """窓3 22:23: 取得の移動中にほかの窓の続行フリーズ → 前面化しない・マウスを送らない・frozen"""
+        ex, st = self._executor()
+
+        def move(fetcher):
+            self._other_continue()          # 窓6 が続行ラウンド
+            fetcher._check()
+            return True
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, side_effect=move), \
+             patch.object(ex, "_borrow_front") as borrow, \
+             patch.object(PlaySound, "play_sound") as sound, \
+             patch.object(DebugLog, "write") as write:
+            self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "frozen")
+        borrow.assert_not_called()
+        sound.assert_not_called()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.clicks, [])
+        self.assertTrue(any("結果 frozen" in c.args[0] for c in write.call_args_list))
+
+    def test_a_freeze_while_waiting_for_the_lock_does_not_front(self):
+        ex, st = self._executor()
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True,
+                          side_effect=lambda f: self._other_continue() or True), \
+             patch.object(ex, "_borrow_front") as borrow:
+            self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "frozen")
+        borrow.assert_not_called()
+
+    def test_speed_and_round_freezes_stop_it_too(self):
+        for start in (SharedState.speed_freeze_start, SharedState.round_freeze_start):
+            SharedState.speed_freeze_reset()
+            SharedState.round_freeze_reset()
+            ex, st = self._executor()
+            start(WindowState())
+            self.assertEqual(ex._fetch_stopped(st.round_seq, time.time() + 10), "frozen", start.__name__)
+
+    def test_its_own_equip_wait_does_not_stop_it(self):
+        ex, st = self._executor()
+        SharedState.equip_freeze_start(st)
+        self.assertIsNone(ex._fetch_stopped(st.round_seq, time.time() + 10))
+
+    def test_frozen_gives_no_notice(self):
+        ex, st = self._executor()
+        st.in_round = False
+        st.round_end_seen = True
+        SharedState.set_item_fetch(True)
+        self.addCleanup(SharedState.set_item_fetch, False)
+
+        def press(*_a, **_kw):
+            st.begin_done = True
+            return True
+
+        def fetch(*_a):
+            st.waiting_for_equip = False
+            return "frozen"
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), patch.object(config, "ITEMS",
+                                                                     {29: ItemCatalog.Item("T", "Survival", True)}), \
+             patch.object(ex, "_begin_move"), patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_fetch_item", side_effect=fetch), \
+             patch.object(ex, "_attend_to_item_loss") as attend, \
+             patch.object(PlaySound, "play_sound"):
+            st.last_lost_item_id = 29
+            ex.do_after_round()
+        attend.assert_not_called()
+
+    # ── 3. 照準合わせの途中 ──
+    def _aiming(self, start=(1500.0, 300.0)):
+        """前面だけ確かめるマウスで店のボタンを合わせる Fetcher（照準から遠いので何回も動かす）"""
+        ex, st = self._executor()
+        deadline = time.time() + 10
+
+        def locate(_img, _pt):
+            return (start[0] - 0.9 * self.world["mouse"][0], start[1] - 0.55 * self.world["mouse"][1], 1.0, 1.0)
+        f = ItemFetch.Fetcher(
+            osc=MagicMock(), grounded=lambda: True, capture=lambda: ("shot", self.AIM),
+            mouse=ActionExecutor._FrontOnlyMouse(self.HWND, lambda: ex._fetch_stopped(st.round_seq, deadline)),
+            equip_seen=lambda: (0, 0), stopped=lambda: ex._fetch_stopped(st.round_seq, deadline),
+            log=lambda _m: None, locate_fn=locate)
+        f.aimer = ItemFetch.Aimer((0.9, 0.55))
+        return f
+
+    def test_a_continue_freeze_while_aiming_sends_no_more(self):
+        f = self._aiming()
+        self.on_move = lambda n: self._other_continue() if n == 2 else None
+        with self.assertRaises(ItemFetch.Stopped) as caught:
+            f.aim_click("Survival")
+        self.assertEqual(caught.exception.args[0], "frozen")
+        self.assertEqual(len(self.sent), 2, "次のマウスを送らない")
+        self.assertEqual(self.clicks, [])
+
+    def test_losing_the_front_while_aiming_sends_no_more(self):
+        f = self._aiming()
+        self.on_move = lambda n: self.front.update(hwnd=0x66) if n == 2 else None
+        with self.assertRaises(ItemFetch.Stopped) as caught:
+            f.aim_click("Survival")
+        self.assertEqual(caught.exception.args[0], "front_lost")
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.clicks, [])
+
+    def test_no_click_without_the_front(self):
+        f = self._aiming(start=self.AIM)            # もう合っている
+        self.front["hwnd"] = 0x66
+        with self.assertRaises(ItemFetch.Stopped):
+            f.aim_click("Survival")
+        self.assertEqual(self.clicks, [], "クリックも送らない")
+
+    def test_the_equip_aim_by_hint_is_guarded_too(self):
+        f = self._aiming()
+        f.equip_hint = {"d": (300.0, 0.0), "scale": (1.0, 1.0)}
+        self.on_move = lambda n: self.front.update(hwnd=0x66) if n == 1 else None
+        with self.assertRaises(ItemFetch.Stopped):
+            f.aim_click("Equip")
+        self.assertEqual(len(self.sent), 1)
+
+    # ── 4. 戻せなかった縦の視点 ──
+    def test_the_vertical_view_left_behind_is_restored_on_the_next_front(self):
+        ex, st = self._executor()
+
+        def buy(fetcher, shop, item_id):
+            for _ in range(3):
+                fetcher.mouse.move_rel(6, -6)           # 縦 -18 送った
+            fetcher.mouse.move_rel(0, -2)
+            self.front["hwnd"] = 0x66                   # 人がほかの窓へ
+            return True
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"):
+            ex._fetch_item(st.round_seq, "Survival", 29)
+        self.assertEqual(ex._pending_view_dy, 20)
+        self.sent.clear()
+        self.front["hwnd"] = self.HWND
+        with patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(DebugLog, "write") as write:
+            ex._borrow_front()                          # 次にこの窓を前面にした（Begin のクリックなど）
+            first = list(self.sent)
+            ex._borrow_front()
+        self.assertEqual(first, [(0, 5)] * 4, "最初に縦だけ戻す（6px 以下の刻み）")
+        self.assertEqual(self.sent, first, "2回目は戻さない（もう覚えていない）")
+        self.assertEqual(ex._pending_view_dy, 0)
+        self.assertIn("[操作] [窓3] アイテム取得: 残っていた縦の視点を戻した（縦 20）",
+                      [c.args[0] for c in write.call_args_list])
+
+    def test_a_restored_view_leaves_nothing_behind(self):
+        ex, st = self._executor()
+
+        def buy(fetcher, shop, item_id):
+            fetcher.mouse.move_rel(0, -12)
+            return True
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"):
+            ex._fetch_item(st.round_seq, "Survival", 29)
+        self.assertEqual(ex._pending_view_dy, 0, "前面のまま戻せたので覚えない")
+        self.assertEqual(sum(dy for _dx, dy in self.sent), 0)
+
+    def test_a_frozen_fetch_still_restores_the_view_when_in_front(self):
+        ex, st = self._executor()
+
+        def buy(fetcher, shop, item_id):
+            fetcher.mouse.move_rel(0, -12)
+            self._other_continue()
+            fetcher._check()
+            return True
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"):
+            self.assertEqual(ex._fetch_item(st.round_seq, "Survival", 29), "frozen")
+        self.assertEqual(sum(dy for _dx, dy in self.sent), 0, "止まった後でも、前面なら縦は戻す")
+        self.assertEqual(ex._pending_view_dy, 0)
 
 
 class TestSuicideBackgroundRouting(unittest.TestCase):
@@ -25106,10 +25358,10 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         self.assertEqual(order[-1], "give back")
 
     def test_not_in_front_does_not_send_the_view_back(self):
-        """窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らない"""
+        """窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らない（CZ: 最初の1通から送らない）"""
         outcome, order, _ = self._run(lambda f: self._moves(f, raise_as="stopped"), foreground=False)
-        self.assertEqual(outcome, "stopped")
-        self.assertEqual(len([m for m in order if m != "give back"]), 6, "戻しは送らない")
+        self.assertEqual(outcome, "front_lost")
+        self.assertEqual([m for m in order if m != "give back"], [], "マウスは1通も送らない")
 
     def test_a_stop_while_moving_sends_nothing_back(self):
         outcome, order, osc_sent = self._run(lambda f: True, move_raises="round")

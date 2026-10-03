@@ -85,6 +85,7 @@ class ActionExecutor:
         # ツールが Begin を押している窓か。判定は LogMonitor が持つ（書き写さない）。
         # 渡されなければ「機能していない」＝速度検知の音声は鳴らす側
         self._auto_begin_active = auto_begin_active or (lambda: False)
+        self._pending_view_dy = 0   # 戻せなかった縦の視点（次に前面にしたとき戻す。CZ）
         # アイテムロストの前面化＋音声を見張っているラウンド（二重に立てない）
         self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
@@ -324,9 +325,21 @@ class ActionExecutor:
         ok, loan = WindowOperator.borrow_front(hwnd)
         if ok:
             self._log(f"フォーカス切替 → HWND={hwnd:#010x}")
+            self._restore_pending_view()
         else:
             self._log(f"⚠ フォーカス取得失敗 HWND={hwnd:#010x} → 操作を中止")
         return ok, loan
+
+    def _restore_pending_view(self):
+        """前に無くて戻せなかった縦の視点（アイテム取得）を、前面にした直後に何より先に戻す（CZ）"""
+        dy, self._pending_view_dy = self._pending_view_dy, 0
+        if not dy:
+            return
+        mouse = _FetchMouse()
+        for sx, sy in ItemFetch.split_move(0, dy):
+            mouse.move_rel(sx, sy)
+            time.sleep(ItemFetch.STEP_SEC)
+        DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: 残っていた縦の視点を戻した（縦 {dy}）")
 
     # ── 自爆 ──────────────────────────────────
 
@@ -1283,6 +1296,11 @@ class ActionExecutor:
             return "round"
         if st.item_id and not st.waiting_for_equip:
             return "equipped"               # 手で装備した
+        _eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
+        if not (con_ok and spd_ok and rnd_ok):
+            # ほかの窓の続行ラウンド・速度検知・突入のフリーズ（CZ）。その窓を人が操作し始めるので手を引く。
+            # 装備待ちは自分の取得のためのものなので見ない
+            return "frozen"
         if time.time() > deadline:
             return "timeout"
         return None
@@ -1308,7 +1326,8 @@ class ActionExecutor:
             return np.ascontiguousarray(bgra[:, :, :3]), aim
 
         fetcher = ItemFetch.Fetcher(
-            osc=self._osc, grounded=grounded, capture=capture, mouse=_FetchMouse(),
+            osc=self._osc, grounded=grounded, capture=capture,
+            mouse=_FrontOnlyMouse(self._cfg.hwnd, lambda: self._fetch_stopped(round_seq, deadline)),
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
             stopped=lambda: self._fetch_stopped(round_seq, deadline),
             log=lambda m: DebugLog.write(f"{head} {m}"),
@@ -1333,7 +1352,9 @@ class ActionExecutor:
             self._log("アイテム取得: 装備できました")
         elif outcome != "equipped":
             why = {"failed": "取れませんでした", "timeout": f"{config.ITEM_FETCH_LIMIT_SEC:.0f}秒で間に合いません",
-                   "round": "ラウンドが始まりました", "stopped": "停止しました"}.get(outcome, outcome)
+                   "round": "ラウンドが始まりました", "stopped": "停止しました",
+                   "frozen": "ほかの窓がフリーズしました",
+                   "front_lost": "この窓が前面でなくなりました"}.get(outcome, outcome)
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
 
@@ -1364,13 +1385,18 @@ class ActionExecutor:
                 # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。
                 # 窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らないよう戻さない
                 try:
+                    fetcher.mouse.inner.restoring = True   # 止まった後でも、前面なら視点は戻す
                     if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
                         fetcher.restore_view()
                     elif fetcher.mouse.total != [0, 0]:
                         DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: "
                                        f"窓が前に無いので視点を戻せません（{fetcher.mouse.total}）")
+                except ItemFetch.Stopped:
+                    pass                            # 戻す途中で前面でなくなった（残りは下で覚える）
                 except Exception:
                     DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
+                # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す（CZ）
+                self._pending_view_dy += -fetcher.mouse.total[1]
                 WindowOperator.return_front(loan)
 
     # ── 速度によるラウンド種別の検知 ────────────
@@ -1734,3 +1760,29 @@ class MotionSampler:
             self._write(summarize_motion(self.samples, released - self._started))
         except Exception:
             DebugLog.exception("ActionExecutor.MotionSampler")
+
+
+class _FrontOnlyMouse(_FetchMouse):
+    """アイテム取得のマウス。送る前・クリックの前に前面がこの窓かを確かめ、違えば送らずにやめる（CZ）。
+    相対移動とクリックは前面の窓に届くので、ほかの窓（人が操作している続行ラウンドなど）の視点を回さない"""
+
+    def __init__(self, hwnd: int, stopped=None):
+        self._hwnd = hwnd
+        self._stopped = stopped     # 送る前にも止まる条件（ほかの窓のフリーズなど）を見る
+        self.restoring = False      # 視点を戻すときは、止まる条件は見ない（前面かだけ見る）
+
+    def _check_front(self):
+        if self._stopped is not None and not self.restoring:
+            reason = self._stopped()
+            if reason:
+                raise ItemFetch.Stopped(reason)
+        if WindowOperator.foreground_hwnd() != self._hwnd:
+            raise ItemFetch.Stopped("front_lost")
+
+    def move_rel(self, dx: int, dy: int):
+        self._check_front()
+        _FetchMouse.move_rel(dx, dy)
+
+    def click(self):
+        self._check_front()
+        _FetchMouse.click()

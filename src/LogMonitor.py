@@ -226,7 +226,14 @@ class LogMonitor:
             # 人が見ていないので意味が無く、ほかの窓のカーソル方式 Begin の
             # 邪魔になる。アナウンスと録画と同じ扱い
             return
-        if not SharedState.nothing_frozen():
+        if label == "続行ラウンド":
+            # 続行ラウンドは何よりも優先して前面化する（依頼者。CZ）。止めるのは、ほかの窓が続行ラウンドを
+            # やっているときだけ（装備待ち・速度検知・突入のフリーズでは止めない。ほかの窓のアイテム取得は
+            # 続行のフリーズを見て手を引く）。数える前に呼ぶので自分の分は入っていない
+            if SharedState.get_continue_round_count() > 0:
+                self._log("ほかの窓が続行ラウンド中なので前面化しません")
+                return
+        elif not SharedState.nothing_frozen():
             # フリーズを張った窓を操作している最中に前面を奪わない。種別は
             # 問わない（依頼者の指摘。続行フリーズだけ見ると 8 Pages の最中に奪う）。
             # 自分が張っているときも、自分の分で False になる
