@@ -195,6 +195,22 @@ class Aimer:
 
 # ── 取りに行く ──────────────────────────────────
 
+class CountingMouse:
+    """送ったマウスの相対移動の合計（横・縦）を数える（終わったら逆向きに送って視点を戻すため。CN）"""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.total = [0, 0]
+
+    def move_rel(self, dx: int, dy: int):
+        self.inner.move_rel(dx, dy)
+        self.total[0] += dx
+        self.total[1] += dy
+
+    def click(self):
+        self.inner.click()
+
+
 class Stopped(Exception):
     """ラウンド開始・停止・時間切れ（理由は args[0]）"""
 
@@ -214,17 +230,18 @@ class Fetcher:
     """
 
     def __init__(self, osc, grounded, capture, mouse, equip_seen, stopped, log,
-                 locate_fn=locate, sleep=time.sleep, clock=time.time, saved_gain=None):
+                 locate_fn=locate, sleep=None, clock=None, saved_gain=None):
         self.osc = osc
         self.grounded = grounded
         self.capture = capture
-        self.mouse = mouse
+        self.mouse = CountingMouse(mouse)   # 測りと照準合わせの動きを全部数える
+        self.turned_sec = 0.0               # LookLeft を押していた秒数（終わったら LookRight で戻す）
         self.equip_seen = equip_seen
         self.stopped = stopped
         self.log = log
         self.locate = locate_fn
-        self.sleep = sleep
-        self.clock = clock
+        self.sleep = sleep or time.sleep
+        self.clock = clock or time.time
         self.saved_gain = saved_gain
         self.aimer = None           # calibrate で作る
 
@@ -279,12 +296,37 @@ class Fetcher:
             self.osc.send("/input/MoveBackward", 0)
             self.osc.send("/input/MoveLeft", 0)
             self.osc.send("/input/LookLeft", 1)
-            self._wait(TURN_SEC)
-            self.osc.send("/input/LookLeft", 0)
+            turn_started = self.clock()
+            try:
+                self._wait(TURN_SEC)
+            finally:
+                self.osc.send("/input/LookLeft", 0)
+                self.turned_sec = self.clock() - turn_started
             self.log(f"アイテム取得: 店の前に着いた {self.clock() - started:.2f}秒")
             return True
         finally:
             self.osc.stop_all(repeat=1)         # 途中でやめても押したままにしない
+
+    # ── 視点を戻す（CN。どの終わり方でも）──
+    def restore_view(self):
+        """送ったマウスの相対移動の合計を逆向きに、同じ刻み（6px・25ms）で送って戻す。止めない"""
+        dx, dy = -self.mouse.total[0], -self.mouse.total[1]
+        if not dx and not dy:
+            return
+        for sx, sy in split_move(dx, dy):
+            self.mouse.move_rel(sx, sy)
+            self.sleep(STEP_SEC)
+        self.log(f"アイテム取得: 視点を戻した（横 {dx}・縦 {dy}）")
+
+    def restore_turn(self):
+        """左へ回した分を LookRight で同じ秒数だけ戻す（出現で向きがそろうか確かめられないため）"""
+        sec, self.turned_sec = self.turned_sec, 0.0
+        if sec <= 0:
+            return
+        self.osc.send("/input/LookRight", 1)
+        self.sleep(sec)
+        self.osc.send("/input/LookRight", 0)
+        self.log(f"アイテム取得: 向きを戻した（LookRight {sec:.2f}秒）")
 
     # ── 3. 照準合わせとクリック ──
     def aim_click(self, name: str) -> bool:

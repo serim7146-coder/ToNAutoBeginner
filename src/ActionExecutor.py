@@ -1292,6 +1292,10 @@ class ActionExecutor:
             DebugLog.exception("ActionExecutor._fetch_item")
             outcome = "failed"
         finally:
+            try:
+                fetcher.restore_turn()          # 左へ回した分を戻す（どの終わり方でも）
+            except Exception:
+                DebugLog.exception("ActionExecutor._fetch_item.restore_turn")
             if self._osc is not None:
                 self._osc.stop_all(repeat=1)
         DebugLog.write(f"{head} アイテム取得: 結果 {outcome}")
@@ -1317,6 +1321,16 @@ class ActionExecutor:
                     SharedState.set_item_fetch_gain(fetcher.aimer.gain)   # 次回の測りに使う（保存）
                 return "ok"
             finally:
+                # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。
+                # 窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らないよう戻さない
+                try:
+                    if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
+                        fetcher.restore_view()
+                    elif fetcher.mouse.total != [0, 0]:
+                        DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: "
+                                       f"窓が前に無いので視点を戻せません（{fetcher.mouse.total}）")
+                except Exception:
+                    DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
                 WindowOperator.return_front(loan)
 
     # ── 速度によるラウンド種別の検知 ────────────

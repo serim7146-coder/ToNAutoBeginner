@@ -23780,6 +23780,193 @@ class TestItemFetchCM(unittest.TestCase):
         self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_FILE))).is_file())
 
 
+class TestItemFetchViewRestoreCN(unittest.TestCase):
+    """CN: 自動取得の後、送ったマウスの相対移動の合計（測り・照準合わせ）を逆向きに同じ刻み（6px・25ms）で
+    送って視点を戻す（成功・失敗・時間切れ・ラウンド開始・停止のどれでも）。前面を返す前・排他の中。
+    左へ回した分は LookRight で同じ秒数戻す"""
+
+    def setUp(self):
+        self.now = [0.0]
+        SharedState.set_item_fetch_gain(None)
+        self.addCleanup(SharedState.set_item_fetch_gain, None)
+
+    def _sleep(self, sec):
+        self.now[0] += sec
+
+    # ── ItemFetch ──
+    def _fetcher(self, locate, mouse, osc=None, grounded=lambda: True):
+        self.logs = []
+        return ItemFetch.Fetcher(
+            osc=osc or MagicMock(), grounded=grounded, capture=lambda: ("shot", (960.0, 540.0)),
+            mouse=mouse, equip_seen=lambda: (0, 0), stopped=lambda: None, log=self.logs.append,
+            locate_fn=locate, sleep=self._sleep, clock=lambda: self.now[0])
+
+    def test_the_measure_and_the_aim_are_both_sent_back(self):
+        world = {"mouse": [0, 0]}
+
+        def locate(_img, _pt):
+            return (1300.0 - 0.9 * world["mouse"][0], 300.0 - 0.55 * world["mouse"][1])
+        mouse = TestItemFetchCM.FakeMouse(world)
+        f = self._fetcher(locate, mouse)
+        self.assertTrue(f.calibrate("Survival"))
+        self.assertTrue(f.aim_click("Survival"))
+        sent = (sum(dx for dx, _ in mouse.moves), sum(dy for _, dy in mouse.moves))
+        self.assertNotEqual(sent, (0, 0))
+        self.assertEqual(tuple(f.mouse.total), sent, "測りの動きも数える")
+        before = len(mouse.moves)
+        f.restore_view()
+        back = mouse.moves[before:]
+        self.assertEqual((sum(dx for dx, _ in back), sum(dy for _, dy in back)), (-sent[0], -sent[1]))
+        self.assertTrue(all(abs(dx) <= 6 and abs(dy) <= 6 for dx, dy in back), "6px 刻み")
+        self.assertEqual(world["mouse"], [0, 0], "元の視点")
+        self.assertIn(f"アイテム取得: 視点を戻した（横 {-sent[0]}・縦 {-sent[1]}）", self.logs)
+
+    def test_the_steps_are_25ms_apart(self):
+        mouse = TestItemFetchCM.FakeMouse()
+        f = self._fetcher(lambda *_: None, mouse)
+        f.mouse.move_rel(24, -12)
+        self.now[0] = 0.0
+        f.restore_view()
+        self.assertEqual(mouse.moves[1:], [(-6, 3)] * 4)
+        self.assertAlmostEqual(self.now[0], 4 * 0.025)
+
+    def test_nothing_sent_nothing_back(self):
+        mouse = TestItemFetchCM.FakeMouse()
+        f = self._fetcher(lambda *_: None, mouse)
+        f.restore_view()
+        self.assertEqual(mouse.moves, [])
+        self.assertEqual(self.logs, [])
+
+    def _turning(self, stop_at=None):
+        osc = TestItemFetchCM.FakeOsc(self)
+        f = self._fetcher(lambda *_: None, TestItemFetchCM.FakeMouse(), osc=osc,
+                          grounded=lambda: TestItemFetchCM._two_landings(self.now[0]))
+        if stop_at is not None:
+            f.stopped = lambda: "round" if self.now[0] >= stop_at else None
+        try:
+            f.move_to_shop()
+        except ItemFetch.Stopped:
+            pass
+        return f, osc
+
+    def test_the_turn_is_turned_back_with_look_right(self):
+        f, osc = self._turning()
+        self.assertAlmostEqual(f.turned_sec, 0.5)
+        osc.sent.clear()
+        f.restore_turn()
+        self.assertEqual([(a, v) for _t, a, v in osc.sent], [("/input/LookRight", 1), ("/input/LookRight", 0)])
+        self.assertAlmostEqual(osc.sent[1][0] - osc.sent[0][0], 0.5, places=6)
+        f.restore_turn()
+        self.assertEqual(len(osc.sent), 2, "2回は戻さない")
+
+    def test_a_stop_during_the_turn_still_counts_the_turn(self):
+        f, osc = self._turning(stop_at=2.2)             # 回し始め 1.95 → 2.45 の途中で止める合図
+        self.assertIn(("/input/LookLeft", 0), [(a, v) for _t, a, v in osc.sent], "離す")
+        self.assertAlmostEqual(f.turned_sec, 0.5, msg="押していた秒数だけ戻す")
+
+    def test_no_turn_no_turning_back(self):
+        f, osc = self._turning(stop_at=1.0)             # 柵の前でやめた
+        self.assertEqual(f.turned_sec, 0.0)
+        osc.sent.clear()
+        f.restore_turn()
+        self.assertEqual(osc.sent, [])
+
+    # ── 組み込み（ActionExecutor）──
+    def _run(self, buy_does, foreground=True, move_raises=None):
+        """buy_does(fetcher) を店で行う。送ったマウス・戻したマウス・前面を返した順を見る"""
+        SharedState.set_item_fetch(True)
+        self.addCleanup(SharedState.set_item_fetch, False)
+        cfg = WindowConfig(hwnd=0x55, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, window_idx=2,
+                         item_id=0, waiting_for_equip=True)
+        ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None,
+                                           auto_begin_active=lambda: True)
+        order = []
+
+        def move(fetcher):
+            fetcher.turned_sec = 0.5            # 左へ回した
+            if move_raises:
+                raise ItemFetch.Stopped(move_raises)
+            return True
+
+        def buy(fetcher, shop, item_id):
+            return buy_does(fetcher)
+
+        osc_sent = []
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, side_effect=move), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(ActionExecutor._FetchMouse, "move_rel",
+                          side_effect=lambda dx, dy: order.append(("mouse", dx, dy))), \
+             patch.object(ex, "_borrow_front", return_value=(True, "loan")), \
+             patch.object(WindowOperator, "foreground_hwnd", return_value=0x55 if foreground else 0x99), \
+             patch.object(WindowOperator, "return_front", side_effect=lambda loan: order.append("give back")), \
+             patch.object(ex._osc, "send", side_effect=lambda a, v: osc_sent.append((a, v))), \
+             patch.object(ex._osc, "stop_all"), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ItemFetch.time, "sleep"):
+            outcome = ex._fetch_item(st.round_seq, "Survival", 29)
+        return outcome, order, osc_sent
+
+    @staticmethod
+    def _moves(fetcher, raise_as=None, result=True):
+        for _ in range(5):
+            fetcher.mouse.move_rel(6, -4)          # 測り・照準合わせで送った
+        fetcher.mouse.move_rel(3, 0)
+        if raise_as:
+            raise ItemFetch.Stopped(raise_as)
+        return result
+
+    def test_every_ending_sends_the_view_back_before_giving_the_front_back(self):
+        cases = (("ok", lambda f: self._moves(f)),
+                 ("failed", lambda f: self._moves(f, result=False)),
+                 ("timeout", lambda f: self._moves(f, raise_as="timeout")),
+                 ("round", lambda f: self._moves(f, raise_as="round")),
+                 ("stopped", lambda f: self._moves(f, raise_as="stopped")))
+        for expected, does in cases:
+            outcome, order, osc_sent = self._run(does)
+            self.assertEqual(outcome, expected)
+            give_back = order.index("give back")
+            back = [m for m in order[6:give_back] if m != "give back"]
+            self.assertEqual(sum(m[1] for m in back), -33, expected)
+            self.assertEqual(sum(m[2] for m in back), 20, expected)
+            self.assertTrue(all(abs(m[1]) <= 6 and abs(m[2]) <= 6 for m in back), expected)
+            self.assertEqual(order[-1], "give back", "前面を返すのは戻した後")
+            self.assertEqual(osc_sent[-2:], [("/input/LookRight", 1), ("/input/LookRight", 0)], expected)
+
+    def test_an_error_while_buying_still_sends_the_view_back(self):
+        def boom(f):
+            f.mouse.move_rel(6, 0)
+            raise RuntimeError("x")
+        outcome, order, _ = self._run(boom)
+        self.assertEqual(outcome, "failed")
+        self.assertEqual(order, [("mouse", 6, 0), ("mouse", -6, 0), "give back"])
+
+    def test_a_failing_restore_still_gives_the_front_back(self):
+        with patch.object(ItemFetch.Fetcher, "restore_view", side_effect=RuntimeError("x")):
+            outcome, order, _ = self._run(lambda f: self._moves(f))
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(order[-1], "give back")
+
+    def test_not_in_front_does_not_send_the_view_back(self):
+        """窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らない"""
+        outcome, order, _ = self._run(lambda f: self._moves(f, raise_as="stopped"), foreground=False)
+        self.assertEqual(outcome, "stopped")
+        self.assertEqual(len([m for m in order if m != "give back"]), 6, "戻しは送らない")
+
+    def test_a_stop_while_moving_turns_back_too(self):
+        outcome, order, osc_sent = self._run(lambda f: True, move_raises="round")
+        self.assertEqual(outcome, "round")
+        self.assertEqual(osc_sent, [("/input/LookRight", 1), ("/input/LookRight", 0)])
+        self.assertEqual(order, [], "店へ着く前なのでマウスは送っていない・前面化もしていない")
+
+    def test_the_restore_is_logged(self):
+        with patch.object(DebugLog, "write") as write:
+            self._run(lambda f: self._moves(f))
+        lines = [c.args[0] for c in write.call_args_list]
+        self.assertIn("[操作] [窓2] アイテム取得: 視点を戻した（横 -33・縦 20）", lines)
+        self.assertIn("[操作] [窓2] アイテム取得: 向きを戻した（LookRight 0.50秒）", lines)
+
+
 class TestSuicideCancelCL(unittest.TestCase):
     """CL: 自爆キャンセルのキー（既定 ^）。押すと全部の窓の自爆を止め（長押し中はその場で離す・
     やり直さない）、そのラウンドはもう自爆しない（後のきっかけでも）。次のラウンドからは今どおり。
