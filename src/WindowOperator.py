@@ -406,6 +406,23 @@ def cursor_target(hwnd: int) -> tuple:
     return (x, y), ""
 
 
+def cursor_in_client(hwnd: int) -> bool:
+    """利用者のカーソルが、その窓のクライアント領域の上にあるか（最小化・取れないときは False）。
+    UseRight の連打で Begin が押される状態かを見る（CS）"""
+    point = cursor_position()
+    if not hwnd or point is None:
+        return False
+    try:
+        if win32gui.IsIconic(hwnd):
+            return False
+        _cl, _ct, cw, ch = win32gui.GetClientRect(hwnd)
+        left, top = win32gui.ClientToScreen(hwnd, (0, 0))
+    except Exception:
+        DebugLog.exception("WindowOperator.cursor_in_client")
+        return False
+    return left <= point[0] < left + cw and top <= point[1] < top + ch
+
+
 GA_ROOT = 2
 
 

@@ -305,6 +305,8 @@ BEGIN_USE_SPAM_START_SEC = 12.9
 # 0.1（1周0.2秒）だったときは、0.05秒の差し込みに当たるのが4回に1回程度で、
 # 空振りして前面化へ落ちていた。ToN_Multi_Supporter も 0.05 秒間隔
 BEGIN_USE_PULSE_SEC    = 0.025
+# 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔（CS）
+BEGIN_USE_REACH_CHECK_SEC = 0.5
 # カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
 BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
 BEGIN_CURSOR_GAP_SEC   = 0.3        # 置けなかったときに、次を試すまでの間

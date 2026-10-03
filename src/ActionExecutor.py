@@ -766,6 +766,7 @@ class ActionExecutor:
     def _spam_use_right_loop(self, stop, round_seq: int):
         st = self._st
         start = (st.round_over_time or time.time()) + config.BEGIN_USE_SPAM_START_SEC
+        reach_at, reach = 0.0, False    # 連打で押せる状態か（前面か、カーソルがこの窓の上）
         while not stop.is_set():
             if (not self._is_running() or st.begin_done or st.in_round
                     or st.round_seq != round_seq):
@@ -781,8 +782,21 @@ class ActionExecutor:
                 self._log_spam_paused()
                 stop.wait(config.BEGIN_USE_PULSE_SEC)
                 continue
+            now = time.time()
+            if now - reach_at >= config.BEGIN_USE_REACH_CHECK_SEC:
+                reach_at, reach = now, self._use_right_reaches_begin()
+            if reach:
+                # この窓が前面か、カーソルがこの窓の上: 連打の UseRight で Begin が押される（CS）。
+                # 背面でカーソルも外なら記録しない（その間に来た定期を受理しないため。CO）
+                st.last_begin_press_at = now
             self._osc.press("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
             stop.wait(config.BEGIN_USE_PULSE_SEC)
+
+    def _use_right_reaches_begin(self) -> bool:
+        """UseRight がこの窓の Begin に届く状態か（前面か、カーソルがクライアント領域の上）"""
+        hwnd = self._cfg.hwnd
+        return (WindowOperator.foreground_hwnd() == hwnd
+                or WindowOperator.cursor_in_client(hwnd))
 
     def _dip_cursor_for_begin(self, tail: str) -> bool:
         """カーソルをその窓へ一瞬だけ置き、受理を待つ。押せたら True。
@@ -817,6 +831,7 @@ class ActionExecutor:
                 with WindowOperator.cursor_over_window(
                         self._cfg.hwnd, self._log_cursor_reason) as over:
                     if over:
+                        st.last_begin_press_at = time.time()   # 置けた瞬間に（dwell の間に届く。CS）
                         if not attempt:
                             self._log(f"Begin: カーソルを一瞬合わせる{tail}")
                         time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
@@ -918,6 +933,8 @@ class ActionExecutor:
             if not ok:
                 return False
             self._log(f"Beginクリック{tail}")
+            # 押す前に記録する（CS）。Verified はクリックの最中（押してから 0.14 秒ほど）に届く
+            st.last_begin_press_at = time.time()
             WindowOperator.click()
             st.last_begin_press_at = time.time()
             # 離した直後に元の窓へ返す。Begin は押した瞬間に判定され、クリックの
@@ -1244,7 +1261,7 @@ class ActionExecutor:
         if (not SharedState.get_item_fetch() or self._osc is None
                 or not self._auto_begin_active() or self._hands_free()):
             return None
-        item_id = st.last_lost_item_id if st.last_lost_round_seq == st.round_seq else 0
+        item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える。CS）
         shop = ItemFetch.shop_for(item_id, config.ITEMS)
         if shop is None or not ItemFetch.available():
             return None

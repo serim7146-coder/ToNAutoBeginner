@@ -790,7 +790,6 @@ class LogMonitor:
         if reason != HELD_LOST_INSTANCE:
             # アイテム自動取得（CM）が取りに行く。インスタンス移動は取りに行かない
             self.st.last_lost_item_id = held
-            self.st.last_lost_round_seq = self.st.round_seq
         if reason == HELD_LOST_INSTANCE:
             self._log(f"所持アイテム: なし（{reason}）")
         else:
@@ -1683,6 +1682,7 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_JOINING:
             # インスタンスを移動するとアイテムは消える（依頼者）
             self._lose_held_item(HELD_LOST_INSTANCE)
+            st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない（CS）
             if st.equip_freeze_held and not self._auto_begin_active():
                 # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
                 st.waiting_for_equip = False
@@ -1722,6 +1722,8 @@ class LogMonitor:
             self._track_randomizer_item_change(event)
             st.equip_seen_id = event.item_id        # アイテム自動取得が Equip の結果を待つ
             st.equip_seen_seq += 1
+            if event.item_id:
+                st.last_lost_item_id = 0            # 装備した（手で別のアイテムでも）→ もう取りに行かない
             st.item_id = event.item_id
             self._hold_item(event.item_id)
             if st.speed_freeze_kind == "8pages":

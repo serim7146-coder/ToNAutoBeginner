@@ -4,6 +4,7 @@ import base64
 import struct
 import socket
 from unittest.mock import patch, MagicMock, call, ANY
+import itertools
 import threading
 import time
 import sys
@@ -19200,10 +19201,12 @@ class TestBeginByCursor(unittest.TestCase):
         executor, st = self._executor()
         st.round_over_time = 1000.0
         user32 = FakeUser32()
-        waits, clock = [], iter([1000.0, 1000.0 + config.BEGIN_USE_SPAM_START_SEC])
+        waits = []
+        clock = itertools.chain([1000.0], itertools.repeat(1000.0 + config.BEGIN_USE_SPAM_START_SEC))
 
         with patch.object(WindowOperator, "user32", user32), \
              patch.object(ActionExecutor.time, "time", side_effect=lambda: next(clock)), \
+             patch.object(executor, "_use_right_reaches_begin", return_value=False), \
              patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
             executor._spam_use_right(self.CountingStop(limit=2, waits=waits), st.round_seq)
 
@@ -23449,10 +23452,10 @@ class TestItemFetchCM(unittest.TestCase):
         self.assertTrue(any("Event クリック" in m for m in self.logs))
 
     # ── 5. 組み込み（ActionExecutor）──────────────────
-    def _executor(self, osc_port=9000, auto_begin=True, lost=29, lost_seq=3, **state):
+    def _executor(self, osc_port=9000, auto_begin=True, lost=29, **state):
         cfg = WindowConfig(hwnd=0x55, osc_port=osc_port, voice_item_lost="lost.mp3")
         st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_end_seen=True, item_id=0,
-                         round_seq=3, last_lost_item_id=lost, last_lost_round_seq=lost_seq,
+                         round_seq=3, last_lost_item_id=lost,
                          window_idx=2, **state)
         logs = []
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append,
@@ -23468,7 +23471,7 @@ class TestItemFetchCM(unittest.TestCase):
         self.assertIsNone(self._executor(auto_begin=False)[0].item_fetch_target(), "Begin を押さない窓")
         self.assertIsNone(self._executor(lost=5)[0].item_fetch_target(), "Others")
         self.assertIsNone(self._executor(lost=999)[0].item_fetch_target(), "表に無い")
-        self.assertIsNone(self._executor(lost_seq=2)[0].item_fetch_target(), "前のラウンドのロスト")
+        self.assertIsNone(self._executor(lost=0)[0].item_fetch_target(), "ロストしたものが無い（装備した・インスタンス移動）")
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
         self.assertIsNone(self._executor()[0].item_fetch_target(), "放置モード")
@@ -23704,7 +23707,7 @@ class TestItemFetchCM(unittest.TestCase):
         monitor.st.held_item_id = 29
         monitor.st.round_seq = 4
         monitor._lose_held_item("リスポーン")
-        self.assertEqual((monitor.st.last_lost_item_id, monitor.st.last_lost_round_seq), (29, 4))
+        self.assertEqual(monitor.st.last_lost_item_id, 29)
         monitor.st.held_item_id = 70
         monitor._lose_held_item(LogMonitor.HELD_LOST_INSTANCE)
         self.assertEqual(monitor.st.last_lost_item_id, 29, "インスタンス移動は取りに行かない")
@@ -24433,6 +24436,250 @@ class TestBeginMissCR(unittest.TestCase):
     def test_the_checkbox_and_the_note(self):
         self.assertIn((BugReport.BEGIN_MISS, "Begin の撮影（見つからなかったとき）"), BugReport.ATTACHMENTS)
         self.assertIn("画面の撮影には一緒にいた人の名前が写ることがあります", mainGUI.ReportDialog.REPORT_NOTE)
+
+
+class TestPressRecordCS(unittest.TestCase):
+    """CS: 押した記録の漏れ（CO の不具合）。押す前に記録する（クリック・カーソルの差し込み）。UseRight の連打で
+    押せる状態（前面か、カーソルがその窓の上）なら記録する。背面でカーソルも外なら記録しない"""
+
+    VERIFIED = "2026.10.03 15:54:06 Debug      -  Verified"
+
+    def _monitor(self, hwnd=0x22):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=hwnd, osc_port=9000, auto_begin=True), {},
+                                        lambda _m: None, window_idx=2)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.round_end_seen = True
+        monitor._verified.on_round_end_verified(0)
+        monitor._running = True
+        monitor._action._is_running = lambda: True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        return monitor
+
+    def _verified(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.VERIFIED)
+
+    def test_a_verified_during_the_click_is_accepted(self):
+        monitor = self._monitor()
+        ex = monitor._action
+        with patch.object(ex, "_borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "click", side_effect=lambda: self._verified(monitor)), \
+             patch.object(WindowOperator, "return_front"):
+            self.assertTrue(ex._press_begin(click_only=True))
+        self.assertTrue(monitor.st.begin_done, "mouseDown と mouseUp の間に届いた")
+        self.assertIn("[窓2] ✅ Connecting", monitor.logs)
+
+    def test_a_verified_during_the_dwell_is_accepted(self):
+        monitor = self._monitor()
+        ex = monitor._action
+
+        @contextlib.contextmanager
+        def over(_hwnd, _say=None):
+            yield True
+
+        dwells = []
+
+        def sleep(sec):
+            if sec == config.BEGIN_CURSOR_DWELL_SEC:
+                dwells.append(sec)
+                self._verified(monitor)             # 置いている 0.05 秒の間に届いた
+        with patch.object(WindowOperator, "cursor_over_window", side_effect=over), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            self.assertTrue(ex._dip_cursor_for_begin(""))
+        self.assertTrue(monitor.st.begin_done)
+        self.assertEqual(len(dwells), 1, "1回目の差し込みで受理（やり直しで通ったのではない）")
+
+    class _Stop:
+        """1回目の UseRight の後に Verified を届け、その次で止める"""
+        def __init__(self, on_wait, limit=3):
+            self.on_wait, self.n, self.limit = on_wait, 0, limit
+
+        def is_set(self):
+            return self.n >= self.limit
+
+        def wait(self, _sec):
+            self.n += 1
+            if self.n == 1:
+                self.on_wait()
+
+    def _spam(self, monitor, front, cursor_in):
+        st = monitor.st
+        st.round_over_time = time.time() - 60       # もう送り始める時刻
+        with patch.object(WindowOperator, "foreground_hwnd", return_value=front), \
+             patch.object(WindowOperator, "cursor_in_client", return_value=cursor_in), \
+             patch.object(OSCClient.OSCClient, "press", return_value=True) as press:
+            monitor._action._spam_use_right_loop(self._Stop(lambda: self._verified(monitor)), st.round_seq)
+        return press
+
+    def test_window_2_front_and_spamming_is_accepted_before_the_click(self):
+        """窓2 15:54:06: 前面で連打中、クリックの前に Verified → 受理。位置合わせ・探す・撮影の保存は走らない"""
+        monitor = self._monitor()
+        self._spam(monitor, front=0x22, cursor_in=False)
+        self.assertTrue(monitor.st.begin_done)
+        ex = monitor._action
+        with patch.object(ex, "_adjust_to_begin") as adjust, \
+             patch.object(BeginMiss, "save") as save, \
+             patch.object(WindowOperator, "click") as click:
+            self.assertTrue(ex._press_begin(click_only=True))
+            ex._confirm_begin(monitor.st.round_seq)
+        adjust.assert_not_called()
+        save.assert_not_called()
+        click.assert_not_called()
+
+    def test_the_cursor_over_the_window_counts_too(self):
+        monitor = self._monitor()
+        self._spam(monitor, front=0x99, cursor_in=True)
+        self.assertTrue(monitor.st.begin_done)
+
+    def test_behind_with_the_cursor_outside_is_ignored_as_before(self):
+        """CO の窓4 05:45: 背面でカーソルも外の連打中に来た定期は受理しない"""
+        monitor = self._monitor()
+        press = self._spam(monitor, front=0x99, cursor_in=False)
+        self.assertTrue(press.called, "連打はしている")
+        self.assertFalse(monitor.st.begin_done)
+        self.assertIn("[窓2] Verified を無視（ツールがまだ押していない → 定期）", monitor.logs)
+
+    def test_the_reach_is_checked_every_half_second(self):
+        monitor = self._monitor()
+        clock = [time.time()]
+
+        class Stop:
+            n = 0
+
+            def is_set(self):
+                return self.n >= 40
+
+            def wait(self, sec):
+                self.n += 1
+                clock[0] += sec
+        monitor.st.round_over_time = clock[0] - 60
+        with patch.object(ActionExecutor.time, "time", side_effect=lambda: clock[0]), \
+             patch.object(monitor._action, "_use_right_reaches_begin", return_value=False) as reach, \
+             patch.object(OSCClient.OSCClient, "press", return_value=True):
+            monitor._action._spam_use_right_loop(Stop(), monitor.st.round_seq)
+        self.assertEqual(reach.call_count, 2, "40 回 × 0.025 秒 = 1 秒で 2 回")
+
+    def test_the_reach_helper(self):
+        ex = self._monitor(hwnd=0x22)._action
+        for front, inside, expected in ((0x22, False, True), (0x99, True, True), (0x99, False, False)):
+            with patch.object(WindowOperator, "foreground_hwnd", return_value=front), \
+                 patch.object(WindowOperator, "cursor_in_client", return_value=inside):
+                self.assertEqual(ex._use_right_reaches_begin(), expected, (front, inside))
+
+    def test_cursor_in_client(self):
+        with patch.object(WindowOperator, "cursor_position", return_value=(150, 120)), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+             patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 100, 50)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen", return_value=(100, 100)):
+            self.assertTrue(WindowOperator.cursor_in_client(0x22))
+        for point in ((99, 120), (200, 120), (150, 150)):
+            with patch.object(WindowOperator, "cursor_position", return_value=point), \
+                 patch.object(WindowOperator.win32gui, "IsIconic", return_value=False), \
+                 patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 100, 50)), \
+                 patch.object(WindowOperator.win32gui, "ClientToScreen", return_value=(100, 100)):
+                self.assertFalse(WindowOperator.cursor_in_client(0x22), point)
+        with patch.object(WindowOperator, "cursor_position", return_value=(150, 120)), \
+             patch.object(WindowOperator.win32gui, "IsIconic", return_value=True), \
+             patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 100, 50)), \
+             patch.object(WindowOperator.win32gui, "ClientToScreen", return_value=(100, 100)):
+            self.assertFalse(WindowOperator.cursor_in_client(0x22), "最小化（矩形の中でも）")
+
+
+class TestKeepFetchingTheLostItemCS(unittest.TestCase):
+    """CS: 取りに行くのは「最後にロストしたアイテム」。装備したとき・インスタンスが変わったときまで覚え、
+    その間の「アイテム未回収」のラウンドでも Begin の受理の後に取りに行く"""
+
+    ITEMS = {29: ItemCatalog.Item("Taser", "Survival", True),
+             70: ItemCatalog.Item("Coil", "Enkephalin", True)}
+    P = "2026.10.03 16:39:00 Debug      -  "
+
+    def setUp(self):
+        p = patch.object(config, "ITEMS", self.ITEMS)
+        p.start()
+        self.addCleanup(p.stop)
+        SharedState.set_item_fetch(True)
+        self.addCleanup(SharedState.set_item_fetch, False)
+        SharedState.set_hands_free(False)
+
+    def _lost_last_round(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x22, osc_port=9000, auto_begin=True), {},
+                                        lambda _m: None, window_idx=2)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._running = True
+        monitor.st.round_seq = 3
+        monitor.st.held_item_id = 29
+        monitor._lose_held_item("リスポーン")     # ラウンド3でロストして、取れなかった
+        monitor.st.round_seq = 4                 # 次の「アイテム未回収」のラウンド
+        monitor.st.item_id = 0
+        return monitor
+
+    def _line(self, monitor, body):
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._process(self.P + body)
+
+    def test_the_next_unrecovered_round_still_fetches(self):
+        monitor = self._lost_last_round()
+        self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29))
+
+    def test_the_next_round_fetches_after_the_begin(self):
+        monitor = self._lost_last_round()
+        ex, st = monitor._action, monitor.st
+        st.round_end_seen = True
+        st.waiting_for_equip = True
+        fetched = []
+
+        def press(*_a, **_kw):
+            st.begin_done = True
+            return True
+
+        def fetch(round_seq, shop, item_id):
+            fetched.append((shop, item_id))
+            st.waiting_for_equip = False
+            return "ok"
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ex, "_begin_move"), patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_fetch_item", side_effect=fetch), \
+             patch.object(ex, "_attend_to_item_loss") as attend, \
+             patch.object(ActionExecutor.time, "sleep"):
+            ex.do_after_round()
+        self.assertEqual(fetched, [("Survival", 29)])
+        attend.assert_not_called()
+
+    def test_equipping_ends_it(self):
+        for line in ("Equipping 70. Was using 0", "Equipping 29."):
+            monitor = self._lost_last_round()
+            self._line(monitor, line)
+            self.assertIsNone(monitor._action.item_fetch_target(), line)
+
+    def test_equipping_nothing_does_not_end_it(self):
+        monitor = self._lost_last_round()
+        self._line(monitor, "Equipping 0. Was using 70")
+        self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29))
+
+    def test_a_new_instance_ends_it(self):
+        monitor = self._lost_last_round()
+        self._line(monitor, "[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
+        self.assertIsNone(monitor._action.item_fetch_target())
+
+    def test_hands_free_off_and_others_are_as_before(self):
+        monitor = self._lost_last_round()
+        SharedState.set_item_fetch(False)
+        self.assertIsNone(monitor._action.item_fetch_target(), "設定 OFF")
+        SharedState.set_item_fetch(True)
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+        self.assertIsNone(monitor._action.item_fetch_target(), "放置モード")
+        SharedState.set_hands_free(False)
+        monitor.st.last_lost_item_id = 999
+        self.assertIsNone(monitor._action.item_fetch_target(), "表に無い")
 
 
 class TestSuicideCancelCL(unittest.TestCase):
