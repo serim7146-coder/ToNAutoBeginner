@@ -113,11 +113,54 @@ def _in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
     encoded_values = ",".join(urllib.parse.quote(str(value), safe="") for value in values)
     return f"&{column}=in.({encoded_values})"
 
-# 追加できない時はNoneを返す
+# DB の関数（supabase/get_transformed_uid.sql）。uid → transformed_uid を返し、無ければ割り当てる
+TRANSFORMED_UID_RPC = "rpc/get_transformed_uid"
+
+
 def send_Users(VRChat_uid: str) -> int | None:
+    """VRChat の uid → transformed_uid（int2。DB を軽くするための番号）。無ければ DB 側で割り当てる。
+
+    DB の関数 get_transformed_uid を呼ぶ。Users の表は直接読まない——読めると、鍵（exe から
+    取り出せる）を持つ誰でも全員の uid と番号の対応を引けてしまう。関数がまだ DB に無い
+    （404）ときだけ前のやり方へ落ちる。割り当てられないときは None
+    """
     if not _configured():
         _say_user("Supabase設定がないためユーザー登録をスキップします。")
         return None
+    req = urllib.request.Request(
+        _url(TRANSFORMED_UID_RPC),
+        data=json.dumps({"p_vrchat_uid": VRChat_uid}).encode(),
+        headers={"Content-Type": "application/json", **_headers(accept=True)},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
+            value = json.loads(res.read())
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+        _say_user("DB に get_transformed_uid がありません → 前のやり方で登録します")
+        return _send_Users_direct(VRChat_uid)
+    if value is None:
+        _say_user("transformed_uid を割り当てられませんでした")
+        return None
+    return int(value)
+
+
+def get_transformed_uid(VRChat_uid: str) -> int | None:
+    """send_Users() と同じ（無ければ割り当てる）。失敗は None"""
+    if not _configured():
+        _say_user("Supabase設定がないためtransformed_uid取得をスキップします。")
+        return None
+    try:
+        return send_Users(VRChat_uid)
+    except Exception as e:
+        _say_user(f"transformed_uid取得エラー: {e}")
+        return None
+
+
+def _send_Users_direct(VRChat_uid: str) -> int | None:
+    """前のやり方（Users を直接読んで、空いている番号を選んで書く）。DB に関数
+    get_transformed_uid がまだ無いときだけ使う。関数を入れて Users を閉じたら消す"""
     uid = urllib.parse.quote(VRChat_uid, safe="")
     # VRChat_uidが既に存在するか確認
     req = urllib.request.Request(
@@ -161,25 +204,6 @@ def send_Users(VRChat_uid: str) -> int | None:
         _say_user(f"ユーザー登録: {res.status}")
         return transformed_uid
 
-def get_transformed_uid(VRChat_uid: str) -> int | None:
-    if not _configured():
-        _say_user("Supabase設定がないためtransformed_uid取得をスキップします。")
-        return None
-    try:
-        uid = urllib.parse.quote(VRChat_uid, safe="")
-        req = urllib.request.Request(
-            _url(f"Users?VRChat_uid=eq.{uid}&select=transformed_uid"),
-            headers=_headers(accept=True)
-        )
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-            data = json.loads(res.read())
-        if data:
-            return data[0]["transformed_uid"]
-        # なければ新規登録
-        return send_Users(VRChat_uid)
-    except Exception as e:
-        _say_user(f"transformed_uid取得エラー: {e}")
-        return None
 
 def round_type_id(round_name: str) -> int:
     """ログのラウンド名 → 番号（ToN Save Manager の ToNRoundType）。表に無ければ 999"""

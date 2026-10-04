@@ -12,6 +12,7 @@ import subprocess
 import json
 import copy
 import urllib.request
+import urllib.error
 import urllib.parse
 import tempfile
 import gzip
@@ -32589,85 +32590,86 @@ class TestGetTransformedUid(unittest.TestCase):
             "&round=in.(Fog%20%28Alternate%29)",
         )
 
-    def test_send_Users(self):
-        """新規ユーザー登録"""
-        # 1回目: 存在確認 → 空（新規）
-        # 2回目: 既存transformed_uid一覧取得
-        # 3回目: POST登録
-        mock_res1 = MagicMock()
-        mock_res1.__enter__ = MagicMock(return_value=mock_res1)
-        mock_res1.__exit__ = MagicMock(return_value=False)
-        mock_res1.read.return_value = json.dumps([]).encode()  # 存在しない
+    @staticmethod
+    def _res(body, status=200):
+        res = MagicMock()
+        res.__enter__ = MagicMock(return_value=res)
+        res.__exit__ = MagicMock(return_value=False)
+        res.read.return_value = json.dumps(body).encode()
+        res.status = status
+        return res
 
-        mock_res2 = MagicMock()
-        mock_res2.__enter__ = MagicMock(return_value=mock_res2)
-        mock_res2.__exit__ = MagicMock(return_value=False)
-        mock_res2.read.return_value = json.dumps([{"transformed_uid": 123}]).encode()
+    def _configured(self):
+        for name, value in (("SUPABASE_URL", "https://db.example"), ("SUPABASE_KEY", "key")):
+            p = patch.object(ConnectDB, name, value)
+            p.start()
+            self.addCleanup(p.stop)
 
-        mock_res3 = MagicMock()
-        mock_res3.__enter__ = MagicMock(return_value=mock_res3)
-        mock_res3.__exit__ = MagicMock(return_value=False)
-        mock_res3.status = 201
-
-        with patch('urllib.request.urlopen', side_effect=[mock_res1, mock_res2, mock_res3]):
+    def test_send_Users_asks_the_db_function(self):
+        """Users は直接読まない。関数 get_transformed_uid に uid を渡して番号をもらう"""
+        self._configured()
+        with patch('urllib.request.urlopen', return_value=self._res(123)) as mock_urlopen:
             result = ConnectDB.send_Users("usr_new")
-            self.assertNotEqual(result, 123)
-            self.assertIsNotNone(result)
 
-    def test_send_users_existing_user(self):
-        """既存ユーザーの場合はtransformed_uidをそのまま返す"""
-        mock_res = MagicMock()
-        mock_res.__enter__ = MagicMock(return_value=mock_res)
-        mock_res.__exit__ = MagicMock(return_value=False)
-        mock_res.read.return_value = json.dumps([{"VRChat_uid": "usr-existing", "transformed_uid": 123}]).encode()
+        self.assertEqual(result, 123)
+        mock_urlopen.assert_called_once()
+        req = mock_urlopen.call_args.args[0]
+        self.assertTrue(req.full_url.endswith("/rest/v1/rpc/get_transformed_uid"), req.full_url)
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(json.loads(req.data), {"p_vrchat_uid": "usr_new"})
 
-        with patch('urllib.request.urlopen', return_value=mock_res):
-            result = ConnectDB.send_Users("usr-existing")
-            self.assertEqual(result, 123)
+    def test_send_Users_none_from_the_db_is_none(self):
+        """割り当てられない（ほぼ埋まっている）"""
+        self._configured()
+        with patch('urllib.request.urlopen', return_value=self._res(None)):
+            self.assertIsNone(ConnectDB.send_Users("usr_new"))
 
-    def test_send_Users_full(self):
+    def test_a_db_without_the_function_falls_back_to_the_old_way(self):
+        """関数がまだ DB に無い（404）間だけ前のやり方"""
+        self._configured()
+        missing = urllib.error.HTTPError("u", 404, "not found", {}, None)
+        with patch('urllib.request.urlopen', side_effect=missing), \
+             patch.object(ConnectDB, "_send_Users_direct", return_value=7) as old:
+            self.assertEqual(ConnectDB.send_Users("usr_new"), 7)
+        old.assert_called_once_with("usr_new")
+
+    def test_other_http_errors_do_not_fall_back(self):
+        self._configured()
+        denied = urllib.error.HTTPError("u", 401, "denied", {}, None)
+        with patch('urllib.request.urlopen', side_effect=denied), \
+             patch.object(ConnectDB, "_send_Users_direct") as old:
+            with self.assertRaises(urllib.error.HTTPError):
+                ConnectDB.send_Users("usr_new")
+        old.assert_not_called()
+
+    def test_the_old_way_registers_a_new_user(self):
+        """前のやり方: 存在確認 → 既存の番号の一覧 → POST 登録"""
+        responses = [self._res([]), self._res([{"transformed_uid": 123}]), self._res(None, 201)]
+        with patch('urllib.request.urlopen', side_effect=responses):
+            result = ConnectDB._send_Users_direct("usr_new")
+        self.assertNotEqual(result, 123)
+        self.assertIsNotNone(result)
+
+    def test_the_old_way_returns_an_existing_user(self):
+        res = self._res([{"VRChat_uid": "usr-existing", "transformed_uid": 123}])
+        with patch('urllib.request.urlopen', return_value=res):
+            self.assertEqual(ConnectDB._send_Users_direct("usr-existing"), 123)
+
+    def test_the_old_way_when_full(self):
         """ユーザー登録限界"""
         existing = [{"VRChat_uid": "usr-existing", "transformed_uid": i} for i in range(-32768, 32767)]
-        mock_res1 = MagicMock()
-        mock_res1.__enter__ = MagicMock(return_value=mock_res1)
-        mock_res1.__exit__ = MagicMock(return_value=False)
-        mock_res1.read.return_value = json.dumps([]).encode()
+        with patch('urllib.request.urlopen', side_effect=[self._res([]), self._res(existing)]):
+            self.assertIsNone(ConnectDB._send_Users_direct("usr_new"))
 
-        mock_res2 = MagicMock()
-        mock_res2.__enter__ = MagicMock(return_value=mock_res2)
-        mock_res2.__exit__ = MagicMock(return_value=False)
-        mock_res2.read.return_value = json.dumps(existing).encode()
-
-        with patch('urllib.request.urlopen', side_effect=[mock_res1, mock_res2]):
-            result = ConnectDB.send_Users("usr_new")
-            self.assertIsNone(result)
-
-    def test_existing_user(self):
-        """既存ユーザーのtransformed_uidを返す"""
-        mock_res = MagicMock()
-        mock_res.__enter__ = MagicMock(return_value=mock_res)
-        mock_res.__exit__ = MagicMock(return_value=False)
-        mock_res.read.return_value = json.dumps([{"VRChat_uid": "usr-existing", "transformed_uid": 123}]).encode()
-
-        with patch('urllib.request.urlopen', return_value=mock_res):
-            result = ConnectDB.get_transformed_uid("usr-existing")
-            self.assertEqual(result, 123)
-
-    def test_new_user_calls_send_users(self):
-        """存在しない場合はsend_Usersを呼ぶ"""
-        mock_res = MagicMock()
-        mock_res.__enter__ = MagicMock(return_value=mock_res)
-        mock_res.__exit__ = MagicMock(return_value=False)
-        mock_res.read.return_value = json.dumps([]).encode()  # 空 = 未登録
-
-        with patch('urllib.request.urlopen', return_value=mock_res), \
-             patch.object(ConnectDB, 'send_Users', return_value=123) as mock_send:
-            result = ConnectDB.get_transformed_uid("usr_new")
-            mock_send.assert_called_once_with("usr_new")
-            self.assertEqual(result, 123)
+    def test_get_transformed_uid_is_send_users(self):
+        self._configured()
+        with patch.object(ConnectDB, 'send_Users', return_value=123) as mock_send:
+            self.assertEqual(ConnectDB.get_transformed_uid("usr_new"), 123)
+        mock_send.assert_called_once_with("usr_new")
 
     def test_error_returns_none(self):
         """エラー時はNoneを返す"""
+        self._configured()
         with patch('urllib.request.urlopen', side_effect=Exception("network error")):
             result = ConnectDB.get_transformed_uid("usr_abc123")
             self.assertIsNone(result)
