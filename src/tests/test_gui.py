@@ -1488,6 +1488,33 @@ class TestGuiTweaks(unittest.TestCase):
         self.assertEqual(self._shown("assign"), [True] * 4)
         self.assertEqual(self._state("rounds"), [True] * 4)
 
+    def test_changing_the_window_count_keeps_each_windows_settings(self):
+        count = len(self.app.tabs)
+        self.addCleanup(self.app._rebuild_tabs, count)
+        self.addCleanup(setattr, self.app, "_tab_memory", {})
+        self.app._tab_memory = {}
+        self.app._rebuild_tabs(2)
+        second = self.app.tabs[1]
+        second.v_do_skip.set(False)
+        second.v_auto_begin.set(False)
+        second.v_cancel_afk_after_unlock.set(True)
+        second.v_skip_rounds["Cracked"].set(True)
+        second.v_log.set("C:/logs/output_log_2.txt")
+        second.set_hwnd_choices([0x2222], selected_hwnd=0x2222)
+
+        self.app._rebuild_tabs(3)
+        self.app._rebuild_tabs(1)
+        self.app._rebuild_tabs(2)
+
+        tab = self.app.tabs[1]
+        self.assertFalse(tab.v_do_skip.get())
+        self.assertFalse(tab.v_auto_begin.get())
+        self.assertTrue(tab.v_cancel_afk_after_unlock.get())
+        self.assertEqual(tab.live_settings()["skip_rounds"], {"Cracked"})
+        self.assertEqual(tab.v_log.get(), "C:/logs/output_log_2.txt")
+        self.assertEqual(tab._get_selected_hwnd(), 0x2222)
+        self.assertTrue(self.app.tabs[0].v_do_skip.get(), "触っていない窓は既定のまま")
+
     def test_other_collapsibles_are_not_linked(self):
         frame = mainGUI.CollapsibleFrame(self.app, text="x", collapsed=True)
         self.addCleanup(frame.destroy)

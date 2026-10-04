@@ -1827,8 +1827,12 @@ class LogMonitor:
                                st.round_seq)
         if st.died_this_round and st.item_id:
             st.item_equipped_after_death = True
+        if not st.item_id:
+            # 「Equipping 0」は外しただけ。装備待ちは続ける
+            self._log("アイテムを外した (id=0)")
+            return
         self._log(f"✅ アイテム装備 (id={st.item_id})")
-        if (not self._auto_begin_active() and st.equip_freeze_held and st.item_id):
+        if (not self._auto_begin_active() and st.equip_freeze_held):
             # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
             st.waiting_for_equip = False
             self._start_daemon(self._release_equip_freeze_after_equip)
@@ -2094,15 +2098,17 @@ class LogMonitor:
         if not RoundDecision.open_special_active(st.open_special_round_wins,
                                                  self._after_unlock()):
             return f"放置モード(3クラ済み): 即自爆 {ids} / {st.round_type}"
+        if not RoundDecision.open_special_round_type(st.round_type):
+            return f"放置モード(複数体のラウンド): 即自爆 {ids} / {st.round_type}"
         if not st.item_id:
             has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in ids
             if not has_dtm:
-                return (f"放置モード(アイテムなし・DTMなし): 即自爆 {ids} / "
+                return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {ids} / "
                         f"{st.round_type}")
         has_cancel_afk = bool(self.cfg.cancel_afk and
                               RoundDecision.open_special_ids(ids, self._holds_plush()))
         if not has_cancel_afk:
-            return f"放置モード(DTM/Waldo以外): 即自爆 {ids} / {st.round_type}"
+            return f"放置モード(DTM/Waldo続行対象外): 即自爆 {ids} / {st.round_type}"
         return None
 
     def _decide(self, round_type: str):

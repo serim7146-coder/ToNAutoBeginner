@@ -64,6 +64,7 @@
 ## 3クラ解放について
 * 「DTM/Waldo続行」は、特殊ラウンドを見るか、3勝を「マクロ開始」の状態で迎えることで内部的に自動で解除されます。
   * 窓ごとの「3クラ解放後も続行」を ON にすると、解除の後も DTM/Waldo を続行します。
+  * DTM/Waldo の続行は Cracked などの特殊ラウンドでも行います。テラーが複数体出るラウンド（Double Trouble・Bloodbath・Midnight）だけは続行しません（Bloodbath EX は続行します）。
 * Have Plushを所持している時のみWaldoを続行します。
   * Have Plush の番号は item.json から引きます。item.json が無い間は、アイテムに関係なく Waldo を続行します。
 ## 統計について

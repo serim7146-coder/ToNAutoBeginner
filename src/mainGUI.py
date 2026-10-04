@@ -237,6 +237,35 @@ class WindowTab(ttk.Frame):
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
         }
 
+    def snapshot(self) -> dict:
+        """窓数を変えてタブを作り直すときに引き継ぐ、この窓の状態"""
+        return {
+            **self.live_settings(),
+            "profile": self.v_profile.get(),
+            "log": self.v_log.get(),
+            "hwnd_choices": list(self._hwnd_map.items()),
+            "hwnd_sel": self.v_hwnd_sel.get(),
+            "osc": (self.osc_in, self.osc_out),
+        }
+
+    def restore(self, saved: dict):
+        """snapshot() で控えた状態へ戻す"""
+        for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
+                         ("cancel_afk", self.v_cancel_afk),
+                         ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
+                         ("announce_intermission", self.v_announce_intermission)):
+            var.set(saved[key])
+        for key, vars_ in (("skip_rounds", self.v_skip_rounds),
+                           ("continue_rounds", self.v_continue_rounds)):
+            for name, var in vars_.items():
+                var.set(name in saved[key])
+        self.v_profile.set(saved["profile"])
+        self.v_log.set(saved["log"])
+        self._hwnd_map = dict(saved["hwnd_choices"])
+        self.cb_hwnd["values"] = list(self._hwnd_map)
+        self.v_hwnd_sel.set(saved["hwnd_sel"])
+        self.osc_in, self.osc_out = saved["osc"]
+
     def _build(self):
         p = self
 
@@ -1548,6 +1577,13 @@ class App(tk.Tk):
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
 
     def _rebuild_tabs(self, count: int):
+        # 窓数を変えても、窓ごとの設定（自動Begin・自動自爆・ラウンド指定・割り当てなど）は
+        # そのまま。減らした窓の分も覚えておき、また増やしたら戻す（このツールを閉じるまで）
+        memory = getattr(self, "_tab_memory", None)
+        if memory is None:
+            memory = self._tab_memory = {}
+        for tab in self.tabs:
+            memory[tab.idx] = tab.snapshot()
         for tab in self.tabs:
             try:
                 self.nb.forget(tab)
@@ -1563,6 +1599,9 @@ class App(tk.Tk):
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
+        for tab in self.tabs:
+            if tab.idx in memory:
+                tab.restore(memory[tab.idx])
 
     def _on_tab_section_toggled(self, key: str, collapsed: bool):
         """窓タブの折りたたみを1つ開閉したら、全タブの同じ枠をそろえる（保存はしない）"""

@@ -271,6 +271,8 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor.st.instance_access = access
         monitor.early_read_capable = capable
         monitor.st.in_round = True
+        # Fog は特殊ラウンドなので、出た時点で3勝扱い（3クラ解放前の DTM 続行は効かない）
+        monitor.st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         monitor.logs = []
         monitor.logger = monitor.logs.append
         monitor._process(self.UNKNOWN)
@@ -799,6 +801,8 @@ class TestFogNoObjectDtm(unittest.TestCase):
         monitor.st.instance_access = access
         monitor.early_read_capable = capable
         monitor.st.in_round = True
+        # Fog は特殊ラウンドなので、出た時点で3勝扱い（3クラ解放前の DTM 続行は効かない）
+        monitor.st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         monitor.logs = []
         monitor.logger = monitor.logs.append
         monitor._process(self.UNKNOWN)

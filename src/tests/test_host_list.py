@@ -48,8 +48,12 @@ class TestAppTabLifecycle(unittest.TestCase):
                 self.added.append((tab, text))
 
         class OldTab:
-            def __init__(self):
+            def __init__(self, idx):
+                self.idx = idx
                 self.destroyed = False
+
+            def snapshot(self):
+                return {"idx": self.idx}
 
             def destroy(self):
                 self.destroyed = True
@@ -61,6 +65,10 @@ class TestAppTabLifecycle(unittest.TestCase):
                 self.idx = idx
                 self.on_log_selected = on_log_selected
                 self.destroyed = False
+                self.restored = None
+
+            def restore(self, saved):
+                self.restored = saved
 
             def destroy(self):
                 self.destroyed = True
@@ -72,7 +80,7 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._apply_saved_window_settings = lambda: None
         app._tab_sections = {}
         app._on_tab_section_toggled = lambda _key, _collapsed: None
-        app.tabs = [OldTab(), OldTab()]
+        app.tabs = [OldTab(0), OldTab(1)]
         old_tabs = list(app.tabs)
 
         with patch.object(mainGUI, "WindowTab", NewTab):
@@ -83,6 +91,8 @@ class TestAppTabLifecycle(unittest.TestCase):
         self.assertEqual(len(app.tabs), 3)
         self.assertEqual([tab.idx for tab in app.tabs], [0, 1, 2])
         self.assertEqual(len(app.nb.added), 3)
+        self.assertEqual([tab.restored for tab in app.tabs], [{"idx": 0}, {"idx": 1}, None],
+                         "残った窓は前の設定のまま。増えた窓は既定")
 
     def test_win_count_change_skips_rebuild_when_count_is_unchanged(self):
         class FakeVar:

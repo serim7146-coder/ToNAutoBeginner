@@ -97,6 +97,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 
 ### 4.1 `WindowConfig`（窓ごとの設定）
 `hwnd`・`log_path`・自動 Begin・自動自爆・DTM/Waldo 続行・OSC のポート・ラウンドごとの自爆/続行の指定（`skip_rounds`・`continue_rounds`。インスタンスが変わると外す）・音声のパス。
+窓数を変えて窓タブを作り直しても、各窓の設定と割り当ては引き継ぐ（`WindowTab.snapshot`/`restore`。減らした窓の分も、ツールを閉じるまで覚えておく）。
 
 ### 4.2 `WindowState`（窓ごとの実行時の状態）
 LogMonitor が1窓に1つ持つ。主なもの:
@@ -187,6 +188,7 @@ LogMonitor._process(line)
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
 4. `RoundDecision.decide_killers`: 続行リスト（Classic と Moon では Special/Moon 枠も見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
    DTM/Waldo は3勝まで（窓の設定 `cancel_afk_after_unlock` で3勝の後も）。Waldo は Have Plush を持っているときだけ（番号は item.json の名前から。分からなければ前と同じく続行）。
+   テラーが複数体出るラウンド（`config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS`: Double Trouble・Bloodbath・Midnight）では DTM/Waldo でも続行しない。Bloodbath EX・Cracked などほかの特殊ラウンドは続行する（完全放置モードも同じ）。
 
 ## 8. Begin
 

@@ -370,6 +370,9 @@ OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わる�
 # 持っているか分からないので前と同じ（アイテムに関係なく続行）
 HAVE_PLUSH_NAME = "Have Plush"
 HAVE_PLUSH_ITEM_ID: int | None = None
+# DTM/Waldo でも続行しないラウンド。テラーが複数体出るもの（依頼者 2026-10-04）。
+# Bloodbath EX は続行する。Cracked などほかの特殊ラウンドは続行する
+OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS = {"Double Trouble", "Bloodbath", "Midnight"}
 # 「特殊ラウンドを経験したら3勝扱い」の例外。特殊ラウンドだが、例外的に3クラ前にも
 # 出現するもの（依頼者 2026-09-30: Twilight だけ。ほかの Moon は出現条件の都合で
 # 3クラ前には起こりえない）。特殊ラウンドであることは変わらない（SPECIAL_ROUND には残す）

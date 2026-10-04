@@ -32,6 +32,12 @@ def open_special_active(wins: int, after_unlock: bool = False) -> bool:
     return after_unlock or wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
 
 
+def open_special_round_type(round_type: str) -> bool:
+    """DTM/Waldo を続行してよいラウンドか。テラーが複数体出るラウンドだけは続行しない
+    （Double Trouble・Bloodbath・Midnight。Bloodbath EX は続行）"""
+    return round_type not in config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS
+
+
 def open_special_ids(terror_ids, holds_plush: bool | None = None) -> list[int]:
     """続行してよい DTM/Waldo。Waldo は Have Plush を持っているときだけ。
     holds_plush が None（持っているか分からない）なら前と同じく続行する"""
@@ -50,7 +56,7 @@ def is_open_special_round_target(
 ) -> bool:
     return (
         bool(open_special_ids(terror_ids, holds_plush))
-        and round_type not in config.SPECIAL_ROUND
+        and open_special_round_type(round_type)
         and open_special_active(wins, after_unlock)
         and cancel_afk
     )

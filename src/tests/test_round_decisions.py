@@ -3166,3 +3166,36 @@ class TestOpenSpecialAfterUnlock(unittest.TestCase):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('"cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get()', src)
         self.assertIn('text="3クラ解放後も続行"', src)
+
+    def test_special_rounds_continue_except_multi_terror_ones(self):
+        """3クラ解放後は Cracked などでも続行。複数体のラウンド（Double Trouble・Bloodbath・
+        Midnight）だけは続行しない。Bloodbath EX は続行（依頼者 2026-10-04）"""
+        for round_type, expected in (("Cracked", True), ("Bloodbath EX", True), ("Fog", True),
+                                     ("Punished", True), ("Classic", True),
+                                     ("Double Trouble", False), ("Bloodbath", False),
+                                     ("Midnight", False)):
+            monitor = self._monitor(True)
+            monitor.st.round_type = round_type
+            _kind, is_continue, open_special = monitor._list_plan([config.DTM_ID], False)
+            self.assertEqual((is_continue, open_special), (expected, expected), round_type)
+            self.assertEqual(monitor._hands_free_skip_reason([config.DTM_ID]) is None, expected,
+                             round_type)
+
+
+class TestEquippingNothing(unittest.TestCase):
+    """「Equipping 0」（外しただけ）では装備待ちを解かない"""
+
+    def test_it_keeps_waiting(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=True), {}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.waiting_for_equip = True
+        monitor.st.begin_done = True
+        with patch.object(monitor, "_auto_begin_active", return_value=True), \
+             patch.object(monitor, "_start_daemon") as daemon:
+            monitor._on_item_equip(LogParser.LogEvent(LogParser.EVENT_ITEM_EQUIP, item_id=0))
+            self.assertTrue(monitor.st.waiting_for_equip)
+            daemon.assert_not_called()
+            monitor._on_item_equip(LogParser.LogEvent(LogParser.EVENT_ITEM_EQUIP, item_id=29))
+        self.assertFalse(monitor.st.waiting_for_equip)
+        self.assertIn(monitor._release_equip_wait_after_delay,
+                      [c.args[0] for c in daemon.call_args_list])
