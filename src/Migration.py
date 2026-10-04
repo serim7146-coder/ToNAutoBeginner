@@ -6,7 +6,8 @@
   2. 古い exe の場所を settings.json に書き、Setup を画面なしで動かす係（PowerShell）を
      裏で起こして、ツールは終わる。係はツールの終了（起動中の目印が消えるの）を待ってから
      Setup を動かす。Setup は終わるとインストールしたツールを起動する（/launch=1）
-  3. インストールしたツールは、最初の起動で古い exe を消す
+  3. Setup が成功したら、係が古い exe（と .old）を消す（依頼者）。消せなかったときは、
+     インストールしたツールが最初の起動で消す（settings.json の印を見る）
 失敗したら（落とせない・リリースに Setup が無い・Setup が途中で止まる）、その回は今のまま
 動き、次の起動でやり直す。設定・統計は %APPDATA% にあるので、どちらの exe でも同じものを使う。
 """
@@ -54,11 +55,13 @@ def _quote(text) -> str:
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def setup_script(setup: Path, mutex: str = config.APP_MUTEX_NAME,
+def setup_script(setup: Path, old_exe: Path | None = None, mutex: str = config.APP_MUTEX_NAME,
                  wait_sec: int = MUTEX_WAIT_SEC) -> str:
-    """ツールの終了を待ってから Setup を画面なしで動かし、終わったら Setup を消す PowerShell"""
+    """ツールの終了を待ってから Setup を画面なしで動かし、Setup を消す PowerShell。
+    Setup が成功したら（終了コード 0）古い exe と .old も消す。exe はツールの終わり際まで
+    開いていることがあるので、少し間を置いて何度か試す"""
     args = ",".join(_quote(a) for a in SETUP_ARGS)
-    return "\n".join([
+    lines = [
         f"$deadline = (Get-Date).AddSeconds({int(wait_sec)})",
         "while ((Get-Date) -lt $deadline) {",
         "  $m = $null",
@@ -66,9 +69,21 @@ def setup_script(setup: Path, mutex: str = config.APP_MUTEX_NAME,
         "  $m.Dispose()",
         "  Start-Sleep -Milliseconds 300",
         "}",
-        f"Start-Process -FilePath {_quote(setup)} -ArgumentList {args} -Wait",
+        f"$p = Start-Process -FilePath {_quote(setup)} -ArgumentList {args} -Wait -PassThru",
         f"Remove-Item -LiteralPath {_quote(setup)} -Force -ErrorAction SilentlyContinue",
-    ])
+    ]
+    if old_exe is not None:
+        old = [_quote(old_exe), _quote(old_exe.with_name(old_exe.name + ".old"))]
+        lines += [
+            "if ($p.ExitCode -eq 0) {",
+            "  for ($i = 0; $i -lt 20; $i++) {",
+            f"    Remove-Item -LiteralPath {', '.join(old)} -Force -ErrorAction SilentlyContinue",
+            f"    if (-not (Test-Path -LiteralPath {old[0]})) {{ break }}",
+            "    Start-Sleep -Milliseconds 500",
+            "  }",
+            "}",
+        ]
+    return "\n".join(lines)
 
 
 def powershell_command(script: str) -> list[str]:
@@ -78,10 +93,11 @@ def powershell_command(script: str) -> list[str]:
             "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
 
 
-def launch_setup(setup: Path) -> bool:
+def launch_setup(setup: Path, old_exe: Path | None = None) -> bool:
     """Setup を動かす係を裏で起こす。起こせたら True（呼び出し側はすぐツールを終える）"""
     try:
-        subprocess.Popen(powershell_command(setup_script(setup)), creationflags=CREATE_NO_WINDOW,
+        subprocess.Popen(powershell_command(setup_script(setup, old_exe)),
+                         creationflags=CREATE_NO_WINDOW,
                          close_fds=True)
         return True
     except Exception:

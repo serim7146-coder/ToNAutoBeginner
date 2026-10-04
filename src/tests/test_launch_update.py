@@ -1139,9 +1139,19 @@ class TestMigrationRules(unittest.TestCase):
                       "' は2つ重ねる")
         self.assertIn("'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/launch=1'", script)
         self.assertLess(script.index("TryOpenExisting"), script.index("Start-Process"))
+        self.assertNotIn("ExitCode", script, "古い exe を渡さなければ消さない")
         cmd = Migration.powershell_command(script)
         self.assertEqual(cmd[-2], "-EncodedCommand")
         self.assertEqual(base64.b64decode(cmd[-1]).decode("utf-16-le"), script)
+
+    def test_the_old_exe_is_removed_only_after_setup_succeeds(self):
+        setup = Path("C:/Temp/ToNAutoBeginner-Setup.exe")
+        script = Migration.setup_script(setup, Path("D:/tools/ToNAutoBeginner.exe"))
+        removal = script.index("if ($p.ExitCode -eq 0)")
+        self.assertLess(script.index("Start-Process"), removal, "Setup が終わってから")
+        self.assertIn("-Wait -PassThru", script)
+        self.assertIn("'D:/tools/ToNAutoBeginner.exe', 'D:/tools/ToNAutoBeginner.exe.old'",
+                      script[removal:])
 
     def test_the_installer_relaunches_after_a_silent_migration(self):
         iss = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
@@ -1203,7 +1213,7 @@ class TestMigrationInTheApp(unittest.TestCase):
                  patch.object(Migration, "launch_setup", return_value=True) as launch:
                 mainGUI.App._finish_migration(app, Path("D:/tools/ToNAutoBeginner.exe"), tmp)
             setup = Path(d) / config.SETUP_ASSET_NAME
-            launch.assert_called_once_with(setup)
+            launch.assert_called_once_with(setup, Path("D:/tools/ToNAutoBeginner.exe"))
             self.assertTrue(setup.exists())
         data = mainGUI.load_settings()
         self.assertEqual(data[Migration.SETTINGS_KEY], str(Path("D:/tools/ToNAutoBeginner.exe")))

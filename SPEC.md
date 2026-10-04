@@ -233,6 +233,6 @@ LogMonitor._process(line)
   アップデート（自動更新・Setup の上書き）ではアンインストールは走らずデータは残る。アンインストールはインストール先・`%APPDATA%\ToNAutoBeginner`・`%LOCALAPPDATA%\ToNAutoBeginner` を全部消す。
   `AppId` は変えない（変えると別アプリ扱いになる）。
 - 新しく入れる人はインストール先を選ぶ（`DisableDirPage=auto`。上書きでは聞かない）。Program Files など管理者権限が要る場所は選べない（.iss の `NextButtonClick`）。
-- exe 単体からの移行（`Migration.py`）: exe 単体（Inno Setup のアンインストール情報 `InstallLocation` の外）で起動したら、最新リリースの `ToNAutoBeginner-Setup.exe` を落とし、元の exe の場所を settings.json（`migrated_from`）に書いて、PowerShell の係を裏で起こしてツールを終える。係は起動中の目印が消えるのを待ち（最大60秒）、Setup を `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /launch=1` で動かす。Setup は終わるとツールを起動する。インストール版は最初の起動で元の exe（と `.old`）を消す。失敗したらその回は今のまま動き、次の起動でやり直す。移行するときは更新の確認はしない。
+- exe 単体からの移行（`Migration.py`）: exe 単体（Inno Setup のアンインストール情報 `InstallLocation` の外）で起動したら、最新リリースの `ToNAutoBeginner-Setup.exe` を落とし、元の exe の場所を settings.json（`migrated_from`）に書いて、PowerShell の係を裏で起こしてツールを終える。係は起動中の目印が消えるのを待ち（最大60秒）、Setup を `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /launch=1` で動かす。Setup は終わるとツールを起動する。Setup が成功したら（終了コード 0）係が元の exe（と `.old`）を消す。消せなかったときはインストール版が最初の起動で消す。失敗したらその回は今のまま動き、次の起動でやり直す。移行するときは更新の確認はしない。
 - リリース: `ToNAutoBeginner.exe`（自動更新が探すのはこの名前）と `ToNAutoBeginner-Setup.exe`（移行が探す）の両方を、`APP_VERSION` と同じタグのリリースに置く。
 - テスト: `src` で `python UnitTest.py`（全部）／`python UnitTest.py test_freezes`（1ファイル）。本体は `src/tests/test_*.py`、共通の準備は `src/tests/support.py`（Windows 専用モジュールの差し替え・本物の OSC / 設定 / DB に触らない安全装置）。

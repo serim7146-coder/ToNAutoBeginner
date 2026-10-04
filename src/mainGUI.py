@@ -2656,7 +2656,7 @@ class App(tk.Tk):
             "インストーラー版へ移行するため、いったん終了します。\n"
             "設定と統計はそのまま引き継がれます。\n"
             "1分ほどで自動で起動します（スタートメニューからも起動できます）。")
-        if not Migration.launch_setup(setup):
+        if not Migration.launch_setup(setup, Path(exe)):
             self._log("[移行] インストーラーを起動できませんでした。今回はこのまま使えます")
             messagebox.showwarning("インストーラー版へ移行",
                                    "インストーラーを起動できませんでした。今回はこのまま使えます"
