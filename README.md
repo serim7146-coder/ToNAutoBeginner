@@ -54,7 +54,7 @@
 * 干し芋・焼き芋のインスタンスでは、次のルールで自爆します（自動自爆が ON のとき）。
   * Classic（Variant を除く）・Bloodbath・Classic.exe・Randomizer は自爆します。
   * Moon は2回目から自爆します。焼き芋では Mystic Moon と Solstice を1回目から自爆します。
-  * 8 Pages と Run は自爆しません。
+  * 8 Pages・Run・Bloodbath EX は自爆しません。
   * Fog は、干し芋では自爆しません。焼き芋ではオルタネイト枠だけを続行リストで判定し、ほかは自爆します。
   * Sabotage は参加者の続行の希望で判定します。
 * 「完全放置モード」は、自爆できるようになった時に自爆します（プライベートインスタンスのみ）。

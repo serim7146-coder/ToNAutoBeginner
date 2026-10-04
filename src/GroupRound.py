@@ -19,8 +19,8 @@ NORMAL   = "normal"     # 通常判定（RoundDecision.decide_killers）へ委�
 # 問答無用スキップ（Variant例外なし）
 ALWAYS_SKIP_ROUNDS = frozenset({"Bloodbath", "Classic.exe", "Randomizer"})
 
-# 全続行（自爆しないだけ）
-ALWAYS_CONTINUE_ROUNDS = frozenset({"8 Pages", "Run"})
+# 全続行（自爆しないだけ）。Bloodbath EX は芋では自爆しない（依頼者 2026-10-04）
+ALWAYS_CONTINUE_ROUNDS = frozenset({"8 Pages", "Run", "Bloodbath EX"})
 
 # 焼き芋では1回目でもスキップするmoon
 YAKIIMO_SKIP_FIRST_MOONS = frozenset({"Mystic Moon", "Solstice"})

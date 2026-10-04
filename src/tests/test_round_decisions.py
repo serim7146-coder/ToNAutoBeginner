@@ -79,12 +79,11 @@ class TestGroupRoundTable(unittest.TestCase):
             self.assertEqual(self._both(round_type, [192]), {GroupRound.SKIP},
                              round_type)
 
-    def test_double_trouble_and_bloodbath_ex_use_the_normal_judgement(self):
-        for round_type in ("Double Trouble", "Bloodbath EX"):
-            self.assertEqual(self._both(round_type), {GroupRound.NORMAL}, round_type)
+    def test_double_trouble_uses_the_normal_judgement(self):
+        self.assertEqual(self._both("Double Trouble"), {GroupRound.NORMAL})
 
-    def test_eight_pages_and_run_always_continue(self):
-        for round_type in ("8 Pages", "Run"):
+    def test_eight_pages_run_and_bloodbath_ex_always_continue(self):
+        for round_type in ("8 Pages", "Run", "Bloodbath EX"):
             self.assertEqual(self._both(round_type), {GroupRound.CONTINUE}, round_type)
 
     def test_hoshiimo_fog_always_continues(self):
@@ -2616,7 +2615,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
     # ── 全続行（自爆しないだけ） ───────────────
     def test_always_continue_rounds_do_nothing(self):
-        for round_type in ("8 Pages", "Run"):
+        for round_type in ("8 Pages", "Run", "Bloodbath EX"):
             monitor = self._monitor()
 
             with patch.object(PlaySound, "play_sound") as mock_play:
