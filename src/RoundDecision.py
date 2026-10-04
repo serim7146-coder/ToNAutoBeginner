@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import config
+import ItemCatalog
 import MatchTNL
 
 
@@ -36,6 +37,13 @@ def open_special_round_type(round_type: str) -> bool:
     """DTM/Waldo を続行してよいラウンドか。テラーが複数体出るラウンドだけは続行しない
     （Double Trouble・Bloodbath・Midnight。Bloodbath EX は続行）"""
     return round_type not in config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS
+
+
+def guidance_plush_id() -> int | None:
+    """Guidance Plush の番号（item.json から名前で。無ければ config の番号。どちらも無ければ None）。
+    Waldo の続行と、完全放置モードのアイテム自動取得の条件"""
+    return (ItemCatalog.item_id_by_name(config.GUIDANCE_PLUSH_NAME, config.ITEMS)
+            or config.GUIDANCE_PLUSH_ITEM_ID)
 
 
 def open_special_ids(terror_ids, holds_plush: bool | None = None) -> list[int]:

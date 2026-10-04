@@ -1413,8 +1413,12 @@ class TestItemFetch(unittest.TestCase):
         self.assertIsNone(self._executor(lost=0)[0].item_fetch_target(), "ロストしたものが無い（装備した・インスタンス移動）")
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
-        self.assertEqual(self._executor()[0].item_fetch_target(), ("Survival", 29),
-                         "完全放置モードでも取りに行く")
+        with patch.object(RoundDecision, "guidance_plush_id", return_value=29):
+            self.assertEqual(self._executor()[0].item_fetch_target(), ("Survival", 29),
+                             "完全放置モードでも Guidance Plush は取りに行く")
+        with patch.object(RoundDecision, "guidance_plush_id", return_value=70):
+            self.assertIsNone(self._executor()[0].item_fetch_target(),
+                              "完全放置モードでは Guidance Plush 以外は取りに行かない")
 
     def _hands_free_round(self, ex, st, outcome="ok"):
         order = []
@@ -1444,8 +1448,12 @@ class TestItemFetch(unittest.TestCase):
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
         ex, st, _ = self._executor()
-        self.assertEqual(self._hands_free_round(ex, st), ["press", ("fetch", "Survival", 29)])
+        with patch.object(RoundDecision, "guidance_plush_id", return_value=29):
+            self.assertEqual(self._hands_free_round(ex, st), ["press", ("fetch", "Survival", 29)])
         self.assertFalse(st.equip_freeze_held)
+        ex, st, _ = self._executor()
+        with patch.object(RoundDecision, "guidance_plush_id", return_value=70):
+            self.assertEqual(self._hands_free_round(ex, st), ["press"], "Guidance Plush 以外")
 
     def test_hands_free_does_not_fetch_when_holding_or_off(self):
         SharedState.set_hands_free(True)
@@ -2075,8 +2083,10 @@ class TestKeepFetchingTheLostItem(unittest.TestCase):
         SharedState.set_item_fetch(True)
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
-        self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29),
-                         "完全放置モードでも取りに行く")
+        self.assertIsNone(monitor._action.item_fetch_target(),
+                          "完全放置モードでは Guidance Plush（ここでは表に無い）以外は取りに行かない")
+        with patch.object(RoundDecision, "guidance_plush_id", return_value=29):
+            self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29))
         SharedState.set_hands_free(False)
         monitor.st.last_lost_item_id = 999
         self.assertIsNone(monitor._action.item_fetch_target(), "表に無い")

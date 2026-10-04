@@ -201,7 +201,7 @@ LogMonitor._process(line)
 
 - **霧の看破**: `--enable-sdk-log-levels` 付きで起動した窓だけ。画面のボタンが ON で Invite・Invite+・Friends のときだけ判定・表示に使う。それ以外は DB にだけ黙って送る。名前ごとに公開と答え合わせし、一度でも食い違った名前は使わない。看破できる起動で5秒たってもオブジェクトの名前が出なければ DTM と判断する。
 - **速度検知**: OSC で VelocityMagnitude を受ける窓だけ。Verified Round End から速度を見て、張り付いた値で 8 Pages（6.5）・Punished（4.0）を先読みする。
-- **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。完全放置モードでも。合計 `ITEM_FETCH_LIMIT_SEC` まで）。取得で動かした縦の視点は、どの終わり方でも戻す。前面を取られて戻せなかった分は、裏で見張って、この窓が前面になったら・ほかの窓が誰もフリーズしていなければ前面を借りて戻す（`_restore_view_soon`）。
+- **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。完全放置モードでは Guidance Plush だけ（`RoundDecision.guidance_plush_id`）。合計 `ITEM_FETCH_LIMIT_SEC` まで）。取得で動かした縦の視点は、どの終わり方でも戻す。前面を取られて戻せなかった分は、裏で見張って、この窓が前面になったら・ほかの窓が誰もフリーズしていなければ前面を借りて戻す（`_restore_view_soon`）。
 - **VRChat の起動**: 窓ごとに `--profile=N`・`--osc=<受信>:127.0.0.1:<送信>`（窓 i は 9000+10i と +1）。窓が出てから `LAUNCH_STAGGER_SEC` 置いて次を起動する（VRChat API の 429 を避けるため）。入室後の選択画面は `ToNEntry` が突破する。
 - **自動アップデート**: 起動時に GitHub Releases の最新タグと `config.APP_VERSION` を比べ、新しければダウンロードして実行中の exe を `.old` にして差し替える。
 

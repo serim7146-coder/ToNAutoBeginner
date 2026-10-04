@@ -1345,7 +1345,8 @@ class ActionExecutor:
     def item_fetch_target(self) -> tuple | None:
         """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
         押さない窓・このラウンドにロストしたアイテムが分からない・Others や
-        表に無いアイテム → None（今どおり）。完全放置モードでも取りに行く（依頼者）"""
+        表に無いアイテム → None（今どおり）。完全放置モードでも取りに行くが、
+        Guidance Plush だけ（依頼者）"""
         st = self._st
         if SharedState.get_item_begin_mode():
             return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者）
@@ -1353,6 +1354,8 @@ class ActionExecutor:
                 or not self._auto_begin_active()):
             return None
         item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える）
+        if self._hands_free() and item_id != RoundDecision.guidance_plush_id():
+            return None
         shop = ItemFetch.shop_for(item_id, config.ITEMS)
         if shop is None or not ItemFetch.available():
             return None
