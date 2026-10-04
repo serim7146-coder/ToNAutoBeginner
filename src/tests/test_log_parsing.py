@@ -227,6 +227,21 @@ class TestLogParser(unittest.TestCase):
         self.assertEqual(event.round_type, "Double Trouble")
         self.assertEqual(event.terror_ids, [1, 2])
 
+    def test_bloodbath_with_three_same_terrors_is_ex(self):
+        """EX はラウンド開始では Bloodbath と出る。3体が同じ番号なら EX（依頼者）"""
+        start = LogParser.parse("This round is taking place at Facility (12) and the round type is Bloodbath")
+        self.assertEqual(start.round_type, "Bloodbath", "開始の時点では見分けられない")
+        for kind in ("set", "revealed"):
+            ex = LogParser.parse(f"Killers have been {kind} - 50 50 50 // Round type is Bloodbath")
+            self.assertEqual((ex.round_type, ex.terror_ids), ("Bloodbath EX", [50]), kind)
+        normal = LogParser.parse("Killers have been set - 50 50 7 // Round type is Bloodbath")
+        self.assertEqual((normal.round_type, normal.terror_ids), ("Bloodbath", [50, 50, 7]))
+
+    def test_ex_alone_is_bloodbath_ex(self):
+        start = LogParser.parse("This round is taking place at Facility (12) and the round type is EX")
+        killers = LogParser.parse("Killers have been set - 50 50 50 // Round type is EX")
+        self.assertEqual((start.round_type, killers.round_type), ("Bloodbath EX", "Bloodbath EX"))
+
     def test_user_auth_and_joining_parse_after_prefix(self):
         prefix = "2026.05.24 10:00:00 Log - "
         user = LogParser.parse(prefix + "User Authenticated: tester (usr_12345678-1234-1234-1234-123456789abc)")

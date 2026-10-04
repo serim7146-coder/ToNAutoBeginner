@@ -189,6 +189,7 @@ LogMonitor._process(line)
 4. `RoundDecision.decide_killers`: 続行リスト（Classic と Moon では Special/Moon 枠も見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
    DTM/Waldo は3勝まで（窓の設定 `cancel_afk_after_unlock` で3勝の後も）。Waldo は Have Plush を持っているときだけ（番号は item.json の名前から。分からなければ前と同じく続行）。
    テラーが複数体出るラウンド（`config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS`: Double Trouble・Bloodbath・Midnight）では DTM/Waldo でも続行しない。Bloodbath EX・Cracked などほかの特殊ラウンドは続行する（完全放置モードも同じ）。
+   Bloodbath EX はラウンド開始の行では「Bloodbath」と出る。`LogParser` が Killers 行で3つの番号がそろった Bloodbath を「Bloodbath EX」に読み替える（「EX」とだけ出た場合も同じ名前にそろえる。実ログでは未確認）。判断はすべて Killers 行の後なので、続行リスト・ラウンド指定・DTM/Waldo・統計（番号 8）は EX として扱う。干し芋/焼き芋の「Bloodbath は自爆」には含めない（続行リストで判定）。
 
 ## 8. Begin
 

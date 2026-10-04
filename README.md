@@ -50,6 +50,7 @@
 * Runは自爆を行いません。Runラウンドの窓が選択されることもありません。
 * ~~April Foolイベント中に配布された当ツールはSanicをFoxyに置換しています。ex.) Foxy生存済みで、Sanic未生存の際は、Foxyで判定され、生存済みと判定されます。~~
 * 8 Pagesはテラーを正確に判定できません。
+* Bloodbath EX はラウンド開始では Bloodbath と出るため、テラーが出た時点で3体が同じテラーなら Bloodbath EX と判定します。
 * 干し芋・焼き芋のインスタンスでは、次のルールで自爆します（自動自爆が ON のとき）。
   * Classic（Variant を除く）・Bloodbath・Classic.exe・Randomizer は自爆します。
   * Moon は2回目から自爆します。焼き芋では Mystic Moon と Solstice を1回目から自爆します。

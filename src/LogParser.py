@@ -40,6 +40,27 @@ RE_KILLERS_SET = re.compile(r"Killers have been set - (\d+) (\d+) (\d+) // Round
 RE_KILLERS_UNKNOWN = re.compile(r"Killers is unknown - \?\?\? // .+ // Round type is (.+)")
 RE_KILLERS_REVEALED = re.compile(r"Killers have been revealed - (\d+) (\d+) (\d+) // Round type is (.+)")
 RE_LIVED = re.compile(r"^Lived in round[.]$")
+
+# Bloodbath EX は、ラウンド開始の行では「Bloodbath」と出る（依頼者）。EX では3体が
+# 同じテラーになる（依頼者: 確実）ので、Killers 行の3つの番号がそろっていれば EX と
+# みなす（ToN Save Manager も EX を「Bloodbath で全員同じ番号」と定義している）。
+# 「EX」とだけ出た場合も同じ名前にそろえる（ToN Save Manager のエミュレータはそう書く。
+# 実際のログでは未確認）
+BLOODBATH_EX = "Bloodbath EX"
+ROUND_TYPE_ALIASES = {"EX": BLOODBATH_EX}
+
+
+def _round_type(raw: str) -> str:
+    name = raw.strip()
+    return ROUND_TYPE_ALIASES.get(name, name)
+
+
+def _killers_round_type(raw: str, a: str, b: str, c: str) -> str:
+    """Killers 行のラウンド種別。3体が同じ番号の Bloodbath は Bloodbath EX"""
+    name = _round_type(raw)
+    if name == "Bloodbath" and int(a) == int(b) == int(c):
+        return BLOODBATH_EX
+    return name
 LIVED_MARK = "Lived in round"
 RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
@@ -219,14 +240,14 @@ def parse(line: str) -> LogEvent | None:
         map_match = RE_MAP_ID.search(raw_map)
         return LogEvent(
             EVENT_ROUND_START,
-            round_type=m.group(2).strip(),
+            round_type=_round_type(m.group(2)),
             raw_map=raw_map,
             map_id=int(map_match.group(1)) if map_match else 0,
         )
 
     m = RE_KILLERS_SET.match(line)
     if m:
-        round_type = m.group(4).strip()
+        round_type = _killers_round_type(m.group(4), m.group(1), m.group(2), m.group(3))
         return LogEvent(
             EVENT_KILLERS_SET,
             round_type=round_type,
@@ -242,7 +263,7 @@ def parse(line: str) -> LogEvent | None:
 
     m = RE_KILLERS_UNKNOWN.match(line)
     if m:
-        return LogEvent(EVENT_KILLERS_UNKNOWN, round_type=m.group(1).strip())
+        return LogEvent(EVENT_KILLERS_UNKNOWN, round_type=_round_type(m.group(1)))
 
     signal = TerrorReplacement.match_signal(line)
     if signal is not None:
@@ -250,7 +271,7 @@ def parse(line: str) -> LogEvent | None:
 
     m = RE_KILLERS_REVEALED.match(line)
     if m:
-        round_type = m.group(4).strip()
+        round_type = _killers_round_type(m.group(4), m.group(1), m.group(2), m.group(3))
         return LogEvent(
             EVENT_KILLERS_REVEALED,
             round_type=round_type,

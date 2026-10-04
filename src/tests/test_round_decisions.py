@@ -3181,6 +3181,20 @@ class TestOpenSpecialAfterUnlock(unittest.TestCase):
             self.assertEqual(monitor._hands_free_skip_reason([config.DTM_ID]) is None, expected,
                              round_type)
 
+    def test_bloodbath_ex_is_told_apart_by_the_killers_line(self):
+        """EX はラウンド開始では Bloodbath。Killers 行で3体が同じなら EX として続行する"""
+        for killers, expected in (("50 50 50", True), ("50 7 9", False)):
+            monitor = self._monitor(True)
+            with patch.object(LogMonitor.threading, "Thread"), \
+                 patch.object(ConnectDB, "register_round"), \
+                 patch.object(PlaySound, "play_sound"):
+                monitor._process("This round is taking place at Facility (12) "
+                                 "and the round type is Bloodbath")
+                monitor._process(f"Killers have been set - {killers} // Round type is Bloodbath")
+            self.assertEqual(monitor.st.round_type, "Bloodbath EX" if expected else "Bloodbath")
+            _kind, is_continue, _open = monitor._list_plan(monitor.st.terror_ids, False)
+            self.assertEqual(is_continue, expected, killers)
+
 
 class TestEquippingNothing(unittest.TestCase):
     """「Equipping 0」（外しただけ）では装備待ちを解かない"""
