@@ -39,7 +39,7 @@ def open_special_round_type(round_type: str) -> bool:
 
 
 def open_special_ids(terror_ids, holds_plush: bool | None = None) -> list[int]:
-    """続行してよい DTM/Waldo。Waldo は Have Plush を持っているときだけ。
+    """続行してよい DTM/Waldo。Waldo は Guidance Plush を持っているときだけ。
     holds_plush が None（持っているか分からない）なら前と同じく続行する"""
     return [tid for tid in terror_ids or ()
             if tid in config.OPEN_SPECIAL_ROUND_TERROR_IDS

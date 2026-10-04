@@ -34,7 +34,11 @@ class TestItemCatalog(unittest.TestCase):
         items = ItemCatalog.load_items(REPO_ROOT / "item.json")
         self.assertIsNone(ItemCatalog.take_load_problem())
         self.assertTrue(items)
-        build = (REPO_ROOT / "build.py").read_text(encoding="utf-8")
+        self.assertEqual(ItemCatalog.item_id_by_name(config.GUIDANCE_PLUSH_NAME, items), 70,
+                         "Waldo の続行条件のアイテムを名前で引ける")
+        names = [item.name for item in items.values()]
+        self.assertEqual(len(names), len(set(names)), "同じ名前が2つあると名前で引けない")
+        build =(REPO_ROOT / "build.py").read_text(encoding="utf-8")
         self.assertIn("--include-data-files=item.json=item.json", build,
                       "exe に入れないと空の表で動く")
 

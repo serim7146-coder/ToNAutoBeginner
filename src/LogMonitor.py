@@ -2085,9 +2085,9 @@ class LogMonitor:
                 else otherwise)
 
     def _holds_plush(self) -> bool | None:
-        """Have Plush を持っているか。番号が分からなければ None（Waldo は前と同じく続行）"""
-        plush = (ItemCatalog.item_id_by_name(config.HAVE_PLUSH_NAME, config.ITEMS)
-                 or config.HAVE_PLUSH_ITEM_ID)
+        """Guidance Plush を持っているか。番号が分からなければ None（Waldo は前と同じく続行）"""
+        plush = (ItemCatalog.item_id_by_name(config.GUIDANCE_PLUSH_NAME, config.ITEMS)
+                 or config.GUIDANCE_PLUSH_ITEM_ID)
         if not plush:
             return None
         return self.st.held_item_id == plush

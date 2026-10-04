@@ -3043,14 +3043,14 @@ class TestAlternateRoundNameForDb(unittest.TestCase):
         self.assertEqual(self.monitor._round_type_for_db([]), "Fog")
 
 
-class TestWaldoNeedsHavePlush(unittest.TestCase):
-    """Waldo を続行するのは Have Plush を持っているときだけ。DTM は今までどおり。
-    Have Plush の番号が分からない（item.json に無い）間は、前と同じく続行する"""
+class TestWaldoNeedsGuidancePlush(unittest.TestCase):
+    """Waldo を続行するのは Guidance Plush を持っているときだけ。DTM は今までどおり。
+    Guidance Plush の番号が分からない（item.json に無い）間は、前と同じく続行する"""
 
     PLUSH = 77
 
     def setUp(self):
-        items = {self.PLUSH: ItemCatalog.Item("Have Plush", "Event", True),
+        items = {self.PLUSH: ItemCatalog.Item("Guidance Plush", "Event", True),
                  1: ItemCatalog.Item("Glow Stick", "Survival", True)}
         p = patch.object(config, "ITEMS", items)
         p.start()
@@ -3071,10 +3071,10 @@ class TestWaldoNeedsHavePlush(unittest.TestCase):
         return is_continue, open_special
 
     def test_the_id_is_looked_up_by_name(self):
-        self.assertEqual(ItemCatalog.item_id_by_name(" have plush ", config.ITEMS), self.PLUSH)
-        self.assertIsNone(ItemCatalog.item_id_by_name("Have Plush", {}))
+        self.assertEqual(ItemCatalog.item_id_by_name(" guidance plush ", config.ITEMS), self.PLUSH)
+        self.assertIsNone(ItemCatalog.item_id_by_name("Guidance Plush", {}))
 
-    def test_waldo_with_have_plush_continues(self):
+    def test_waldo_with_guidance_plush_continues(self):
         self.assertEqual(self._continues(self._monitor(self.PLUSH), [config.WALDO_ID]), (True, True))
 
     def test_waldo_with_another_item_is_skipped(self):
@@ -3087,13 +3087,13 @@ class TestWaldoNeedsHavePlush(unittest.TestCase):
         self.assertEqual(self._continues(self._monitor(1), [config.DTM_ID]), (True, True))
 
     def test_without_the_id_waldo_is_as_before(self):
-        with patch.object(config, "ITEMS", {}), patch.object(config, "HAVE_PLUSH_ITEM_ID", None):
+        with patch.object(config, "ITEMS", {}), patch.object(config, "GUIDANCE_PLUSH_ITEM_ID", None):
             monitor = self._monitor(1)
             self.assertIsNone(monitor._holds_plush())
             self.assertEqual(self._continues(monitor, [config.WALDO_ID]), (True, True))
 
     def test_the_fallback_id_in_config_is_used(self):
-        with patch.object(config, "ITEMS", {}), patch.object(config, "HAVE_PLUSH_ITEM_ID", 5):
+        with patch.object(config, "ITEMS", {}), patch.object(config, "GUIDANCE_PLUSH_ITEM_ID", 5):
             self.assertTrue(self._monitor(5)._holds_plush())
             self.assertFalse(self._monitor(1)._holds_plush())
 
