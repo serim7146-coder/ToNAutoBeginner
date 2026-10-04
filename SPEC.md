@@ -221,9 +221,15 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\fog_object_names.json` | 看破の名前ごとの答え合わせ |
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
-| リポジトリの `terrors.json`・`maps.json`・`item.json`・`voice/`・`begin_templates/`・`shop_templates/` | exe に同梱するデータ（item.json は準備中でまだ無い） |
+| リポジトリの `terrors.json`・`maps.json`・`item.json`・`voice/`・`begin_templates/`・`shop_templates/` | exe に同梱するデータ |
 
 ## 12. ビルド・テスト
 
 - ビルド: リポジトリの直下で `python build.py`（Nuitka の onefile）。展開先は `%LOCALAPPDATA%\ToNAutoBeginner\<版>-<ビルドの印>`。
+  exe ができたら続けてインストーラー `dist/ToNAutoBeginner-Setup.exe` を作る（Inno Setup 6 の ISCC。`installer/ToNAutoBeginner.iss`。見つからなければ exe だけ）。
+- インストーラー: ユーザー単位（管理者権限なし）で `%LOCALAPPDATA%\Programs\ToNAutoBeginner` に入れる。自動更新は exe の横で差し替えるので、書き込める場所に入れる。
+  起動中かは `config.APP_MUTEX_NAME` のミューテックス（`main.hold_running_mutex`。.iss の AppMutex と同じ名前）で見る。
+  アップデート（自動更新・Setup の上書き）ではアンインストールは走らずデータは残る。アンインストールはインストール先・`%APPDATA%\ToNAutoBeginner`・`%LOCALAPPDATA%\ToNAutoBeginner` を全部消す。
+  `AppId` は変えない（変えると別アプリ扱いになる）。
+- リリース: `ToNAutoBeginner.exe`（自動更新が探すのはこの名前）と `ToNAutoBeginner-Setup.exe` の両方を、`APP_VERSION` と同じタグのリリースに置く。
 - テスト: `src` で `python UnitTest.py`（全部）／`python UnitTest.py test_freezes`（1ファイル）。本体は `src/tests/test_*.py`、共通の準備は `src/tests/support.py`（Windows 専用モジュールの差し替え・本物の OSC / 設定 / DB に触らない安全装置）。

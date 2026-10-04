@@ -1,5 +1,12 @@
 # 最新リリース
-[ToNAutoBeginner](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner.exe)
+* [インストーラー（おすすめ）](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner-Setup.exe)
+* [exe 単体](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner.exe)
+
+## インストール・アンインストール
+* インストーラーは管理者権限なしで `%LOCALAPPDATA%\Programs\ToNAutoBeginner` に入れます。スタートメニューから起動できます。
+* アップデートは今までどおりツールが自動で行います。設定や統計は残ります。
+* アンインストールは Windows の「設定 → アプリ」から行います。設定・統計・ログ・画像（`%APPDATA%\ToNAutoBeginner`）と展開先（`%LOCALAPPDATA%\ToNAutoBeginner`）も消えます。
+* exe 単体で使っている場合は、exe と上の2つのフォルダを手で消してください。
 
 # ToNAutoBeginner
 **VRChatワールド「Terrors of Nowhere」向けの支援ツール**

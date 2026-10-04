@@ -763,13 +763,110 @@ class TestBuildScript(unittest.TestCase):
                 self.build.build_command(bad)
 
     def test_main_runs_nuitka_in_the_repo_root(self):
-        with patch.object(self.build.subprocess, "run") as run, patch("builtins.print"):
+        with patch.object(self.build.subprocess, "run") as run, patch("builtins.print"), \
+             patch.object(self.build, "find_iscc", return_value=None):
             run.return_value.returncode = 0
-            self.assertEqual(self.build.main(), 0)
+            self.assertEqual(self.build.main(), 0, "Inno Setup が無くても exe ができれば成功")
+        self.assertEqual(run.call_count, 1)
         cmd = run.call_args.args[0]
         self.assertTrue(any(a.startswith(f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{config.APP_VERSION}-")
                             for a in cmd), cmd)
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), REPO_ROOT)
+
+    def test_the_installer_is_built_after_the_exe(self):
+        iscc = Path("C:/Inno/ISCC.exe")
+        with patch.object(self.build.subprocess, "run") as run, patch("builtins.print"), \
+             patch.object(self.build, "find_iscc", return_value=iscc):
+            run.return_value.returncode = 0
+            self.assertEqual(self.build.main(), 0)
+        nuitka, setup = (c.args[0] for c in run.call_args_list)
+        self.assertEqual(nuitka[1:3], ["-m", "nuitka"])
+        numbers = config.APP_VERSION.lstrip("v")
+        self.assertEqual(setup, [str(iscc), f"/DAppVersion={numbers}",
+                                 str(REPO_ROOT / "installer" / "ToNAutoBeginner.iss")])
+
+    def test_no_installer_when_the_exe_failed(self):
+        with patch.object(self.build.subprocess, "run") as run, patch("builtins.print"), \
+             patch.object(self.build, "find_iscc", return_value=Path("C:/Inno/ISCC.exe")):
+            run.return_value.returncode = 3
+            self.assertEqual(self.build.main(), 3)
+        self.assertEqual(run.call_count, 1)
+
+    def test_iscc_is_found_by_env_then_path_then_the_usual_places(self):
+        with patch.object(self.build.shutil, "which", return_value="/bin/ISCC"):
+            self.assertEqual(self.build.find_iscc({"ISCC": "D:/x/ISCC.exe"}), Path("D:/x/ISCC.exe"))
+            self.assertEqual(self.build.find_iscc({}), Path("/bin/ISCC"))
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(self.build.shutil, "which", return_value=None):
+            self.assertIsNone(self.build.find_iscc({"LOCALAPPDATA": d}))
+            exe = Path(d) / "Programs" / "Inno Setup 6" / "ISCC.exe"
+            exe.parent.mkdir(parents=True)
+            exe.write_text("", encoding="utf-8")
+            self.assertEqual(self.build.find_iscc({"LOCALAPPDATA": d,
+                                                   "ProgramFiles": d, "ProgramFiles(x86)": d}), exe)
+
+
+class TestInstallerScript(unittest.TestCase):
+    """installer/ToNAutoBeginner.iss（Inno Setup）の約束ごと。ISCC は呼ばない"""
+
+    def setUp(self):
+        self.text = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
+
+    def _setting(self, key):
+        m = re.search(rf"^{re.escape(key)}=(.*)$", self.text, re.M)
+        self.assertIsNotNone(m, key)
+        return m.group(1).strip()
+
+    def test_it_installs_per_user_where_the_auto_update_can_write(self):
+        self.assertEqual(self._setting("PrivilegesRequired"), "lowest")
+        self.assertEqual(self._setting("DefaultDirName"), r"{autopf}\{#AppName}")
+
+    def test_the_running_check_uses_the_apps_mutex(self):
+        self.assertEqual(self._setting("AppMutex"), config.APP_MUTEX_NAME)
+
+    def test_the_app_id_is_fixed(self):
+        self.assertEqual(self._setting("AppId"), "{{F3825561-B8B1-4328-8C50-51C1EFCF0BF5}",
+                         "変えると上書きもアンインストールも効かなくなる")
+
+    def test_uninstall_removes_the_data_and_the_extract_dirs(self):
+        section = self.text.split("[UninstallDelete]", 1)[1]
+        for name in (r"{userappdata}\{#AppName}", r"{localappdata}\{#AppName}",
+                     r"{app}\{#AppExe}.old"):
+            self.assertIn(f'Name: "{name}"', section, name)
+        self.assertIn('#define AppName "ToNAutoBeginner"', self.text)
+        self.assertEqual(config.SETTINGS_PATH.parent.name, "ToNAutoBeginner", "%APPDATA% の同じフォルダ")
+
+    def test_it_packs_the_exe_that_nuitka_builds(self):
+        self.assertIn('#define AppExe "ToNAutoBeginner.exe"', self.text)
+        self.assertIn('Source: "..\\{#AppExe}"', self.text)
+        self.assertEqual(config.UPDATE_ASSET_NAME, "ToNAutoBeginner.exe")
+        self.assertEqual(self._setting("OutputBaseFilename"), "ToNAutoBeginner-Setup")
+
+
+class TestRunningMutex(unittest.TestCase):
+    """インストーラーが起動中と分かる目印（main.hold_running_mutex）"""
+
+    def setUp(self):
+        import main
+        self.main = main
+        self.addCleanup(setattr, main, "_running_mutex", None)
+        main._running_mutex = None
+
+    def test_it_creates_the_named_mutex_once(self):
+        fake = MagicMock()
+        fake.windll.kernel32.CreateMutexW.return_value = 77
+        with patch.object(self.main, "ctypes", fake), patch.object(self.main.sys, "platform", "win32"):
+            self.main.hold_running_mutex()
+            self.main.hold_running_mutex()
+        fake.windll.kernel32.CreateMutexW.assert_called_once_with(None, False, config.APP_MUTEX_NAME)
+        self.assertEqual(self.main._running_mutex, 77)
+
+    def test_a_failure_does_not_stop_the_start(self):
+        fake = MagicMock()
+        fake.windll.kernel32.CreateMutexW.side_effect = OSError("x")
+        with patch.object(self.main, "ctypes", fake), patch.object(self.main.sys, "platform", "win32"):
+            self.main.hold_running_mutex()
+        self.assertIsNone(self.main._running_mutex)
 
 
 
@@ -999,10 +1096,10 @@ class TestReadmeRelease(unittest.TestCase):
         for url in urls:
             self.assertIn("/releases/latest/download/", url)
 
-    def test_the_url_points_at_the_update_asset(self):
+    def test_the_url_points_at_the_installer_and_the_update_asset(self):
         urls = re.findall(r"releases/latest/download/([^\s)]+)", self._readme())
 
-        self.assertEqual(urls, [config.UPDATE_ASSET_NAME])
+        self.assertEqual(urls, ["ToNAutoBeginner-Setup.exe", config.UPDATE_ASSET_NAME])
 
     def test_the_url_points_at_this_repository(self):
         self.assertIn(f"github.com/{config.GITHUB_REPO}/releases/",

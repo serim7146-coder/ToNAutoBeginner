@@ -15,6 +15,9 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 APP_VERSION       = "v0.6.0"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
+# 起動中の目印（名前付きミューテックス）。インストーラー・アンインストーラーがこれを見て、
+# 起動中なら閉じるよう案内する。installer/ToNAutoBeginner.iss の AppMutex と同じ名前にする
+APP_MUTEX_NAME    = "ToNAutoBeginnerRunning"
 
 # ── 設定ファイル（前回のtnlパスなどを保存） ──
 SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "settings.json"
