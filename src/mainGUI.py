@@ -550,7 +550,7 @@ class CollapsibleFrame(tk.Frame):
 
 
 class ReportDialog(tk.Toplevel):
-    """不具合の報告（BU）。要件・窓・添付を選んで Discord の Webhook へ送る"""
+    """不具合の報告。要件・窓・添付を選んで Discord の Webhook へ送る"""
 
     REPORT_NOTE = ("VRChat のログには、一緒にいた人の名前やユーザー ID、あなたの表示名が"
                    "含まれます。画面の撮影には一緒にいた人の名前が写ることがあります。"
@@ -810,7 +810,7 @@ class App(tk.Tk):
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
-    # ── 自爆キャンセルのキー（CL。押した瞬間の通知で拾う）──────────
+    # ── 自爆キャンセルのキー（押した瞬間の通知で拾う）──────────
     # ツール自身が背面で送る自爆の ^ は PostMessage なので、低レベルのフックには来ない
     def _hook_suicide_cancel_key(self):
         """今のキーで受け直す（起動時と、キーを変えたとき）"""
@@ -1394,7 +1394,7 @@ class App(tk.Tk):
                                           command=self._begin_capture_key)
         self.btn_capture_key.pack(side="left", padx=(6, 0))
         self._refresh_emergency_key_label()
-        # 自爆キャンセルのキー（CL）は行の最後
+        # 自爆キャンセルのキーは行の最後
         self.lbl_suicide_cancel_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
         self.lbl_suicide_cancel_key.pack(side="left", padx=(16, 0))
         self.btn_capture_cancel_key = ttk.Button(
@@ -1429,7 +1429,7 @@ class App(tk.Tk):
         self.btn_speed_detect.pack(side="left", padx=(8, 0))
         self._refresh_speed_detect_button()
 
-        # アイテム自動取得（CM。全窓共通・保存・既定 OFF）
+        # アイテム自動取得（全窓共通・保存・既定 OFF）
         self.btn_item_fetch = tk.Button(
             fhf, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
             font=(UIFont.UI, 11, "bold"), relief="raised", padx=12, pady=5,
@@ -1929,7 +1929,7 @@ class App(tk.Tk):
             start_key = ""
         self.v_start_key.set(start_key)
         self._refresh_start_key_label()
-        # 自爆キャンセルのキー（CL）。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
+        # 自爆キャンセルのキー。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
         cancel_key = data.get("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
         if not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
             cancel_key = config.SUICIDE_CANCEL_KEY
@@ -2265,7 +2265,7 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
         self._debug_start()
 
-    # ── 不具合の報告（BU）──────────────────────────
+    # ── 不具合の報告 ────────────────────────
     def _open_report(self):
         dialog = getattr(self, "_report_dialog", None)
         try:

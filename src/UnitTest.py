@@ -132,16 +132,15 @@ import UIFont
 import AutoUpdate
 import config
 from State import WindowConfig, WindowState
-import OSCControl
 
 
-# ── テストから本物の OSC を送らない・本物の受け口を開かない（DE）─────────
+# ── テストから本物の OSC を送らない・本物の受け口を開かない ─────────
 # 127.0.0.1:9000 は依頼者の窓1 の VRChat が待っている。テストが本物のソケットで送ると、窓1 が勝手に
 # 動く・止まる（1回流すごとに約27万通送っていた）。OSC を使うモジュールの socket を、送ったもの・
 # 開こうとした受け口を記録するだけの偽物に差し替える（読み込み時に。どのテストより前）。
 # 記録が1つでもあれば tearDownModule で失敗にする（テストの並び順に左右されない）
 def _module_time(sleep):
-    """そのモジュールの time に差し替える偽物（DE）。patch.object(<モジュール>.time, "sleep") は time.sleep
+    """そのモジュールの time に差し替える偽物。patch.object(<モジュール>.time, "sleep") は time.sleep
     そのもの（全モジュール共通）を偽物にするので、ほかのモジュールの「時計を見ながら待つ」処理（OSC の
     送り直しなど）が時間の進まないまま空回りする。時計は本物のまま、sleep だけ偽物"""
     fake = type(sys)("time_for_test")
@@ -191,7 +190,7 @@ class _OscSocketTrap:
 
     @classmethod
     def install(cls):
-        for mod in (OSCClient, OSCReceiver, OSCControl):
+        for mod in (OSCClient, OSCReceiver):
             mod.socket = cls.module
 
     @classmethod
@@ -255,7 +254,7 @@ def tearDownModule():
 
 
 class TestNoRealOscDE(unittest.TestCase):
-    """DE: テストから本物の OSC を送らない・本物の受け口を開かない（窓1 の VRChat が 9000 で待っている）"""
+    """テストから本物の OSC を送らない・本物の受け口を開かない（窓1 の VRChat が 9000 で待っている）"""
 
     def setUp(self):
         self.sends, self.binds = list(_OscSocketTrap.sends), list(_OscSocketTrap.binds)
@@ -265,7 +264,7 @@ class TestNoRealOscDE(unittest.TestCase):
         _OscSocketTrap.binds[:] = self.binds
 
     def test_the_modules_use_the_trap(self):
-        for mod in (OSCClient, OSCReceiver, OSCControl):
+        for mod in (OSCClient, OSCReceiver):
             self.assertIs(mod.socket, _OscSocketTrap.module, mod.__name__)
 
     def test_a_send_is_caught_not_sent(self):
@@ -483,7 +482,7 @@ class TestOSCClient(unittest.TestCase):
              patch.object(OSCClient.time, "time", side_effect=lambda: now[0]), \
              patch.object(OSCClient.time, "sleep", side_effect=lambda s: now.__setitem__(0, now[0] + s)):
             client.press("/input/MoveForward", 0.5)
-        # DB: 押している間は 0.1 秒ごとに 1 を送り直す（0.1・0.2・0.3・0.4 の4回）
+        # 押している間は 0.1 秒ごとに 1 を送り直す（0.1・0.2・0.3・0.4 の4回）
         self.assertEqual([v for _a, v in sent], [0, 1, 1, 1, 1, 1, 0])
 
     def test_launch_args_include_osc_when_index_given(self):
@@ -5233,7 +5232,7 @@ class TestEmeraldCityInstance(unittest.TestCase):
         self.assertEqual(self._parse("~region(jp)"), config.INSTANCE_PUBLIC)
 
     def test_the_group_id_is_not_empty(self):
-        """空だと group() がどのグループにも一致してしまう（CBPS_GROUP_ID の轍）"""
+        """空だと group() がどのグループにも一致してしまう"""
         self.assertTrue(config.EMERALD_CITY_GROUP_ID.strip())
         self.assertTrue(config.EMERALD_CITY_GROUP_ID.startswith("grp_"))
 
@@ -5339,8 +5338,7 @@ class TestGroupRoundTable(unittest.TestCase):
                 GroupRound.NORMAL, round_type)
 
     def test_other_instances_are_never_touched(self):
-        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_CBPS,
-                      config.INSTANCE_OTHER_GROUP):
+        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP):
             self.assertEqual(self._decide(itype, "Classic"),
                              GroupRound.NORMAL, itype)
 
@@ -11287,7 +11285,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         focus.assert_not_called()
 
     def test_another_windows_speed_freeze_does_not_block_it(self):
-        """CZ: 続行ラウンドは何よりも優先して前面化する（速度検知のフリーズでは止めない）"""
+        """続行ラウンドは何よりも優先して前面化する（速度検知のフリーズでは止めない）"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.SPEED_FREEZE_EVENT.clear()
 
@@ -11296,7 +11294,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         focus.assert_called_once_with(777)
 
     def test_another_windows_equip_wait_does_not_block_it(self):
-        """CZ: 窓6 22:23 の並び（ほかの窓が装備待ち）でもすぐ前面化する"""
+        """窓6 22:23 の並び（ほかの窓が装備待ち）でもすぐ前面化する"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.EQUIP_WAIT_EVENT.clear()
 
@@ -11305,7 +11303,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         focus.assert_called_once_with(777)
 
     def test_a_round_freeze_does_not_block_it(self):
-        """CZ: ラウンド突入のフリーズでも止めない"""
+        """ラウンド突入のフリーズでも止めない"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         SharedState.ROUND_FREEZE_EVENT.clear()
 
@@ -11314,7 +11312,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         focus.assert_called_once_with(777)
 
     def test_another_windows_continue_round_blocks_it(self):
-        """CZ: 止めるのは、ほかの窓が続行ラウンドをやっているときだけ（今どおり前面化しない）"""
+        """止めるのは、ほかの窓が続行ラウンドをやっているときだけ（今どおり前面化しない）"""
         monitor = self._monitor({self.CLASSIC_KEY: {42}})
         other = WindowState()
         SharedState.continue_round_start(other)
@@ -11641,7 +11639,7 @@ class TestAttendToItemLoss(unittest.TestCase):
     # ── 13. 音声はここからしか鳴らない ──────────────────
     def test_the_voice_comes_only_from_here(self):
         """B・C の窓の音声は _attend_to_item_loss() だけ。_handle_item_lost() と
-        Begin 直前からは鳴らなくなった。例外はアイテム自動取得で取りに行く前の音だけ（CY）"""
+        Begin 直前からは鳴らなくなった。例外はアイテム自動取得で取りに行く前の音だけ"""
         src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
         callers = [m.start() for m in re.finditer(r"self\.announce_item_lost_once\(\)", src)]
         show = src[src.index("    def _show_item_loss("):]
@@ -12749,7 +12747,7 @@ class TestBeginAdjust(unittest.TestCase):
         self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
         self.addCleanup(setattr, ActionExecutor.ActionExecutor, "_detector_unavailable_logged",
                         ActionExecutor.ActionExecutor._detector_unavailable_logged)
-        # CI: 高さ 971px で幅 100px の文字は w/H 0.103（目標）。横のテストで前後は動かない
+        # 高さ 971px で幅 100px の文字は w/H 0.103（目標）。横のテストで前後は動かない
         self.capture = patch.object(ScreenCapture, "capture_window",
                                     return_value=(b"\0" * 16, 2, 971))
         for p in (patch.object(BeginDetect, "available", return_value=True),
@@ -12860,7 +12858,7 @@ class TestBeginAdjust(unittest.TestCase):
         self.assertEqual(self.moves, [])
 
     def test_no_begin_anywhere_is_not_found(self):
-        """CI: 見つからなければ探す（後ろ→戻して前へ×4→戻す）。それでも無ければ not_found"""
+        """見つからなければ探す（後ろ→戻して前へ×4→戻す）。それでも無ければ not_found"""
         self.hits = [None] * 10
 
         self.assertEqual(self.ex._adjust_to_begin(1), "not_found")
@@ -14645,7 +14643,7 @@ class TestHandsFreeSpeedDetectBR(unittest.TestCase):
         monitor.st.instance_type = instance_type
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)
-        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
+        monitor.st.last_begin_press_at = time.time()   # ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, call):
@@ -14918,7 +14916,7 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
         self.root.update()
 
     def _listed(self):
-        """[(見せている ID, 中の番号)]（BY: 分類の列は無くなり、ID はゲームの ID）"""
+        """[(見せている ID, 中の番号)]（分類の列は無くなり、ID はゲームの ID）"""
         tree = self.window.terror_tree
         return [(int(tree.item(i, "values")[0]), int(i)) for i in tree.get_children()]
 
@@ -14978,7 +14976,7 @@ class TestStatisticsTerrorTabBT(unittest.TestCase):
 
 
 class TestBeginAfterFalseVerified(unittest.TestCase):
-    """BW: 定期の Verified を受理と取り違えたら、15秒後に begin_done を戻して Begin を押し直す"""
+    """定期の Verified を受理と取り違えたら、15秒後に begin_done を戻して Begin を押し直す"""
 
     BASE = datetime(2026, 10, 1, 14, 23, 9).timestamp()
 
@@ -14989,7 +14987,7 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=auto_begin), {}, lambda _m: None,
                                         window_idx=1)
         monitor.st.instance_type = instance_type
-        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
+        monitor.st.last_begin_press_at = time.time()   # ツールが押した直後（受理されるのはこのときだけ）
         monitor._running = True
         monitor.logs = []
         monitor.logger = monitor.logs.append
@@ -15095,7 +15093,7 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         self._feed(monitor, t, "Verified Round End")
         self._feed(monitor, t, "Verified")
         monitor.st.last_begin_press_at = 0.0          # 以後はツールが押していない（定期）
-        # CU: 実機ではログの行が絶えず来るので、受理から15秒過ぎた最初の行で「始まらなかった」が決まる
+        # 実機ではログの行が絶えず来るので、受理から15秒過ぎた最初の行で「始まらなかった」が決まる
         # （次の Verified の300秒後より前）。その行が無いと、後で決まった位相が先に覚えた位相を上書きする
         self._feed(monitor, t + 20)
         for k in range(1, 5):
@@ -15116,7 +15114,7 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
 
 
 class TestDoBeginAgain(unittest.TestCase):
-    """BW: ActionExecutor.do_begin_again（移動がまだなら移動から、済んでいれば押すところから）"""
+    """ActionExecutor.do_begin_again（移動がまだなら移動から、済んでいれば押すところから）"""
 
     def _executor(self, **st_kw):
         st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, **st_kw)
@@ -15574,7 +15572,7 @@ class TestDebugLogTraces(unittest.TestCase):
 
 
 class TestBugReportContent(unittest.TestCase):
-    """BU: 送る中身（本文・zip・伏せる・大きさ）。本物の Discord へは送らない"""
+    """送る中身（本文・zip・伏せる・大きさ）。本物の Discord へは送らない"""
 
     NOW = datetime(2026, 10, 1, 12, 34, 56)
     HOME = r"C:\Users\Alice"
@@ -15590,7 +15588,7 @@ class TestBugReportContent(unittest.TestCase):
         self.debug.write_text("debug line\n", encoding="utf-8")
         self.vrchat = self.dir / "output_log.txt"
         self.vrchat.write_text("vrchat line C:/users/alice/AppData\n", encoding="utf-8")
-        p = patch.object(BeginMiss, "folder", return_value=self.dir / "begin_miss")   # CR: 撮影はこのテストの場所
+        p = patch.object(BeginMiss, "folder", return_value=self.dir / "begin_miss")   # 撮影はこのテストの場所
         p.start()
         self.addCleanup(p.stop)
 
@@ -15706,7 +15704,7 @@ class TestBugReportContent(unittest.TestCase):
 
 
 class TestBugReportSend(unittest.TestCase):
-    """BU: 送り方（multipart・UA・失敗の文言に URL を出さない）"""
+    """送り方（multipart・UA・失敗の文言に URL を出さない）"""
 
     URL = "https://discord.example/api/webhooks/123/SECRET-TOKEN"
 
@@ -15775,7 +15773,7 @@ class TestBugReportSend(unittest.TestCase):
 
 
 class TestBugReportDialog(unittest.TestCase):
-    """BU: 画面（本物の Tk の App。送信は差し替え）"""
+    """画面（本物の Tk の App。送信は差し替え）"""
 
     @classmethod
     def setUpClass(cls):
@@ -15889,7 +15887,7 @@ class TestBugReportDialog(unittest.TestCase):
 
 
 class TestStatisticsFixesBY(unittest.TestCase):
-    """BY: 統計画面の直し（選んだらすぐ集計・分類の列なし・ゲームの ID・チップの組）"""
+    """統計画面の直し（選んだらすぐ集計・分類の列なし・ゲームの ID・チップの組）"""
 
     LOWER = ["Classic", "Run", "Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Special"]
 
@@ -16768,7 +16766,7 @@ class TestOldExtractDirsCH(unittest.TestCase):
 
 
 class TestBeginAdjustDepthCI(unittest.TestCase):
-    """CI: Begin の位置合わせの前後（文字の幅÷窓の高さ）と、見つからないときの探し方。
+    """Begin の位置合わせの前後（文字の幅÷窓の高さ）と、見つからないときの探し方。
     撮影は差し替え（BeginDetect の結果を順に返す偽物。窓の高さ 1000px）"""
 
     AIM = (500.0, 400.0)
@@ -17179,7 +17177,7 @@ class TestBeginScoreMinCK(unittest.TestCase):
 
 
 class TestBeginStrongScoreCT(unittest.TestCase):
-    """CT: 近さ ≥ SCORE_STRONG（0.75）なら周りの黒さを見ない（実機で BEGIN を 0.79〜0.87 で見つけているのに
+    """近さ ≥ SCORE_STRONG（0.75）なら周りの黒さを見ない（実機で BEGIN を 0.79〜0.87 で見つけているのに
     黒さ 0.31〜0.64 で捨てていた）。今の「近さ ≥ 0.57 かつ 黒さ ≥ 0.65」も残す"""
 
     def _find(self, *candidates):
@@ -17227,7 +17225,7 @@ class TestBeginStrongScoreCT(unittest.TestCase):
 
 
 class TestVerifiedPhaseCU(unittest.TestCase):
-    """CU: ツールが Begin を押す窓で、押した記録の無い Verified が Verified Round End の後に来たとき、定期の
+    """ツールが Begin を押す窓で、押した記録の無い Verified が Verified Round End の後に来たとき、定期の
     位相を知っていて予定（±TOL）に重ならなければ受理する。位相を知らない・予定に重なるなら今どおり無視。
     無視した Verified の後 15 秒以内にラウンドが始まったら、覚えた位相を元に戻す"""
 
@@ -17338,7 +17336,7 @@ class TestVerifiedPhaseCU(unittest.TestCase):
 
 
 class TestItemFetchSpeedCW(unittest.TestCase):
-    """CW: 保存した感度（同じ送る間隔）があれば測らない。合わなければ測り直して1回やり直す。
+    """保存した感度（同じ送る間隔）があれば測らない。合わなければ測り直して1回やり直す。
     送る間隔は 0.005 秒（測り・合わせ・戻し）。感度は間隔と一緒に保存し、間隔が違えば測る"""
 
     TRUE_GAIN = (0.9, 0.55)
@@ -17460,7 +17458,7 @@ class TestItemFetchSpeedCW(unittest.TestCase):
 
 
 class TestItemFetchAimCX(unittest.TestCase):
-    """CX: 押してよいずれを見本の px で持ち、locate の倍率で画面の px に写す（Equip 横±8・縦±3、店のボタン
+    """押してよいずれを見本の px で持ち、locate の倍率で画面の px に写す（Equip 横±8・縦±3、店のボタン
     横±14・縦±10、最小 1px）。保存する感度は calibrate で測った値だけ"""
 
     def setUp(self):
@@ -17531,8 +17529,8 @@ class TestItemFetchAimCX(unittest.TestCase):
             canvas = np.zeros((1080, 1920, 3), np.uint8)
             canvas[300:300 + small.shape[0], 700:700 + small.shape[1]] = small
             x, y, sx, sy, inliers, project = ItemFetch.locate(canvas, ItemFetch.BUTTONS["Equip"])
-            self.assertGreaterEqual(inliers, ItemFetch.MIN_INLIERS, "手がかりの数も返す（DC）")
-            self.assertEqual(project(ItemFetch.BUTTONS["Equip"]), (x, y, sx, sy), "同じ写し方（DD）")
+            self.assertGreaterEqual(inliers, ItemFetch.MIN_INLIERS, "手がかりの数も返す")
+            self.assertEqual(project(ItemFetch.BUTTONS["Equip"]), (x, y, sx, sy), "同じ写し方")
             px, py, _psx, _psy = project(ItemFetch.BUTTONS["Survival"])
             self.assertAlmostEqual(px, 700 + 266 * scale, delta=1.5)
             self.assertAlmostEqual(py, 300 + 95 * scale, delta=1.5)
@@ -17596,7 +17594,7 @@ class TestItemFetchAimCX(unittest.TestCase):
 
 
 class TestItemLossVoiceCY(unittest.TestCase):
-    """CY: 自動取得で取りに行くときも、アイテムロストの音はいつものタイミングで（音だけ・前面化なし）。
+    """自動取得で取りに行くときも、アイテムロストの音はいつものタイミングで（音だけ・前面化なし）。
     アイテム取得→Begin モードは RoundOver、既定のモードは Begin が通った後（取りに行く前）。1ラウンド1回。
     取りに行って失敗・時間切れでは何もしない"""
 
@@ -17753,7 +17751,7 @@ class TestItemLossVoiceCY(unittest.TestCase):
 
 
 class TestEquipGreenCenterDA(unittest.TestCase):
-    """DA: Equip は locate の点の近く（見本の px で 横 ±30・縦 ±15）の緑の画素の重心（緑の文字のど真ん中）を
+    """Equip は locate の点の近く（見本の px で 横 ±30・縦 ±15）の緑の画素の重心（緑の文字のど真ん中）を
     狙う。緑が無ければ座標（直した (180, 177)）。作った画像（黒地に緑の矩形）で確かめる"""
 
     GREEN = (0, 200, 0)                 # BGR。HSV で H 60・S 255・V 200
@@ -17787,7 +17785,7 @@ class TestEquipGreenCenterDA(unittest.TestCase):
 
     def test_it_aims_at_the_middle_of_the_green_text(self):
         """狙いの点から右下 (+6, +5)（見本の px）の緑の矩形 → その中心を狙う
-        （照準は離れた所。照準の真下に緑が無いので、DC の「照準の真下の緑」ではなくこちらで狙う）"""
+        （照準は離れた所。照準の真下に緑が無いので、「照準の真下の緑」ではなくこちらで狙う）"""
         for s in (0.44, 1.0, 1.9):
             point = (900.0, 500.0)
             green = (point[0] + 6 * s, point[1] + 5 * s)
@@ -17851,7 +17849,7 @@ class TestEquipGreenCenterDA(unittest.TestCase):
 
 
 class TestOscHoldResendDB(unittest.TestCase):
-    """DB: OSC で押している間、まだ押しているアドレスへ 1 を OSC_HOLD_RESEND_SEC ごとに送り直す。
+    """OSC で押している間、まだ押しているアドレスへ 1 を OSC_HOLD_RESEND_SEC ごとに送り直す。
     押す長さ・最初の 0→1・最後の 0 は今どおり（偽の送信と時計）"""
 
     def _client(self):
@@ -17909,7 +17907,7 @@ class TestOscHoldResendDB(unittest.TestCase):
 
 
 class TestEquipUnderReticleDC(unittest.TestCase):
-    """DC: Equip の合わせの各回で、まず照準の周りの緑の文字を見て、そのずれが Equip の許しに入っていれば
+    """Equip の合わせの各回で、まず照準の周りの緑の文字を見て、そのずれが Equip の許しに入っていれば
     locate に関係なく動かさずに押す。照準合わせの1回ごとに debug.log に1行（作った画像・偽の locate）"""
 
     AIM = (960.0, 540.0)
@@ -18015,7 +18013,7 @@ class TestEquipUnderReticleDC(unittest.TestCase):
 
 
 class TestEquipPredictDD(unittest.TestCase):
-    """DD: 店のボタンを押す回の撮影で Equip の位置（照準からの差 d）と倍率を覚え、店の中では locate を使わず
+    """店のボタンを押す回の撮影で Equip の位置（照準からの差 d）と倍率を覚え、店の中では locate を使わず
     照準の真下の緑 → 予測の近くの緑 → 予測で合わせる。緑が3回続けて無いときだけ locate（倍率がおかしい結果は
     捨てる）。作った画像（緑の矩形は視点を回すと逆へ動く）と偽の locate"""
 
@@ -18188,7 +18186,7 @@ class TestEquipPredictDD(unittest.TestCase):
 
 
 class TestFetchYieldCZ(unittest.TestCase):
-    """CZ: 自動取得は、ほかの窓の続行・速度検知・突入のフリーズが張られたらその場でやめる（frozen）。
+    """自動取得は、ほかの窓の続行・速度検知・突入のフリーズが張られたらその場でやめる（frozen）。
     マウスを送る前・クリックの前に前面がこの窓かを確かめ、違えばやめる（front_lost）。戻せなかった縦の視点は、
     次にツールがこの窓を前面にしたとき最初に戻す"""
 
@@ -22302,7 +22300,7 @@ class TestVerifiedStrafe(unittest.TestCase):
         monitor.st.instance_type = instance_type
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
-        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
+        monitor.st.last_begin_press_at = time.time()   # ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, monitor, line="Verified"):
@@ -22734,7 +22732,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
         monitor.st.instance_type = instance_type or config.INSTANCE_PRIVATE
         monitor.st.round_end_seen = True
         monitor._verified.on_round_end_verified(0)   # Begin を押せる（トラッカーにも）
-        monitor.st.last_begin_press_at = time.time()   # CO: ツールが押した直後（受理されるのはこのときだけ）
+        monitor.st.last_begin_press_at = time.time()   # ツールが押した直後（受理されるのはこのときだけ）
         return monitor
 
     def _started(self, monitor, line=None):
@@ -22744,7 +22742,7 @@ class TestStringDownloadTrigger(unittest.TestCase):
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
     def test_download_line_is_no_event(self):
-        """CQ: 使っていないので読まない（debug.log の行の約 9% を占めていた）"""
+        """使っていないので読まない（debug.log の行の約 9% を占めていた）"""
         for line in (self.DL, self.DL_ALT):
             self.assertIsNone(LogParser.parse("2026.08.23 17:53:12 Debug      -  " + line), line)
         self.assertFalse(hasattr(LogParser, "EVENT_STRING_DOWNLOAD"))
@@ -24444,8 +24442,8 @@ class _CancelKeyVar:
 
 
 def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
-    """CL: 偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）。
-    CM のアイテム自動取得のボタンの表示もここで足す"""
+    """偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）。
+    アイテム自動取得のボタンの表示もここで足す"""
     app.v_suicide_cancel_key = _CancelKeyVar(key)
     app._refresh_item_fetch_button = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
@@ -24455,7 +24453,7 @@ def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
 
 
 class TestItemFetchCM(unittest.TestCase):
-    """CM: アイテム自動取得。ツールが Begin を押す OSC の窓でアイテムロストのとき、Begin が通った後に
+    """アイテム自動取得。ツールが Begin を押す OSC の窓でアイテムロストのとき、Begin が通った後に
     店の前へ移動 → 前面化 → 特徴点で店の画面を見つけて照準を合わせてクリック（店 → Equip）→ ログの
     Equipping で確かめる。OSC・接地・撮影・マウス・ログは偽物"""
 
@@ -24775,7 +24773,7 @@ class TestItemFetchCM(unittest.TestCase):
         self.addCleanup(SharedState.set_item_fetch_gain, None)
         SharedState.set_item_fetch_gain([0.9, 0.6, 0.005, "calib"])
         self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005, "calib"),
-                         "感度・送った間隔・測った値の印（CW・CX）")
+                         "感度・送った間隔・測った値の印")
         for broken in (None, "x", [1], [0.9, 0.6], [0.9, 0.6, 0.005], [0.9, 0.6, 0.005, "aim"],
                        [0.01, 0.5, 0.005, "calib"], [0.5, 25, 0.005, "calib"],
                        ["a", 1, 0.005, "calib"], [0.9, 0.6, 0, "calib"]):
@@ -24904,13 +24902,13 @@ class TestItemFetchCM(unittest.TestCase):
         return order
 
     def test_after_the_begin_it_fetches_instead_of_waiting(self):
-        """CY: Begin が通った後（いつもの案内のタイミング）に音だけ鳴らしてから取りに行く"""
+        """Begin が通った後（いつもの案内のタイミング）に音だけ鳴らしてから取りに行く"""
         SharedState.set_item_fetch(True)
         ex, st, _ = self._executor()
         self.assertEqual(self._after_round(ex, st, "ok"), ["press", "sound", ("fetch", "Survival", 29)])
 
     def test_a_failure_or_timeout_gives_nothing_more(self):
-        """CY: 取りに行って失敗・時間切れ → 何もしない（前面化・フリーズ・2回目の音なし）"""
+        """取りに行って失敗・時間切れ → 何もしない（前面化・フリーズ・2回目の音なし）"""
         SharedState.set_item_fetch(True)
         for outcome in ("failed", "timeout"):
             ex, st, _ = self._executor()
@@ -24940,7 +24938,7 @@ class TestItemFetchCM(unittest.TestCase):
             self.assertEqual(self._after_round(ex, st, "ok"), ["press", "attend"], kw)
 
     def test_the_item_begin_mode_does_not_fetch(self):
-        """CY: アイテム取得→Begin モードでは自動取得を動かさない（自動取得 ON でも今どおり装備を待つ）"""
+        """アイテム取得→Begin モードでは自動取得を動かさない（自動取得 ON でも今どおり装備を待つ）"""
         SharedState.set_item_fetch(True)
         SharedState.set_item_begin_mode(True)
         ex, st, _ = self._executor()
@@ -25117,7 +25115,7 @@ class TestItemFetchCM(unittest.TestCase):
         self.assertEqual((monitor.st.equip_seen_seq, monitor.st.equip_seen_id), (2, 29))
 
     def test_the_item_begin_mode_round_over_is_as_before(self):
-        """CY: アイテム取得→Begin モードでは自動取得 ON でも、RoundOver は昔どおり _attend_to_item_loss"""
+        """アイテム取得→Begin モードでは自動取得 ON でも、RoundOver は昔どおり _attend_to_item_loss"""
         SharedState.set_item_fetch(True)
         SharedState.set_item_begin_mode(True)
         monitor = self._monitor(auto_begin=True, osc_port=9000)
@@ -25151,9 +25149,9 @@ class TestItemFetchCM(unittest.TestCase):
         loader._load({"item_fetch_gain": [0.9, 0.6, 0.005, "calib"]})
         self.assertEqual(SharedState.get_item_fetch_gain(), (0.9, 0.6, 0.005, "calib"))
         loader._load({"item_fetch_gain": [0.9, 0.6]})
-        self.assertIsNone(SharedState.get_item_fetch_gain(), "CW より前の形（間隔なし）は読み捨てる")
+        self.assertIsNone(SharedState.get_item_fetch_gain(), "前の形（間隔なし）は読み捨てる")
         loader._load({"item_fetch_gain": [0.9, 0.6, 0.005]})
-        self.assertIsNone(SharedState.get_item_fetch_gain(), "CX より前の形（印なし）は読み捨てる")
+        self.assertIsNone(SharedState.get_item_fetch_gain(), "前の形（印なし）は読み捨てる")
         loader._load({"item_fetch_gain": "broken"})
         self.assertIsNone(SharedState.get_item_fetch_gain())
         SharedState.set_item_fetch_gain((1.2, 0.4, 0.005, "calib"))
@@ -25199,9 +25197,9 @@ class TestItemFetchCM(unittest.TestCase):
 
 
 class TestItemFetchViewRestoreCN(unittest.TestCase):
-    """CN・CW: 自動取得の後、送ったマウスの相対移動の縦の合計（測り・照準合わせ）を逆向きに同じ刻み
+    """自動取得の後、送ったマウスの相対移動の縦の合計（測り・照準合わせ）を逆向きに同じ刻み
     （6px・STEP_SEC）で送って視点を戻す（成功・失敗・時間切れ・ラウンド開始・停止のどれでも）。前面を返す前・
-    排他の中。横と、左へ回した向き（LookRight）は戻さない（CW。マップが変わると向きはそろう）"""
+    排他の中。横と、左へ回した向き（LookRight）は戻さない（マップが変わると向きはそろう）"""
 
     def setUp(self):
         self.now = [0.0]
@@ -25278,7 +25276,7 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         return f, osc
 
     def test_the_turn_is_not_turned_back(self):
-        """CW: LookLeft の 90 度は戻さない（LookRight を送らない）"""
+        """LookLeft の 90 度は戻さない（LookRight を送らない）"""
         f, osc = self._turning()
         self.assertNotIn("/input/LookRight", [a for _t, a, _v in osc.sent])
         self.assertFalse(hasattr(f, "restore_turn"))
@@ -25365,7 +25363,7 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
         self.assertEqual(order[-1], "give back")
 
     def test_not_in_front_does_not_send_the_view_back(self):
-        """窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らない（CZ: 最初の1通から送らない）"""
+        """窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らない（最初の1通から送らない）"""
         outcome, order, _ = self._run(lambda f: self._moves(f, raise_as="stopped"), foreground=False)
         self.assertEqual(outcome, "front_lost")
         self.assertEqual([m for m in order if m != "give back"], [], "マウスは1通も送らない")
@@ -25385,7 +25383,7 @@ class TestItemFetchViewRestoreCN(unittest.TestCase):
 
 
 class TestNoVerifiedBeforePressCO(unittest.TestCase):
-    """CO: ツールが Begin を押す窓では、ツールが直前（BEGIN_PRESS_RECENT_SEC 以内）に押したときの
+    """ツールが Begin を押す窓では、ツールが直前（BEGIN_PRESS_RECENT_SEC 以内）に押したときの
     Verified だけを受理にする。押していないのに来たものは定期（VerifiedTracker に覚えさせる・begin_done を
     立てない・横移動しない）。ツールが押さない窓は今どおり"""
 
@@ -25465,7 +25463,7 @@ class TestNoVerifiedBeforePressCO(unittest.TestCase):
 
 
 class TestBeginMoveMeasureCP(unittest.TestCase):
-    """CP: Begin 前の移動（と押し直しの移動）で、実際に動いた量を debug.log に1行残す（記録だけ）"""
+    """Begin 前の移動（と押し直しの移動）で、実際に動いた量を debug.log に1行残す（記録だけ）"""
 
     S = ActionExecutor.summarize_motion
 
@@ -25600,7 +25598,7 @@ class TestBeginMoveMeasureCP(unittest.TestCase):
 
 
 class TestVerifiedDebugLineCQ(unittest.TestCase):
-    """CQ: debug.log の `Verified` の行の記録は `[事象] verified → 受理／無視（理由）`（判定の後に1行）。
+    """debug.log の `Verified` の行の記録は `[事象] verified → 受理／無視（理由）`（判定の後に1行）。
     `begin_done` という名前で出さない（読んだだけで Begin が通ったように見えた）"""
 
     BASE = datetime(2026, 10, 3, 5, 45, 25).timestamp()
@@ -25672,7 +25670,7 @@ class TestVerifiedDebugLineCQ(unittest.TestCase):
 
 
 class TestBeginMissCR(unittest.TestCase):
-    """CR: 位置合わせで BEGIN が見つからなかった撮影を、窓ごとに最新2枚 begin_miss\窓N_1.png・窓N_2.png に
+    """位置合わせで BEGIN が見つからなかった撮影を、窓ごとに最新2枚 begin_miss\窓N_1.png・窓N_2.png に
     残し（古い方から上書き）、不具合報告の zip の begin_miss/ に入れる（選んだ窓の分・窓なしなら全部）"""
 
     NOW = datetime(2026, 10, 3, 7, 0, 1)
@@ -25842,7 +25840,7 @@ class TestBeginMissCR(unittest.TestCase):
 
 
 class TestPressRecordCS(unittest.TestCase):
-    """CS: 押した記録の漏れ（CO の不具合）。押す前に記録する（クリック・カーソルの差し込み）。UseRight の連打で
+    """押した記録の漏れ（定期を受理と取り違えた不具合）。押す前に記録する（クリック・カーソルの差し込み）。UseRight の連打で
     押せる状態（前面か、カーソルがその窓の上）なら記録する。背面でカーソルも外なら記録しない"""
 
     VERIFIED = "2026.10.03 15:54:06 Debug      -  Verified"
@@ -25936,7 +25934,7 @@ class TestPressRecordCS(unittest.TestCase):
         self.assertTrue(monitor.st.begin_done)
 
     def test_behind_with_the_cursor_outside_is_ignored_as_before(self):
-        """CO の窓4 05:45: 背面でカーソルも外の連打中に来た定期は受理しない"""
+        """窓4 05:45: 背面でカーソルも外の連打中に来た定期は受理しない"""
         monitor = self._monitor()
         press = self._spam(monitor, front=0x99, cursor_in=False)
         self.assertTrue(press.called, "連打はしている")
@@ -25990,7 +25988,7 @@ class TestPressRecordCS(unittest.TestCase):
 
 
 class TestKeepFetchingTheLostItemCS(unittest.TestCase):
-    """CS: 取りに行くのは「最後にロストしたアイテム」。装備したとき・インスタンスが変わったときまで覚え、
+    """取りに行くのは「最後にロストしたアイテム」。装備したとき・インスタンスが変わったときまで覚え、
     その間の「アイテム未回収」のラウンドでも Begin の受理の後に取りに行く"""
 
     ITEMS = {29: ItemCatalog.Item("Taser", "Survival", True),
@@ -26086,7 +26084,7 @@ class TestKeepFetchingTheLostItemCS(unittest.TestCase):
 
 
 class TestSuicideCancelCL(unittest.TestCase):
-    """CL: 自爆キャンセルのキー（既定 ^）。押すと全部の窓の自爆を止め（長押し中はその場で離す・
+    """自爆キャンセルのキー（既定 ^）。押すと全部の窓の自爆を止め（長押し中はその場で離す・
     やり直さない）、そのラウンドはもう自爆しない（後のきっかけでも）。次のラウンドからは今どおり。
     ロビーで押しても持ち越さない"""
 
@@ -30373,7 +30371,7 @@ class TestVerifiedInTheMonitor(unittest.TestCase):
         return datetime.fromtimestamp(at).strftime("%Y.%m.%d %H:%M:%S") + " Debug      -  "
 
     def _monitor(self, path=None):
-        # CO: 規則そのものを見るので、ツールが押さない窓
+        # 規則そのものを見るので、ツールが押さない窓
         monitor = LogMonitor.LogMonitor(WindowConfig(log_path=path, auto_begin=False), {},
                                         lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
@@ -30571,7 +30569,7 @@ class TestLogMonitorBeginDone(unittest.TestCase):
     PREFIX = "2026.09.26 "
 
     def _monitor(self, phase=0.0):
-        # CO: 規則そのものを見るので、ツールが押さない窓（押した記録なしでも今どおり受理）
+        # 規則そのものを見るので、ツールが押さない窓（押した記録なしでも今どおり受理）
         monitor = LogMonitor.LogMonitor(WindowConfig(auto_begin=False), {}, lambda _msg: None,
                                         window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
@@ -32126,7 +32124,7 @@ class TestGuiRoundHelpers(unittest.TestCase):
         self.assertEqual(
             sorted(rows, key=StatisticsGUI._round_count_sort_key),
             [
-                ("Fog", 5, 5),              # BY: Classic は下の段の組へ移った（同じ回数なら後ろ）
+                ("Fog", 5, 5),              # Classic は下の段の組へ移った（同じ回数なら後ろ）
                 ("Classic", 5, 5),
                 ("Unbound", 2, 2),
                 ("Bloodbath", 1, 1),

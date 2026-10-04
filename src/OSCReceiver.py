@@ -27,7 +27,7 @@ GROUNDED = "/avatar/parameters/Grounded"
 def parse_message(data: bytes):
     """OSCメッセージを (address, value) にする。解釈できなければ None。
 
-    OSCControl.monitor() と同じ手順。float/int/真偽だけ扱えれば足りる。
+    float/int/真偽だけ扱えれば足りる。
     """
     try:
         end = data.index(b"\x00")

@@ -87,7 +87,7 @@ class LogMonitor:
         # 定期の Verified を見分ける（窓ごと。起動時の遡りで位相を取り戻す）
         self._verified = VerifiedTracker.VerifiedTracker()
         # 定期として無視した Verified（ログの時刻, 覚える前の定期の時刻）。すぐラウンドが始まったら
-        # 本物の Begin だったので、覚えた位相を元に戻す（CU）
+        # 本物の Begin だったので、覚えた位相を元に戻す
         self._ignored_verified = None
         self._action = ActionExecutor(
             cfg=cfg,
@@ -182,7 +182,7 @@ class LogMonitor:
             self._log(f"チェイスの向きを{name}に切り替え")
 
     def cancel_suicide(self):
-        """自爆キャンセルのキー（CL）。ActionExecutor.cancel_suicide() の結果を返す"""
+        """自爆キャンセルのキー。ActionExecutor.cancel_suicide() の結果を返す"""
         return self._action.cancel_suicide()
 
     def _log(self, msg: str):
@@ -212,7 +212,7 @@ class LogMonitor:
         self._debug(f"[事象] {event.kind}" + (" " + " ".join(parts) if parts else ""))
 
     def _debug_verified(self, result: str):
-        """debug.log へ: `Verified` の行を読んだ記録に、判定の結果を付ける（CQ）"""
+        """debug.log へ: `Verified` の行を読んだ記録に、判定の結果を付ける"""
         self._debug(f"[事象] verified → {result}")
 
     def _debug(self, msg: str):
@@ -259,7 +259,7 @@ class LogMonitor:
             # 邪魔になる。アナウンスと録画と同じ扱い
             return
         if label == "続行ラウンド":
-            # 続行ラウンドは何よりも優先して前面化する（依頼者。CZ）。止めるのは、ほかの窓が続行ラウンドを
+            # 続行ラウンドは何よりも優先して前面化する（依頼者）。止めるのは、ほかの窓が続行ラウンドを
             # やっているときだけ（装備待ち・速度検知・突入のフリーズでは止めない。ほかの窓のアイテム取得は
             # 続行のフリーズを見て手を引く）。数える前に呼ぶので自分の分は入っていない
             if SharedState.get_continue_round_count() > 0:
@@ -330,7 +330,7 @@ class LogMonitor:
 
     def _undo_ignored_verified(self):
         """ラウンド開始: 定期として無視した Verified の後 VERIFIED_ROUND_START_WAIT_SEC 以内なら、それは
-        本物の Begin だった。定期として覚えた分を取り消す（CU）"""
+        本物の Begin だった。定期として覚えた分を取り消す"""
         ignored, self._ignored_verified = self._ignored_verified, None
         if ignored is None or not self.st.log_now:
             return
@@ -346,7 +346,7 @@ class LogMonitor:
         位相を掴む唯一の手段。定期と分かった時刻を覚えて、次からは無視できる
         ようにする（横移動はもう終わっているので、ここでは止めない）。
         受理と取り違えていたので、Begin は通っていない。begin_done を戻し、
-        ツールが Begin を押す窓なら押し直す（戻さないと誰も押さずに止まる。BW）
+        ツールが Begin を押す窓なら押し直す（戻さないと誰も押さずに止まる）
         """
         st = self.st
         if not st.pending_verified_time or not st.log_now:
@@ -844,7 +844,7 @@ class LogMonitor:
             return
         self.st.held_item_id = 0
         if reason != HELD_LOST_INSTANCE:
-            # アイテム自動取得（CM）が取りに行く。インスタンス移動は取りに行かない
+            # アイテム自動取得が取りに行く。インスタンス移動は取りに行かない
             self.st.last_lost_item_id = held
         if reason == HELD_LOST_INSTANCE:
             self._log(f"所持アイテム: なし（{reason}）")
@@ -1356,14 +1356,14 @@ class LogMonitor:
             off_schedule = False
             if not pressed and self._auto_begin_active():
                 if phase_before is None:
-                    # CO: ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
+                    # ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
                     # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
                     self._verified.mark_periodic(now)
                     self._ignored_verified = (now, phase_before)
                     self._debug_verified("無視（ツールがまだ押していない）")
                     self._log("Verified を無視（ツールがまだ押していない → 定期）")
                     return
-                # CU: 位相を知っていて予定（±TOL）に重ならない。定期は300秒に1回なので Begin
+                # 位相を知っていて予定（±TOL）に重ならない。定期は300秒に1回なので Begin
                 # （背面でカーソルも外でも、連打の UseRight で押せていることがある）
                 off_schedule = True
 
@@ -1633,7 +1633,7 @@ class LogMonitor:
                 if self._round_lost_item():
                     st.item_id = 0
                 st.waiting_for_equip = True
-                # このモードでは自動取得を動かさない（item_fetch_target が None。CY）
+                # このモードでは自動取得を動かさない（item_fetch_target が None）
                 self._action._attend_to_item_loss()
                 self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
             # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
@@ -1744,7 +1744,7 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_JOINING:
             # インスタンスを移動するとアイテムは消える（依頼者）
             self._lose_held_item(HELD_LOST_INSTANCE)
-            st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない（CS）
+            st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない
             if st.equip_freeze_held and not self._auto_begin_active():
                 # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
                 st.waiting_for_equip = False

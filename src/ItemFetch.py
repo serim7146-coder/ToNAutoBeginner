@@ -1,4 +1,4 @@
-"""アイテム自動取得（CM）: Red Merchant Store で、ロストしたアイテムを Equip する。
+"""アイテム自動取得: Red Merchant Store で、ロストしたアイテムを Equip する。
 
 手順（2026-10-03 実機。窓 1920x1080・OSC。3店とも手が空から 5.5〜6.4 秒で装備できた）:
     1. 移動（OSC）: 左を押したまま跳んで柵を越え（着地2回）、後ろ→後ろ＋左、左へ90度回る
@@ -25,7 +25,7 @@ BUTTONS = {
     "Enkephalin": (106, 129),
     "Survival": (266, 95),
     "Event": (266, 189),
-    "Equip": (180, 177),        # 緑の文字の中心（撮影4枚の平均。前の (174, 172) は左上にずれていた。DA）
+    "Equip": (180, 177),        # 緑の文字の中心（撮影4枚の平均。前の (174, 172) は左上にずれていた）
 }
 # item.json のカテゴリ → 店。Others・表に無いアイテムは取らない
 SHOP_BY_CATEGORY = {"Enkephalin": "Enkephalin", "Survival": "Survival", "Event": "Event"}
@@ -38,7 +38,7 @@ RANSAC_PX = 5.0
 
 # 照準合わせ
 TOL_X, TOL_Y = 6, 4         # Aimer を許しを渡さずに使うときの既定（画面の px）
-# 押してよいずれ（見本の px）。画面の許しは、見本の 1px が画面で何 px か（locate の倍率）を掛ける（CX）。
+# 押してよいずれ（見本の px）。画面の許しは、見本の 1px が画面で何 px か（locate の倍率）を掛ける。
 # Equip は枠の高さの真ん中あたり（小さく写ると縦 ±4px 決め打ちではボタンの端で押していた）
 BUTTON_TOL = {"Equip": (8, 3), "Enkephalin": (14, 10), "Survival": (14, 10), "Event": (14, 10)}
 TOL_MIN_PX = 1.0            # 画面の許しの最小
@@ -50,11 +50,11 @@ CALIB_PX = 20.0             # 保存した gain があれば、画面でこれ�
 CALIB_UNITS_RANGE = (6, 160)
 GAIN_SANE = (0.05, 20.0)    # 測った gain がこの外なら1回測り直し、だめなら失敗
 GAIN_KEEP = (0.5, 2.0)      # 以後の測り直しは、測った値のこの倍率の外を捨てる
-TRUST_REJECTS = 2           # 保存した感度で合わせる間に、範囲の外がこれだけ出たら測り直す（CW）
+TRUST_REJECTS = 2           # 保存した感度で合わせる間に、範囲の外がこれだけ出たら測り直す
 GAIN_MIN_SENT = 8           # 送った量がこれ以上の軸だけ gain を測り直す
 MOVE_CAP = 160              # 1回に送る量の上限（マウスの単位）
 STEP = 6                    # 一度に送る量（大きく送ると Windows のマウスの加速で行き過ぎる）
-# 送る間隔（測り・照準合わせ・縦の戻しで共通。変えたら保存した感度は使わず測り直す。CW）
+# 送る間隔（測り・照準合わせ・縦の戻しで共通。変えたら保存した感度は使わず測り直す）
 STEP_SEC = 0.005
 AFTER_MOVE_SEC = 0.06
 AIM_TRIES = 12              # 1つのボタンにつき合わせる回数
@@ -130,7 +130,7 @@ def locate(bgr, point, template=None):
     """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率と手がかりの数と写す関数
     (x, y, 横の倍率, 縦の倍率, インライアの数, project)。倍率は見本の 1px が画面で何 px か（点の
     ±SCALE_PROBE を写した距離から）。project(見本の点) は同じホモグラフィで別の点を (x, y, 横, 縦の倍率) に
-    写す（店のボタンを押す回に Equip の位置も覚えるため。DD）。見つからなければ None"""
+    写す（店のボタンを押す回に Equip の位置も覚えるため）。見つからなければ None"""
     import cv2
     import numpy as np
     template = template or _load_template()
@@ -162,12 +162,12 @@ def locate(bgr, point, template=None):
     return x, y, sx, sy, int(mask.sum()), project
 
 
-# Equip は緑の文字のど真ん中を狙う（DA）。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
+# Equip は緑の文字のど真ん中を狙う。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
 # 窓は Equip の近くだけ（左の一覧・上のアイテム名の緑の文字を入れない）
 GREEN_HSV_LOW = (40, 80, 90)        # OpenCV の HSV（H は 0〜179）
 GREEN_HSV_HIGH = (90, 255, 255)
 GREEN_WINDOW = (30, 15)             # 狙いの点から 横 ±30・縦 ±15（見本の px）
-# 店の中の Equip は locate を使わず、店のボタンを押した回の位置から追う（DD。店の中は見本と中身が違い、
+# 店の中の Equip は locate を使わず、店のボタンを押した回の位置から追う（店の中は見本と中身が違い、
 # 手がかりが 10〜17 点しか取れず倍率が外れる）。locate は緑の文字が続けて見つからないときだけ
 GREEN_MISSES_FOR_LOCATE = 3         # 緑の文字がこの回数続けて見つからなければ locate を使う
 LOCATE_SCALE_TOL = 0.2              # 覚えた倍率からこの割合以上ずれた locate の結果は捨てる
@@ -227,7 +227,7 @@ class Aimer:
         self.gain = list(gain)
         self.limits = tuple((GAIN_KEEP[0] * g, GAIN_KEEP[1] * g) for g in gain)
         self._last = None           # (前の位置 x, y, 送った量 mx, my)
-        self.rejected = 0           # 範囲の外で捨てた測り直しの数（保存した感度が合わない目安。CW）
+        self.rejected = 0           # 範囲の外で捨てた測り直しの数（保存した感度が合わない目安）
 
     def forget(self):
         """ボタンが変わった（前の位置と比べない）"""
@@ -263,7 +263,7 @@ class Aimer:
 # ── 取りに行く ──────────────────────────────────
 
 class CountingMouse:
-    """送ったマウスの相対移動の合計（横・縦）を数える（終わったら逆向きに送って視点を戻すため。CN）"""
+    """送ったマウスの相対移動の合計（横・縦）を数える（終わったら逆向きに送って視点を戻すため）"""
 
     def __init__(self, inner):
         self.inner = inner
@@ -310,8 +310,8 @@ class Fetcher:
         self.clock = clock or time.time
         self.saved_gain = saved_gain
         self.aimer = None           # calibrate で作る
-        self.measured_gain = None   # calibrate で測った感度（保存するのはこれだけ。CX）
-        # 店のボタンを押した回の撮影で写した Equip: {"d": (照準からの差 x, y), "scale": (横, 縦)}（DD）
+        self.measured_gain = None   # calibrate で測った感度（保存するのはこれだけ）
+        # 店のボタンを押した回の撮影で写した Equip: {"d": (照準からの差 x, y), "scale": (横, 縦)}
         self.equip_hint = None
 
     def _check(self):
@@ -372,7 +372,7 @@ class Fetcher:
         finally:
             self.osc.stop_all(repeat=1)         # 途中でやめても押したままにしない
 
-    # ── 視点を戻す（CN・CW。どの終わり方でも。縦だけ）──
+    # ── 視点を戻す（どの終わり方でも。縦だけ）──
     def restore_view(self):
         """送ったマウスの相対移動の縦の合計を逆向きに、同じ刻み（6px・STEP_SEC）で送って戻す。止めない。
         横は戻さない（ラウンド突入などマップが変わると向きは強制的にそろう。依頼者）"""
@@ -387,13 +387,13 @@ class Fetcher:
     # ── 3. 照準合わせとクリック ──
     def aim_click(self, name: str, trust_check: bool = False) -> bool:
         """trust_check: 保存した感度で合わせている。実際の動きが感度の 0.5〜2 倍の外に
-        TRUST_REJECTS 回出たら、合わないとみなしてその場でやめる（測り直すため。CW）"""
+        TRUST_REJECTS 回出たら、合わないとみなしてその場でやめる（測り直すため）"""
         if name == "Equip" and self.equip_hint is not None:
             return self._aim_equip_by_hint()
         point = BUTTONS[name]
         self.aimer.forget()
         misses = 0
-        last_scale = None               # 前の回の倍率（照準の真下の緑を見るのに使う。DC）
+        last_scale = None               # 前の回の倍率（照準の真下の緑を見るのに使う）
         for tries in range(1, AIM_TRIES + 1):
             self._check()
             shot = self.capture()
@@ -404,7 +404,7 @@ class Fetcher:
             inliers = found[4] if found is not None and len(found) >= 5 else None
             head = f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり {'-' if inliers is None else inliers} 点"
             if name == "Equip" and shot is not None and scale is not None:
-                # 照準の真下に Equip の緑の文字があれば、locate に関係なく押す（DC。locate はアイテムの
+                # 照準の真下に Equip の緑の文字があれば、locate に関係なく押す（locate はアイテムの
                 # 画面では手がかりが少なく、ときどき大きく外れた位置を出す）
                 under = green_center(shot[0], shot[1], scale)
                 tol = screen_tol(name, scale)
@@ -468,8 +468,8 @@ class Fetcher:
         return max(fx, fy) / min(fx, fy) <= LOCATE_ASPECT_MAX   # 0 は上の 2 割で弾いている
 
     def _aim_equip_by_hint(self) -> bool:
-        """店の中の Equip（DD）。locate は使わず、店のボタンを押した回に覚えた位置（照準 + d）から追う:
-        照準の真下の緑（DC）→ 予測の近くの緑 → 予測。緑が GREEN_MISSES_FOR_LOCATE 回続けて無いときだけ
+        """店の中の Equip。locate は使わず、店のボタンを押した回に覚えた位置（照準 + d）から追う:
+        照準の真下の緑 → 予測の近くの緑 → 予測。緑が GREEN_MISSES_FOR_LOCATE 回続けて無いときだけ
         locate（倍率がおかしい結果は捨てる）。動かしたら d を「送った量 × 感度」だけ進める"""
         name = "Equip"
         hint = self.equip_hint
@@ -546,7 +546,7 @@ class Fetcher:
 
     @staticmethod
     def _aim_line(head, pos, scale, how, aim, action) -> str:
-        """照準合わせの1回の記録（DC）"""
+        """照準合わせの1回の記録"""
         return (f"{head}・位置 ({pos[0]:.1f}, {pos[1]:.1f})・倍率 {scale[0]:.2f}/{scale[1]:.2f}・"
                 f"狙い {how}・ずれ 横 {pos[0] - aim[0]:.1f}・縦 {pos[1] - aim[1]:.1f}・{action}")
 
@@ -628,13 +628,13 @@ class Fetcher:
                 gain.append(float(self.saved_gain[axis]))
                 self.log(f"アイテム取得: {label}の感度は保存した値 {gain[-1]:.3f} で続けます")
         self.aimer = Aimer(gain)
-        self.measured_gain = tuple(gain)    # 保存してよいのは測った値だけ（合わせで直した値は保存しない。CX）
+        self.measured_gain = tuple(gain)    # 保存してよいのは測った値だけ（合わせで直した値は保存しない）
         self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
         return True
 
     def buy(self, shop: str, target_id: int) -> bool:
         """店の前で、窓が前に出ている状態から。感度 → 店のボタン → Equip。
-        保存した感度があれば測らずに使う。それで店のボタンに合わなければ、測り直して1回やり直す（CW）"""
+        保存した感度があれば測らずに使う。それで店のボタンに合わなければ、測り直して1回やり直す"""
         if self.saved_gain:
             self.aimer = Aimer(self.saved_gain)
             self.log(f"アイテム取得: 感度 保存した値を使う（横 {self.saved_gain[0]:.3f}・"

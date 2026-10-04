@@ -76,7 +76,7 @@ class OSCClient:
 
     def _hold_and_release(self, ends) -> bool:
         """ends は [(アドレス, 離す時刻)]。離す時刻の早い順に 0 を送る。待つ間は OSC_HOLD_RESEND_SEC ごとに、
-        まだ押しているアドレスへ 1 を送り直す（DB。押している途中で VRChat 側で入力が消えて止まることが
+        まだ押しているアドレスへ 1 を送り直す（押している途中で VRChat 側で入力が消えて止まることが
         あった。途中で消えても次の送り直しで戻る）。離す時刻は送り直しで変わらない"""
         ok = True
         ends = sorted(ends, key=lambda e: e[1])

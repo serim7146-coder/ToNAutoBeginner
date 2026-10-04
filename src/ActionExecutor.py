@@ -85,7 +85,7 @@ class ActionExecutor:
         # ツールが Begin を押している窓か。判定は LogMonitor が持つ（書き写さない）。
         # 渡されなければ「機能していない」＝速度検知の音声は鳴らす側
         self._auto_begin_active = auto_begin_active or (lambda: False)
-        self._pending_view_dy = 0   # 戻せなかった縦の視点（次に前面にしたとき戻す。CZ）
+        self._pending_view_dy = 0   # 戻せなかった縦の視点（次に前面にしたとき戻す）
         # アイテムロストの前面化＋音声を見張っているラウンド（二重に立てない）
         self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
@@ -331,7 +331,7 @@ class ActionExecutor:
         return ok, loan
 
     def _restore_pending_view(self):
-        """前に無くて戻せなかった縦の視点（アイテム取得）を、前面にした直後に何より先に戻す（CZ）"""
+        """前に無くて戻せなかった縦の視点（アイテム取得）を、前面にした直後に何より先に戻す"""
         dy, self._pending_view_dy = self._pending_view_dy, 0
         if not dy:
             return
@@ -412,7 +412,7 @@ class ActionExecutor:
         if st.is_continue_round or st.died_this_round:
             return False
         if self._suicide_cancelled(round_seq):
-            return False            # 自爆キャンセルのキー（CL）
+            return False            # 自爆キャンセルのキー
         if st.waiting_for_equip:
             # 自窓のアイテムロスト待ち。他窓の待ちでは止まらない
             self._log("自爆キャンセル（アイテムロスト待ち中）")
@@ -423,7 +423,7 @@ class ActionExecutor:
         return self._st.suicide_cancelled_round == round_seq
 
     def cancel_suicide(self) -> str | None:
-        """自爆キャンセルのキー（CL）。ラウンドの中なら、このラウンドはもう自爆しない
+        """自爆キャンセルのキー。ラウンドの中なら、このラウンドはもう自爆しない
         （長押し中ならその場で離す・やり直さない・後のきっかけでも始めない）。
         "stopped"＝自爆の途中だった、"marked"＝自爆していなかった、None＝ラウンド外（持ち越さない）"""
         st = self._st
@@ -690,7 +690,7 @@ class ActionExecutor:
 
     def _look_for_begin(self, stage: str = ""):
         """撮って BEGIN を探す。(見つけた文字 or None, 照準の x)。撮れなければ None。
-        見つからなかった撮影は窓ごとに最新2枚を残す（CR。stage はどの段の撮影か）"""
+        見つからなかった撮影は窓ごとに最新2枚を残す（stage はどの段の撮影か）"""
         hwnd = self._cfg.hwnd
         aim = WindowOperator.aim_in_window_image(hwnd)
         if aim is None:
@@ -799,8 +799,8 @@ class ActionExecutor:
             if now - reach_at >= config.BEGIN_USE_REACH_CHECK_SEC:
                 reach_at, reach = now, self._use_right_reaches_begin()
             if reach:
-                # この窓が前面か、カーソルがこの窓の上: 連打の UseRight で Begin が押される（CS）。
-                # 背面でカーソルも外なら記録しない（その間に来た定期を受理しないため。CO）
+                # この窓が前面か、カーソルがこの窓の上: 連打の UseRight で Begin が押される。
+                # 背面でカーソルも外なら記録しない（その間に来た定期を受理しないため）
                 st.last_begin_press_at = now
             self._osc.press("/input/UseRight", config.BEGIN_USE_PULSE_SEC)
             stop.wait(config.BEGIN_USE_PULSE_SEC)
@@ -844,7 +844,7 @@ class ActionExecutor:
                 with WindowOperator.cursor_over_window(
                         self._cfg.hwnd, self._log_cursor_reason) as over:
                     if over:
-                        st.last_begin_press_at = time.time()   # 置けた瞬間に（dwell の間に届く。CS）
+                        st.last_begin_press_at = time.time()   # 置けた瞬間に（dwell の間に届く）
                         if not attempt:
                             self._log(f"Begin: カーソルを一瞬合わせる{tail}")
                         time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
@@ -946,7 +946,7 @@ class ActionExecutor:
             if not ok:
                 return False
             self._log(f"Beginクリック{tail}")
-            # 押す前に記録する（CS）。Verified はクリックの最中（押してから 0.14 秒ほど）に届く
+            # 押す前に記録する。Verified はクリックの最中（押してから 0.14 秒ほど）に届く
             st.last_begin_press_at = time.time()
             WindowOperator.click()
             st.last_begin_press_at = time.time()
@@ -1067,7 +1067,7 @@ class ActionExecutor:
             return True
 
         if SharedState.get_item_begin_mode():
-            # アイテム取得→Beginモード（自動取得は動かさない。CY）:
+            # アイテム取得→Beginモード（自動取得は動かさない）:
             # フリーズ発生源は自窓なので他窓の解除待ちはせず、
             # 装備確認 → Begin の順で進む。ここで他窓解除待ちをすると
             # 自分が張ったフリーズを自分で待つデッドロックになる。
@@ -1134,7 +1134,7 @@ class ActionExecutor:
         head = f"[操作] [窓{st.window_idx}] Begin前の移動"
         DebugLog.write(f"{head}: {'Punished後' if late else '通常'} 前進{forward}秒・左{left}秒"
                        f"（round_type={st.round_type}）")
-        # 実際に動いた量を debug.log へ（CP。記録だけ。離してから少し後まで別スレッドで読む）
+        # 実際に動いた量を debug.log へ（記録だけ。離してから少し後まで別スレッドで読む）
         sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head}: {m}"))
         sampler.start()
         try:
@@ -1151,7 +1151,7 @@ class ActionExecutor:
         st.begin_move_done = True
 
     def do_begin_again(self, round_seq: int):
-        """定期の Verified を受理と取り違えた後に、Begin をもう一度押す（BW）。
+        """定期の Verified を受理と取り違えた後に、Begin をもう一度押す。
 
         もう Verified Round End の後なので待ち（BEGIN_WAIT_SEC）は要らない。
         移動は時間で押す相対の移動なので2回やると行き過ぎる。このラウンドで
@@ -1249,7 +1249,7 @@ class ActionExecutor:
             if st.begin_done:
                 fetch = self.item_fetch_target()
                 if fetch:
-                    # 自動取得: いつもの案内のタイミング（Begin が通った後）で音だけ鳴らし、取りに行く（CY）。
+                    # 自動取得: いつもの案内のタイミング（Begin が通った後）で音だけ鳴らし、取りに行く。
                     # 「音は前面化と一緒に _show_item_loss からだけ」の例外。前面化すると取りに行く
                     # 前面化・カーソルの差し込みの邪魔になる。手で装備するならこの音で気づける。
                     # アイテム取得→Begin モードで RoundOver に鳴らした回は鳴らない（1ラウンド1回）
@@ -1259,8 +1259,8 @@ class ActionExecutor:
                     self._attend_to_item_loss()     # 取りに行けない: 今のアイテムロストの案内（前面化・音声）
                 elif outcome == "stopped":
                     return
-                # 取りに行って失敗・時間切れ・ラウンド開始: 何もしない（音・前面化・フリーズなし。CY）。
-                # 次のラウンドでまた取りに行く（CS）
+                # 取りに行って失敗・時間切れ・ラウンド開始: 何もしない（音・前面化・フリーズなし）。
+                # 次のラウンドでまた取りに行く
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
                 time.sleep(0.3)
@@ -1271,18 +1271,18 @@ class ActionExecutor:
             if st.in_round:
                 return
 
-    # ── アイテム自動取得（CM）────────────────────
+    # ── アイテム自動取得 ──────────────────
     def item_fetch_target(self) -> tuple | None:
         """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
         押さない窓・放置モード・このラウンドにロストしたアイテムが分からない・Others や
         表に無いアイテム → None（今どおり）"""
         st = self._st
         if SharedState.get_item_begin_mode():
-            return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者。CY）
+            return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者）
         if (not SharedState.get_item_fetch() or self._osc is None
                 or not self._auto_begin_active() or self._hands_free()):
             return None
-        item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える。CS）
+        item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える）
         shop = ItemFetch.shop_for(item_id, config.ITEMS)
         if shop is None or not ItemFetch.available():
             return None
@@ -1298,7 +1298,7 @@ class ActionExecutor:
             return "equipped"               # 手で装備した
         _eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
         if not (con_ok and spd_ok and rnd_ok):
-            # ほかの窓の続行ラウンド・速度検知・突入のフリーズ（CZ）。その窓を人が操作し始めるので手を引く。
+            # ほかの窓の続行ラウンド・速度検知・突入のフリーズ。その窓を人が操作し始めるので手を引く。
             # 装備待ちは自分の取得のためのものなので見ない
             return "frozen"
         if time.time() > deadline:
@@ -1360,7 +1360,7 @@ class ActionExecutor:
 
     @staticmethod
     def _saved_fetch_gain():
-        """保存した感度 (横, 縦)。今の送る間隔で保存したものだけ（間隔が違えば測る。CW）"""
+        """保存した感度 (横, 縦)。今の送る間隔で保存したものだけ（間隔が違えば測る）"""
         saved = SharedState.get_item_fetch_gain()
         if saved and abs(saved[2] - ItemFetch.STEP_SEC) < 1e-9:
             return saved[:2]
@@ -1377,7 +1377,7 @@ class ActionExecutor:
                 if not fetcher.buy(shop, item_id):
                     return "failed"
                 if fetcher.measured_gain is not None:
-                    # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ。CX）
+                    # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ）
                     SharedState.set_item_fetch_gain(
                         (*fetcher.measured_gain, ItemFetch.STEP_SEC, SharedState.ITEM_FETCH_GAIN_MARK))
                 return "ok"
@@ -1395,7 +1395,7 @@ class ActionExecutor:
                     pass                            # 戻す途中で前面でなくなった（残りは下で覚える）
                 except Exception:
                     DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
-                # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す（CZ）
+                # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す
                 self._pending_view_dy += -fetcher.mouse.total[1]
                 WindowOperator.return_front(loan)
 
@@ -1653,7 +1653,7 @@ class _FetchMouse:
         pydirectinput.mouseUp(_pause=False)
 
 
-# ── Begin 前の移動の実測（CP。記録だけ）──────────────────
+# ── Begin 前の移動の実測（記録だけ）──────────────────
 MOTION_INTERVAL_SEC = 0.05      # 速さと接地を読む間隔
 MOTION_TAIL_SEC = 0.6           # 離してからこれだけ後まで読む
 MOTION_START_SPEED = 1.0        # 動き出し（これを超えた最初の時刻）
@@ -1763,7 +1763,7 @@ class MotionSampler:
 
 
 class _FrontOnlyMouse(_FetchMouse):
-    """アイテム取得のマウス。送る前・クリックの前に前面がこの窓かを確かめ、違えば送らずにやめる（CZ）。
+    """アイテム取得のマウス。送る前・クリックの前に前面がこの窓かを確かめ、違えば送らずにやめる。
     相対移動とクリックは前面の窓に届くので、ほかの窓（人が操作している続行ラウンドなど）の視点を回さない"""
 
     def __init__(self, hwnd: int, stopped=None):

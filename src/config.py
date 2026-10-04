@@ -66,11 +66,11 @@ EMERGENCY_KEY_CAPTURE_SEC = 5.0   # 「キーを押して設定」で待つ時�
 # 勝手に動き出す方が危ない。だから既定は未設定、不正なら無効にするだけで、
 # 別のキーへは倒さない。ポーリングと捕捉の秒数は停止キーと共用する
 START_KEY = ""
-# 自爆キャンセルのキー（CL）。押すと全部の窓の自爆を止め、そのラウンドはもう自爆しない。
+# 自爆キャンセルのキー。押すと全部の窓の自爆を止め、そのラウンドはもう自爆しない。
 # 押した瞬間を取りこぼさないよう、チェイスのキーと同じく押した通知（hook_key）で受ける
 SUICIDE_CANCEL_KEY = "^"
 
-# アイテム自動取得（CM）。Begin が通った後に店へ取りに行く。合計でこれを超えたらやめる
+# アイテム自動取得。Begin が通った後に店へ取りに行く。合計でこれを超えたらやめる
 ITEM_FETCH_LIMIT_SEC = 10.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
 
@@ -219,7 +219,6 @@ BEGIN_PRESS_RECENT_SEC     = 3.0     # 予定と重なった1回を受理とみ�
 VERIFIED_LEARN_BACK_SEC    = 1800.0  # 起動時に位相を取り戻すため遡るログの長さ
 # 採用した Verified の後、ラウンド開始が来るまでの実測は12〜13秒
 VERIFIED_ROUND_START_WAIT_SEC = 15.0
-VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 ROUND_FREEZE_SELECTABLE = [
@@ -305,9 +304,9 @@ BEGIN_USE_SPAM_START_SEC = 12.9
 # 0.1（1周0.2秒）だったときは、0.05秒の差し込みに当たるのが4回に1回程度で、
 # 空振りして前面化へ落ちていた。ToN_Multi_Supporter も 0.05 秒間隔
 BEGIN_USE_PULSE_SEC    = 0.025
-# 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔（CS）
+# 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔
 BEGIN_USE_REACH_CHECK_SEC = 0.5
-# OSC で押している間、1 を送り直す間隔（DB。途中で VRChat 側で入力が消えて止まることがあった）
+# OSC で押している間、1 を送り直す間隔（途中で VRChat 側で入力が消えて止まることがあった）
 OSC_HOLD_RESEND_SEC = 0.1
 # カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
 BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
@@ -331,7 +330,7 @@ BEGIN_ADJUST_MAX_STEPS    = 4      # 横移動の回数の上限
 BEGIN_ADJUST_MAX_TOTAL_SEC = 1.2   # 1回の位置合わせで横移動してよい合計
 BEGIN_ADJUST_SETTLE_SEC   = 0.4    # 動いてから撮り直すまでの待ち（減速を待つ）
 BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変わらなければ打ち切る（OSC が届いていない等）
-# 前後（CI）。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
+# 前後。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
 # 後ろへ 0.2秒 0.069・0.4秒 0.044、前へ 0.15秒 0.146。高さはほとんど変わらない）
 # 押せる範囲（実測 2026-10-03 1920x1080: 押せる一番近い 0.404・一番遠い 0.066）の内側に余裕を
 # 持たせた範囲なら前後に動かない。外なら、合わせる先へ向けて動く（合わせる先は秒数の計算にだけ使う）
@@ -382,7 +381,6 @@ INSTANCE_PUBLIC        = "public"
 INSTANCE_PRIVATE       = "private"
 INSTANCE_HOSHIIMO      = "干し芋"
 INSTANCE_YAKIIMO       = "焼き芋"
-INSTANCE_CBPS          = "CBPS"
 INSTANCE_OTHER_GROUP   = "other_group"
 INSTANCE_EMERALD_CITY  = "Emerald City"
 
@@ -392,19 +390,7 @@ YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 # 識別のみ。自爆・グループ判定の対象にはしない
 # （GroupRound.GROUP_INSTANCES に入れると自爆が走る）
 EMERALD_CITY_GROUP_ID = "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8"
-CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
-# ── グループインスタンスで、自動自爆するラウンド ──
-# 干し芋/焼き芋の判定は GroupRound へ移した（ラウンドごとにルールが違うため）
-CBPS_SKIP_ROUNDS = {
-    "Classic",
-    "Bloodbath",
-    "Double Trouble",
-    "Bloodbath EX",
-    "Randomizer",
-    "Punished",
-    "Sabotage",
-}
 
 # ── Variant判定待ち ──
 # Variantになりうるテラーがいる間は、出現ログを待ってから判断する。

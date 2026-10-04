@@ -408,7 +408,7 @@ def cursor_target(hwnd: int) -> tuple:
 
 def cursor_in_client(hwnd: int) -> bool:
     """利用者のカーソルが、その窓のクライアント領域の上にあるか（最小化・取れないときは False）。
-    UseRight の連打で Begin が押される状態かを見る（CS）"""
+    UseRight の連打で Begin が押される状態かを見る"""
     point = cursor_position()
     if not hwnd or point is None:
         return False

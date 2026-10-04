@@ -195,7 +195,7 @@ def set_list_source(src):
 # ═══════════════════════════════════════════════
 #  アイテム取得→Beginモード
 # ═══════════════════════════════════════════════
-_ITEM_FETCH = False             # アイテム自動取得（CM。全窓共通・既定 OFF）
+_ITEM_FETCH = False             # アイテム自動取得（全窓共通・既定 OFF）
 _ITEM_FETCH_LOCK = threading.Lock()
 
 
@@ -211,7 +211,7 @@ def set_item_fetch(val: bool):
 
 
 _ITEM_FETCH_GAIN = None         # 測った視点の感度（横, 縦, 送った間隔, "calib"）。保存して次回に使う
-ITEM_FETCH_GAIN_MARK = "calib"  # calibrate で測った値の印（CX。印の無い前の保存は読み捨てる）
+ITEM_FETCH_GAIN_MARK = "calib"  # calibrate で測った値の印（印の無い前の保存は読み捨てる）
 
 
 def get_item_fetch_gain():
@@ -221,7 +221,7 @@ def get_item_fetch_gain():
 
 def set_item_fetch_gain(gain):
     """(横, 縦, 送った間隔の秒, "calib") か None。数でない・範囲（ItemFetch.GAIN_SANE）の外・間隔が無い・
-    測った値の印が無い（CX より前の形。合わせで直した値の可能性がある）は None（読み捨てる）"""
+    測った値の印が無い（前の保存の形。合わせで直した値の可能性がある）は None（読み捨てる）"""
     global _ITEM_FETCH_GAIN
     value = None
     try:

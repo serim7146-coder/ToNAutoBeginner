@@ -1,4 +1,4 @@
-"""不具合の報告を Discord の Webhook へ送る（BU）。
+"""不具合の報告を Discord の Webhook へ送る。
 
 送り先は .env の DISCORD_REPORT_WEBHOOK_URL（ConnectDB と同じ候補から読む）。
 URL はどこにも出さない（画面・ログ・debug.log・失敗の文言）。
@@ -33,7 +33,7 @@ GUI_LOG = "gui_log"
 DEBUG_LOG = "debug_log"
 VRCHAT_LOG = "vrchat_log"
 SETTINGS = "settings"
-BEGIN_MISS = "begin_miss"       # CR: Begin の位置合わせで見つからなかった撮影
+BEGIN_MISS = "begin_miss"       # Begin の位置合わせで見つからなかった撮影
 ATTACHMENTS = ((GUI_LOG, "画面のログ出力"), (DEBUG_LOG, "debug.log"),
                (VRCHAT_LOG, "選んだ窓の VRChat のログ"), (SETTINGS, "設定"),
                (BEGIN_MISS, "Begin の撮影（見つからなかったとき）"))
