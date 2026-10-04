@@ -60,10 +60,11 @@ def fetch_latest_release() -> dict | None:
         return None
 
 
-def find_exe_asset(release: dict) -> tuple[str, int] | None:
-    """リリースアセットから配布EXEの (URL, サイズ) を返す。無ければNone。"""
+def find_exe_asset(release: dict, name: str | None = None) -> tuple[str, int] | None:
+    """リリースアセットから配布EXE（name。既定は UPDATE_ASSET_NAME）の (URL, サイズ) を返す。無ければNone。"""
+    name = name or config.UPDATE_ASSET_NAME
     for asset in release.get("assets", []):
-        if asset.get("name") == config.UPDATE_ASSET_NAME and asset.get("browser_download_url"):
+        if asset.get("name") == name and asset.get("browser_download_url"):
             return asset["browser_download_url"], int(asset.get("size", 0))
     return None
 

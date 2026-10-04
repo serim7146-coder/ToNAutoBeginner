@@ -1104,3 +1104,145 @@ class TestReadmeRelease(unittest.TestCase):
     def test_the_url_points_at_this_repository(self):
         self.assertIn(f"github.com/{config.GITHUB_REPO}/releases/",
                       self._readme())
+
+
+class TestMigrationRules(unittest.TestCase):
+    """exe 単体 → インストーラー版への移行（Migration。Windows の処理は差し替え）"""
+
+    def test_who_is_moved(self):
+        installed = Path("C:/Users/a/AppData/Local/Programs/ToNAutoBeginner")
+        self.assertFalse(Migration.needs_migration(None, installed), "開発実行は移さない")
+        self.assertTrue(Migration.needs_migration(Path("D:/tools/ToNAutoBeginner.exe"), None),
+                        "インストールしていない")
+        self.assertTrue(Migration.needs_migration(Path("D:/tools/ToNAutoBeginner.exe"), installed),
+                        "インストールしてあっても、外の exe なら移す")
+        self.assertFalse(Migration.needs_migration(installed / "ToNAutoBeginner.exe", installed))
+
+    def test_the_install_dir_comes_from_inno_setups_uninstall_key(self):
+        fake = MagicMock()
+        fake.QueryValueEx.return_value = ("C:\\Apps\\ToNAutoBeginner\\", 1)
+        with patch.dict(sys.modules, {"winreg": fake}):
+            self.assertEqual(Migration.installed_dir(), Path("C:\\Apps\\ToNAutoBeginner"))
+        self.assertEqual(fake.OpenKey.call_args.args[1], Migration.UNINSTALL_KEY)
+        iss = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
+        app_id = re.search(r"^AppId=\{(\{[0-9A-F-]+\})$", iss, re.M).group(1)
+        self.assertTrue(Migration.UNINSTALL_KEY.endswith("\\" + app_id + "_is1"), "AppId と同じ")
+        fake.OpenKey.side_effect = OSError("no key")
+        with patch.dict(sys.modules, {"winreg": fake}):
+            self.assertIsNone(Migration.installed_dir())
+
+    def test_the_script_waits_for_the_app_then_runs_setup_silently(self):
+        setup = Path("C:/Users/O'Neil/AppData/Local/Temp/ToNAutoBeginner-Setup.exe")
+        script = Migration.setup_script(setup)
+        self.assertIn(f"TryOpenExisting('{config.APP_MUTEX_NAME}'", script)
+        self.assertIn("'C:/Users/O''Neil/AppData/Local/Temp/ToNAutoBeginner-Setup.exe'", script,
+                      "' は2つ重ねる")
+        self.assertIn("'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/launch=1'", script)
+        self.assertLess(script.index("TryOpenExisting"), script.index("Start-Process"))
+        cmd = Migration.powershell_command(script)
+        self.assertEqual(cmd[-2], "-EncodedCommand")
+        self.assertEqual(base64.b64decode(cmd[-1]).decode("utf-16-le"), script)
+
+    def test_the_installer_relaunches_after_a_silent_migration(self):
+        iss = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
+        self.assertIn("Check: LaunchAfterSilentInstall", iss)
+        self.assertIn("{param:launch|0}", iss)
+        self.assertIn("DisableDirPage=auto", iss, "新しく入れる人は場所を選ぶ")
+        self.assertIn("/launch=1", Migration.SETUP_ARGS)
+
+    def test_the_old_exe_is_removed_but_never_the_running_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = Path(d) / "ToNAutoBeginner.exe"
+            old.write_text("x", encoding="utf-8")
+            (Path(d) / "ToNAutoBeginner.exe.old").write_text("x", encoding="utf-8")
+            self.assertTrue(Migration.remove_old_exe(old, old), "今動いているもの → 触らない")
+            self.assertTrue(old.exists())
+            self.assertTrue(Migration.remove_old_exe(old, Path("C:/x/ToNAutoBeginner.exe")))
+            self.assertEqual(list(Path(d).iterdir()), [])
+            self.assertTrue(Migration.remove_old_exe(old, None), "もう無い")
+
+
+class TestMigrationInTheApp(unittest.TestCase):
+    """mainGUI 側の手順（画面・スレッド・Setup の起動は差し替え）"""
+
+    def _app(self, running=False):
+        app = MagicMock()
+        app._running = running
+        app.MIGRATION_RETRY_MS = mainGUI.App.MIGRATION_RETRY_MS
+        return app
+
+    def test_nothing_happens_when_not_needed(self):
+        app = self._app()
+        with patch.object(AutoUpdate, "current_exe_path", return_value=None), \
+             patch.object(mainGUI.threading, "Thread") as thread:
+            self.assertFalse(mainGUI.App._start_migration(app))
+        thread.assert_not_called()
+
+    def test_a_standalone_exe_starts_the_download(self):
+        app = self._app()
+        exe = Path("D:/tools/ToNAutoBeginner.exe")
+        with patch.object(AutoUpdate, "current_exe_path", return_value=exe), \
+             patch.object(Migration, "installed_dir", return_value=None), \
+             patch.object(mainGUI.threading, "Thread") as thread:
+            self.assertTrue(mainGUI.App._start_migration(app))
+        worker = thread.call_args.kwargs["target"]
+        release = {"assets": [{"name": config.SETUP_ASSET_NAME, "browser_download_url": "u", "size": 9}]}
+        with patch.object(AutoUpdate, "fetch_latest_release", return_value=release), \
+             patch.object(AutoUpdate, "download_to_temp", return_value=Path("t")) as dl:
+            worker()
+        dl.assert_called_once_with("u", 9)
+        app._after_from_worker.assert_called_once_with(app._finish_migration, exe, Path("t"), True)
+
+    def test_finishing_writes_the_old_path_runs_setup_and_closes(self):
+        app = self._app()
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d) / "tmpabc.exe.download"
+            tmp.write_text("setup", encoding="utf-8")
+            mainGUI.save_settings({"win_count": 3})
+            with patch.object(mainGUI.messagebox, "showinfo"), \
+                 patch.object(Migration, "launch_setup", return_value=True) as launch:
+                mainGUI.App._finish_migration(app, Path("D:/tools/ToNAutoBeginner.exe"), tmp)
+            setup = Path(d) / config.SETUP_ASSET_NAME
+            launch.assert_called_once_with(setup)
+            self.assertTrue(setup.exists())
+        data = mainGUI.load_settings()
+        self.assertEqual(data[Migration.SETTINGS_KEY], str(Path("D:/tools/ToNAutoBeginner.exe")))
+        self.assertEqual(data["win_count"], 3, "ほかの設定はそのまま")
+        app._on_close.assert_called_once()
+
+    def test_a_failed_download_keeps_using_the_app(self):
+        app = self._app()
+        with patch.object(Migration, "launch_setup") as launch:
+            mainGUI.App._finish_migration(app, Path("D:/x.exe"), None)
+        launch.assert_not_called()
+        app._on_close.assert_not_called()
+        self.assertIn("次の起動でやり直します", app._log.call_args.args[0])
+
+    def test_it_waits_while_the_macro_runs(self):
+        app = self._app(running=True)
+        with patch.object(Migration, "launch_setup") as launch:
+            mainGUI.App._finish_migration(app, Path("D:/x.exe"), Path("t"))
+        launch.assert_not_called()
+        self.assertEqual(app.after.call_args.args[0], mainGUI.App.MIGRATION_RETRY_MS)
+
+    def test_the_installed_app_removes_the_old_exe_once(self):
+        app = self._app()
+        installed = Path("C:/Apps/ToNAutoBeginner")
+        mainGUI.save_settings({Migration.SETTINGS_KEY: "D:/tools/ToNAutoBeginner.exe", "win_count": 2})
+        with patch.object(AutoUpdate, "current_exe_path", return_value=installed / "ToNAutoBeginner.exe"), \
+             patch.object(Migration, "installed_dir", return_value=installed), \
+             patch.object(Migration, "remove_old_exe", return_value=True) as remove:
+            mainGUI.App._cleanup_migrated_exe(app)
+            mainGUI.App._cleanup_migrated_exe(app)
+        remove.assert_called_once()
+        self.assertEqual(mainGUI.load_settings(), {"win_count": 2})
+
+    def test_not_yet_installed_keeps_the_mark(self):
+        app = self._app()
+        mainGUI.save_settings({Migration.SETTINGS_KEY: "D:/tools/ToNAutoBeginner.exe"})
+        with patch.object(AutoUpdate, "current_exe_path", return_value=Path("D:/tools/ToNAutoBeginner.exe")), \
+             patch.object(Migration, "installed_dir", return_value=None), \
+             patch.object(Migration, "remove_old_exe") as remove:
+            mainGUI.App._cleanup_migrated_exe(app)
+        remove.assert_not_called()
+        self.assertIn(Migration.SETTINGS_KEY, mainGUI.load_settings())

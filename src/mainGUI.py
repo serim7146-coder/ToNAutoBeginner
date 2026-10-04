@@ -19,6 +19,7 @@ import LogMonitor
 import SharedState
 import PlaySound
 import MatchTNL
+import Migration
 import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
@@ -795,7 +796,10 @@ class App(tk.Tk):
         AutoUpdate.cleanup_old_exe()
         # 古い版の onefile の展開先を消す（exe のときだけ。消すのに時間がかかるので裏で）
         threading.Thread(target=AutoUpdate.cleanup_old_extract_dirs, daemon=True).start()
-        self._start_update_check()
+        self._cleanup_migrated_exe()
+        # exe 単体ならインストーラー版へ移す。移すときは更新の確認はしない（Setup が最新）
+        if not self._start_migration():
+            self._start_update_check()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _remember_own_window(self)       # 録画中だけキャプチャから外すため
         Recorder.set_window_hider(self._set_own_windows_hidden)
@@ -2608,6 +2612,73 @@ class App(tk.Tk):
         messagebox.showinfo("アップデート完了", f"{tag} へ更新しました。再起動します。")
         AutoUpdate.restart_to_new_exe(exe)
         self._on_close()
+
+    # ── インストーラー版への移行（Migration）───────────────
+    MIGRATION_RETRY_MS = 30_000      # マクロ動作中は止まるまでこの間隔で待つ
+
+    def _start_migration(self) -> bool:
+        """exe 単体で動いていたら、インストーラー版へ移す準備を裏で始める。始めたら True"""
+        exe = AutoUpdate.current_exe_path()
+        if not Migration.needs_migration(exe, Migration.installed_dir()):
+            return False
+        self._log("[移行] インストーラー版へ移行します（設定・統計はそのまま引き継ぎます）。"
+                  "インストーラーをダウンロード中…")
+
+        def worker():
+            release = AutoUpdate.fetch_latest_release()
+            asset = AutoUpdate.find_exe_asset(release, config.SETUP_ASSET_NAME) if release else None
+            tmp = AutoUpdate.download_to_temp(*asset) if asset else None
+            self._after_from_worker(self._finish_migration, exe, tmp, asset is not None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _finish_migration(self, exe, tmp, found: bool = True):
+        """Setup を落とせたら、古い exe の場所を書いてから Setup を裏で動かし、ツールを終える"""
+        if tmp is None:
+            self._log("[移行] " + ("インストーラーのダウンロードに失敗しました" if found
+                                  else f"リリースに {config.SETUP_ASSET_NAME} がありません")
+                      + "。今回はこのまま使えます（次の起動でやり直します）")
+            return
+        if self._running:
+            self._log("[移行] マクロ動作中のため、止まってから移行します")
+            self.after(self.MIGRATION_RETRY_MS, lambda: self._finish_migration(exe, tmp, found))
+            return
+        setup = Path(tmp).with_name(config.SETUP_ASSET_NAME)
+        try:
+            setup.unlink(missing_ok=True)
+            Path(tmp).rename(setup)
+        except OSError:
+            setup = Path(tmp)
+        save_settings({**load_settings(), Migration.SETTINGS_KEY: str(exe)})
+        messagebox.showinfo(
+            "インストーラー版へ移行",
+            "インストーラー版へ移行するため、いったん終了します。\n"
+            "設定と統計はそのまま引き継がれます。\n"
+            "1分ほどで自動で起動します（スタートメニューからも起動できます）。")
+        if not Migration.launch_setup(setup):
+            self._log("[移行] インストーラーを起動できませんでした。今回はこのまま使えます")
+            messagebox.showwarning("インストーラー版へ移行",
+                                   "インストーラーを起動できませんでした。今回はこのまま使えます"
+                                   "（次の起動でやり直します）。")
+            return
+        DebugLog.write(f"[環境] インストーラー版へ移行（元の exe: {exe}）")
+        self._on_close()
+
+    def _cleanup_migrated_exe(self):
+        """インストーラー版の最初の起動で、移す前の exe を消す（settings.json の印を見る）"""
+        data = load_settings()
+        old = data.get(Migration.SETTINGS_KEY)
+        if not old:
+            return
+        exe = AutoUpdate.current_exe_path()
+        if exe is None or Migration.needs_migration(exe, Migration.installed_dir()):
+            return              # まだ移っていない（Setup が途中で止まった）。次の起動で
+        if Migration.remove_old_exe(Path(old), exe):
+            data.pop(Migration.SETTINGS_KEY, None)
+            save_settings(data)
+            self._log("[移行] インストーラー版へ移行しました。前の exe を消しました"
+                      "（設定・統計はそのまま）")
 
     # ── VRChat起動 ─────────────────────────────
     def _add_tool_row(self, path: str = "", save: bool = True):

@@ -15,6 +15,8 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 APP_VERSION       = "v0.6.0"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
+# インストーラー（exe 単体の人はこれで入れ直す。Migration）
+SETUP_ASSET_NAME  = "ToNAutoBeginner-Setup.exe"
 # 起動中の目印（名前付きミューテックス）。インストーラー・アンインストーラーがこれを見て、
 # 起動中なら閉じるよう案内する。installer/ToNAutoBeginner.iss の AppMutex と同じ名前にする
 APP_MUTEX_NAME    = "ToNAutoBeginnerRunning"

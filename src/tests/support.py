@@ -145,6 +145,7 @@ import ToNEntry
 import mainGUI
 import UIFont
 import AutoUpdate
+import Migration
 import config
 from State import WindowConfig, WindowState
 
