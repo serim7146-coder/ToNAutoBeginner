@@ -111,7 +111,7 @@ class ToNEntry:
         if not address:
             return False
         self._log(f"OSC移動 {direction} {seconds}秒")
-        ok = self._osc.press(address, seconds)
+        ok = self._osc.press(address, seconds, stop=lambda: not self._is_running())
         self._osc.stop_all(repeat=1)     # 入力が残らないよう必ず解除
         return ok
 

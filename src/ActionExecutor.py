@@ -13,6 +13,7 @@ import WindowOperator
 import OSCClient
 import OSCReceiver
 import PlaySound
+import RoundDecision
 from State import WindowConfig, WindowState
 
 
@@ -39,6 +40,8 @@ def classify_speed(value: float) -> str:
 # アイテムロストの窓が、ほかの窓のフリーズが解けるのを見張る間隔。解けた瞬間に
 # 前面化＋音声を出すので、短い方が「続行が終わった直後」に近くなる
 ITEM_LOSS_WATCH_SEC = 0.2
+# アイテム取得で戻せなかった視点を戻しに行くとき、前面・フリーズを見直す間隔
+VIEW_RESTORE_POLL_SEC = 0.2
 
 
 def _width_ratio(hit) -> float | None:
@@ -86,6 +89,7 @@ class ActionExecutor:
         # 渡されなければ「機能していない」＝速度検知の音声は鳴らす側
         self._auto_begin_active = auto_begin_active or (lambda: False)
         self._pending_view_dy = 0   # 戻せなかった縦の視点（次に前面にしたとき戻す）
+        self._view_restore_thread = None    # それを裏で戻しに行くスレッド（_restore_view_soon）
         # アイテムロストの前面化＋音声を見張っているラウンド（二重に立てない）
         self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
@@ -186,6 +190,10 @@ class ActionExecutor:
                     self._chase_dir = self._chase_stop = self._chase_thread = None
             self._log("⚠ チェイス: キーを送れません（最小化中など）→ 止めました")
 
+    def _stopped(self) -> bool:
+        """マクロが止められたか。押している最中の移動・長押しはこれでその場で離す"""
+        return not self._is_running()
+
     def _trace(self, msg: str):
         """debug.log へ（公開ログには出さない）。窓の番号を付ける"""
         DebugLog.write(f"[窓{self._st.window_idx}] {msg}")
@@ -211,12 +219,12 @@ class ActionExecutor:
                        "left": "/input/MoveLeft",
                        "right": "/input/MoveRight"}.get(direction)
             if address:
-                ok = self._osc.press(address, seconds)
+                ok = self._osc.press(address, seconds, stop=self._stopped)
                 self._osc.stop_all(repeat=1)
                 return ok is not False
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
         if key and not WindowOperator.hold_key_background(
-                self._cfg.hwnd, key, seconds):
+                self._cfg.hwnd, key, seconds, stop=self._stopped):
             self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
             return False
         return True
@@ -237,7 +245,7 @@ class ActionExecutor:
                     f"（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
             ok = self._osc.press_multi([("/input/MoveForward", forward_sec),
-                                        ("/input/MoveLeft", left_sec)])
+                                        ("/input/MoveLeft", left_sec)], stop=self._stopped)
             self._osc.stop_all(repeat=1)
             return ok is not False
         ok = self.move("forward", forward_sec) is not False
@@ -330,6 +338,52 @@ class ActionExecutor:
             self._log(f"⚠ フォーカス取得失敗 HWND={hwnd:#010x} → 操作を中止")
         return ok, loan
 
+    def _restore_view_soon(self):
+        """アイテム取得で戻せなかった縦の視点を、裏で戻しに行く（1窓に1本だけ）。
+
+        この窓が前面になったらその場で戻す。そうでなくても、ほかの窓がフリーズしていない
+        （人がほかの窓を操作していない）なら、前面を一瞬借りて戻して返す。止めた・
+        インスタンスが変わった・戻し終えた、で終わる"""
+        if self._view_restore_thread is not None and self._view_restore_thread.is_alive():
+            return
+        self._view_restore_thread = threading.Thread(target=self._restore_view_loop,
+                                                     daemon=True)
+        self._view_restore_thread.start()
+
+    def _restore_view_loop(self):
+        st = self._st
+        instance = st.instance_seq
+        hwnd = self._cfg.hwnd
+        while self._pending_view_dy and self._is_running() and st.instance_seq == instance:
+            in_front = WindowOperator.foreground_hwnd() == hwnd
+            if in_front or self._nobody_else_frozen():
+                with SharedState._GLOBAL_ACTION_LOCK:
+                    if not self._pending_view_dy or not self._is_running():
+                        return
+                    if WindowOperator.foreground_hwnd() == hwnd:
+                        self._restore_pending_view()
+                        return
+                    ok, loan = WindowOperator.borrow_front(hwnd)
+                    if ok:
+                        try:
+                            self._restore_pending_view()
+                        finally:
+                            WindowOperator.return_front(loan)
+                        return
+            time.sleep(VIEW_RESTORE_POLL_SEC)
+
+    def _nobody_else_frozen(self) -> bool:
+        """ほかの窓がどのフリーズも張っていないか（自分の分は数えない。装備待ちも1窓ずつ）。
+        張っている窓は人が操作しているので、その間は前面を借りない"""
+        st = self._st
+        return all(self._freeze_ok(event, held, count, True) for event, held, count in (
+            (SharedState.EQUIP_WAIT_EVENT, st.equip_freeze_held, SharedState.get_equip_freeze_count()),
+            (SharedState.CONTINUE_ROUND_EVENT, st.continue_freeze_held,
+             SharedState.get_continue_round_count()),
+            (SharedState.SPEED_FREEZE_EVENT, st.speed_freeze_held, SharedState.get_speed_freeze_count()),
+            (SharedState.ROUND_FREEZE_EVENT, st.round_freeze_held, SharedState.get_round_freeze_count()),
+        ))
+
     def _restore_pending_view(self):
         """前に無くて戻せなかった縦の視点（アイテム取得）を、前面にした直後に何より先に戻す"""
         dy, self._pending_view_dy = self._pending_view_dy, 0
@@ -390,7 +444,7 @@ class ActionExecutor:
             self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
             if not WindowOperator.hold_key_background(
                     self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
-                    stop=lambda: self._suicide_cancelled(round_seq)):
+                    stop=lambda: self._suicide_cancelled(round_seq) or self._stopped()):
                 # 送れないもの（最小化・Shift併用キー）はやり直しても送れない
                 st._skip_time = 0.0
                 self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
@@ -962,8 +1016,12 @@ class ActionExecutor:
         呼ぶときに使う（移動はフリーズ中でも行うため）。
         """
         st = self._st
-        if not self._is_running() or st.in_round:
-            self._log("Begin キャンセル（停止 or 次のラウンドが開始）")
+        if not self._is_running():
+            # 装備待ちでも止める（以前は装備待ちの窓だけ、止めた後も Begin へ進んでいた）
+            self._log("Begin キャンセル（停止）")
+            return False
+        if st.in_round:
+            self._log("Begin キャンセル（次のラウンドが開始）")
             if st.waiting_for_equip and st.in_round:
                 SharedState.equip_freeze_end(st)
                 self._log("ラウンド開始によりフリーズ解除 → 装備待ちへ")
@@ -1239,6 +1297,14 @@ class ActionExecutor:
         if spam is not None:
             spam.set()      # 連打を止める（条件が変われば自分でも終わる）
 
+        # 完全放置モード: 装備待ち（フリーズ・前面化・音声）は無いが、Begin が通った後に
+        # ロストしたアイテムを取りに行く（依頼者）。取れなくても何もしない（次のラウンドでまた）
+        if (self._hands_free() and st.begin_done and not st.item_id
+                and not st.in_round and self._is_running()):
+            fetch = self.item_fetch_target()
+            if fetch:
+                self._fetch_item(round_seq, *fetch)
+
         # ── フェーズ2: アイテムロスト装備待ち（ロック外）──
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない
         # （フリーズ解除はBEGIN_DONEイベント側で行う）
@@ -1274,13 +1340,13 @@ class ActionExecutor:
     # ── アイテム自動取得 ──────────────────
     def item_fetch_target(self) -> tuple | None:
         """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
-        押さない窓・放置モード・このラウンドにロストしたアイテムが分からない・Others や
-        表に無いアイテム → None（今どおり）"""
+        押さない窓・このラウンドにロストしたアイテムが分からない・Others や
+        表に無いアイテム → None（今どおり）。完全放置モードでも取りに行く（依頼者）"""
         st = self._st
         if SharedState.get_item_begin_mode():
             return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者）
         if (not SharedState.get_item_fetch() or self._osc is None
-                or not self._auto_begin_active() or self._hands_free()):
+                or not self._auto_begin_active()):
             return None
         item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える）
         shop = ItemFetch.shop_for(item_id, config.ITEMS)
@@ -1348,6 +1414,9 @@ class ActionExecutor:
             if self._osc is not None:
                 self._osc.stop_all(repeat=1)
         DebugLog.write(f"{head} アイテム取得: 結果 {outcome}")
+        if self._pending_view_dy:
+            # 前面を取られるなどで視点を戻し切れなかった。ラウンド突入までに戻しに行く
+            self._restore_view_soon()
         if outcome == "ok":
             self._log("アイテム取得: 装備できました")
         elif outcome != "equipped":
@@ -1619,7 +1688,9 @@ class ActionExecutor:
                 return not st.glorbo_afk
             return (
                 not st.is_open_special_round_round
-                or st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS
+                or not RoundDecision.open_special_active(
+                    st.open_special_round_wins,
+                    getattr(self._cfg, "cancel_afk_after_unlock", False))
             )
 
         while not _should_stop():

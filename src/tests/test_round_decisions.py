@@ -3042,3 +3042,127 @@ class TestAlternateRoundNameForDb(unittest.TestCase):
     def test_no_terrors_is_the_round_type(self):
         self.monitor.st.round_type = "Fog"
         self.assertEqual(self.monitor._round_type_for_db([]), "Fog")
+
+
+class TestWaldoNeedsHavePlush(unittest.TestCase):
+    """Waldo を続行するのは Have Plush を持っているときだけ。DTM は今までどおり。
+    Have Plush の番号が分からない（item.json に無い）間は、前と同じく続行する"""
+
+    PLUSH = 77
+
+    def setUp(self):
+        items = {self.PLUSH: ItemCatalog.Item("Have Plush", "Event", True),
+                 1: ItemCatalog.Item("Glow Stick", "Survival", True)}
+        p = patch.object(config, "ITEMS", items)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _monitor(self, held, wins=0, after_unlock=False):
+        cfg = WindowConfig(cancel_afk=True, cancel_afk_after_unlock=after_unlock)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.round_type = "Classic"
+        monitor.st.held_item_id = held
+        monitor.st.item_id = held or 0
+        monitor.st.open_special_round_wins = wins
+        return monitor
+
+    def _continues(self, monitor, ids):
+        _kind, is_continue, open_special = monitor._list_plan(ids, False)
+        return is_continue, open_special
+
+    def test_the_id_is_looked_up_by_name(self):
+        self.assertEqual(ItemCatalog.item_id_by_name(" have plush ", config.ITEMS), self.PLUSH)
+        self.assertIsNone(ItemCatalog.item_id_by_name("Have Plush", {}))
+
+    def test_waldo_with_have_plush_continues(self):
+        self.assertEqual(self._continues(self._monitor(self.PLUSH), [config.WALDO_ID]), (True, True))
+
+    def test_waldo_with_another_item_is_skipped(self):
+        self.assertEqual(self._continues(self._monitor(1), [config.WALDO_ID]), (False, False))
+
+    def test_waldo_with_nothing_is_skipped(self):
+        self.assertEqual(self._continues(self._monitor(0), [config.WALDO_ID]), (False, False))
+
+    def test_dtm_does_not_need_it(self):
+        self.assertEqual(self._continues(self._monitor(1), [config.DTM_ID]), (True, True))
+
+    def test_without_the_id_waldo_is_as_before(self):
+        with patch.object(config, "ITEMS", {}), patch.object(config, "HAVE_PLUSH_ITEM_ID", None):
+            monitor = self._monitor(1)
+            self.assertIsNone(monitor._holds_plush())
+            self.assertEqual(self._continues(monitor, [config.WALDO_ID]), (True, True))
+
+    def test_the_fallback_id_in_config_is_used(self):
+        with patch.object(config, "ITEMS", {}), patch.object(config, "HAVE_PLUSH_ITEM_ID", 5):
+            self.assertTrue(self._monitor(5)._holds_plush())
+            self.assertFalse(self._monitor(1)._holds_plush())
+
+    def test_hands_free_skips_waldo_without_it(self):
+        monitor = self._monitor(1)
+        self.assertIsNotNone(monitor._hands_free_skip_reason([config.WALDO_ID]))
+        self.assertIsNone(self._monitor(self.PLUSH)._hands_free_skip_reason([config.WALDO_ID]))
+        self.assertIsNone(monitor._hands_free_skip_reason([config.DTM_ID]))
+
+    def test_the_pure_rule(self):
+        self.assertEqual(RoundDecision.open_special_ids([config.WALDO_ID, config.DTM_ID], False),
+                         [config.DTM_ID])
+        self.assertEqual(RoundDecision.open_special_ids([config.WALDO_ID], None), [config.WALDO_ID])
+        self.assertEqual(RoundDecision.open_special_ids([config.WALDO_ID], True), [config.WALDO_ID])
+
+
+class TestOpenSpecialAfterUnlock(unittest.TestCase):
+    """窓の設定「3クラ解放後も続行」: 3勝の後も DTM/Waldo を続行し、AFK 対策も回す"""
+
+    def _monitor(self, after_unlock, wins=3):
+        cfg = WindowConfig(cancel_afk=True, cancel_afk_after_unlock=after_unlock)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.round_type = "Classic"
+        monitor.st.item_id = 1
+        monitor.st.open_special_round_wins = wins
+        return monitor
+
+    def test_off_skips_after_three_wins(self):
+        _kind, is_continue, _open = self._monitor(False)._list_plan([config.DTM_ID], False)
+        self.assertFalse(is_continue)
+
+    def test_on_keeps_continuing(self):
+        _kind, is_continue, open_special = self._monitor(True)._list_plan([config.DTM_ID], False)
+        self.assertEqual((is_continue, open_special), (True, True))
+
+    def test_hands_free_too(self):
+        self.assertIsNotNone(self._monitor(False)._hands_free_skip_reason([config.DTM_ID]))
+        self.assertIsNone(self._monitor(True)._hands_free_skip_reason([config.DTM_ID]))
+
+    def test_the_afk_loop_starts_and_keeps_running(self):
+        monitor = self._monitor(True)
+        monitor.st.terror_ids = [config.DTM_ID]
+        with patch.object(monitor, "_start_daemon") as daemon:
+            monitor._decide_with_keep_on_set("Classic")
+        self.assertIn(monitor._action.do_open_special_round_loop,
+                      [c.args[0] for c in daemon.call_args_list])
+        self.assertTrue(monitor.st.is_open_special_round_round)
+
+    def test_the_afk_loop_does_not_stop_at_three_wins(self):
+        st = WindowState(in_round=True, is_open_special_round_round=True, open_special_round_wins=3)
+        moves = []
+        for after_unlock, expected in ((False, 0), (True, 1)):
+            moves.clear()
+            ex = ActionExecutor.ActionExecutor(
+                WindowConfig(cancel_afk_after_unlock=after_unlock), st, lambda: True, lambda _m: None)
+            ticks = iter(range(1000))
+
+            def sleep(_sec):
+                if next(ticks) > config.OPEN_SPECIAL_ROUND_INTERVAL_SEC + 1:
+                    st.in_round = False
+            st.in_round = True
+            with patch.object(ActionExecutor.time, "sleep", side_effect=sleep), \
+                 patch.object(ex, "move", side_effect=lambda *a: moves.append(a)):
+                ex.do_open_special_round_loop()
+            self.assertEqual(len(moves), expected, after_unlock)
+
+    def test_the_gui_has_the_switch(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn('"cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get()', src)
+        self.assertIn('text="3クラ解放後も続行"', src)

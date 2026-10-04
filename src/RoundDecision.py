@@ -27,17 +27,31 @@ def normalize_killer_ids(ids: list[int], round_type: str, state_round_type: str 
     return normalized
 
 
+def open_special_active(wins: int, after_unlock: bool = False) -> bool:
+    """DTM/Waldo を続行する時期か（3勝前。窓の設定で3勝の後も）"""
+    return after_unlock or wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
+
+
+def open_special_ids(terror_ids, holds_plush: bool | None = None) -> list[int]:
+    """続行してよい DTM/Waldo。Waldo は Have Plush を持っているときだけ。
+    holds_plush が None（持っているか分からない）なら前と同じく続行する"""
+    return [tid for tid in terror_ids or ()
+            if tid in config.OPEN_SPECIAL_ROUND_TERROR_IDS
+            and not (tid == config.WALDO_ID and holds_plush is False)]
+
+
 def is_open_special_round_target(
     terror_ids: list[int],
     round_type: str,
     wins: int,
     cancel_afk: bool,
+    after_unlock: bool = False,
+    holds_plush: bool | None = None,
 ) -> bool:
     return (
-        bool(terror_ids and config.OPEN_SPECIAL_ROUND_TERROR_IDS)
-        and any(tid in config.OPEN_SPECIAL_ROUND_TERROR_IDS for tid in terror_ids)
+        bool(open_special_ids(terror_ids, holds_plush))
         and round_type not in config.SPECIAL_ROUND
-        and wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        and open_special_active(wins, after_unlock)
         and cancel_afk
     )
 
@@ -68,8 +82,11 @@ def decide_killers(
     wins: int,
     cancel_afk: bool,
     bloodthirsty_variant: bool = False,
+    after_unlock: bool = False,
+    holds_plush: bool | None = None,
 ) -> KillerDecision:
-    open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk)
+    open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk,
+                                                after_unlock, holds_plush)
     # リストで表現できない組み合わせ。3クラ解放とは別物なので、
     # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,

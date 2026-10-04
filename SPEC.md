@@ -130,7 +130,10 @@ LogMonitor が1窓に1つ持つ。主なもの:
 - どれも `_Freeze`: 張っている窓の数で管理し、0 になったら解除。窓ごとの保持（`*_held`）で多重登録・多重解除を防ぐ（足していない窓が引くと、別の窓の本物のフリーズを解いてしまう）。
 - 前面を要する操作（Begin のクリックなど）の前に `ActionExecutor._wait_other_windows()` で待つ。自分が張った分は待たない。移動（OSC・背面のキー）は前面を奪わないので待たない。自爆も背面送信なので待たない。
 - フリーズのために前面にした窓は、その窓のフリーズが全部解けたら元の窓へ返す（`FrontLoan`）。
-- 停止（`mainGUI.App._stop`）で4種とも強制的に解除する。
+- 停止（`mainGUI.App._stop`）と開始で4種とも強制的に解除する（`SharedState.begin_run`）。停止は**先に監視を止めてから**解く。
+  逆だと、ほかの窓のフリーズ明けを待っていた窓が止まる前に起きて自分のフリーズを張り、次の開始まで全窓が止まったままになる。
+  さらに窓は開始した回（`WindowState.run_id`）を持ち、前の回の窓は張れない・解けない（止めた後も動き終わっていないスレッドのため）。
+- 押している最中の移動（OSC の長押し・背面のキー）は、停止でその場で離す（`stop` を渡す）。
 
 ### 5.1 非同期タスクの寿命
 
@@ -183,6 +186,7 @@ LogMonitor._process(line)
    - それ以外: 操作しない（判定のログだけ）。
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
 4. `RoundDecision.decide_killers`: 続行リスト（Classic と Moon では Special/Moon 枠も見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
+   DTM/Waldo は3勝まで（窓の設定 `cancel_afk_after_unlock` で3勝の後も）。Waldo は Have Plush を持っているときだけ（番号は item.json の名前から。分からなければ前と同じく続行）。
 
 ## 8. Begin
 
@@ -194,7 +198,7 @@ LogMonitor._process(line)
 
 - **霧の看破**: `--enable-sdk-log-levels` 付きで起動した窓だけ。画面のボタンが ON で Invite・Invite+・Friends のときだけ判定・表示に使う。それ以外は DB にだけ黙って送る。名前ごとに公開と答え合わせし、一度でも食い違った名前は使わない。看破できる起動で5秒たってもオブジェクトの名前が出なければ DTM と判断する。
 - **速度検知**: OSC で VelocityMagnitude を受ける窓だけ。Verified Round End から速度を見て、張り付いた値で 8 Pages（6.5）・Punished（4.0）を先読みする。
-- **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。合計 `ITEM_FETCH_LIMIT_SEC` まで）。
+- **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。完全放置モードでも。合計 `ITEM_FETCH_LIMIT_SEC` まで）。取得で動かした縦の視点は、どの終わり方でも戻す。前面を取られて戻せなかった分は、裏で見張って、この窓が前面になったら・ほかの窓が誰もフリーズしていなければ前面を借りて戻す（`_restore_view_soon`）。
 - **VRChat の起動**: 窓ごとに `--profile=N`・`--osc=<受信>:127.0.0.1:<送信>`（窓 i は 9000+10i と +1）。窓が出てから `LAUNCH_STAGGER_SEC` 置いて次を起動する（VRChat API の 429 を避けるため）。入室後の選択画面は `ToNEntry` が突破する。
 - **自動アップデート**: 起動時に GitHub Releases の最新タグと `config.APP_VERSION` を比べ、新しければダウンロードして実行中の exe を `.old` にして差し替える。
 

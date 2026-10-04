@@ -58,6 +58,15 @@ def take_load_problem() -> str | None:
     return problem
 
 
+def item_id_by_name(name: str, items: dict) -> int | None:
+    """名前（大文字小文字・前後の空白は問わない）→ ID。無ければ None"""
+    wanted = (name or "").strip().casefold()
+    for item_id, item in items.items():
+        if item.name.strip().casefold() == wanted:
+            return item_id
+    return None
+
+
 def item_name(item_id, items: dict) -> str | None:
     item = items.get(item_id)
     return item.name if item else None

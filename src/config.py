@@ -361,11 +361,15 @@ BEGIN_RETRY_WAIT_SEC  = 5.0
 HOST_LIST_LOSS_GRACE_SEC = 10.0
 
 # ── 3クラ続行設定 ──────────────────────────────
-OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
-    ReadJson.terror_id("Don't Touch Me", TERRORS),
-    ReadJson.terror_id("Waldo", TERRORS)
-}
-OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）
+DTM_ID   = ReadJson.terror_id("Don't Touch Me", TERRORS)
+WALDO_ID = ReadJson.terror_id("Waldo", TERRORS)
+OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {DTM_ID, WALDO_ID}
+OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）。窓の設定で、3勝の後も続けられる
+# Waldo を続行するのは、このアイテムを持っているときだけ（依頼者）。番号は item.json から名前で引く。
+# item.json に無い間は HAVE_PLUSH_ITEM_ID（分かっていれば番号を書く）。どちらも無ければ、
+# 持っているか分からないので前と同じ（アイテムに関係なく続行）
+HAVE_PLUSH_NAME = "Have Plush"
+HAVE_PLUSH_ITEM_ID: int | None = None
 # 「特殊ラウンドを経験したら3勝扱い」の例外。特殊ラウンドだが、例外的に3クラ前にも
 # 出現するもの（依頼者 2026-09-30: Twilight だけ。ほかの Moon は出現条件の都合で
 # 3クラ前には起こりえない）。特殊ラウンドであることは変わらない（SPECIAL_ROUND には残す）

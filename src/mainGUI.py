@@ -221,7 +221,7 @@ class WindowTab(ttk.Frame):
         if self._on_settings_changed is None:
             return
         for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
-                    self.v_announce_intermission, *self.v_skip_rounds.values(),
+                    self.v_cancel_afk_after_unlock, self.v_announce_intermission, *self.v_skip_rounds.values(),
                     *self.v_continue_rounds.values()):
             var.trace_add("write", lambda *_a: self._on_settings_changed(self))
 
@@ -231,6 +231,7 @@ class WindowTab(ttk.Frame):
             "auto_begin": self.v_auto_begin.get(),
             "do_skip": self.v_do_skip.get(),
             "cancel_afk": self.v_cancel_afk.get(),
+            "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
             "announce_intermission": self.v_announce_intermission.get(),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
@@ -284,10 +285,12 @@ class WindowTab(ttk.Frame):
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
         self.v_cancel_afk  = tk.BooleanVar(value=True)
+        self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="3クラ解放後も続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
@@ -2309,6 +2312,8 @@ class App(tk.Tk):
         self._apply_obs_settings()
 
         self.monitors.clear()
+        # 前の回の窓が止めた後に張ったフリーズが残っていても、ここで全部解いて回を進める
+        SharedState.begin_run()
         for tab in self.tabs:
             cfg, err = tab.get_config()
             if cfg is not None and cfg.hwnd:
@@ -2424,6 +2429,7 @@ class App(tk.Tk):
                     f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
                     f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
                     f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
+                    f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
                     f" Intermission={cfg.announce_intermission}"
                     f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}")
             DebugLog.write(
@@ -2444,12 +2450,12 @@ class App(tk.Tk):
         self._stop_window_volume()               # 元の音量に戻す（監視を止める前に）
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
-        SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
-        SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
-        SharedState.speed_freeze_reset()         # 速度検知フリーズも解除
-        SharedState.round_freeze_reset()         # ラウンド突入フリーズも解除
+        # 先に監視を止めてからフリーズを解く。逆だと、ほかの窓のフリーズが解けるのを待っていた
+        # 窓（アイテムロストの装備待ちなど）が、止まる前に起きて自分のフリーズを張り、
+        # それが次の開始まで残って全窓が止まったままになっていた
         for m in self.monitors:
             m.stop()
+        SharedState.begin_run()                  # フリーズを全部解く（前の回の窓はもう張れない）
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
         self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)

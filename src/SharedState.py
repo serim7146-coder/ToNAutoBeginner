@@ -178,6 +178,31 @@ def _note_freeze(st, kind: str, started: bool, count: int):
                    f"{'張った' if started else '解いた'}（張っている窓: {count}）")
 
 
+# マクロの回（開始・停止のたびに進む）。止めた後もしばらく動いている前の回のスレッドが、
+# 新しい回のフリーズを張ったり解いたりしないように、窓（WindowState.run_id）と照らす
+_RUN = _Setting(0)
+
+
+def begin_run() -> int:
+    """マクロの開始・停止のたびに（Tk のスレッドから）呼ぶ。全窓フリーズを全部解き、回を進める。
+    以後、前の回の窓はフリーズを張れない・解けない（張っても数に入らない）"""
+    for freeze in (_EQUIP, _SPEED, _ROUND, _CONTINUE):
+        freeze.reset()
+    run = _RUN.get() + 1
+    _RUN.set(run)
+    return run
+
+
+def current_run() -> int:
+    return _RUN.get()
+
+
+def _stale(st) -> bool:
+    """前の回の窓か（run_id を持たない窓＝テストなどは今の回とみなす）"""
+    run = getattr(st, "run_id", None)
+    return run is not None and run != _RUN.get()
+
+
 class _Freeze:
     def __init__(self, kind: str, held_attr: str, keep_order: bool = False):
         self.kind = kind                    # debug.log に出す名前
@@ -191,8 +216,10 @@ class _Freeze:
         self.queue: list | None = [] if keep_order else None
 
     def start(self, st):
-        """窓stを保持者として登録（登録済みなら何もしない）"""
+        """窓stを保持者として登録（登録済みなら何もしない）。前の回の窓は登録しない"""
         with self.lock:
+            if _stale(st):
+                return
             if getattr(st, self.held_attr):
                 return
             setattr(st, self.held_attr, True)
@@ -203,9 +230,13 @@ class _Freeze:
             self.event.clear()
 
     def end(self, st):
-        """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
+        """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）。
+        前の回の窓は印を落とすだけ（その回の数は begin_run で0にしてある。引くと今の回の数が狂う）"""
         with self.lock:
             if not getattr(st, self.held_attr):
+                return
+            if _stale(st):
+                setattr(st, self.held_attr, False)
                 return
             setattr(st, self.held_attr, False)
             _note_freeze(st, self.kind, False, max(0, self.count - 1))

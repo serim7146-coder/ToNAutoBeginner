@@ -316,7 +316,7 @@ class TestDebugLogTraces(unittest.TestCase):
             ex._osc.press_multi.return_value = True
             ex._begin_move()
             ex._osc.press_multi.assert_called_once_with([("/input/MoveForward", fwd),
-                                                         ("/input/MoveLeft", left)])
+                                                     ("/input/MoveLeft", left)], stop=ex._stopped)
             self.assertIn(f"[操作] [窓1] Begin前の移動: {kind} 前進{fwd}秒・左{left}秒"
                           f"（round_type={round_type}）", self.written)
             self.assertIn("[操作] [窓1] Begin前の移動: 最後までやった", self.written)

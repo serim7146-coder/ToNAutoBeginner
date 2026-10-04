@@ -866,6 +866,72 @@ class TestFetchYield(unittest.TestCase):
         self.assertEqual(len(self.sent), 1)
 
     # ── 4. 戻せなかった縦の視点 ──
+    def test_a_view_left_behind_is_restored_soon_by_borrowing_the_front(self):
+        """ほかの窓に前面を取られて戻せなかった縦の視点を、ラウンド突入までに戻しに行く。
+        ほかの窓が誰もフリーズしていなければ、前面を一瞬借りて戻して返す"""
+        ex, _st = self._executor()
+        ex._pending_view_dy = 20
+        self.front["hwnd"] = 0x66
+        borrowed = []
+
+        def borrow(hwnd):
+            borrowed.append(hwnd)
+            self.front["hwnd"] = hwnd
+            return True, "loan"
+        with patch.object(WindowOperator, "borrow_front", side_effect=borrow), \
+             patch.object(WindowOperator, "return_front") as give:
+            ex._restore_view_loop()
+        self.assertEqual(borrowed, [self.HWND])
+        self.assertEqual(self.sent, [(0, 5)] * 4)
+        give.assert_called_once_with("loan")
+        self.assertEqual(ex._pending_view_dy, 0)
+
+    def test_it_waits_while_another_window_is_frozen(self):
+        """人がほかの窓を操作している（フリーズ中）あいだは前面を借りない"""
+        ex, _st = self._executor()
+        ex._pending_view_dy = 20
+        self.front["hwnd"] = 0x66
+        other = WindowState()
+        SharedState.continue_round_start(other)
+        borrowed = []
+        waits = []
+
+        def sleep(_sec):
+            waits.append(list(borrowed))
+            if len(waits) == 3:
+                SharedState.continue_round_end(other)   # 続行ラウンドが終わった
+        with patch.object(ActionExecutor.time, "sleep", side_effect=sleep), \
+             patch.object(WindowOperator, "borrow_front",
+                          side_effect=lambda h: borrowed.append(h) or (True, None)), \
+             patch.object(WindowOperator, "return_front"):
+            ex._restore_view_loop()
+        self.assertTrue(all(w == [] for w in waits[:3]), "フリーズの間は借りない")
+        self.assertEqual(borrowed, [self.HWND])
+
+    def test_it_restores_at_once_when_the_window_is_in_front(self):
+        ex, _st = self._executor()
+        ex._pending_view_dy = 20
+        SharedState.continue_round_start(WindowState())  # ほかの窓がフリーズ中でも、前面ならその場で
+        with patch.object(WindowOperator, "borrow_front") as borrow:
+            ex._restore_view_loop()
+        borrow.assert_not_called()
+        self.assertEqual(self.sent, [(0, 5)] * 4)
+
+    def test_a_fetch_that_could_not_restore_starts_it(self):
+        ex, st = self._executor()
+
+        def buy(fetcher, shop, item_id):
+            fetcher.mouse.move_rel(0, -20)
+            self.front["hwnd"] = 0x66                   # 人がほかの窓へ（ラウンド突入までに取れない）
+            raise ItemFetch.Stopped("front_lost")
+        with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
+             patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
+             patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
+             patch.object(WindowOperator, "return_front"), \
+             patch.object(ActionExecutor.ActionExecutor, "_restore_view_soon") as soon:
+            ex._fetch_item(st.round_seq, "Survival", 29)
+        soon.assert_called_once()
+
     def test_the_vertical_view_left_behind_is_restored_on_the_next_front(self):
         ex, st = self._executor()
 
@@ -878,7 +944,8 @@ class TestFetchYield(unittest.TestCase):
         with patch.object(ItemFetch.Fetcher, "move_to_shop", autospec=True, return_value=True), \
              patch.object(ItemFetch.Fetcher, "buy", autospec=True, side_effect=buy), \
              patch.object(WindowOperator, "borrow_front", return_value=(True, None)), \
-             patch.object(WindowOperator, "return_front"):
+             patch.object(WindowOperator, "return_front"), \
+             patch.object(ActionExecutor.ActionExecutor, "_restore_view_soon"):   # 裏で戻すのは別に見る
             ex._fetch_item(st.round_seq, "Survival", 29)
         self.assertEqual(ex._pending_view_dy, 20)
         self.sent.clear()
@@ -1333,7 +1400,50 @@ class TestItemFetch(unittest.TestCase):
         self.assertIsNone(self._executor(lost=0)[0].item_fetch_target(), "ロストしたものが無い（装備した・インスタンス移動）")
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
-        self.assertIsNone(self._executor()[0].item_fetch_target(), "放置モード")
+        self.assertEqual(self._executor()[0].item_fetch_target(), ("Survival", 29),
+                         "完全放置モードでも取りに行く")
+
+    def _hands_free_round(self, ex, st, outcome="ok"):
+        order = []
+
+        def press(*_a, **_kw):
+            order.append("press")
+            st.begin_done = True
+            return True
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_fetch_item",
+                          side_effect=lambda seq, shop, item: order.append(("fetch", shop, item)) or outcome), \
+             patch.object(ex, "_attend_to_item_loss", side_effect=lambda: order.append("attend")), \
+             patch.object(PlaySound, "play_sound", side_effect=lambda _p: order.append("sound")):
+            ex.do_after_round()
+        return order
+
+    def test_hands_free_fetches_after_the_begin_without_freeze_or_sound(self):
+        """完全放置モードでも取りに行く。装備待ち（フリーズ・前面化・音声）は無い"""
+        SharedState.set_item_fetch(True)
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+        ex, st, _ = self._executor()
+        self.assertEqual(self._hands_free_round(ex, st), ["press", ("fetch", "Survival", 29)])
+        self.assertFalse(st.equip_freeze_held)
+
+    def test_hands_free_does_not_fetch_when_holding_or_off(self):
+        SharedState.set_hands_free(True)
+        self.addCleanup(SharedState.set_hands_free, False)
+        SharedState.set_item_fetch(True)
+        ex, st, _ = self._executor()
+        st.item_id = 1
+        self.assertEqual(self._hands_free_round(ex, st), ["press"], "持っている")
+        SharedState.set_item_fetch(False)
+        ex, st, _ = self._executor()
+        self.assertEqual(self._hands_free_round(ex, st), ["press"], "設定 OFF")
 
     def _after_round(self, ex, st, outcome, accept=True):
         """Begin まで回し、受理の後に何が起きるかを見る"""
@@ -1834,7 +1944,8 @@ class TestItemFetchViewRestore(unittest.TestCase):
         self.assertEqual(order, [("mouse", 6, -6), ("mouse", 0, 6), "give back"])
 
     def test_a_failing_restore_still_gives_the_front_back(self):
-        with patch.object(ItemFetch.Fetcher, "restore_view", side_effect=RuntimeError("x")):
+        with patch.object(ItemFetch.Fetcher, "restore_view", side_effect=RuntimeError("x")), \
+             patch.object(ActionExecutor.ActionExecutor, "_restore_view_soon"):   # 後で戻すのは別に見る
             outcome, order, _ = self._run(lambda f: self._moves(f))
         self.assertEqual(outcome, "ok")
         self.assertEqual(order[-1], "give back")
@@ -1951,7 +2062,8 @@ class TestKeepFetchingTheLostItem(unittest.TestCase):
         SharedState.set_item_fetch(True)
         SharedState.set_hands_free(True)
         self.addCleanup(SharedState.set_hands_free, False)
-        self.assertIsNone(monitor._action.item_fetch_target(), "放置モード")
+        self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29),
+                         "完全放置モードでも取りに行く")
         SharedState.set_hands_free(False)
         monitor.st.last_lost_item_id = 999
         self.assertIsNone(monitor._action.item_fetch_target(), "表に無い")

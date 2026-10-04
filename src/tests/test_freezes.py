@@ -542,9 +542,15 @@ class TestContinueFreezeIsPerWindow(unittest.TestCase):
                          "開始は3か所（Glorbo の続行）")
 
     def test_the_gui_reset_takes_no_window(self):
+        """止める・始めるときは窓を問わず全部解く（begin_run が4種とも reset する）"""
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
 
-        self.assertIn("SharedState.continue_round_reset()", src)
+        self.assertEqual(src.count("SharedState.begin_run()"), 2, "停止と開始")
+        st = WindowState()
+        SharedState.continue_round_start(st)
+        SharedState.begin_run()
+        self.assertTrue(SharedState.CONTINUE_ROUND_EVENT.is_set())
+        self.assertEqual(SharedState.get_continue_round_count(), 0)
 
 
 
@@ -3494,3 +3500,70 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         self.assertFalse(monitor.st.item_equipped_after_death)
         self.assertFalse(monitor.st.pending_sabotage_murder)
         self.assertFalse(monitor.st.sabotage_murder_this_round)
+
+
+class TestStopLeavesNoFreeze(unittest.TestCase):
+    """停止→（停止中に装備）→再開で、アイテムロストのフリーズが残り続けていた。
+    停止がフリーズを先に解いてから監視を止めていたので、ほかの窓のフリーズ明けを待っていた窓
+    （_handle_item_lost）がその間に起きて自分のフリーズを張り、それが次の開始まで残っていた"""
+
+    def setUp(self):
+        SharedState.begin_run()
+        self.addCleanup(SharedState.begin_run)
+
+    def test_a_stale_window_cannot_freeze_the_next_run(self):
+        old = WindowState(run_id=SharedState.current_run())
+        SharedState.begin_run()                         # 停止
+        SharedState.equip_freeze_start(old)             # 止まる前の窓が遅れて張った
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set())
+        self.assertEqual(SharedState.get_equip_freeze_count(), 0)
+
+    def test_a_stale_window_cannot_release_the_next_runs_freeze(self):
+        old = WindowState(run_id=SharedState.current_run())
+        SharedState.equip_freeze_start(old)
+        SharedState.begin_run()                         # 停止・再開
+        new = WindowState(run_id=SharedState.current_run())
+        SharedState.equip_freeze_start(new)
+        SharedState.equip_freeze_end(old)               # 止まる前の窓が遅れて解いた
+        self.assertFalse(SharedState.EQUIP_WAIT_EVENT.is_set(), "今の回の分は残る")
+        self.assertEqual(SharedState.get_equip_freeze_count(), 1)
+        self.assertFalse(old.equip_freeze_held)
+
+    def test_the_waiting_window_does_not_leave_a_freeze_after_stop(self):
+        """窓A が装備待ち・窓B は A の装備待ちが解けるのを待っている → 停止"""
+        running = {"on": True}
+        a = WindowState(run_id=SharedState.current_run(), waiting_for_equip=True)
+        b = WindowState(run_id=SharedState.current_run(), waiting_for_equip=True, item_id=0)
+        SharedState.equip_freeze_start(a)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=2), b, lambda: running["on"],
+                                           lambda _m: None)
+        result = {}
+        worker = threading.Thread(target=lambda: result.setdefault("ok", ex._handle_item_lost()))
+        worker.start()
+        time.sleep(0.05)                                # B は待っている
+
+        running["on"] = False                           # 停止: 監視を先に止める
+        SharedState.begin_run()                         # それからフリーズを解く
+        worker.join(3)
+
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(result["ok"])
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set(), "再開したらすぐ動ける")
+        self.assertEqual(SharedState.get_equip_freeze_count(), 0)
+
+    def test_stop_stops_the_monitors_before_releasing(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        stop = src[src.index("    def _stop(self):"):]
+        stop = stop[:stop.index("\n    def ")]
+        self.assertLess(stop.index("m.stop()"), stop.index("SharedState.begin_run()"))
+        start = src[src.index("    def _start(self):"):]
+        start = start[:start.index("\n    def ")]
+        self.assertLess(start.index("SharedState.begin_run()"), start.index("mon.start()"))
+
+    def test_a_monitor_belongs_to_the_run_it_started_in(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None)
+        with patch.object(monitor, "_start_daemon"), \
+             patch.object(monitor._action, "start_velocity_receiver"):
+            monitor.start()
+        self.assertEqual(monitor.st.run_id, SharedState.current_run())
+        monitor.stop()

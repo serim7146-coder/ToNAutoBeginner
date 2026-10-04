@@ -148,6 +148,7 @@ class LogMonitor:
         return SharedState.get_item_begin_mode() and self._auto_begin_active()
 
     def start(self):
+        self.st.run_id = SharedState.current_run()      # この回の窓（止めた後に張るフリーズは数えない）
         self._running = True
         self._stop_event.clear()
         self.early_read_capable = bool(
@@ -1228,7 +1229,7 @@ class LogMonitor:
             return False
         if RoundDecision.is_open_special_round_target(
                 ids, st.round_type, st.open_special_round_wins,
-                self.cfg.cancel_afk):
+                self.cfg.cancel_afk, self._after_unlock(), self._holds_plush()):
             return False        # 3クラ解放が勝つ。通常判定へ落とす
         if GroupRound.is_variant(ids):
             return False        # Variantは自爆しない。通常判定へ落とす
@@ -1577,7 +1578,7 @@ class LogMonitor:
             if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
                     and self.cfg.cancel_afk):
                 self._log(f"特殊ラウンド（{proof}）を経験したので3勝扱い"
-                          " → 以降のDTM/Waldoはスキップします")
+                          f" → {self._after_unlock_text('以降のDTM/Waldoはスキップします')}")
             st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
             st.round_type = event.round_type
@@ -1841,7 +1842,8 @@ class LogMonitor:
                 self._log(f"生存数: {st.open_special_round_wins}/"
                           f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
                 if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                    self._log("🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします")
+                    self._log("🎉 3勝達成！" + self._after_unlock_text(
+                        "以降のDTM/Waldoラウンドはスキップします"))
         st.is_open_special_round_round = False
 
     # ── テラー確定処理 ────────────────────────
@@ -2040,7 +2042,8 @@ class LogMonitor:
         decision = RoundDecision.decide_killers(
             self._keep_on(), ids, st.round_type,
             st.open_special_round_wins, self.cfg.cancel_afk,
-            bloodthirsty_variant=bloodthirsty)
+            bloodthirsty_variant=bloodthirsty,
+            after_unlock=self._after_unlock(), holds_plush=self._holds_plush())
         return ("list", decision.is_continue_round,
                 decision.is_open_special_round_target)
 
@@ -2062,21 +2065,36 @@ class LogMonitor:
             return "skip"
         return "open_special" if open_special else "continue"
 
+    def _after_unlock(self) -> bool:
+        """DTM/Waldo を3クラ解放（3勝）の後も続行する窓か"""
+        return bool(getattr(self.cfg, "cancel_afk_after_unlock", False))
+
+    def _after_unlock_text(self, otherwise: str) -> str:
+        """3勝扱いになったときに出す続き（3クラ解放後も続行する窓なら、そう言う）"""
+        return ("3クラ解放後も続行の設定なので、DTM/Waldoは続けます" if self._after_unlock()
+                else otherwise)
+
+    def _holds_plush(self) -> bool | None:
+        """Have Plush を持っているか。番号が分からなければ None（Waldo は前と同じく続行）"""
+        plush = (ItemCatalog.item_id_by_name(config.HAVE_PLUSH_NAME, config.ITEMS)
+                 or config.HAVE_PLUSH_ITEM_ID)
+        if not plush:
+            return None
+        return self.st.held_item_id == plush
+
     def _hands_free_skip_reason(self, ids) -> str | None:
         """放置モードで即自爆するならその理由。DTM/Waldo は例外"""
         st = self.st
-        if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+        if not RoundDecision.open_special_active(st.open_special_round_wins,
+                                                 self._after_unlock()):
             return f"放置モード(3クラ済み): 即自爆 {ids} / {st.round_type}"
         if not st.item_id:
             has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in ids
             if not has_dtm:
                 return (f"放置モード(アイテムなし・DTMなし): 即自爆 {ids} / "
                         f"{st.round_type}")
-        has_cancel_afk = bool(
-            config.OPEN_SPECIAL_ROUND_TERROR_IDS and
-            any(t in config.OPEN_SPECIAL_ROUND_TERROR_IDS for t in ids) and
-            self.cfg.cancel_afk
-        )
+        has_cancel_afk = bool(self.cfg.cancel_afk and
+                              RoundDecision.open_special_ids(ids, self._holds_plush()))
         if not has_cancel_afk:
             return f"放置モード(DTM/Waldo以外): 即自爆 {ids} / {st.round_type}"
         return None
@@ -2172,7 +2190,9 @@ class LogMonitor:
                 if not self._hands_free():
                     Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
-            if is_open_special_round_target and is_private and st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+            if (is_open_special_round_target and is_private
+                    and RoundDecision.open_special_active(st.open_special_round_wins,
+                                                          self._after_unlock())):
                 st.is_open_special_round_round = True
                 self._log(f"3クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}）")
                 self._start_daemon(self._action.do_open_special_round_loop)

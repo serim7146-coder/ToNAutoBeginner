@@ -11,6 +11,8 @@ class WindowConfig:
     auto_begin: bool = True
     do_skip: bool = True
     cancel_afk: bool = True
+    # DTM/Waldo を3クラ解放（3勝）の後も続行する
+    cancel_afk_after_unlock: bool = False
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     # VRChatが値を送ってくるポート。0なら従来どおり osc_port+1 を使う
     # （--osc= の送信ポートは受信+1とは限らない）
@@ -58,6 +60,9 @@ class WindowState:
     map_id: int = 0
     round_seq: int = 0
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
+    # マクロの回（SharedState.begin_run）。前の回の窓がフリーズを張ったり解いたりしないため。
+    # None は回を問わない（監視だけで使うとき・テスト）
+    run_id: Optional[int] = field(default=None, compare=False)
     # 窓の番号（debug.log の行に付けるため。判定には使わない）
     window_idx: int = field(default=0, compare=False)
     # このラウンドで Begin 前の移動を最後までやったか（押し直しで2回動かさないため）。

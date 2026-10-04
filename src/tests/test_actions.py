@@ -166,7 +166,7 @@ class TestOscBranching(unittest.TestCase):
              patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "hold_key") as mock_key:
             ex.move("forward", 2.1)
-        mock_press.assert_called_once_with("/input/MoveForward", 2.1)
+        mock_press.assert_called_once_with("/input/MoveForward", 2.1, stop=ex._stopped)
         mock_key.assert_not_called()
 
     def test_move_falls_back_to_the_background_key_without_osc(self):
@@ -176,7 +176,7 @@ class TestOscBranching(unittest.TestCase):
                           return_value=True) as mock_key,              patch.object(WindowOperator, "focus_window") as focus:
             ex.move("forward", 2.1)
 
-        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1)
+        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1, stop=ex._stopped)
         focus.assert_not_called()
 
     def test_a_failed_background_key_is_logged(self):
@@ -200,7 +200,7 @@ class TestOscBranching(unittest.TestCase):
         ex = self._executor(9000)
         held = []
         with patch.object(ex._osc, "press",
-                          side_effect=lambda a, s: held.append(
+                          side_effect=lambda a, s, stop=None: held.append(
                               SharedState._GLOBAL_ACTION_LOCK.locked()) or True), \
              patch.object(ex._osc, "stop_all"):
             ex.move("forward", 1.0)
@@ -211,7 +211,7 @@ class TestOscBranching(unittest.TestCase):
         ex = self._executor(0)
         held = []
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda *_a: held.append(
+                          side_effect=lambda *_a, **_k: held.append(
                               SharedState._GLOBAL_ACTION_LOCK.locked()) or True):
             ex.move("forward", 1.0)
 
@@ -1514,3 +1514,45 @@ class TestRoundTypeObservation(unittest.TestCase):
         self.assertFalse(any("round type" in m for m in self.written), self.written)
         self.assertEqual(len(self.written), 1, self.written)
         self.assertIn("定期 Verified の位相", self.written[0])
+
+
+class TestStopReleasesHolds(unittest.TestCase):
+    """マクロを止めたら、押している最中の移動（Begin 前の移動など）もその場で離す"""
+
+    def test_osc_hold_releases_on_stop(self):
+        client = OSCClient.OSCClient(9000)
+        sent = []
+        client.send = lambda address, value: sent.append((address, value)) or True
+        clock = {"t": 0.0}
+        stopped = {"on": False}
+
+        def sleep(sec):
+            clock["t"] += sec
+            if clock["t"] >= 0.3:
+                stopped["on"] = True                    # 0.3秒で止められた
+        with patch.object(OSCClient.time, "time", side_effect=lambda: clock["t"]), \
+             patch.object(OSCClient.time, "sleep", side_effect=sleep):
+            client.press_multi([("/input/MoveForward", 2.0), ("/input/MoveLeft", 1.0)],
+                               stop=lambda: stopped["on"])
+        self.assertLess(clock["t"], 0.5, "2秒待たない")
+        self.assertIn(("/input/MoveForward", 0), sent)
+        self.assertIn(("/input/MoveLeft", 0), sent)
+        self.assertEqual(set(sent[-2:]), {("/input/MoveForward", 0), ("/input/MoveLeft", 0)},
+                         "最後は両方を離す")
+
+    def test_the_begin_move_uses_the_stop(self):
+        running = {"on": True}
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), WindowState(),
+                                           lambda: running["on"], lambda _m: None)
+        with patch.object(ex._osc, "press_multi") as multi, patch.object(ex._osc, "stop_all"):
+            ex.move_forward_left(2.0, 0.1)
+        stop = multi.call_args.kwargs["stop"]
+        self.assertFalse(stop())
+        running["on"] = False
+        self.assertTrue(stop())
+
+    def test_the_begin_precheck_stops_even_while_waiting_for_equip(self):
+        st = WindowState(waiting_for_equip=True)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1), st, lambda: False, lambda _m: None)
+        self.assertFalse(ex._begin_precheck())
+        self.assertFalse(ex._begin_precheck(check_freeze=False))

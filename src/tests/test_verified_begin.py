@@ -36,7 +36,7 @@ class TestToNEntry(unittest.TestCase):
         with patch.object(entry._osc, "press", return_value=True) as mock_press, \
              patch.object(entry._osc, "stop_all") as mock_stop:
             self.assertTrue(entry.move("right", 0.4))
-        mock_press.assert_called_once_with("/input/MoveRight", 0.4)
+        mock_press.assert_called_once_with("/input/MoveRight", 0.4, stop=ANY)
         mock_stop.assert_called()
 
     def test_move_rejects_unknown_direction(self):
@@ -170,7 +170,7 @@ class TestToNEntryLocking(unittest.TestCase):
         entry = self._entry()
         held = []
         with patch.object(entry._osc, "press",
-                          side_effect=lambda a, s: held.append(
+                          side_effect=lambda a, s, stop=None: held.append(
                               SharedState._GLOBAL_ACTION_LOCK.locked()) or True), \
              patch.object(entry._osc, "stop_all"):
             entry.move("right", 0.38)
