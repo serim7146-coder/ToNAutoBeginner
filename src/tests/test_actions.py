@@ -684,27 +684,87 @@ class TestHideOwnWindowsWhileRecording(unittest.TestCase):
     def test_no_hwnd_is_false(self):
         self.assertFalse(WindowOperator.set_capture_excluded(0, True))
 
-    def test_the_toplevel_hwnd_climbs_to_the_parent(self):
-        """Tk の winfo_id() は子ウィンドウ。そのままでは窓全体に効かない"""
+    def test_the_toplevel_hwnd_is_the_root_ancestor(self):
+        """Tk の winfo_id() は子ウィンドウ。そのままでは窓全体に効かない。親の鎖の一番上を使う"""
         user32 = MagicMock()
-        user32.GetParent.side_effect = [200, 300, 0]
+        user32.GetAncestor.return_value = 300
 
         with patch.object(WindowOperator, "user32", user32):
             self.assertEqual(WindowOperator.toplevel_hwnd(100), 300)
+        user32.GetAncestor.assert_called_once_with(100, WindowOperator.GA_ROOT)
+        user32.GetParent.assert_not_called()
 
-    def test_a_toplevel_without_a_parent_is_itself(self):
+    def test_the_owner_of_a_popup_is_not_followed(self):
+        """枠なしのオーバーレイ（ポップアップ）では GetParent が持ち主（メイン画面）を返す。
+        それをたどるとオーバーレイの代わりにメイン画面を覚え、オーバーレイが録画に映っていた"""
         user32 = MagicMock()
-        user32.GetParent.return_value = 0
+        user32.GetAncestor.return_value = 500     # オーバーレイ自身
+        user32.GetParent.return_value = 900       # 持ち主（メイン画面）
+
+        with patch.object(WindowOperator, "user32", user32):
+            self.assertEqual(WindowOperator.toplevel_hwnd(400), 500)
+
+    def test_a_toplevel_without_an_ancestor_is_itself(self):
+        user32 = MagicMock()
+        user32.GetAncestor.return_value = 0
 
         with patch.object(WindowOperator, "user32", user32):
             self.assertEqual(WindowOperator.toplevel_hwnd(100), 100)
 
-    def test_a_broken_getparent_falls_back_to_the_child(self):
+    def test_a_broken_getancestor_falls_back_to_the_child(self):
         user32 = MagicMock()
-        user32.GetParent.side_effect = OSError("取れない")
+        user32.GetAncestor.side_effect = OSError("取れない")
 
         with patch.object(WindowOperator, "user32", user32):
             self.assertEqual(WindowOperator.toplevel_hwnd(100), 100)
+
+    def test_a_window_opened_while_recording_is_hidden_at_once(self):
+        """録画の途中で開いたオーバーレイ・統計画面も、開いたその場で外す"""
+        app = type("FakeApp", (), {})()
+        app._log = lambda _m: None
+        app._capture_warned = False
+        widget = MagicMock()
+        self.addCleanup(SharedState.set_own_windows_hidden, False)
+        self.addCleanup(SharedState.unregister_own_window, 81)
+        with patch.object(WindowOperator, "set_capture_excluded", return_value=True) as excluded, \
+             patch.object(WindowOperator, "own_window_hwnd", return_value=81):
+            mainGUI.App._set_own_windows_hidden(app, True)      # 録画開始
+            mainGUI._remember_own_window(widget)                # その後でオーバーレイを開いた
+        self.assertIn((81, True), [c.args for c in excluded.call_args_list])
+
+    def test_a_window_opened_while_not_recording_is_left_alone(self):
+        widget = MagicMock()
+        SharedState.set_own_windows_hidden(False)
+        self.addCleanup(SharedState.unregister_own_window, 82)
+        with patch.object(WindowOperator, "set_capture_excluded") as excluded, \
+             patch.object(WindowOperator, "own_window_hwnd", return_value=82):
+            mainGUI._remember_own_window(widget)
+        excluded.assert_not_called()
+
+    def test_one_failure_does_not_leave_the_others_shown(self):
+        app = type("FakeApp", (), {})()
+        app.logs = []
+        app._log = app.logs.append
+        app._capture_warned = False
+        self.addCleanup(SharedState.set_own_windows_hidden, False)
+        for h in (91, 92, 93):
+            SharedState.register_own_window(h)
+            self.addCleanup(SharedState.unregister_own_window, h)
+        with patch.object(WindowOperator, "set_capture_excluded",
+                          side_effect=lambda h, _x: h != 91) as excluded:
+            mainGUI.App._set_own_windows_hidden(app, True)
+        self.assertEqual(sorted(c.args[0] for c in excluded.call_args_list), [91, 92, 93])
+        self.assertEqual(len([m for m in app.logs if "隠せませんでした" in m]), 1)
+
+    def test_stopping_the_recording_clears_the_state(self):
+        app = type("FakeApp", (), {})()
+        app._log = lambda _m: None
+        app._capture_warned = False
+        with patch.object(WindowOperator, "set_capture_excluded", return_value=True):
+            mainGUI.App._set_own_windows_hidden(app, True)
+            self.assertTrue(SharedState.own_windows_hidden())
+            mainGUI.App._set_own_windows_hidden(app, False)
+        self.assertFalse(SharedState.own_windows_hidden())
 
     def test_the_recorder_keeps_its_dependencies(self):
         """窓の操作は Recorder に持ち込まない（標準ライブラリ＋OBSClient だけ）"""

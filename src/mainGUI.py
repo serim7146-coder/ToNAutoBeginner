@@ -400,6 +400,8 @@ def _remember_own_window(widget):
     if not hwnd:
         return
     SharedState.register_own_window(hwnd)
+    if SharedState.own_windows_hidden():
+        WindowOperator.set_capture_excluded(hwnd, True)     # 録画の途中で開いた窓も外す
 
     def forget(event, _hwnd=hwnd, _widget=widget):
         if event.widget is _widget:      # 子ウィジェットの Destroy は無視
@@ -3021,17 +3023,20 @@ class App(tk.Tk):
         （hwnd は窓を作ったときに控えた値）。取れない環境では1度だけ知らせて、
         録画はそのまま続ける
         """
+        SharedState.set_own_windows_hidden(hidden)
         for hwnd in SharedState.own_windows():
-            if WindowOperator.set_capture_excluded(hwnd, hidden):
-                continue
-            if not self._capture_warned:
-                self._capture_warned = True
-                self._log("⚠ 録画からツールの窓を隠せませんでした"
-                          "（Windows 10 2004 以降が必要です）。録画は続けます")
-            return
+            ok = WindowOperator.set_capture_excluded(hwnd, hidden)
+            DebugLog.write(f"[画面] 録画{'から外す' if hidden else 'に戻す'} hwnd={int(hwnd):#x}"
+                           f" → {'OK' if ok else '失敗'}")
+            if ok or not hidden or self._capture_warned:
+                continue            # 1つ失敗しても、残りの窓は外しに行く
+            self._capture_warned = True
+            self._log("⚠ 録画からツールの窓を隠せませんでした"
+                      "（Windows 10 2004 以降が必要です）。録画は続けます")
 
     def _show_own_windows_again(self):
         """録画中に隠したままにしない。止めたら必ず戻す"""
+        SharedState.set_own_windows_hidden(False)
         for hwnd in SharedState.own_windows():
             WindowOperator.set_capture_excluded(hwnd, False)
 

@@ -332,6 +332,8 @@ class StatisticsWindow(tk.Toplevel):
         if not hwnd:
             return
         SharedState.register_own_window(hwnd)
+        if SharedState.own_windows_hidden():
+            WindowOperator.set_capture_excluded(hwnd, True)     # 録画の途中で開いた
 
         def forget(event, _hwnd=hwnd):
             if event.widget is self:     # 子ウィジェットの Destroy は無視

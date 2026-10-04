@@ -353,6 +353,12 @@ def own_windows() -> frozenset:
         return frozenset(_OWN_WINDOWS)
 
 
+# 当ツールの窓をいま録画から外しているか。録画の途中で開いた窓（オーバーレイ・統計画面）も
+# 開いたその場で外すため（外すのは録画の開始時に開いていた窓だけだった）
+_OWN_WINDOWS_HIDDEN = _Setting(False, bool)
+own_windows_hidden, set_own_windows_hidden = _OWN_WINDOWS_HIDDEN.get, _OWN_WINDOWS_HIDDEN.set
+
+
 def nothing_frozen() -> bool:
     """どのフリーズも張られていないか。
 
