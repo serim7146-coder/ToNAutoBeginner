@@ -1619,12 +1619,6 @@ class TestStatisticsWindowV1(unittest.TestCase):
 
 
 class TestGetTransformedUid(unittest.TestCase):
-    def test_round_filters_url_encode_round_names(self):
-        self.assertEqual(
-            ConnectDB._in_filter("round", ("Fog (Alternate)",)),
-            "&round=in.(Fog%20%28Alternate%29)",
-        )
-
     @staticmethod
     def _res(body, status=200):
         res = MagicMock()
@@ -1709,52 +1703,10 @@ class TestGetTransformedUid(unittest.TestCase):
             result = ConnectDB.get_transformed_uid("usr_abc123")
             self.assertIsNone(result)
 
-    def test_get_ToNRoundStatistics(self):
-        """"ToNRounds" から読み、今の形に直す。絞り込みはラウンドの番号"""
-        mock_res = MagicMock()
-        mock_res.__enter__ = MagicMock(return_value=mock_res)
-        mock_res.__exit__ = MagicMock(return_value=False)
-        v1 = [{"time": 12696896, "round": 10, "map_id": 2, "terror1": 201, "terror2": None,
-               "terror3": None, "transformed_uid": 123, "other_uids": [5, 6]}]
-        expected = [{"created_at": "2026-05-27T22:54:56Z", "round": "Unbound",
-                     "terror_ids": [201], "map_id": 2, "transformed_uid": 123}]
-        mock_res.read.return_value = json.dumps(v1).encode()
-        with patch('urllib.request.urlopen', return_value=mock_res) as mock_urlopen:
-            result = ConnectDB.get_ToNRoundStatistics()
-            self.assertEqual(result, expected, "other_uids があっても1件")
-            requested_url = mock_urlopen.call_args.args[0].full_url
-            self.assertIn("/rest/v1/ToNRounds?", requested_url)
-            self.assertIn("order=time.desc", requested_url)
-            self.assertIn("round=not.in.(1,104)", requested_url)
-
-        mock_res.read.return_value = json.dumps(v1).encode()
-        with patch('urllib.request.urlopen', return_value=mock_res) as mock_urlopen:
-            result = ConnectDB.get_ToNRoundStatistics(exclude_rounds=None, include_rounds=("Classic", "Run"))
-            self.assertEqual(result, expected)
-            requested_url = mock_urlopen.call_args.args[0].full_url
-            self.assertIn("round=in.(1,104)", requested_url)
-
-    def test_get_ToNRoundStatistics_fetches_all_pages(self):
-        first_page = [
-            {"created_at": f"2026-05-24T12:{i % 60:02d}:00+00:00", "round": "Unbound", "terror_ids": [1]}
-            for i in range(1000)
-        ]
-        second_page = [{"created_at": "2026-05-24T13:00:00+00:00", "round": "Unbound", "terror_ids": [2]}]
-
-        mock_res1 = MagicMock()
-        mock_res1.__enter__ = MagicMock(return_value=mock_res1)
-        mock_res1.__exit__ = MagicMock(return_value=False)
-        mock_res1.read.return_value = json.dumps(first_page).encode()
-
-        mock_res2 = MagicMock()
-        mock_res2.__enter__ = MagicMock(return_value=mock_res2)
-        mock_res2.__exit__ = MagicMock(return_value=False)
-        mock_res2.read.return_value = json.dumps(second_page).encode()
-
-        with patch('urllib.request.urlopen', side_effect=[mock_res1, mock_res2]) as mock_urlopen:
-            result = ConnectDB.get_ToNRoundStatistics()
-
-        self.assertEqual(len(result), 1001)
-        urls = [call.args[0].full_url for call in mock_urlopen.call_args_list]
-        self.assertIn("offset=0", urls[0])
-        self.assertIn("offset=1000", urls[1])
+    def test_round_row_is_one_row_even_with_other_uids(self):
+        """"ToNRounds" の1行を今の形に直す。other_uids（同じラウンドを見たほかの人）があっても1件"""
+        v1 = {"time": 12696896, "round": 10, "map_id": 2, "terror1": 201, "terror2": None,
+              "terror3": None, "transformed_uid": 123, "other_uids": [5, 6]}
+        self.assertEqual(ConnectDB.round_row(v1),
+                         {"created_at": "2026-05-27T22:54:56Z", "round": "Unbound",
+                          "terror_ids": [201], "map_id": 2, "transformed_uid": 123})

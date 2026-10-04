@@ -77,7 +77,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 DebugLog.add_secret(SUPABASE_URL)
 DebugLog.add_secret(SUPABASE_KEY)
 REQUEST_TIMEOUT = 10
-DEFAULT_EXCLUDED_STAT_ROUNDS = ("Classic", "Run")
 
 def _say_user(message: str):
     """ユーザー登録・transformed_uid の取得の成否（送ったラウンドの中身は含まない）。
@@ -100,18 +99,6 @@ def _headers(accept: bool = False) -> dict[str, str]:
 
 def _url(path: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{path}"
-
-def _not_in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
-    if not values:
-        return ""
-    encoded_values = ",".join(urllib.parse.quote(str(value), safe="") for value in values)
-    return f"&{column}=not.in.({encoded_values})"
-
-def _in_filter(column: str, values: tuple[str, ...] | list[str] | None) -> str:
-    if not values:
-        return ""
-    encoded_values = ",".join(urllib.parse.quote(str(value), safe="") for value in values)
-    return f"&{column}=in.({encoded_values})"
 
 # DB の関数（supabase/get_transformed_uid.sql）。uid → transformed_uid を返し、無ければ割り当てる
 TRANSFORMED_UID_RPC = "rpc/get_transformed_uid"
@@ -317,32 +304,3 @@ def round_row(row: dict) -> dict:
         "map_id": row.get("map_id"),
         "transformed_uid": row.get("transformed_uid"),
     }
-
-
-def get_ToNRoundStatistics(
-    exclude_rounds: tuple[str, ...] | list[str] | None = DEFAULT_EXCLUDED_STAT_ROUNDS,
-    include_rounds: tuple[str, ...] | list[str] | None = None,
-):
-    if not _configured():
-        print("Supabase設定がないため集計データ取得をスキップします。")
-        return []
-    all_rows = []
-    offset = 0
-    page_size = 1000
-    # 絞り込みはラウンドの番号で（名前 → 番号）
-    include_ids = sorted({round_type_id(n) for n in include_rounds or ()})
-    exclude_ids = sorted({round_type_id(n) for n in exclude_rounds or ()})
-    round_filter = (_in_filter("round", include_ids) if include_rounds
-                    else _not_in_filter("round", exclude_ids))
-    while True:
-        req = urllib.request.Request(
-            _url(f"ToNRounds?select=*&order=time.desc{round_filter}&limit={page_size}&offset={offset}"),
-            headers=_headers(accept=True)
-        )
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-            data = json.loads(res.read().decode("utf-8"))
-        all_rows.extend(round_row(row) for row in data)
-        if len(data) < page_size:
-            break
-        offset += page_size
-    return all_rows

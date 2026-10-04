@@ -277,8 +277,7 @@ FOCUS_RETURN_AFTER_RELEASE_SEC = 0.3
 
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
-# 自爆キーをフォーカス無しで送る（Trueで背面送信、Falseで従来のフォーカス方式）
-# 背面送信が使えない状況では自動的にフォーカス方式へ落ちる
+# 自爆キーはいつも背面へ送る（前面化しない）。送れない窓（最小化中など）では自爆せずに知らせる
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
 # 自爆が効かなかったらやり直す。背面送信で長押ししている間に他の窓が
 # 前面を奪うと、VRChat はキーを離したことにする（実例: 窓4が80秒後に死亡）
@@ -423,8 +422,8 @@ TON_INSTANCE_ACCESS_CHOICES      = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACC
 TON_INSTANCE_ACCESS_DEFAULT      = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
-# 的の位置は画面比率で持つ。スポーン地点と向きが固定なので毎回同じ位置に出る。
-# 値は 2560x1440 での実測から算出（例: 警告同意 1327/2560, 739/1440）。
+# スポーン地点と向きが固定なので、決まった秒数の横移動で的が照準（画面中央）に来る。
+# 画面の座標は使わない（ToNEntry）
 TON_ENTRY_ENABLED = True
 TON_ENTRY_BEGIN   = True   # 選択画面突破後にBeginまで押すか
 
@@ -467,8 +466,9 @@ OBS_RECORD_MAX_SEC  = 900      # 1本の上限。RoundOver が来ないときの
 OBS_TIMEOUT_SEC     = 2.0      # 接続・送受信のタイムアウト
 
 # ── 霧の看破（--enable-sdk-log-levels 付きのログの [NetworkProcessing]） ──
-# 公開前にオブジェクト名からテラーを特定する。使ってよいのは Invite / Invite+ /
-# Friends / Group Only のインスタンスだけ（それ以外は DB にだけ送る）
+# 公開前にオブジェクト名からテラーを特定する。判定・表示に使うのは、画面の「霧を即時判定する」が
+# ON で、Invite / Invite+ / Friends のインスタンスのときだけ（FogEarlyRead.EARLY_READ_ACCESS）。
+# それ以外は DB にだけ送る
 FOG_EARLY_READ_ENABLED     = True
 FOG_EARLY_READ_LAUNCH_FLAG = "--enable-sdk-log-levels"
 # 名前ごとの答え合わせ（一致 / 食い違い）の記録

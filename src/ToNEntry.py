@@ -141,10 +141,10 @@ class ToNEntry:
     def run(self) -> bool:
         """入室時の選択画面を順に突破する。
 
-        手順（実測で決めた移動量）:
-            右0.4秒 → クリック（警告同意）
-            左0.65秒 → クリック（難易度 Casual）
-            右0.6秒 → クリック（BGM）→ クリック（LET ME PLAY）
+        手順は config.TON_ENTRY_STEPS（実測で決めた移動量）:
+            右 → クリック（警告同意）
+            左 → クリック（難易度 Casual）
+            右 → クリック（BGM）→ クリック（LET ME PLAY）
         最後の2回は的がほぼ同じ位置にあるため移動せず続けて押す。
         """
         if not self.wait_for_panel():
