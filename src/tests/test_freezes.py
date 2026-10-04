@@ -3567,3 +3567,54 @@ class TestStopLeavesNoFreeze(unittest.TestCase):
             monitor.start()
         self.assertEqual(monitor.st.run_id, SharedState.current_run())
         monitor.stop()
+
+
+class TestItemLossLogsWithoutAnItem(unittest.TestCase):
+    """前のロストから未回収のまま、またアイテムロストのラウンドに入ったときのログ"""
+
+    def _monitor(self, item_id):
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, logs.append, window_idx=1)
+        monitor.st.item_id = item_id
+        return monitor, logs
+
+    def test_a_held_item_is_lost_as_before(self):
+        monitor, logs = self._monitor(29)
+        monitor._mark_item_lost("Punished: ラウンド開始時にアイテムロスト")
+        self.assertEqual(logs, ["[窓1] Punished: ラウンド開始時にアイテムロスト"])
+
+    def test_nothing_held_is_not_called_a_loss(self):
+        monitor, logs = self._monitor(0)
+        monitor._mark_item_lost("Punished: ラウンド開始時にアイテムロスト")
+        self.assertEqual(logs, ["[窓1] Punished: アイテムなし（前にロストしたものは未回収のまま）"])
+        self.assertTrue(monitor.st.item_lost_this_round, "扱いは今までどおりロスト（装備待ち・取得の対象）")
+
+    def test_the_wait_ending_at_the_round_start_does_not_say_equipped(self):
+        logs = []
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_end_seen=True, item_id=0,
+                         waiting_for_equip=True)
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1), st, lambda: True, logs.append)
+
+        def press(*_a, **_k):
+            st.begin_done = True
+            return True
+
+        def sleep(_sec):
+            if st.begin_done:                   # 押した後、装備しないまま次のラウンド
+                st.in_round = True
+                st.waiting_for_equip = False
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=None), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_press_begin", side_effect=press), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "item_fetch_target", return_value=None), \
+             patch.object(ex, "_attend_to_item_loss"), \
+             patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            ex.do_after_round()
+        self.assertNotIn("✅ アイテム装備確認 → 続行", logs)
+        self.assertIn("ラウンドが始まったので装備待ちをやめます（アイテムは未回収のまま）", logs)

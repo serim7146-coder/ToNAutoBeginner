@@ -1333,7 +1333,11 @@ class ActionExecutor:
             if not self._is_running():
                 SharedState.equip_freeze_end(st)
                 return
-            self._log("✅ アイテム装備確認 → 続行")
+            if st.item_id:
+                self._log("✅ アイテム装備確認 → 続行")
+            else:
+                # 装備しないまま次のラウンドが始まった（装備待ちはラウンド開始で外れる）
+                self._log("ラウンドが始まったので装備待ちをやめます（アイテムは未回収のまま）")
             if st.in_round:
                 return
 

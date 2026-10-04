@@ -917,12 +917,18 @@ class LogMonitor:
                 and self.st.instance_type == config.INSTANCE_PRIVATE)
 
     def _mark_item_lost(self, message: str = ""):
+        """アイテムロストとして扱う。message は「<理由>: アイテムロスト」の形。
+        もともと持っていなかった（前のロストから未回収）ときは、ロストとは書かず、そう書く"""
         st = self.st
         already_lost = st.item_lost_this_round and st.item_id == 0
+        had_item = bool(st.item_id)
         st.item_lost_this_round = True
         st.randomizer_item_changed = False
         st.item_id = 0
         if message and not already_lost:
+            if not had_item:
+                head = message.rsplit(": ", 1)[0]
+                message = f"{head}: アイテムなし（前にロストしたものは未回収のまま）"
             self._log(message)
 
     def _round_start_loses_item(self) -> bool:
