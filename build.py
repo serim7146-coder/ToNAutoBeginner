@@ -35,6 +35,7 @@ BASE_ARGS = [
     "--include-data-files=ToNAutoBeginnerIcon.ico=ToNAutoBeginnerIcon.ico",
     "--include-data-files=maps.json=maps.json",
     "--include-data-files=terrors.json=terrors.json",
+    "--include-data-files=item.json=item.json",
     "--include-data-dir=voice=voice",
     "--include-data-dir=begin_templates=begin_templates",
     "--include-data-dir=shop_templates=shop_templates",

@@ -221,7 +221,7 @@ class WindowTab(ttk.Frame):
         if self._on_settings_changed is None:
             return
         for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
-                    self.v_announce_intermission, *self.v_skip_rounds.values(),
+                    self.v_cancel_afk_after_unlock, self.v_announce_intermission, *self.v_skip_rounds.values(),
                     *self.v_continue_rounds.values()):
             var.trace_add("write", lambda *_a: self._on_settings_changed(self))
 
@@ -231,10 +231,40 @@ class WindowTab(ttk.Frame):
             "auto_begin": self.v_auto_begin.get(),
             "do_skip": self.v_do_skip.get(),
             "cancel_afk": self.v_cancel_afk.get(),
+            "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
             "announce_intermission": self.v_announce_intermission.get(),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
         }
+
+    def snapshot(self) -> dict:
+        """窓数を変えてタブを作り直すときに引き継ぐ、この窓の状態"""
+        return {
+            **self.live_settings(),
+            "profile": self.v_profile.get(),
+            "log": self.v_log.get(),
+            "hwnd_choices": list(self._hwnd_map.items()),
+            "hwnd_sel": self.v_hwnd_sel.get(),
+            "osc": (self.osc_in, self.osc_out),
+        }
+
+    def restore(self, saved: dict):
+        """snapshot() で控えた状態へ戻す"""
+        for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
+                         ("cancel_afk", self.v_cancel_afk),
+                         ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
+                         ("announce_intermission", self.v_announce_intermission)):
+            var.set(saved[key])
+        for key, vars_ in (("skip_rounds", self.v_skip_rounds),
+                           ("continue_rounds", self.v_continue_rounds)):
+            for name, var in vars_.items():
+                var.set(name in saved[key])
+        self.v_profile.set(saved["profile"])
+        self.v_log.set(saved["log"])
+        self._hwnd_map = dict(saved["hwnd_choices"])
+        self.cb_hwnd["values"] = list(self._hwnd_map)
+        self.v_hwnd_sel.set(saved["hwnd_sel"])
+        self.osc_in, self.osc_out = saved["osc"]
 
     def _build(self):
         p = self
@@ -284,10 +314,12 @@ class WindowTab(ttk.Frame):
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
         self.v_cancel_afk  = tk.BooleanVar(value=True)
+        self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="3クラ解放後も続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
@@ -397,6 +429,8 @@ def _remember_own_window(widget):
     if not hwnd:
         return
     SharedState.register_own_window(hwnd)
+    if SharedState.own_windows_hidden():
+        WindowOperator.set_capture_excluded(hwnd, True)     # 録画の途中で開いた窓も外す
 
     def forget(event, _hwnd=hwnd, _widget=widget):
         if event.widget is _widget:      # 子ウィジェットの Destroy は無視
@@ -550,7 +584,7 @@ class CollapsibleFrame(tk.Frame):
 
 
 class ReportDialog(tk.Toplevel):
-    """不具合の報告（BU）。要件・窓・添付を選んで Discord の Webhook へ送る"""
+    """不具合の報告。要件・窓・添付を選んで Discord の Webhook へ送る"""
 
     REPORT_NOTE = ("VRChat のログには、一緒にいた人の名前やユーザー ID、あなたの表示名が"
                    "含まれます。画面の撮影には一緒にいた人の名前が写ることがあります。"
@@ -664,6 +698,45 @@ class ReportDialog(tk.Toplevel):
 
 
 class App(tk.Tk):
+    # ── 続行リスト一式（self.lists）の窓口。代入すると全窓へ差し替わる ──
+    def _shared_lists(self) -> MatchTNL.SharedLists:
+        lists = self.__dict__.get("lists")
+        if lists is None:
+            lists = self.__dict__["lists"] = MatchTNL.SharedLists(participants=set())
+        return lists
+
+    @property
+    def keepOn_set(self) -> dict:
+        return self._shared_lists().keep_on
+
+    @keepOn_set.setter
+    def keepOn_set(self, value: dict):
+        self._shared_lists().keep_on = value
+
+    @property
+    def host_wishes(self) -> dict:
+        return self._shared_lists().wishes
+
+    @host_wishes.setter
+    def host_wishes(self, value: dict):
+        self._shared_lists().wishes = value
+
+    @property
+    def host_participants(self):
+        return self._shared_lists().participants
+
+    @host_participants.setter
+    def host_participants(self, value):
+        self._shared_lists().participants = value
+
+    @property
+    def host_tabs(self) -> dict:
+        return self._shared_lists().tabs
+
+    @host_tabs.setter
+    def host_tabs(self, value: dict):
+        self._shared_lists().tabs = value
+
     def __init__(self):
         super().__init__()
 
@@ -684,15 +757,10 @@ class App(tk.Tk):
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
-        # LogMonitor がこの dict をそのまま掴むので、以後は差し替えず中身を入れ替える
-        self.keepOn_set: dict = {}
-        # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
-        # Sabotage のマーダー判定に使う。これも in-place で入れ替える
-        self.host_wishes: dict = {}
-        # 参加者（＋自分）の名前。host_wishes には待機も入るので区別する。これも in-place
-        self.host_participants: set = set()
-        # ToN ListTool の複窓対応のタブ。窓ごとに対応するタブだけを使う
-        self.host_tabs: dict = {"version": 0, "tabs": {}}
+        # 続行リスト一式。全窓の LogMonitor が同じものを持つ。中身は差し替えで更新する
+        # （keepOn_set・host_wishes・host_participants・host_tabs はこの属性の窓口）。
+        # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
+        self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
@@ -707,6 +775,10 @@ class App(tk.Tk):
         # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
         self.v_emergency_key = tk.StringVar(value=config.EMERGENCY_STOP_KEY)
         self.v_start_key = tk.StringVar(value=config.START_KEY)
+        # キーの通知（keyboard のスレッド）が読む写し。StringVar は Tk のスレッドでしか読まない
+        self._watched_keys = (config.EMERGENCY_STOP_KEY, config.START_KEY)
+        for var in (self.v_emergency_key, self.v_start_key):
+            var.trace_add("write", lambda *_: self._remember_watched_keys())
         self.v_suicide_cancel_key = tk.StringVar(value=config.SUICIDE_CANCEL_KEY)
         self._suicide_cancel_hook = None
         self._suicide_cancel_down = False
@@ -735,9 +807,136 @@ class App(tk.Tk):
     def _start_emergency_stop_polling(self):
         self._hook_chase_keys()
         self._hook_suicide_cancel_key()
+        self._hook_stop_start_keys()
+
+    # ── 緊急停止・マクロ開始のキー（押した瞬間の通知で拾う）──────────
+    # 以前は 200ms ごとに is_pressed() を見ていた。それだと短く押したキーが見に行く合間に
+    # 収まって取りこぼし（長押しが要った）、Tk のスレッドが重い間は検知も遅れる。
+    # 押した・離した通知のたびに、keyboard のスレッドでその瞬間の状態を見る
+    def _hook_stop_start_keys(self):
+        """アプリ起動時に1回。keyboard が無ければ何もしない"""
+        self._stop_start_hook = None
         if keyboard is None:
             return
-        self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
+        try:
+            self._stop_start_hook = keyboard.hook(self._on_stop_start_key_event)
+        except Exception as e:
+            DebugLog.exception("mainGUI._hook_stop_start_keys")
+            self._log(f"[緊急停止] ⚠ キーの通知を受けられません（{e}）")
+
+    def _unhook_stop_start_keys(self):
+        hook, self._stop_start_hook = getattr(self, "_stop_start_hook", None), None
+        if hook is None:
+            return
+        try:
+            keyboard.unhook(hook)
+        except KeyError:
+            pass                    # もう外れている
+        except Exception:
+            DebugLog.exception("mainGUI._unhook_stop_start_keys")
+
+    def _remember_watched_keys(self):
+        """Tk のスレッドで呼ぶ。キーを変えたら通知の側が読む写しも替える（代入1回で差し替える）"""
+        self._watched_keys = (self.v_emergency_key.get(), self.v_start_key.get())
+
+    def _on_stop_start_key_event(self, event=None):
+        """keyboard のスレッドから、キーを押す・離すたびに呼ばれる。
+
+        組み合わせ（ctrl+p など）もあるので、どのキーの通知かではなく、通知が来た瞬間に
+        設定のキーが押されているかを見る。押されていなかった→押された、の1回だけ反応する
+        （押しっぱなしの繰り返しでは増えない）。GUI の処理は Tk のスレッドで行う
+        """
+        if self._capturing_key:
+            # 設定しようとしているキーで停止や開始がかかると困る
+            self._emergency_stop_key_pressed = False
+            self._start_key_pressed = False
+            return
+        stop_key, start_key = self._watched_keys
+        self._check_stop_key(stop_key, event)
+        self._check_start_key(start_key, event)
+
+    @staticmethod
+    def _key_down_now(key: str, event=None) -> bool:
+        """そのキー（組み合わせも）がいま押されているか。
+
+        keyboard は押された状態の表を通知より先に更新し、通知は別のスレッドで少し遅れて
+        届く。遅れている間に離されると、表ではもう離れている。押した通知そのものが
+        そのキーなら（組み合わせのほかのキーは表で見て）押されたものとして数える
+        """
+        if keyboard.is_pressed(key):
+            return True
+        if event is None or getattr(event, "event_type", None) != "down":
+            return False
+        code = getattr(event, "scan_code", None)
+        steps = keyboard.parse_hotkey(key)
+        if len(steps) != 1:
+            return False                    # 順に押す形（a, b）は扱わない
+        parts = steps[0]
+        if not any(code in part for part in parts):
+            return False
+        return all(any(keyboard.is_pressed(c) for c in part)
+                   for part in parts if code not in part)
+
+    def _check_stop_key(self, key: str, event=None):
+        try:
+            now = self._key_down_now(key, event)
+        except Exception:
+            DebugLog.exception("mainGUI._check_stop_key")
+            self._emergency_stop_key_pressed = False
+            # 不正なキーだと is_pressed が投げる。握り潰すと緊急停止が黙って
+            # 死ぬので、既定値へ戻して知らせる
+            self._after_from_hook(self._fall_back_to_default_key,
+                                  f"[緊急停止] ⚠ {key!r} は使えないキーです")
+            return
+        if now and not self._emergency_stop_key_pressed:
+            self._after_from_hook(self._on_stop_key, key)
+        self._emergency_stop_key_pressed = now
+
+    def _check_start_key(self, key: str, event=None):
+        """マクロ開始のキー。未設定なら何もしない（`is_pressed("")` を呼ばない）。不正なキーだった
+        ときは、別のキーへ倒さずに無効へ戻す——勝手に動き出す方が危ないので、
+        停止キーの `_fall_back_to_default_key()` とは逆に振る"""
+        if not key:
+            self._start_key_pressed = False
+            return
+        try:
+            now = self._key_down_now(key, event)
+        except Exception:
+            DebugLog.exception("mainGUI._check_start_key")
+            self._start_key_pressed = False
+            self._after_from_hook(self._disable_broken_start_key, key)
+            return
+        if now and not self._start_key_pressed:
+            self._after_from_hook(self._on_start_key, key)
+        self._start_key_pressed = now
+
+    def _after_from_hook(self, func, *args):
+        try:
+            self.after(0, func, *args)
+        except (tk.TclError, RuntimeError):
+            pass                    # 閉じた後に通知が来た
+
+    def _on_stop_key(self, key: str):
+        self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")
+        self._stop_reason = "緊急停止キー"      # debug.log の停止の理由
+        self._stop()
+
+    def _on_start_key(self, key: str):
+        if self._start_button_disabled():
+            # 黙って無視すると「キーが効かない」と見える。押された瞬間だけ
+            # 出すので、押し続けても増えない
+            self._log("[マクロ開始] いま押せません（動作中か起動中）")
+            return
+        self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
+        self._start()
+
+    def _disable_broken_start_key(self, key: str):
+        if self.v_start_key.get() != key:
+            return                  # もう別のキーに変わっている
+        self.v_start_key.set("")
+        self._start_key_pressed = False
+        self._refresh_start_key_label()
+        self._log(f"[マクロ開始] ⚠ {key!r} は使えないキーです。解除しました")
 
     # ── チェイスのキー（押した瞬間の通知で拾う）──────────────
     # 200ms ごとの is_pressed() では、短く押した F1/F2（0.1秒前後）が見に行く
@@ -776,7 +975,7 @@ class App(tk.Tk):
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
-    # ── 自爆キャンセルのキー（CL。押した瞬間の通知で拾う）──────────
+    # ── 自爆キャンセルのキー（押した瞬間の通知で拾う）──────────
     # ツール自身が背面で送る自爆の ^ は PostMessage なので、低レベルのフックには来ない
     def _hook_suicide_cancel_key(self):
         """今のキーで受け直す（起動時と、キーを変えたとき）"""
@@ -845,65 +1044,6 @@ class App(tk.Tk):
                 DebugLog.exception("mainGUI._unhook_chase_keys")
         self._chase_hooks = []
 
-    def _poll_emergency_stop_key(self):
-        if self._capturing_key:
-            # 設定しようとしているキーで停止や開始がかかると困る
-            self._emergency_stop_key_pressed = False
-            self._start_key_pressed = False
-            self._reschedule_emergency_poll()
-            return
-        key = self.v_emergency_key.get()
-        try:
-            now = keyboard.is_pressed(key)
-            if now and not self._emergency_stop_key_pressed:
-                self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")
-                self._stop_reason = "緊急停止キー"      # debug.log の停止の理由
-                self.after(0, self._stop)
-            self._emergency_stop_key_pressed = now
-        except Exception:
-            DebugLog.exception("mainGUI._poll_emergency_stop_key")
-            # 不正なキーだと is_pressed が投げる。握り潰すと緊急停止が黙って
-            # 死ぬので、既定値へ戻して知らせる
-            self._fall_back_to_default_key(
-                f"[緊急停止] ⚠ {key!r} は使えないキーです")
-
-        self._poll_start_key()
-
-        try:
-            self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
-        except tk.TclError:
-            pass
-
-    def _poll_start_key(self):
-        """マクロ開始のキー。停止キーと同じ200msのループに乗せる。
-
-        未設定なら何もしない（`is_pressed("")` を呼ばない）。不正なキーだった
-        ときは、別のキーへ倒さずに無効へ戻す——勝手に動き出す方が危ないので、
-        停止キーの `_fall_back_to_default_key()` とは逆に振る。
-        """
-        key = self.v_start_key.get()
-        if not key:
-            self._start_key_pressed = False
-            return
-        try:
-            now = keyboard.is_pressed(key)
-        except Exception:
-            DebugLog.exception("mainGUI._poll_start_key")
-            self.v_start_key.set("")
-            self._start_key_pressed = False
-            self._refresh_start_key_label()
-            self._log(f"[マクロ開始] ⚠ {key!r} は使えないキーです。解除しました")
-            return
-        if now and not self._start_key_pressed:
-            if self._start_button_disabled():
-                # 黙って無視すると「キーが効かない」と見える。押された瞬間だけ
-                # 出すので、押し続けても増えない
-                self._log("[マクロ開始] いま押せません（動作中か起動中）")
-            else:
-                self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
-                self.after(0, self._start)
-        self._start_key_pressed = now
-
     def _on_chase_key(self, direction: str, key: str):
         """押した瞬間に前面の、監視している窓だけを回す。それ以外は何もしない
         （ほかのアプリで F1 を使っていることがある）"""
@@ -926,12 +1066,6 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             return True
 
-    def _reschedule_emergency_poll(self):
-        try:
-            self.after(config.EMERGENCY_STOP_POLL_MS, self._poll_emergency_stop_key)
-        except tk.TclError:
-            pass
-
     def _fall_back_to_default_key(self, reason: str):
         """不正なキーは既定値へ倒す。効かない緊急停止を抱えたままにしない"""
         if self.v_emergency_key.get() == config.EMERGENCY_STOP_KEY:
@@ -945,7 +1079,7 @@ class App(tk.Tk):
     def _refresh_emergency_key_label(self):
         try:
             self.lbl_emergency.config(
-                text=f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー長押し")
+                text=f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー")
         except (tk.TclError, AttributeError):
             pass
 
@@ -971,7 +1105,7 @@ class App(tk.Tk):
     def _refresh_start_key_label(self):
         key = self.v_start_key.get()
         text = ("マクロ開始: 未設定" if not key
-                else f"マクロ開始: {HotKey.display(key)}キー長押し")
+                else f"マクロ開始: {HotKey.display(key)}キー")
         try:
             self.lbl_start_key.config(text=text)
         except (tk.TclError, AttributeError):
@@ -1360,7 +1494,7 @@ class App(tk.Tk):
                                           command=self._begin_capture_key)
         self.btn_capture_key.pack(side="left", padx=(6, 0))
         self._refresh_emergency_key_label()
-        # 自爆キャンセルのキー（CL）は行の最後
+        # 自爆キャンセルのキーは行の最後
         self.lbl_suicide_cancel_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
         self.lbl_suicide_cancel_key.pack(side="left", padx=(16, 0))
         self.btn_capture_cancel_key = ttk.Button(
@@ -1395,7 +1529,7 @@ class App(tk.Tk):
         self.btn_speed_detect.pack(side="left", padx=(8, 0))
         self._refresh_speed_detect_button()
 
-        # アイテム自動取得（CM。全窓共通・保存・既定 OFF）
+        # アイテム自動取得（全窓共通・保存・既定 OFF）
         self.btn_item_fetch = tk.Button(
             fhf, text="", bg=config.GUI_SUB, fg=config.GUI_FG,
             font=(UIFont.UI, 11, "bold"), relief="raised", padx=12, pady=5,
@@ -1443,6 +1577,13 @@ class App(tk.Tk):
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
 
     def _rebuild_tabs(self, count: int):
+        # 窓数を変えても、窓ごとの設定（自動Begin・自動自爆・ラウンド指定・割り当てなど）は
+        # そのまま。減らした窓の分も覚えておき、また増やしたら戻す（このツールを閉じるまで）
+        memory = getattr(self, "_tab_memory", None)
+        if memory is None:
+            memory = self._tab_memory = {}
+        for tab in self.tabs:
+            memory[tab.idx] = tab.snapshot()
         for tab in self.tabs:
             try:
                 self.nb.forget(tab)
@@ -1458,6 +1599,9 @@ class App(tk.Tk):
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
+        for tab in self.tabs:
+            if tab.idx in memory:
+                tab.restore(memory[tab.idx])
 
     def _on_tab_section_toggled(self, key: str, collapsed: bool):
         """窓タブの折りたたみを1つ開閉したら、全タブの同じ枠をそろえる（保存はしない）"""
@@ -1692,45 +1836,61 @@ class App(tk.Tk):
             self._load_tnl()
 
     def _apply_keep_on(self, new_set: dict):
-        """keepOn_set の中身を入れ替える。
+        """続行リストを差し替える（新しい dict の代入。走行中の全窓に即座に効く）。
 
-        LogMonitor は生成時に渡された dict を掴んだままなので、差し替え
-        （再代入）ではなく in-place で更新する。走行中の全窓に即座に効く。
+        中身の入れ替え（clear → update）はしない。その間に判定した窓が空のリストを
+        見て、続行すべきラウンドで自爆してしまう（MatchTNL.SharedLists）
         """
-        self.keepOn_set.clear()
-        self.keepOn_set.update(new_set)
+        self.keepOn_set = dict(new_set)
 
     def _apply_host_tabs(self, tabs_data: dict):
-        """タブごとの内訳。LogMonitor が同じ dict を掴むので in-place で更新する。
-
-        版を上げて、窓側の対応づけ（名前の重なり）を計算し直させる
-        """
-        tabs = self.host_tabs.setdefault("tabs", {})
-        tabs.clear()
-        tabs.update(tabs_data or {})
-        self.host_tabs["version"] = self.host_tabs.get("version", 0) + 1
+        """タブごとの内訳を差し替える。版を上げて、窓側の対応づけ（名前の重なり）を計算し直させる"""
+        version = (self.host_tabs or {}).get("version", 0) + 1
+        self.host_tabs = {"version": version, "tabs": dict(tabs_data or {})}
 
     def _apply_host_wishes(self, new_wishes: dict, participants=()):
-        """参加者別の希望も LogMonitor が同じ dict を掴む。in-place で更新する"""
-        self.host_wishes.clear()
-        self.host_wishes.update(new_wishes)
-        names = getattr(self, "host_participants", None)
-        if names is not None:
-            names.clear()
-            names.update(participants)
+        """参加者別の希望と参加者の名前を差し替える"""
+        self.host_wishes = dict(new_wishes)
+        if getattr(self, "host_participants", None) is not None:
+            self.host_participants = set(participants)
 
     def _start_host_save_polling(self):
         self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
 
     def _poll_host_save(self):
+        """HOST_SAVE_POLL_SEC ごと。プロセスとファイルを読むのは裏のスレッド、結果を当てるのは
+        Tk のスレッド（緊急停止・画面を止めない）。次の予約は当て終えてから（読みが重なる
+        ことは無い）"""
+        def work():
+            try:
+                result = self._read_host_source()
+            except Exception:
+                DebugLog.exception("mainGUI._poll_host_save")
+                result = None
+            self._after_from_worker(self._finish_host_poll, result)
+        self._off_gui(work)
+
+    def _finish_host_poll(self, result):
         try:
-            self._refresh_host_source()
+            if result is not None:
+                self._apply_host_source(result)
         except Exception:
-            DebugLog.exception("mainGUI._poll_host_save")
-            pass
+            DebugLog.exception("mainGUI._finish_host_poll")
         try:
             self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
         except tk.TclError:
+            pass
+
+    @staticmethod
+    def _off_gui(work):
+        """Tk のスレッドを止めずに work を走らせる（テストでは同じスレッドで走らせる）"""
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_from_worker(self, func, *args):
+        """裏のスレッドから Tk のスレッドへ渡す。閉じた後なら捨てる"""
+        try:
+            self.after(0, func, *args)
+        except (tk.TclError, RuntimeError):
             pass
 
     def _warn_host_save_once(self, msg: str):
@@ -1789,20 +1949,24 @@ class App(tk.Tk):
         切り替えない——ディスクに何日も前のものが残っていることがあり、
         SQLite が一瞬無いだけで古い参加者と古い続行リストで判定してしまう。
         """
+        self._apply_host_source(self._read_host_source())
+
+    def _read_host_source(self) -> tuple:
+        """主催リストの元を読む。プロセスとファイルだけを見て、画面と状態には触らない
+        （裏のスレッドで呼んでよい）。戻り値は (種類, 中身):
+        ("lost", 理由) / ("same", None) / ("error", 文言) / ("loaded", (keep_on, meta, wishes, stamp))
+        """
         if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
-            self._host_list_lost("ToN ListTool が起動していません")
-            return
+            return "lost", "ToN ListTool が起動していません"
 
         path, load = config.HOST_STATE_PATH, MatchTNL.load_host_state
         name = os.path.basename(path)
         if not os.path.exists(path):
-            self._host_list_lost(f"{name} がありません")
-            return
+            return "lost", f"{name} がありません"
         try:
             stat = os.stat(path)
         except OSError as e:
-            self._host_list_lost(f"{name} が読めません: {e}")
-            return
+            return "lost", f"{name} が読めません: {e}"
 
         # 自分のリストだけ更新されたときも読み直す。SQLite は本体を触らずに
         # -wal だけ伸びることがあるので、そちらも見る
@@ -1810,25 +1974,36 @@ class App(tk.Tk):
                  _file_stamp(config.USER_SAVE_PATH),
                  _file_stamp(path + "-wal"))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
-            self._host_loss_since = None        # 取れている
-            return
+            return "same", None
 
         try:
             keep_on, meta, wishes = load(path, config.USER_SAVE_PATH)
         except Exception as e:
-            DebugLog.exception("mainGUI._refresh_host_source")
+            DebugLog.exception("mainGUI._read_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する
-            self._warn_host_save_once(f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}")
-            return
+            return "error", f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}"
 
         if not meta["listed"]:
             # 参加者にも待機にも続行リストを持つ人がいない＝周回そのものが無い。
             # 「参加者0人」だけでは切り替えない——ToN ListTool は複窓だと全員を
             # 待機へ移すことがあり、それでも希望は待機に残っている
-            self._host_list_lost("続行リストを持つ人がいません（参加者・待機とも）")
-            return
+            return "lost", "続行リストを持つ人がいません（参加者・待機とも）"
+        return "loaded", (keep_on, meta, wishes, stamp)
 
+    def _apply_host_source(self, result: tuple):
+        """_read_host_source() の結果を当てる（Tk のスレッドで）"""
+        kind, value = result
+        if kind == "lost":
+            self._host_list_lost(value)
+            return
+        if kind == "same":
+            self._host_loss_since = None        # 取れている
+            return
+        if kind == "error":
+            self._warn_host_save_once(value)
+            return
+        keep_on, meta, wishes, stamp = value
         self._host_loss_since = None
         self._host_save_stamp = stamp
         self._host_save_warned = False
@@ -1904,7 +2079,7 @@ class App(tk.Tk):
             start_key = ""
         self.v_start_key.set(start_key)
         self._refresh_start_key_label()
-        # 自爆キャンセルのキー（CL）。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
+        # 自爆キャンセルのキー。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
         cancel_key = data.get("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
         if not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
             cancel_key = config.SUICIDE_CANCEL_KEY
@@ -2178,6 +2353,8 @@ class App(tk.Tk):
         self._apply_obs_settings()
 
         self.monitors.clear()
+        # 前の回の窓が止めた後に張ったフリーズが残っていても、ここで全部解いて回を進める
+        SharedState.begin_run()
         for tab in self.tabs:
             cfg, err = tab.get_config()
             if cfg is not None and cfg.hwnd:
@@ -2220,11 +2397,9 @@ class App(tk.Tk):
             # 前面が VRChat の窓かを見るために覚えておく（Begin のカーソル判定）
             SharedState.register_window_hwnd(cfg.hwnd)
             mon = LogMonitor.LogMonitor(
-                cfg, self.keepOn_set, self._log,
+                cfg, None, self._log,
                 window_idx=tab.idx + 1,
-                host_wishes=self.host_wishes,
-                host_participants=self.host_participants,
-                host_tabs=self.host_tabs,
+                lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings)
             self.monitors.append(mon)
             mon.start()
@@ -2242,7 +2417,7 @@ class App(tk.Tk):
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
         self._debug_start()
 
-    # ── 不具合の報告（BU）──────────────────────────
+    # ── 不具合の報告 ────────────────────────
     def _open_report(self):
         dialog = getattr(self, "_report_dialog", None)
         try:
@@ -2295,6 +2470,7 @@ class App(tk.Tk):
                     f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
                     f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
                     f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
+                    f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
                     f" Intermission={cfg.announce_intermission}"
                     f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}")
             DebugLog.write(
@@ -2315,12 +2491,12 @@ class App(tk.Tk):
         self._stop_window_volume()               # 元の音量に戻す（監視を止める前に）
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
-        SharedState.equip_freeze_reset()         # フリーズ中でも確実に解除
-        SharedState.continue_round_reset()       # 続行ラウンドフリーズも解除
-        SharedState.speed_freeze_reset()         # 速度検知フリーズも解除
-        SharedState.round_freeze_reset()         # ラウンド突入フリーズも解除
+        # 先に監視を止めてからフリーズを解く。逆だと、ほかの窓のフリーズが解けるのを待っていた
+        # 窓（アイテムロストの装備待ちなど）が、止まる前に起きて自分のフリーズを張り、
+        # それが次の開始まで残って全窓が止まったままになっていた
         for m in self.monitors:
             m.stop()
+        SharedState.begin_run()                  # フリーズを全部解く（前の回の窓はもう張れない）
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
         self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)
@@ -2476,11 +2652,13 @@ class App(tk.Tk):
         if p:
             row.v_path.set(p)
 
-    def _refresh_tool_row(self, row):
-        """ボタンの名前と「起動中」表示を合わせる。見た目だけ"""
+    def _refresh_tool_row(self, row, running: bool | None = None):
+        """ボタンの名前と「起動中」表示を合わせる。見た目だけ。
+        running を渡さなければ、ここで見る（プロセスの一覧を取るので Tk のスレッドでは重い）"""
         exe = row.v_path.get().strip()
         label = ToolLauncher.button_label(exe) or "起動"
-        running = bool(exe) and ToolLauncher.is_running(exe)
+        if running is None:
+            running = bool(exe) and ToolLauncher.is_running(exe)
         try:
             row.btn.config(text=f"起動中: {label}" if running else f"▶ {label}",
                            state="disabled" if running else "normal")
@@ -2507,12 +2685,28 @@ class App(tk.Tk):
         self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000), self._poll_tool_buttons)
 
     def _poll_tool_buttons(self):
+        """TOOL_LAUNCH_POLL_SEC ごと。プロセスの一覧は裏のスレッドで1回だけ取り
+        （ツールの数だけ取らない）、ボタンは Tk のスレッドで合わせる"""
+        rows = [(row, row.v_path.get().strip()) for row in list(self.tool_rows)]
+
+        def work():
+            states = {}
+            try:
+                names = ProcessCheck.running_names()
+                states = {row: bool(exe) and ToolLauncher.is_running(exe, names)
+                          for row, exe in rows}
+            except Exception:
+                DebugLog.exception("mainGUI._poll_tool_buttons")
+            self._after_from_worker(self._finish_tool_poll, states)
+        self._off_gui(work)
+
+    def _finish_tool_poll(self, states: dict):
         try:
-            for row in list(self.tool_rows):
-                self._refresh_tool_row(row)
+            for row, running in states.items():
+                if row in self.tool_rows:       # 待っている間に消された行は触らない
+                    self._refresh_tool_row(row, running)
         except Exception:
-            DebugLog.exception("mainGUI._poll_tool_buttons")
-            pass
+            DebugLog.exception("mainGUI._finish_tool_poll")
         try:
             self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000),
                        self._poll_tool_buttons)
@@ -2868,17 +3062,20 @@ class App(tk.Tk):
         （hwnd は窓を作ったときに控えた値）。取れない環境では1度だけ知らせて、
         録画はそのまま続ける
         """
+        SharedState.set_own_windows_hidden(hidden)
         for hwnd in SharedState.own_windows():
-            if WindowOperator.set_capture_excluded(hwnd, hidden):
-                continue
-            if not self._capture_warned:
-                self._capture_warned = True
-                self._log("⚠ 録画からツールの窓を隠せませんでした"
-                          "（Windows 10 2004 以降が必要です）。録画は続けます")
-            return
+            ok = WindowOperator.set_capture_excluded(hwnd, hidden)
+            DebugLog.write(f"[画面] 録画{'から外す' if hidden else 'に戻す'} hwnd={int(hwnd):#x}"
+                           f" → {'OK' if ok else '失敗'}")
+            if ok or not hidden or self._capture_warned:
+                continue            # 1つ失敗しても、残りの窓は外しに行く
+            self._capture_warned = True
+            self._log("⚠ 録画からツールの窓を隠せませんでした"
+                      "（Windows 10 2004 以降が必要です）。録画は続けます")
 
     def _show_own_windows_again(self):
         """録画中に隠したままにしない。止めたら必ず戻す"""
+        SharedState.set_own_windows_hidden(False)
         for hwnd in SharedState.own_windows():
             WindowOperator.set_capture_excluded(hwnd, False)
 
@@ -2891,5 +3088,6 @@ class App(tk.Tk):
         self._stop()
         self._unhook_chase_keys()
         self._unhook_suicide_cancel_key()
+        self._unhook_stop_start_keys()
         self._show_own_windows_again()
         self.destroy()

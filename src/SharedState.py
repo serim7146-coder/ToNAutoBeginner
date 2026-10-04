@@ -61,10 +61,10 @@ def _return_front_when_free(st):
 
 def _front_heir(st):
     """札を引き継ぐ窓（装備待ちの列の先頭で、前面を引き継ぐ装備待ち）。無ければ None"""
-    with _EQUIP_FREEZE_LOCK:
-        if not _EQUIP_QUEUE:
+    with _EQUIP.lock:
+        if not _EQUIP.queue:
             return None
-        head = _EQUIP_QUEUE[0]
+        head = _EQUIP.queue[0]
     if head is st or not head.equip_front_hwnd:
         return None
     return head
@@ -79,385 +79,229 @@ def _give_back(loan):
         loan.give_back()
 
 # ═══════════════════════════════════════════════
-#  インスタンスタイプ（初期はパブリックを仮定）
+#  全窓共通の設定（鍵つきの値1つ）
 # ═══════════════════════════════════════════════
-_CURRENT_INSTANCE_TYPE = config.INSTANCE_PUBLIC
-_INSTANCE_LOCK = threading.Lock()
+class _Setting:
+    """どのスレッドから読み書きしてもよい値1つ。convert は書くときに通す（型をそろえる・検証する）"""
 
-def get_instance_type() -> str:
-    with _INSTANCE_LOCK:
-        return _CURRENT_INSTANCE_TYPE
+    def __init__(self, value, convert=None):
+        self._lock = threading.Lock()
+        self._convert = convert or (lambda v: v)
+        self._value = self._convert(value)
 
-def set_instance_type(t: str):
-    global _CURRENT_INSTANCE_TYPE
-    with _INSTANCE_LOCK:
-        _CURRENT_INSTANCE_TYPE = t
+    def get(self):
+        with self._lock:
+            return self._value
 
-# ═══════════════════════════════════════════════
-#  自爆キー（config の既定値。テストから差し替え可能）
-# ═══════════════════════════════════════════════
-_SUICIDE_KEY = config.SELF_SUICIDE_KEY
-_SUICIDE_KEY_LOCK = threading.Lock()
+    def set(self, value):
+        value = self._convert(value)
+        with self._lock:
+            self._value = value
 
-def get_suicide_key() -> str:
-    with _SUICIDE_KEY_LOCK:
-        return _SUICIDE_KEY
 
-def set_suicide_key(key: str):
-    global _SUICIDE_KEY
-    with _SUICIDE_KEY_LOCK:
-        _SUICIDE_KEY = key
+# インスタンスタイプ（初期はパブリックを仮定）
+_INSTANCE_TYPE = _Setting(config.INSTANCE_PUBLIC)
+get_instance_type, set_instance_type = _INSTANCE_TYPE.get, _INSTANCE_TYPE.set
 
-# ═══════════════════════════════════════════════
-#  放置モード
-# ═══════════════════════════════════════════════
-_HANDS_FREE = False
-_HANDS_FREE_LOCK = threading.Lock()
+# 自爆キー（config の既定値。テストから差し替え可能）
+_SUICIDE_KEY = _Setting(config.SELF_SUICIDE_KEY)
+get_suicide_key, set_suicide_key = _SUICIDE_KEY.get, _SUICIDE_KEY.set
 
-def get_hands_free() -> bool:
-    with _HANDS_FREE_LOCK:
-        return _HANDS_FREE
+# 放置モード
+_HANDS_FREE = _Setting(False)
+get_hands_free, set_hands_free = _HANDS_FREE.get, _HANDS_FREE.set
 
-def set_hands_free(val: bool):
-    global _HANDS_FREE
-    with _HANDS_FREE_LOCK:
-        _HANDS_FREE = val
+# 速度によるラウンド種別の検知。判定（受信のみ）と横移動（マクロ）の両方をまとめて止められる
+_SPEED_DETECT = _Setting(config.SPEED_DETECT_ENABLED)
+get_speed_detect, set_speed_detect = _SPEED_DETECT.get, _SPEED_DETECT.set
 
-# ═══════════════════════════════════════════════
-#  速度によるラウンド種別の検知
-#  判定（受信のみ）と横移動（マクロ）の両方をまとめて止められる
-# ═══════════════════════════════════════════════
-_SPEED_DETECT = config.SPEED_DETECT_ENABLED
-_SPEED_DETECT_LOCK = threading.Lock()
+# フリーズ設定（全窓共通）。フリーズ自体が全窓を止める仕組みなので、窓ごとに分ける意味がない
+_FREEZE_ON_8PAGES = _Setting(False, bool)
+get_freeze_on_8pages, set_freeze_on_8pages = _FREEZE_ON_8PAGES.get, _FREEZE_ON_8PAGES.set
+_FREEZE_ON_PUNISH = _Setting(False, bool)
+get_freeze_on_punish, set_freeze_on_punish = _FREEZE_ON_PUNISH.get, _FREEZE_ON_PUNISH.set
+# 突入で全窓を止めるラウンド種別。読むときはコピーを返す（呼び出し側の書き換え防止）
+_FREEZE_ROUNDS = _Setting(set(), lambda names: set(names or ()))
 
-def get_speed_detect() -> bool:
-    with _SPEED_DETECT_LOCK:
-        return _SPEED_DETECT
-
-def set_speed_detect(val: bool):
-    global _SPEED_DETECT
-    with _SPEED_DETECT_LOCK:
-        _SPEED_DETECT = val
-
-# ═══════════════════════════════════════════════
-#  フリーズ設定（全窓共通）
-#  フリーズ自体が全窓を止める仕組みなので、窓ごとに分ける意味がない
-# ═══════════════════════════════════════════════
-_FREEZE_ON_8PAGES = False
-_FREEZE_ON_PUNISH = False
-_FREEZE_ROUNDS: set = set()
-_FREEZE_LOCK = threading.Lock()
-
-def get_freeze_on_8pages() -> bool:
-    with _FREEZE_LOCK:
-        return _FREEZE_ON_8PAGES
-
-def set_freeze_on_8pages(val: bool):
-    global _FREEZE_ON_8PAGES
-    with _FREEZE_LOCK:
-        _FREEZE_ON_8PAGES = bool(val)
-
-def get_freeze_on_punish() -> bool:
-    with _FREEZE_LOCK:
-        return _FREEZE_ON_PUNISH
-
-def set_freeze_on_punish(val: bool):
-    global _FREEZE_ON_PUNISH
-    with _FREEZE_LOCK:
-        _FREEZE_ON_PUNISH = bool(val)
 
 def get_freeze_rounds() -> set:
-    """突入で全窓を止めるラウンド種別。コピーを返す（呼び出し側の書き換え防止）"""
-    with _FREEZE_LOCK:
-        return set(_FREEZE_ROUNDS)
-
-def set_freeze_rounds(names):
-    global _FREEZE_ROUNDS
-    with _FREEZE_LOCK:
-        _FREEZE_ROUNDS = set(names or ())
-
-# ═══════════════════════════════════════════════
-#  続行リストの供給元（全窓共通）
-#  "host" = ToN ListTool の主催リスト / "tnl" = tnlファイル / None = 未決定
-# ═══════════════════════════════════════════════
-_LIST_SOURCE = None
-_LIST_SOURCE_LOCK = threading.Lock()
-
-def get_list_source():
-    with _LIST_SOURCE_LOCK:
-        return _LIST_SOURCE
-
-def set_list_source(src):
-    global _LIST_SOURCE
-    with _LIST_SOURCE_LOCK:
-        _LIST_SOURCE = src
-
-# ═══════════════════════════════════════════════
-#  アイテム取得→Beginモード
-# ═══════════════════════════════════════════════
-_ITEM_FETCH = False             # アイテム自動取得（CM。全窓共通・既定 OFF）
-_ITEM_FETCH_LOCK = threading.Lock()
+    return set(_FREEZE_ROUNDS.get())
 
 
-def get_item_fetch() -> bool:
-    with _ITEM_FETCH_LOCK:
-        return _ITEM_FETCH
+set_freeze_rounds = _FREEZE_ROUNDS.set
+
+# 続行リストの供給元（全窓共通）。"host" = ToN ListTool の主催リスト / "tnl" = tnlファイル / None = 未決定
+_LIST_SOURCE = _Setting(None)
+get_list_source, set_list_source = _LIST_SOURCE.get, _LIST_SOURCE.set
+
+# アイテム自動取得（全窓共通・既定 OFF）
+_ITEM_FETCH = _Setting(False, bool)
+get_item_fetch, set_item_fetch = _ITEM_FETCH.get, _ITEM_FETCH.set
+
+ITEM_FETCH_GAIN_MARK = "calib"  # calibrate で測った値の印（印の無い前の保存は読み捨てる）
 
 
-def set_item_fetch(val: bool):
-    global _ITEM_FETCH
-    with _ITEM_FETCH_LOCK:
-        _ITEM_FETCH = bool(val)
-
-
-_ITEM_FETCH_GAIN = None         # 測った視点の感度（横, 縦, 送った間隔, "calib"）。保存して次回に使う
-ITEM_FETCH_GAIN_MARK = "calib"  # calibrate で測った値の印（CX。印の無い前の保存は読み捨てる）
-
-
-def get_item_fetch_gain():
-    with _ITEM_FETCH_LOCK:
-        return _ITEM_FETCH_GAIN
-
-
-def set_item_fetch_gain(gain):
+def _checked_gain(gain):
     """(横, 縦, 送った間隔の秒, "calib") か None。数でない・範囲（ItemFetch.GAIN_SANE）の外・間隔が無い・
-    測った値の印が無い（CX より前の形。合わせで直した値の可能性がある）は None（読み捨てる）"""
-    global _ITEM_FETCH_GAIN
-    value = None
+    測った値の印が無い（前の保存の形。合わせで直した値の可能性がある）は None（読み捨てる）"""
     try:
         *numbers, mark = gain
         x, y, step = (float(g) for g in numbers)
         if (mark == ITEM_FETCH_GAIN_MARK and all(0.05 <= g <= 20.0 for g in (x, y))
                 and step > 0):
-            value = (x, y, step, ITEM_FETCH_GAIN_MARK)
+            return (x, y, step, ITEM_FETCH_GAIN_MARK)
     except (TypeError, ValueError):
-        value = None
-    with _ITEM_FETCH_LOCK:
-        _ITEM_FETCH_GAIN = value
+        pass
+    return None
 
 
-_ITEM_BEGIN_MODE = False
-_ITEM_BEGIN_MODE_LOCK = threading.Lock()
+# 測った視点の感度（横, 縦, 送った間隔, "calib"）。保存して次回に使う
+_ITEM_FETCH_GAIN = _Setting(None, _checked_gain)
+get_item_fetch_gain, set_item_fetch_gain = _ITEM_FETCH_GAIN.get, _ITEM_FETCH_GAIN.set
 
-def get_item_begin_mode() -> bool:
-    with _ITEM_BEGIN_MODE_LOCK:
-        return _ITEM_BEGIN_MODE
+# アイテム取得→Beginモード
+_ITEM_BEGIN_MODE = _Setting(False)
+get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MODE.set
 
-def set_item_begin_mode(val: bool):
-    global _ITEM_BEGIN_MODE
-    with _ITEM_BEGIN_MODE_LOCK:
-        _ITEM_BEGIN_MODE = val
 
 # ═══════════════════════════════════════════════
-#  装備待ちイベント
-#  set() = 通常動作可能、clear() = 装備待ち中（他窓のアクションをブロック）
-#  複数窓が同時にアイテムロストしても全窓の解除が揃うまでフリーズを維持するため、
-#  続行ラウンドと同じカウンタ方式で管理する。
-#  clear/setは直接呼ばず equip_freeze_start / equip_freeze_end を使うこと。
-#  窓ごとの多重登録・多重解除は WindowState.equip_freeze_held で防ぐ。
+#  全窓フリーズ（装備待ち・速度検知・ラウンド突入・続行）
+#  event: set() = 通常動作可能、clear() = どれかの窓が張っている（他窓のアクションをブロック）。
+#  複数窓が同時に張っても全窓の解除が揃うまで維持するため、張っている窓の数で管理する。
+#  event の clear/set は直接呼ばず start / end を使うこと。
+#  窓ごとの多重登録・多重解除は WindowState の held 属性で防ぐ（足していない窓が引くと、
+#  別の窓の本物のフリーズを解いてしまう）
 # ═══════════════════════════════════════════════
-EQUIP_WAIT_EVENT = threading.Event()
-EQUIP_WAIT_EVENT.set()  # 初期値は通常動作可能
-_EQUIP_FREEZE_COUNT = 0
-_EQUIP_FREEZE_LOCK = threading.Lock()
-# 装備待ちを張った順。アイテムロストの前面化＋音声は先頭の窓だけが出す
-# （利用者が一度に操作できるのは1窓なので、1窓ずつ案内する）。
-# 足す・外す・読むは _EQUIP_FREEZE_LOCK の中で行う。同じ瞬間に2窓が張っても
-# 鍵の順に並ぶので、順番は必ず決まる
-_EQUIP_QUEUE: list = []
-
 def _note_freeze(st, kind: str, started: bool, count: int):
     """debug.log へ: どの窓がフリーズを張った／解いたか、いま何窓が張っているか"""
     DebugLog.write(f"[状態] 窓{getattr(st, 'window_idx', 0)} {kind}フリーズを"
                    f"{'張った' if started else '解いた'}（張っている窓: {count}）")
 
 
-def equip_freeze_start(st):
-    """窓stを装備待ちフリーズ保持者として登録（登録済みなら何もしない）"""
-    global _EQUIP_FREEZE_COUNT
-    with _EQUIP_FREEZE_LOCK:
-        if st.equip_freeze_held:
-            return
-        st.equip_freeze_held = True
-        _EQUIP_FREEZE_COUNT += 1
-        _note_freeze(st, "装備待ち", True, _EQUIP_FREEZE_COUNT)
-        _EQUIP_QUEUE.append(st)
-        EQUIP_WAIT_EVENT.clear()
+# マクロの回（開始・停止のたびに進む）。止めた後もしばらく動いている前の回のスレッドが、
+# 新しい回のフリーズを張ったり解いたりしないように、窓（WindowState.run_id）と照らす
+_RUN = _Setting(0)
 
-def equip_freeze_end(st):
-    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
-    global _EQUIP_FREEZE_COUNT
-    with _EQUIP_FREEZE_LOCK:
-        if not st.equip_freeze_held:
-            return
-        st.equip_freeze_held = False
-        _note_freeze(st, "装備待ち", False, max(0, _EQUIP_FREEZE_COUNT - 1))
-        st.equip_front_hwnd = 0
-        _EQUIP_FREEZE_COUNT = max(0, _EQUIP_FREEZE_COUNT - 1)
-        # 同一性で外す。WindowState は dataclass なので == は中身の比較
-        # （いまは直前に落とした equip_freeze_held で区別がつくが、それに頼らない）
-        _EQUIP_QUEUE[:] = [w for w in _EQUIP_QUEUE if w is not st]
-        if _EQUIP_FREEZE_COUNT == 0:
-            EQUIP_WAIT_EVENT.set()
-    _return_front_when_free(st)
 
-def equip_freeze_reset():
-    """停止時など強制リセット（LogMonitor/WindowStateは起動ごとに作り直される前提）"""
-    global _EQUIP_FREEZE_COUNT
-    with _EQUIP_FREEZE_LOCK:
-        _EQUIP_FREEZE_COUNT = 0
-        _EQUIP_QUEUE.clear()
-        EQUIP_WAIT_EVENT.set()
+def begin_run() -> int:
+    """マクロの開始・停止のたびに（Tk のスレッドから）呼ぶ。全窓フリーズを全部解き、回を進める。
+    以後、前の回の窓はフリーズを張れない・解けない（張っても数に入らない）"""
+    for freeze in (_EQUIP, _SPEED, _ROUND, _CONTINUE):
+        freeze.reset()
+    run = _RUN.get() + 1
+    _RUN.set(run)
+    return run
+
+
+def current_run() -> int:
+    return _RUN.get()
+
+
+def _stale(st) -> bool:
+    """前の回の窓か（run_id を持たない窓＝テストなどは今の回とみなす）"""
+    run = getattr(st, "run_id", None)
+    return run is not None and run != _RUN.get()
+
+
+class _Freeze:
+    def __init__(self, kind: str, held_attr: str, keep_order: bool = False):
+        self.kind = kind                    # debug.log に出す名前
+        self.held_attr = held_attr          # WindowState の「この窓が張っているか」
+        self.event = threading.Event()
+        self.event.set()                    # 初期値は通常動作可能
+        self.count = 0
+        self.lock = threading.Lock()
+        # 張った順（keep_order のときだけ）。足す・外す・読むは lock の中で行う。
+        # 同じ瞬間に2窓が張っても鍵の順に並ぶので、順番は必ず決まる
+        self.queue: list | None = [] if keep_order else None
+
+    def start(self, st):
+        """窓stを保持者として登録（登録済みなら何もしない）。前の回の窓は登録しない"""
+        with self.lock:
+            if _stale(st):
+                return
+            if getattr(st, self.held_attr):
+                return
+            setattr(st, self.held_attr, True)
+            self.count += 1
+            _note_freeze(st, self.kind, True, self.count)
+            if self.queue is not None:
+                self.queue.append(st)
+            self.event.clear()
+
+    def end(self, st):
+        """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）。
+        前の回の窓は印を落とすだけ（その回の数は begin_run で0にしてある。引くと今の回の数が狂う）"""
+        with self.lock:
+            if not getattr(st, self.held_attr):
+                return
+            if _stale(st):
+                setattr(st, self.held_attr, False)
+                return
+            setattr(st, self.held_attr, False)
+            _note_freeze(st, self.kind, False, max(0, self.count - 1))
+            self._on_end(st)
+            self.count = max(0, self.count - 1)
+            if self.queue is not None:
+                # 同一性で外す。WindowState は dataclass なので == は中身の比較
+                self.queue[:] = [w for w in self.queue if w is not st]
+            if self.count == 0:
+                self.event.set()
+        _return_front_when_free(st)
+
+    def _on_end(self, st):
+        """解くときに一緒に落とすもの（鍵の中で呼ぶ）"""
+
+    def reset(self):
+        """停止時など強制リセット（LogMonitor/WindowStateは起動ごとに作り直される前提）"""
+        with self.lock:
+            self.count = 0
+            if self.queue is not None:
+                self.queue.clear()
+            self.event.set()
+
+    def get_count(self) -> int:
+        with self.lock:
+            return self.count
+
+
+class _EquipFreeze(_Freeze):
+    def _on_end(self, st):
+        st.equip_front_hwnd = 0             # 前面の引き継ぎも終わり
+
+
+# 装備待ち。アイテムロストの前面化＋音声は張った順の先頭の窓だけが出す
+# （利用者が一度に操作できるのは1窓なので、1窓ずつ案内する）
+_EQUIP = _EquipFreeze("装備待ち", "equip_freeze_held", keep_order=True)
+EQUIP_WAIT_EVENT = _EQUIP.event
+_EQUIP_QUEUE = _EQUIP.queue
+equip_freeze_start, equip_freeze_end = _EQUIP.start, _EQUIP.end
+equip_freeze_reset, get_equip_freeze_count = _EQUIP.reset, _EQUIP.get_count
+
 
 def is_first_in_equip_queue(st) -> bool:
     """窓stが装備待ちの列の先頭か（張っていなければ False）"""
-    with _EQUIP_FREEZE_LOCK:
-        return bool(_EQUIP_QUEUE) and _EQUIP_QUEUE[0] is st
+    with _EQUIP.lock:
+        return bool(_EQUIP.queue) and _EQUIP.queue[0] is st
 
-def get_equip_freeze_count() -> int:
-    with _EQUIP_FREEZE_LOCK:
-        return _EQUIP_FREEZE_COUNT
 
-# ═══════════════════════════════════════════════
-#  速度検知フリーズ（8 Pages / Punished）
-#  set() = 通常動作可能、clear() = フリーズ中（他窓のアクションをブロック）
-#  適切なアイテム（スキャナー/ナッツ）を取りに行く時間を作るために止める。
-#  窓ごとの多重登録・多重解除は WindowState.speed_freeze_held で防ぐ。
-# ═══════════════════════════════════════════════
-SPEED_FREEZE_EVENT = threading.Event()
-SPEED_FREEZE_EVENT.set()  # 初期値は通常動作可能
-_SPEED_FREEZE_COUNT = 0
-_SPEED_FREEZE_LOCK = threading.Lock()
+# 速度検知（8 Pages / Punished）。適切なアイテム（スキャナー/ナッツ）を取りに行く時間を作る
+_SPEED = _Freeze("速度検知", "speed_freeze_held")
+SPEED_FREEZE_EVENT = _SPEED.event
+speed_freeze_start, speed_freeze_end = _SPEED.start, _SPEED.end
+speed_freeze_reset, get_speed_freeze_count = _SPEED.reset, _SPEED.get_count
 
-def speed_freeze_start(st):
-    """窓stを速度検知フリーズの保持者として登録（登録済みなら何もしない）"""
-    global _SPEED_FREEZE_COUNT
-    with _SPEED_FREEZE_LOCK:
-        if st.speed_freeze_held:
-            return
-        st.speed_freeze_held = True
-        _SPEED_FREEZE_COUNT += 1
-        _note_freeze(st, "速度検知", True, _SPEED_FREEZE_COUNT)
-        SPEED_FREEZE_EVENT.clear()
+# ラウンド突入（Alternate/Unbound/Ghost 等）。続行ラウンドと違い、張った窓自身の自爆は止めない
+_ROUND = _Freeze("ラウンド突入", "round_freeze_held")
+ROUND_FREEZE_EVENT = _ROUND.event
+round_freeze_start, round_freeze_end = _ROUND.start, _ROUND.end
+round_freeze_reset, get_round_freeze_count = _ROUND.reset, _ROUND.get_count
 
-def speed_freeze_end(st):
-    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
-    global _SPEED_FREEZE_COUNT
-    with _SPEED_FREEZE_LOCK:
-        if not st.speed_freeze_held:
-            return
-        st.speed_freeze_held = False
-        _note_freeze(st, "速度検知", False, max(0, _SPEED_FREEZE_COUNT - 1))
-        _SPEED_FREEZE_COUNT = max(0, _SPEED_FREEZE_COUNT - 1)
-        if _SPEED_FREEZE_COUNT == 0:
-            SPEED_FREEZE_EVENT.set()
-    _return_front_when_free(st)
-
-def speed_freeze_reset():
-    """停止時など強制リセット"""
-    global _SPEED_FREEZE_COUNT
-    with _SPEED_FREEZE_LOCK:
-        _SPEED_FREEZE_COUNT = 0
-        SPEED_FREEZE_EVENT.set()
-
-def get_speed_freeze_count() -> int:
-    with _SPEED_FREEZE_LOCK:
-        return _SPEED_FREEZE_COUNT
-
-# ═══════════════════════════════════════════════
-#  ラウンド突入フリーズ（Alternate/Unbound/Ghost 等）
-#  set() = 通常動作可能、clear() = フリーズ中（他窓のアクションをブロック）
-#  続行ラウンドと違い、張った窓自身の自爆は止めない。止めるのは他窓だけ。
-#  窓ごとの多重登録・多重解除は WindowState.round_freeze_held で防ぐ。
-# ═══════════════════════════════════════════════
-ROUND_FREEZE_EVENT = threading.Event()
-ROUND_FREEZE_EVENT.set()  # 初期値は通常動作可能
-_ROUND_FREEZE_COUNT = 0
-_ROUND_FREEZE_LOCK = threading.Lock()
-
-def round_freeze_start(st):
-    """窓stをラウンド突入フリーズの保持者として登録（登録済みなら何もしない）"""
-    global _ROUND_FREEZE_COUNT
-    with _ROUND_FREEZE_LOCK:
-        if st.round_freeze_held:
-            return
-        st.round_freeze_held = True
-        _ROUND_FREEZE_COUNT += 1
-        _note_freeze(st, "ラウンド突入", True, _ROUND_FREEZE_COUNT)
-        ROUND_FREEZE_EVENT.clear()
-
-def round_freeze_end(st):
-    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
-    global _ROUND_FREEZE_COUNT
-    with _ROUND_FREEZE_LOCK:
-        if not st.round_freeze_held:
-            return
-        st.round_freeze_held = False
-        _note_freeze(st, "ラウンド突入", False, max(0, _ROUND_FREEZE_COUNT - 1))
-        _ROUND_FREEZE_COUNT = max(0, _ROUND_FREEZE_COUNT - 1)
-        if _ROUND_FREEZE_COUNT == 0:
-            ROUND_FREEZE_EVENT.set()
-    _return_front_when_free(st)
-
-def round_freeze_reset():
-    """停止時など強制リセット"""
-    global _ROUND_FREEZE_COUNT
-    with _ROUND_FREEZE_LOCK:
-        _ROUND_FREEZE_COUNT = 0
-        ROUND_FREEZE_EVENT.set()
-
-def get_round_freeze_count() -> int:
-    with _ROUND_FREEZE_LOCK:
-        return _ROUND_FREEZE_COUNT
-
-# ═══════════════════════════════════════════════
-#  続行・霧ラウンド中フリーズイベント
-#  set() = 通常動作可能、clear() = 続行ラウンド中（他窓をブロック）
-# ═══════════════════════════════════════════════
-CONTINUE_ROUND_EVENT = threading.Event()
-CONTINUE_ROUND_EVENT.set()  # 初期値は通常動作可能
-_CONTINUE_ROUND_COUNT = 0
-_CONTINUE_ROUND_LOCK = threading.Lock()
-
-def continue_round_start(st):
-    """窓stを続行フリーズの保持者として登録（登録済みなら何もしない）。
-
-    保持を窓ごとに持つのは、足していない窓が引くのを防ぐため。DTM/Waldo の窓は
-    is_continue_round=True でもここを呼ばない（他窓を止めない仕様）ので、
-    終了側が無条件に引くと他窓の本物のフリーズを解除してしまう。
-    """
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        if st.continue_freeze_held:
-            return
-        st.continue_freeze_held = True
-        _CONTINUE_ROUND_COUNT += 1
-        _note_freeze(st, "続行", True, _CONTINUE_ROUND_COUNT)
-        CONTINUE_ROUND_EVENT.clear()
-
-def continue_round_end(st):
-    """窓stの保持を解除し、保持窓が0になったらフリーズ解除（未保持なら何もしない）"""
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        if not st.continue_freeze_held:
-            return
-        st.continue_freeze_held = False
-        _note_freeze(st, "続行", False, max(0, _CONTINUE_ROUND_COUNT - 1))
-        _CONTINUE_ROUND_COUNT = max(0, _CONTINUE_ROUND_COUNT - 1)
-        if _CONTINUE_ROUND_COUNT == 0:
-            CONTINUE_ROUND_EVENT.set()
-    _return_front_when_free(st)
-
-def continue_round_reset():
-    """停止時など強制リセット"""
-    global _CONTINUE_ROUND_COUNT
-    with _CONTINUE_ROUND_LOCK:
-        _CONTINUE_ROUND_COUNT = 0
-        CONTINUE_ROUND_EVENT.set()
-
-def get_continue_round_count() -> int:
-    with _CONTINUE_ROUND_LOCK:
-        return _CONTINUE_ROUND_COUNT
+# 続行・霧ラウンド中。DTM/Waldo の窓は is_continue_round=True でも張らない（他窓を止めない仕様）
+_CONTINUE = _Freeze("続行", "continue_freeze_held")
+CONTINUE_ROUND_EVENT = _CONTINUE.event
+continue_round_start, continue_round_end = _CONTINUE.start, _CONTINUE.end
+continue_round_reset, get_continue_round_count = _CONTINUE.reset, _CONTINUE.get_count
 
 
 # ── このツールが掴んでいる窓 ───────────────────
@@ -507,6 +351,12 @@ def unregister_own_window(hwnd: int):
 def own_windows() -> frozenset:
     with _OWN_WINDOW_LOCK:
         return frozenset(_OWN_WINDOWS)
+
+
+# 当ツールの窓をいま録画から外しているか。録画の途中で開いた窓（オーバーレイ・統計画面）も
+# 開いたその場で外すため（外すのは録画の開始時に開いていた窓だけだった）
+_OWN_WINDOWS_HIDDEN = _Setting(False, bool)
+own_windows_hidden, set_own_windows_hidden = _OWN_WINDOWS_HIDDEN.get, _OWN_WINDOWS_HIDDEN.set
 
 
 def nothing_frozen() -> bool:

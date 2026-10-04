@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import MatchTNL
+import TerrorReplacement
 
 
 EVENT_VERIFIED = "verified"      # `Verified` の行（受理か定期かは LogMonitor が決める）
@@ -12,20 +13,17 @@ EVENT_YOU_DIED = "you_died"
 EVENT_ROUND_OVER = "round_over"
 EVENT_VERIFIED_END = "verified_end"
 EVENT_KILLERS_UNKNOWN = "killers_unknown"
-EVENT_FOXY = "foxy"
 EVENT_KILLERS_REVEALED = "killers_revealed"
 EVENT_JOINING = "joining"
 EVENT_ITEM_EQUIP = "item_equip"
 EVENT_LIVED = "lived"
 EVENT_USER_AUTH = "user_auth"
 EVENT_SUS_PLAYER = "sus_player"
-EVENT_CREATURE_BLOODTHIRSTY = "creature_bloodthirsty"
-EVENT_HUNGRY_HOME_INVADER = "hungry_home_invader"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
-EVENT_GIGABYTES = "gigabytes"
-EVENT_GLORBO = "glorbo"
-EVENT_ATRACHED = "atrached"
+# 置き換えテラーの合図（Atrached・Bloodthirsty・Foxy など）。どれかは LogEvent.flag。
+# 行と flag の対応は TerrorReplacement.SIGNALS
+EVENT_REPLACEMENT = "replacement"
 EVENT_MASTER_SWITCHED = "master_switched"
 EVENT_ENRAGE = "enrage"
 EVENT_STUNNED = "stunned"
@@ -41,8 +39,28 @@ RE_MAP_ID = re.compile(r"\((\d+)\)$")
 RE_KILLERS_SET = re.compile(r"Killers have been set - (\d+) (\d+) (\d+) // Round type is (.+)")
 RE_KILLERS_UNKNOWN = re.compile(r"Killers is unknown - \?\?\? // .+ // Round type is (.+)")
 RE_KILLERS_REVEALED = re.compile(r"Killers have been revealed - (\d+) (\d+) (\d+) // Round type is (.+)")
-RE_FOXY = re.compile(r"foxy the pirate turned evil!", re.IGNORECASE)
 RE_LIVED = re.compile(r"^Lived in round[.]$")
+
+# Bloodbath EX は、ラウンド開始の行では「Bloodbath」と出る（依頼者）。EX では3体が
+# 同じテラーになる（依頼者: 確実）ので、Killers 行の3つの番号がそろっていれば EX と
+# みなす（ToN Save Manager も EX を「Bloodbath で全員同じ番号」と定義している）。
+# 「EX」とだけ出た場合も同じ名前にそろえる（ToN Save Manager のエミュレータはそう書く。
+# 実際のログでは未確認）
+BLOODBATH_EX = "Bloodbath EX"
+ROUND_TYPE_ALIASES = {"EX": BLOODBATH_EX}
+
+
+def _round_type(raw: str) -> str:
+    name = raw.strip()
+    return ROUND_TYPE_ALIASES.get(name, name)
+
+
+def _killers_round_type(raw: str, a: str, b: str, c: str) -> str:
+    """Killers 行のラウンド種別。3体が同じ番号の Bloodbath は Bloodbath EX"""
+    name = _round_type(raw)
+    if name == "Bloodbath" and int(a) == int(b) == int(c):
+        return BLOODBATH_EX
+    return name
 LIVED_MARK = "Lived in round"
 RE_YOU_DIED = re.compile(r"^You died[.]$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
@@ -52,15 +70,6 @@ VERIFIED_MARK = "Verified"      # 前絞りの印（Verified Round End も含む
 ROUND_OVER_MARK = "RoundOver"
 # ToN側の綴りどおり（recieved）。本物のVerifiedにだけ続く行
 RE_EVERYTHING_RECEIVED = re.compile(r"^Everything recieved, looks good to meee~!$")
-# The Gigabytes はテラーIDでは判別できない（実測6件でIDが毎回異なる）。
-# この行だけが固有の手がかり。Killers have been set と同じ秒に出る。
-RE_GIGABYTES = re.compile(r"^The Gigabytes have come[.]$")
-# Punished の Arkus → Glorbo。この行はまだ実ログで観測できていない（低確率で、
-# 手元のログ22本には0件）。正確な大文字小文字と句点が分からないので緩く受ける。
-# 実物が取れたら締める（RE_FOXY も同じ理由で IGNORECASE）
-RE_GLORBO = re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE)
-# Sonic(classic 40)のVariant。同IDで稀に差し替わるためIDでは判別できない。
-RE_ATRACHED = re.compile(r"^Lets play a game[.][.][.]$")
 RE_ITEM_EQUIP = re.compile(r"^Equipping (\d+)[.](?: Was using (\d+))?")
 ITEM_EQUIP_MARK = "Equipping "
 # 8 Pages でページを取った（n 枚目）。持ち込めないアイテムはここでなくなる
@@ -83,8 +92,6 @@ RE_PLAYER_LEFT = re.compile(
 PLAYER_JOINED_MARK = "OnPlayerJoined "
 PLAYER_LEFT_MARK = "OnPlayerLeft "
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
-RE_CREATURE_BLOODTHIRSTY = re.compile(r"^The creature is bloodthirsty today[.][.][.]$")
-RE_HUNGRY_HOME_INVADER = re.compile(r"^I hear strange sounds coming from the kitchen[.]$")
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RESPAWN_MARK = "Player respawned"
 YOU_DIED_MARK = "You died"
@@ -115,6 +122,7 @@ class LogEvent:
     player_name: str = ""
     instance: str = ""      # 入室の行の wrld_… から後ろ全部（同じインスタンスなら誰でも同じ）
     page: int = 0           # Page Collected の n（今は使わない）
+    flag: str = ""          # 置き換えの合図の WindowState の属性（EVENT_REPLACEMENT）
 
 
 RE_LOG_TIME = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
@@ -223,15 +231,6 @@ def parse(line: str) -> LogEvent | None:
     if RE_EVERYTHING_RECEIVED.match(line):
         return LogEvent(EVENT_EVERYTHING_RECEIVED)
 
-    if RE_GIGABYTES.match(line):
-        return LogEvent(EVENT_GIGABYTES)
-
-    if RE_GLORBO.match(line):
-        return LogEvent(EVENT_GLORBO)
-
-    if RE_ATRACHED.match(line):
-        return LogEvent(EVENT_ATRACHED)
-
     if RE_MASTER_SWITCHED.match(line):
         return LogEvent(EVENT_MASTER_SWITCHED)
 
@@ -241,14 +240,14 @@ def parse(line: str) -> LogEvent | None:
         map_match = RE_MAP_ID.search(raw_map)
         return LogEvent(
             EVENT_ROUND_START,
-            round_type=m.group(2).strip(),
+            round_type=_round_type(m.group(2)),
             raw_map=raw_map,
             map_id=int(map_match.group(1)) if map_match else 0,
         )
 
     m = RE_KILLERS_SET.match(line)
     if m:
-        round_type = m.group(4).strip()
+        round_type = _killers_round_type(m.group(4), m.group(1), m.group(2), m.group(3))
         return LogEvent(
             EVENT_KILLERS_SET,
             round_type=round_type,
@@ -264,20 +263,15 @@ def parse(line: str) -> LogEvent | None:
 
     m = RE_KILLERS_UNKNOWN.match(line)
     if m:
-        return LogEvent(EVENT_KILLERS_UNKNOWN, round_type=m.group(1).strip())
+        return LogEvent(EVENT_KILLERS_UNKNOWN, round_type=_round_type(m.group(1)))
 
-    if RE_FOXY.search(line):
-        return LogEvent(EVENT_FOXY)
-
-    if RE_CREATURE_BLOODTHIRSTY.match(line):
-        return LogEvent(EVENT_CREATURE_BLOODTHIRSTY)
-
-    if RE_HUNGRY_HOME_INVADER.match(line):
-        return LogEvent(EVENT_HUNGRY_HOME_INVADER)
+    signal = TerrorReplacement.match_signal(line)
+    if signal is not None:
+        return LogEvent(EVENT_REPLACEMENT, flag=signal.flag)
 
     m = RE_KILLERS_REVEALED.match(line)
     if m:
-        round_type = m.group(4).strip()
+        round_type = _killers_round_type(m.group(4), m.group(1), m.group(2), m.group(3))
         return LogEvent(
             EVENT_KILLERS_REVEALED,
             round_type=round_type,

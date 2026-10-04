@@ -18,11 +18,6 @@ __pycache__/
 build/
 dist/
 
-# Frontend dependencies and build outputs
-node_modules/
-ton-stats/node_modules/
-ton-stats/dist/
-
 # Local logs and temporary files
 *.log
 *.tmp

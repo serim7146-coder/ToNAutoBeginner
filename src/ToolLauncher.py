@@ -35,11 +35,13 @@ def button_label(exe_path: str) -> str:
         return ""
 
 
-def is_running(exe_path: str) -> bool:
+def is_running(exe_path: str, running=None) -> bool:
     """その exe が既に動いているか。
 
     比較はファイル名だけ（`ProcessCheck.is_process_running` と同じ粒度）。
     同名の exe が別フォルダにあると区別できないが、ここではそれで足りる。
+    running に `ProcessCheck.running_names()` を渡すと、その一覧で見る
+    （いくつものツールを見るときにプロセスの一覧を1回で済ませる）。None なら取りに行く
     """
     text = _clean(exe_path)
     if not text:
@@ -50,6 +52,8 @@ def is_running(exe_path: str) -> bool:
         return False
     if not name:
         return False
+    if running is not None:
+        return name.lower() in running
     return ProcessCheck.is_process_running(name)
 
 

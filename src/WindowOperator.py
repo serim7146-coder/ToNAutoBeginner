@@ -408,7 +408,7 @@ def cursor_target(hwnd: int) -> tuple:
 
 def cursor_in_client(hwnd: int) -> bool:
     """利用者のカーソルが、その窓のクライアント領域の上にあるか（最小化・取れないときは False）。
-    UseRight の連打で Begin が押される状態かを見る（CS）"""
+    UseRight の連打で Begin が押される状態かを見る"""
     point = cursor_position()
     if not hwnd or point is None:
         return False
@@ -478,6 +478,7 @@ def window_cursor_point(hwnd: int) -> tuple | None:
     return cursor_target(hwnd)[0]
 
 
+GA_ROOT = 2                    # GetAncestor: 親の鎖をたどった一番上（持ち主はたどらない）
 WDA_NONE = 0x00000000
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
@@ -521,17 +522,15 @@ def toplevel_hwnd(hwnd: int) -> int:
     """
     if not hwnd:
         return 0
-    current = int(hwnd)
+    # GetAncestor(GA_ROOT) は親だけをたどる。GetParent は、ポップアップの窓（枠なしの
+    # オーバーレイ）では親ではなく「持ち主」の窓を返す。それでたどると、オーバーレイの
+    # 代わりにメイン画面を覚えてしまい、オーバーレイが録画から外れなかった
     try:
-        for _ in range(16):         # 念のため上限を置く（輪を作らない）
-            parent = user32.GetParent(current)
-            if not parent:
-                break
-            current = int(parent)
+        root = user32.GetAncestor(int(hwnd), GA_ROOT)
+        return int(root) if root else int(hwnd)
     except Exception:
         DebugLog.exception("WindowOperator.toplevel_hwnd")
         return int(hwnd)
-    return current
 
 
 def foreground_hwnd() -> int:

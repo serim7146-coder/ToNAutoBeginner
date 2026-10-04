@@ -43,7 +43,7 @@ class VerifiedTracker:
         self.last_periodic = t
 
     def mark_periodic(self, t):
-        """呼び出し側が定期と分かった（ツールが押していないのに来た Verified。CO）→ 位相の材料にする"""
+        """呼び出し側が定期と分かった（ツールが押していないのに来た Verified）→ 位相の材料にする"""
         self.last_periodic = t
 
     def on_verified(self, t, pressed_recently: bool) -> str:

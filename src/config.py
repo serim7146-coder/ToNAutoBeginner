@@ -59,18 +59,18 @@ TON_LISTTOOL_PROCESS = "ton_listtool.exe"
 # 既定値。GUIで変更でき、settings.json に保存される。
 # 実行時にここを書き換えないこと（プロセス全体に効いてしまう）
 EMERGENCY_STOP_KEY = "p"
-EMERGENCY_STOP_POLL_MS = 200
 EMERGENCY_KEY_CAPTURE_SEC = 5.0   # 「キーを押して設定」で待つ時間
 # 「▶ マクロ開始」を押すのと同じことをするキー。既定は未設定＝無効。
 # 停止は効かないと危ないので、不正なキーなら既定値へ倒す。開始は逆で、
 # 勝手に動き出す方が危ない。だから既定は未設定、不正なら無効にするだけで、
-# 別のキーへは倒さない。ポーリングと捕捉の秒数は停止キーと共用する
+# 別のキーへは倒さない。捕捉の秒数は停止キーと共用する。
+# どちらも押した瞬間の通知で拾う（長押しは要らない）
 START_KEY = ""
-# 自爆キャンセルのキー（CL）。押すと全部の窓の自爆を止め、そのラウンドはもう自爆しない。
+# 自爆キャンセルのキー。押すと全部の窓の自爆を止め、そのラウンドはもう自爆しない。
 # 押した瞬間を取りこぼさないよう、チェイスのキーと同じく押した通知（hook_key）で受ける
 SUICIDE_CANCEL_KEY = "^"
 
-# アイテム自動取得（CM）。Begin が通った後に店へ取りに行く。合計でこれを超えたらやめる
+# アイテム自動取得。Begin が通った後に店へ取りに行く。合計でこれを超えたらやめる
 ITEM_FETCH_LIMIT_SEC = 10.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
 
@@ -219,7 +219,6 @@ BEGIN_PRESS_RECENT_SEC     = 3.0     # 予定と重なった1回を受理とみ�
 VERIFIED_LEARN_BACK_SEC    = 1800.0  # 起動時に位相を取り戻すため遡るログの長さ
 # 採用した Verified の後、ラウンド開始が来るまでの実測は12〜13秒
 VERIFIED_ROUND_START_WAIT_SEC = 15.0
-VERIFIED_RECV_TIMEOUT_SEC  = 20.0    # Everything recieved を待つ上限
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 ROUND_FREEZE_SELECTABLE = [
@@ -278,8 +277,7 @@ FOCUS_RETURN_AFTER_RELEASE_SEC = 0.3
 
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
-# 自爆キーをフォーカス無しで送る（Trueで背面送信、Falseで従来のフォーカス方式）
-# 背面送信が使えない状況では自動的にフォーカス方式へ落ちる
+# 自爆キーはいつも背面へ送る（前面化しない）。送れない窓（最小化中など）では自爆せずに知らせる
 SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
 # 自爆が効かなかったらやり直す。背面送信で長押ししている間に他の窓が
 # 前面を奪うと、VRChat はキーを離したことにする（実例: 窓4が80秒後に死亡）
@@ -305,9 +303,9 @@ BEGIN_USE_SPAM_START_SEC = 12.9
 # 0.1（1周0.2秒）だったときは、0.05秒の差し込みに当たるのが4回に1回程度で、
 # 空振りして前面化へ落ちていた。ToN_Multi_Supporter も 0.05 秒間隔
 BEGIN_USE_PULSE_SEC    = 0.025
-# 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔（CS）
+# 連打で Begin が押せる状態か（前面か、カーソルがその窓の上）を見直す間隔
 BEGIN_USE_REACH_CHECK_SEC = 0.5
-# OSC で押している間、1 を送り直す間隔（DB。途中で VRChat 側で入力が消えて止まることがあった）
+# OSC で押している間、1 を送り直す間隔（途中で VRChat 側で入力が消えて止まることがあった）
 OSC_HOLD_RESEND_SEC = 0.1
 # カーソルを窓へ置くのは「ひと差し」だけ。利用者からマウスを奪う時間を最小にする
 BEGIN_CURSOR_DWELL_SEC = 0.05       # 窓の上に置いている時間
@@ -331,7 +329,7 @@ BEGIN_ADJUST_MAX_STEPS    = 4      # 横移動の回数の上限
 BEGIN_ADJUST_MAX_TOTAL_SEC = 1.2   # 1回の位置合わせで横移動してよい合計
 BEGIN_ADJUST_SETTLE_SEC   = 0.4    # 動いてから撮り直すまでの待ち（減速を待つ）
 BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変わらなければ打ち切る（OSC が届いていない等）
-# 前後（CI）。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
+# 前後。文字の幅÷窓の高さ（w/H）で近さが分かる（実測 2560x1440: Begin の位置 0.101〜0.105、
 # 後ろへ 0.2秒 0.069・0.4秒 0.044、前へ 0.15秒 0.146。高さはほとんど変わらない）
 # 押せる範囲（実測 2026-10-03 1920x1080: 押せる一番近い 0.404・一番遠い 0.066）の内側に余裕を
 # 持たせた範囲なら前後に動かない。外なら、合わせる先へ向けて動く（合わせる先は秒数の計算にだけ使う）
@@ -363,11 +361,18 @@ BEGIN_RETRY_WAIT_SEC  = 5.0
 HOST_LIST_LOSS_GRACE_SEC = 10.0
 
 # ── 3クラ続行設定 ──────────────────────────────
-OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {
-    ReadJson.terror_id("Don't Touch Me", TERRORS),
-    ReadJson.terror_id("Waldo", TERRORS)
-}
-OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）
+DTM_ID   = ReadJson.terror_id("Don't Touch Me", TERRORS)
+WALDO_ID = ReadJson.terror_id("Waldo", TERRORS)
+OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {DTM_ID, WALDO_ID}
+OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）。窓の設定で、3勝の後も続けられる
+# Waldo を続行するのは、このアイテムを持っているときだけ（依頼者）。番号は item.json から名前で引く。
+# item.json に無い間は GUIDANCE_PLUSH_ITEM_ID（分かっていれば番号を書く）。どちらも無ければ、
+# 持っているか分からないので前と同じ（アイテムに関係なく続行）
+GUIDANCE_PLUSH_NAME = "Guidance Plush"
+GUIDANCE_PLUSH_ITEM_ID: int | None = None
+# DTM/Waldo でも続行しないラウンド。テラーが複数体出るもの（依頼者 2026-10-04）。
+# Bloodbath EX は続行する。Cracked などほかの特殊ラウンドは続行する
+OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS = {"Double Trouble", "Bloodbath", "Midnight"}
 # 「特殊ラウンドを経験したら3勝扱い」の例外。特殊ラウンドだが、例外的に3クラ前にも
 # 出現するもの（依頼者 2026-09-30: Twilight だけ。ほかの Moon は出現条件の都合で
 # 3クラ前には起こりえない）。特殊ラウンドであることは変わらない（SPECIAL_ROUND には残す）
@@ -382,7 +387,6 @@ INSTANCE_PUBLIC        = "public"
 INSTANCE_PRIVATE       = "private"
 INSTANCE_HOSHIIMO      = "干し芋"
 INSTANCE_YAKIIMO       = "焼き芋"
-INSTANCE_CBPS          = "CBPS"
 INSTANCE_OTHER_GROUP   = "other_group"
 INSTANCE_EMERALD_CITY  = "Emerald City"
 
@@ -392,19 +396,7 @@ YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 # 識別のみ。自爆・グループ判定の対象にはしない
 # （GroupRound.GROUP_INSTANCES に入れると自爆が走る）
 EMERALD_CITY_GROUP_ID = "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8"
-CBPS_GROUP_ID     = "" # 後ほど埋めます。
 
-# ── グループインスタンスで、自動自爆するラウンド ──
-# 干し芋/焼き芋の判定は GroupRound へ移した（ラウンドごとにルールが違うため）
-CBPS_SKIP_ROUNDS = {
-    "Classic",
-    "Bloodbath",
-    "Double Trouble",
-    "Bloodbath EX",
-    "Randomizer",
-    "Punished",
-    "Sabotage",
-}
 
 # ── Variant判定待ち ──
 # Variantになりうるテラーがいる間は、出現ログを待ってから判断する。
@@ -437,8 +429,8 @@ TON_INSTANCE_ACCESS_CHOICES      = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACC
 TON_INSTANCE_ACCESS_DEFAULT      = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
-# 的の位置は画面比率で持つ。スポーン地点と向きが固定なので毎回同じ位置に出る。
-# 値は 2560x1440 での実測から算出（例: 警告同意 1327/2560, 739/1440）。
+# スポーン地点と向きが固定なので、決まった秒数の横移動で的が照準（画面中央）に来る。
+# 画面の座標は使わない（ToNEntry）
 TON_ENTRY_ENABLED = True
 TON_ENTRY_BEGIN   = True   # 選択画面突破後にBeginまで押すか
 
@@ -481,8 +473,9 @@ OBS_RECORD_MAX_SEC  = 900      # 1本の上限。RoundOver が来ないときの
 OBS_TIMEOUT_SEC     = 2.0      # 接続・送受信のタイムアウト
 
 # ── 霧の看破（--enable-sdk-log-levels 付きのログの [NetworkProcessing]） ──
-# 公開前にオブジェクト名からテラーを特定する。使ってよいのは Invite / Invite+ /
-# Friends / Group Only のインスタンスだけ（それ以外は DB にだけ送る）
+# 公開前にオブジェクト名からテラーを特定する。判定・表示に使うのは、画面の「霧を即時判定する」が
+# ON で、Invite / Invite+ / Friends のインスタンスのときだけ（FogEarlyRead.EARLY_READ_ACCESS）。
+# それ以外は DB にだけ送る
 FOG_EARLY_READ_ENABLED     = True
 FOG_EARLY_READ_LAUNCH_FLAG = "--enable-sdk-log-levels"
 # 名前ごとの答え合わせ（一致 / 食い違い）の記録
@@ -533,40 +526,38 @@ LOG_LIVE_GRACE_SEC        = 120.0
 LOG_POLL_INTERVAL    = 0.3
 LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
 
-CURIOUS_CREATURE_ID = 106
-BLOODTHIRSTY_CREATURE_ID = 192
-BLOODTHIRSTY_CREATURE_LOG = "The creature is bloodthirsty today..."
-SLENDER_ID = 47
-HUNGRY_HOME_INVADER_ID = 190
-HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする
 ENRAGE_IDENTIFY_ENABLED = True
 STUNNED_IDENTIFY_ENABLED = True
 
-SONIC_ID = 40
-# alternate。Sanic は Foxy に置き換わることがある（foxy the pirate turned evil!）
-SANIC_ID = 136
-FOXY_ID = 316
-# alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy
+# alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy（置き換えではない）
 JOY_ID = 164
-# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
-FUSION_PILOT_ID = 163
+
+# ── 置き換えテラーのID ──
+# 置き換えの表（元 → 置き換え後・起きるラウンド）と合図のログ行は TerrorReplacement に
+# まとめてある。ここは番号だけ
+SONIC_ID = 40
+ATRACHED_ID = 191                   # Classic の Sonic → Atrached
+SLENDER_ID = 47
+HUNGRY_HOME_INVADER_ID = 190        # Classic の Slender → Hungry Home Invader
+CURIOUS_CREATURE_ID = 106
+BLOODTHIRSTY_CREATURE_ID = 192      # Curious → Wild Yet Bloodthirsty Creature（全ラウンド）
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
 # 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
 SELF_INSERTS_ID = 283
-ATRACHED_ID = 191
-ATRACHED_LOG = "Lets play a game..."
+# alternate。Sanic は Foxy に置き換わることがある
+SANIC_ID = 136
+FOXY_ID = 316
+# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
+FUSION_PILOT_ID = 163
+# Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）
+ARKUS_ID = 61
+GLORBO_ID = 317
 # 元IDが毎回違う（実測12件すべて別ID）ので、IDからは予測できない。
 # Classicの1体構成は常に候補として出現ログを待つ
 GIGABYTES_ID = 314
-GIGABYTES_LOG = "The Gigabytes have come."
-# Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）。
-# 合図の行はまだ実ログで取れていないので、大文字小文字と末尾の句点は問わない
-ARKUS_ID = 61
-GLORBO_ID = 317
-GLORBO_LOG = "the real g has appeared"
 
 # Variantテラー（Classicでもこれなら通常判定に回す）
 VARIANT_TERROR_IDS = frozenset({

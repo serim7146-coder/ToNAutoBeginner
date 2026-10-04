@@ -11,6 +11,8 @@ class WindowConfig:
     auto_begin: bool = True
     do_skip: bool = True
     cancel_afk: bool = True
+    # DTM/Waldo を3クラ解放（3勝）の後も続行する
+    cancel_afk_after_unlock: bool = False
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     # VRChatが値を送ってくるポート。0なら従来どおり osc_port+1 を使う
     # （--osc= の送信ポートは受信+1とは限らない）
@@ -58,6 +60,9 @@ class WindowState:
     map_id: int = 0
     round_seq: int = 0
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
+    # マクロの回（SharedState.begin_run）。前の回の窓がフリーズを張ったり解いたりしないため。
+    # None は回を問わない（監視だけで使うとき・テスト）
+    run_id: Optional[int] = field(default=None, compare=False)
     # 窓の番号（debug.log の行に付けるため。判定には使わない）
     window_idx: int = field(default=0, compare=False)
     # このラウンドで Begin 前の移動を最後までやったか（押し直しで2回動かさないため）。
@@ -98,7 +103,7 @@ class WindowState:
     speed_strafe_done: bool = False  # このラウンドで速度検知の横移動をしたか
     # 自爆（リトライ込み）が走っているラウンドの round_seq。流れを1本にするため
     suicide_seq: int = -1
-    # 自爆キャンセルのキーを押したラウンドの round_seq。そのラウンドはもう自爆しない（CL）
+    # 自爆キャンセルのキーを押したラウンドの round_seq。そのラウンドはもう自爆しない
     suicide_cancelled_round: int = -1
     # 入室のたびに進める。インスタンスをまたいで動き続けるものを止めるため
     instance_seq: int = 0
@@ -116,8 +121,8 @@ class WindowState:
     # 所持アイテム（0 = 持っていない）。item_id はロスト判定の都合（8 Pages の開始で
     # 0 になるなど）を含むので、別に持つ。ログの表示と今後の判定用
     held_item_id: int = 0
-    # 最後にロストしたアイテム（アイテム自動取得 CM が取りに行くもの）。装備したとき・インスタンスが
-    # 変わったときに 0 にする。それまでの「アイテム未回収」のラウンドでも取りに行く（CS）
+    # 最後にロストしたアイテム（アイテム自動取得が取りに行くもの）。装備したとき・インスタンスが
+    # 変わったときに 0 にする。それまでの「アイテム未回収」のラウンドでも取りに行く
     last_lost_item_id: int = 0
     # Equipping <id> を受けた回数と最後の id（アイテム自動取得が Equip の結果を待つ）
     equip_seen_seq: int = 0
