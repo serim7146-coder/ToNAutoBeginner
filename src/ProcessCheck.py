@@ -4,6 +4,7 @@
 ToolHelp スナップショットを直に取る（実測で1回あたり約10ms）。
 """
 
+import contextlib
 import ctypes
 from ctypes import wintypes
 
@@ -37,6 +38,28 @@ except Exception:
     pass
 
 
+def _process_names():
+    """動いているプロセスの exe 名（小文字）を1つずつ返す。スナップショットは1回だけ取る。
+    取れなければ OSError（呼び出し側が失敗として扱う）"""
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+        raise OSError("CreateToolhelp32Snapshot に失敗")
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return
+        while True:
+            yield entry.szExeFile.lower()
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                return
+    finally:
+        try:
+            kernel32.CloseHandle(snapshot)
+        except Exception:
+            pass
+
+
 def is_process_running(exe_name: str) -> bool:
     """指定名のプロセスが存在するか。比較は小文字化して完全一致。
 
@@ -46,25 +69,18 @@ def is_process_running(exe_name: str) -> bool:
     if not exe_name:
         return False
     wanted = exe_name.lower()
-    snapshot = None
     try:
-        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
-        if not snapshot or snapshot == INVALID_HANDLE_VALUE:
-            return False
-        entry = PROCESSENTRY32W()
-        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
-        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
-            return False
-        while True:
-            if entry.szExeFile.lower() == wanted:
-                return True
-            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
-                return False
+        # 見つけた時点で抜けても、スナップショットはすぐ閉じる（closing）
+        with contextlib.closing(_process_names()) as names:
+            return any(name == wanted for name in names)
     except Exception:
         return False
-    finally:
-        if snapshot and snapshot != INVALID_HANDLE_VALUE:
-            try:
-                kernel32.CloseHandle(snapshot)
-            except Exception:
-                pass
+
+
+def running_names() -> frozenset | None:
+    """動いているプロセスの exe 名（小文字）すべて。いくつもの名前を見るときに、
+    スナップショットを名前の数だけ取らずに済ませる。失敗時は None"""
+    try:
+        return frozenset(_process_names())
+    except Exception:
+        return None

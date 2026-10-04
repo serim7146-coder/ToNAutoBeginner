@@ -7299,6 +7299,39 @@ class TestProcessCheck(unittest.TestCase):
         self.assertFalse(self._running(k))
         k.CloseHandle.assert_called_once_with(1234)
 
+    # ── running_names（いくつもの名前を1回のスナップショットで）──
+    def _names(self, k):
+        with patch.object(ProcessCheck, "kernel32", k):
+            return ProcessCheck.running_names()
+
+    def test_all_names_come_from_one_snapshot(self):
+        k = self._kernel32(["explorer.exe", "ToN_ListTool.exe", "VRChat.exe"])
+
+        self.assertEqual(self._names(k),
+                         frozenset({"explorer.exe", "ton_listtool.exe", "vrchat.exe"}))
+        k.CreateToolhelp32Snapshot.assert_called_once()
+        k.CloseHandle.assert_called_once_with(1234)
+
+    def test_a_failed_snapshot_gives_none(self):
+        """空（＝何も動いていない）と取り違えない"""
+        k = self._kernel32([], snapshot=0)
+
+        self.assertIsNone(self._names(k))
+
+    def test_an_error_midway_gives_none_and_closes(self):
+        k = self._kernel32(["ToN_ListTool.exe"])
+        k.Process32FirstW.side_effect = OSError("boom")
+
+        self.assertIsNone(self._names(k))
+        k.CloseHandle.assert_called_once_with(1234)
+
+    def test_the_tool_launcher_can_use_the_list(self):
+        names = frozenset({"ton_listtool.exe"})
+        with patch.object(ProcessCheck, "is_process_running") as single:
+            self.assertTrue(ToolLauncher.is_running("D:/x/ToN_ListTool.exe", names))
+            self.assertFalse(ToolLauncher.is_running("D:/x/SaveManager.exe", names))
+        single.assert_not_called()
+
 
 class TestWishesPerWindow(unittest.TestCase):
     """窓ごとに「そのインスタンスにいる人」の希望だけで判定する。
@@ -7965,10 +7998,10 @@ class TestOldListToolIsNotRead(unittest.TestCase):
 
     def test_the_missing_sqlite_file_is_reported_as_lost(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        body = src[src.index("    def _refresh_host_source(self):"):]
+        body = src[src.index("    def _read_host_source(self) -> tuple:"):]
         body = body[:body.index("\n    def ", 10)]
 
-        self.assertIn('self._host_list_lost(f"{name} がありません")', body)
+        self.assertIn('return "lost", f"{name} がありません"', body)
 
 
 class TestHostListGrace(unittest.TestCase):
@@ -8013,7 +8046,8 @@ class TestHostListGrace(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl",
+                     "_read_host_source", "_apply_host_source"):
             method = getattr(mainGUI.App, name)
             setattr(app, name, (lambda m: lambda *a, **kw: m(app, *a, **kw))(method))
         return app
@@ -8704,7 +8738,8 @@ class TestHostListSource(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl"):
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl",
+                     "_read_host_source", "_apply_host_source"):
             setattr(app, name, self._bind(app, name))
         return app
 
@@ -9051,20 +9086,45 @@ class TestHostListSource(unittest.TestCase):
         hits = [m for m in app.logs if "読み込み失敗" in m]
         self.assertEqual(len(hits), 2, app.logs)
 
+    @staticmethod
+    def _tick(app):
+        """_poll_host_save を1回まわす。裏のスレッドの代わりにその場で、Tk へ渡す分もその場で"""
+        app._off_gui = lambda work: work()
+        app._after_from_worker = lambda func, *args: func(*args)
+        app._finish_host_poll = lambda result: mainGUI.App._finish_host_poll(app, result)
+        mainGUI.App._poll_host_save(app)
+
     def test_the_tick_survives_a_read_failure(self):
         """プロセス判定ではなく、読み込み側が投げても tick が止まらないこと"""
         self._write(3)
         app = self._app()
         app.after = MagicMock()
         app._poll_host_save = lambda: None
-        app._refresh_host_source = lambda: mainGUI.App._refresh_host_source(app)
 
         with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(ProcessCheck, "is_process_running", return_value=True), \
              patch.object(mainGUI.os, "stat", side_effect=RuntimeError("boom")):
-            mainGUI.App._poll_host_save(app)
+            self._tick(app)
 
         app.after.assert_called_once()
+
+    def test_the_tick_reads_off_the_gui_thread(self):
+        """プロセスとファイルを読むのは裏のスレッド（Tk のスレッドを止めない）"""
+        app = self._app()
+        seen = {}
+        app._read_host_source = lambda: seen.setdefault("thread", threading.current_thread()) and ("same", None)
+        app._after_from_worker = lambda func, *args: seen.setdefault("handed", func)
+        app._finish_host_poll = lambda result: None
+        app._off_gui = mainGUI.App._off_gui         # 本物（裏のスレッドを立てる）
+
+        mainGUI.App._poll_host_save(app)
+        for _ in range(100):
+            if "handed" in seen:
+                break
+            time.sleep(0.01)
+
+        self.assertIsNot(seen.get("thread"), threading.main_thread())
+        self.assertIs(seen.get("handed"), app._finish_host_poll, "結果は Tk のスレッドへ渡す")
 
     def test_a_stat_failure_falls_back_to_the_tnl(self):
         """OSError 以外で落ちても供給元だけは決まること"""
@@ -9115,9 +9175,9 @@ class TestHostListSource(unittest.TestCase):
 
         def boom():
             raise OSError("boom")
-        app._refresh_host_source = boom
+        app._read_host_source = boom
 
-        mainGUI.App._poll_host_save(app)
+        self._tick(app)
 
         app.after.assert_called_once()
 
@@ -9127,9 +9187,9 @@ class TestHostListSource(unittest.TestCase):
         app.after = MagicMock()
         app._poll_host_save = lambda: None
         called = []
-        app._refresh_host_source = lambda: called.append(1)
+        app._read_host_source = lambda: called.append(1) or ("same", None)
 
-        mainGUI.App._poll_host_save(app)
+        self._tick(app)
 
         self.assertEqual(len(called), 1)
         app.after.assert_called_once()
@@ -13839,10 +13899,12 @@ class TestChaseKeysInTheApp(unittest.TestCase):
         start = src[src.index("    def _start_emergency_stop_polling(self):"):]
         start = start[:start.index("\n    def ")]
         self.assertIn("self._hook_chase_keys()", start)
-        poll = src[src.index("    def _poll_emergency_stop_key(self):"):]
-        poll = poll[:poll.index("\n    def ")]
-        self.assertNotIn("chase", poll, "200ms の見張りでは見ない（二重に反応しない）")
+        self.assertIn("self._hook_stop_start_keys()", start)
+        check = src[src.index("    def _on_stop_start_key_event(self, event=None):"):]
+        check = check[:check.index("\n    def ")]
+        self.assertNotIn("chase", check, "停止・開始の通知では見ない（二重に反応しない）")
         self.assertNotIn("_poll_chase_keys", src)
+        self.assertNotIn("_poll_emergency_stop_key", src, "200ms の見張りはもう無い")
 
     def test_the_keys_are_f1_and_f2(self):
         self.assertEqual((config.CHASE_CW_KEY, config.CHASE_CCW_KEY), ("f1", "f2"))
@@ -18825,6 +18887,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         with self._released(app):
             app._stop_window_volume = lambda: None
             app._unhook_chase_keys = lambda: None
+            app._unhook_stop_start_keys = lambda: None
             mainGUI.App._on_close(app)
 
         kinds = [e[0] for e in app.order]
@@ -24331,17 +24394,17 @@ class TestEmergencyKeyGui(unittest.TestCase):
         self.assertEqual(self.app.v_emergency_key.get(), "f9")
         self.assertTrue(any("取れませんでした" in m for m in self.app.logs))
 
-    def test_the_poll_is_paused_while_capturing(self):
+    def test_the_key_is_ignored_while_capturing(self):
         """設定しようとしたキーで停止がかかると困る"""
         self.app._capturing_key = True
 
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after"):
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         mock_keyboard.is_pressed.assert_not_called()
 
-    def test_the_poll_resumes_after_capturing(self):
+    def test_the_key_is_seen_again_after_capturing(self):
         self.app._capturing_key = True
         self.app._finish_capture_key("f9")
 
@@ -24349,7 +24412,7 @@ class TestEmergencyKeyGui(unittest.TestCase):
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after"):
             mock_keyboard.is_pressed.return_value = False
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         mock_keyboard.is_pressed.assert_called_once_with("f9")
 
@@ -24381,11 +24444,69 @@ class TestEmergencyKeyGui(unittest.TestCase):
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after") as mock_after:
             mock_keyboard.is_pressed.return_value = True
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         mock_keyboard.is_pressed.assert_called_once_with("f9")
-        self.assertIn(self.app._stop, [c.args[1] for c in mock_after.call_args_list
-                                       if len(c.args) > 1])
+        self.assertIn(self.app._on_stop_key, [c.args[1] for c in mock_after.call_args_list
+                                              if len(c.args) > 1])
+
+    def test_a_short_tap_is_not_missed(self):
+        """通知の瞬間に見るので、200ms の見張りの合間に収まる短い押下でも止まる（長押し不要）"""
+        self.app.v_emergency_key.set("f9")
+        self.app._emergency_stop_key_pressed = False
+        handed = []
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after", lambda _ms, f, *a: handed.append(f)):
+            mock_keyboard.is_pressed.return_value = True     # 押した通知
+            mainGUI.App._on_stop_start_key_event(self.app)
+            mock_keyboard.is_pressed.return_value = False    # すぐ離した通知
+            mainGUI.App._on_stop_start_key_event(self.app)
+
+        self.assertEqual(handed, [self.app._on_stop_key])
+
+    def test_a_tap_released_before_the_notice_is_handled_still_stops(self):
+        """通知が遅れて届き、表ではもう離れていても、押した通知そのものがそのキーなら止まる"""
+        self.app.v_emergency_key.set("f9")
+        self.app._emergency_stop_key_pressed = False
+        handed = []
+        down = type("Event", (), {"event_type": "down", "scan_code": 67})()
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after", lambda _ms, f, *a: handed.append(f)):
+            mock_keyboard.is_pressed.return_value = False        # もう離されている
+            mock_keyboard.parse_hotkey.return_value = (((67,),),)
+            mainGUI.App._on_stop_start_key_event(self.app, down)
+
+        self.assertEqual(handed, [self.app._on_stop_key])
+
+    def test_another_key_released_late_does_not_stop(self):
+        self.app.v_emergency_key.set("f9")
+        self.app._emergency_stop_key_pressed = False
+        handed = []
+        down = type("Event", (), {"event_type": "down", "scan_code": 30})()
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after", lambda _ms, f, *a: handed.append(f)):
+            mock_keyboard.is_pressed.return_value = False
+            mock_keyboard.parse_hotkey.return_value = (((67,),),)
+            mainGUI.App._on_stop_start_key_event(self.app, down)
+
+        self.assertEqual(handed, [])
+
+    def test_holding_it_stops_only_once(self):
+        """押しっぱなしの繰り返しの通知では増えない"""
+        self.app.v_emergency_key.set("f9")
+        self.app._emergency_stop_key_pressed = False
+        handed = []
+
+        with patch.object(mainGUI, "keyboard") as mock_keyboard, \
+             patch.object(self.app, "after", lambda _ms, f, *a: handed.append(f)):
+            mock_keyboard.is_pressed.return_value = True
+            for _ in range(5):
+                mainGUI.App._on_stop_start_key_event(self.app)
+
+        self.assertEqual(handed, [self.app._on_stop_key])
 
     def test_the_default_key_does_not_stop_once_changed(self):
         self.app.v_emergency_key.set("f9")
@@ -24393,7 +24514,7 @@ class TestEmergencyKeyGui(unittest.TestCase):
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after"):
             mock_keyboard.is_pressed.return_value = False
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         mock_keyboard.is_pressed.assert_called_once_with("f9")
         self.assertNotIn("p", [c.args[0] for c in
@@ -24404,9 +24525,9 @@ class TestEmergencyKeyGui(unittest.TestCase):
         self.app.v_emergency_key.set("zzz")
 
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
-             patch.object(self.app, "after"):
+             patch.object(self.app, "after", lambda _ms, f, *a: f(*a)):
             mock_keyboard.is_pressed.side_effect = ValueError("bad")
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         self.assertEqual(self.app.v_emergency_key.get(), "p")
         self.assertTrue(any("使えないキー" in m for m in self.app.logs),
@@ -26542,18 +26663,22 @@ class TestStartKeyGui(unittest.TestCase):
         self.addCleanup(lambda: setattr(self.app, "_capturing_key", False))
 
     def _poll(self, pressed=True, side_effect=None):
-        """200ms のループを1周させる。停止キーは押されていない扱い"""
+        """キーの通知を1回流す（Tk へ渡す分はその場で走らせる）。停止キーは押されていない扱い。
+        started は走った _start / _stop（本物は呼ばない）"""
         def is_pressed(key):
             if side_effect is not None and key == self.app.v_start_key.get():
                 raise side_effect
             return pressed and key == self.app.v_start_key.get()
 
+        real_start, real_stop = self.app._start, self.app._stop
+        started = []
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
-             patch.object(self.app, "after") as mock_after:
+             patch.object(self.app, "after", lambda _ms, f, *a: f(*a)), \
+             patch.object(self.app, "_start", lambda: started.append(real_start)), \
+             patch.object(self.app, "_stop", lambda: started.append(real_stop)):
             mock_keyboard.is_pressed.side_effect = is_pressed
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
         called = [c.args[0] for c in mock_keyboard.is_pressed.call_args_list]
-        started = [c.args[1] for c in mock_after.call_args_list if len(c.args) > 1]
         return called, started
 
     # ── 既定 ─────────────────────────────────
@@ -26646,10 +26771,10 @@ class TestStartKeyGui(unittest.TestCase):
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after") as mock_after:
             mock_keyboard.is_pressed.return_value = True
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         started = [c.args[1] for c in mock_after.call_args_list if len(c.args) > 1]
-        self.assertIn(self.app._stop, started)
+        self.assertIn(self.app._on_stop_key, started)
 
     # ── 捕捉 ─────────────────────────────────
     def test_a_valid_key_is_adopted(self):
@@ -26705,7 +26830,7 @@ class TestStartKeyGui(unittest.TestCase):
 
         with patch.object(mainGUI, "keyboard") as mock_keyboard, \
              patch.object(self.app, "after"):
-            mainGUI.App._poll_emergency_stop_key(self.app)
+            mainGUI.App._on_stop_start_key_event(self.app)
 
         mock_keyboard.is_pressed.assert_not_called()
 
@@ -27006,15 +27131,41 @@ class TestToolLauncherRows(unittest.TestCase):
 
         self.assertEqual(str(row.btn.cget("state")), "disabled")
 
+    def _poll_now(self, calls):
+        """_poll_tool_buttons を1回まわす。裏のスレッドの代わりにその場で、Tk へ渡す分もその場で。
+        次の tick の予約は calls に貯める"""
+        def after(ms, func, *args):
+            if ms == 0:
+                func(*args)                 # 裏のスレッドから Tk へ渡された分
+            else:
+                calls.append((ms, func))
+        with patch.object(self.app, "after", after), \
+             patch.object(self.app, "_off_gui", lambda work: work()):
+            mainGUI.App._poll_tool_buttons(self.app)
+
     def test_the_poll_survives_a_failure(self):
         self._add(r"D:\tools\ToN_ListTool.exe")
         calls = []
         with patch.object(mainGUI.App, "_refresh_tool_row",
-                          side_effect=RuntimeError("boom")), \
-             patch.object(self.app, "after", lambda *a: calls.append(a)):
-            mainGUI.App._poll_tool_buttons(self.app)
+                          side_effect=RuntimeError("boom")):
+            self._poll_now(calls)
 
         self.assertEqual(len(calls), 1, "次のtickが予約されること")
+
+    def test_the_poll_takes_one_process_list_for_all_tools(self):
+        """プロセスの一覧はツールの数だけ取らない（1回で済ませる）"""
+        first = self._add("D:/tools/ToN_ListTool.exe")
+        second = self._add("D:/tools/SaveManager.exe")
+        calls = []
+        with patch.object(ProcessCheck, "running_names",
+                          return_value=frozenset({"ton_listtool.exe"})) as names, \
+             patch.object(ProcessCheck, "is_process_running") as single:
+            self._poll_now(calls)
+
+        names.assert_called_once()
+        single.assert_not_called()
+        self.assertEqual(str(first.btn.cget("state")), "disabled")
+        self.assertEqual(str(second.btn.cget("state")), "normal")
 
     def test_the_poll_is_not_the_host_save_one(self):
         """続行リストの供給元判定とボタンの見た目は無関係"""
@@ -27320,6 +27471,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
         app._save_launch_settings.assert_called_once()
@@ -27333,6 +27485,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("destroy"))
@@ -27346,6 +27499,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
         self.assertLess(order.index("save"), order.index("stop"))
@@ -27358,6 +27512,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
         app.destroy.assert_called_once()
