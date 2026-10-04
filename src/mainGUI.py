@@ -664,6 +664,45 @@ class ReportDialog(tk.Toplevel):
 
 
 class App(tk.Tk):
+    # ── 続行リスト一式（self.lists）の窓口。代入すると全窓へ差し替わる ──
+    def _shared_lists(self) -> MatchTNL.SharedLists:
+        lists = self.__dict__.get("lists")
+        if lists is None:
+            lists = self.__dict__["lists"] = MatchTNL.SharedLists(participants=set())
+        return lists
+
+    @property
+    def keepOn_set(self) -> dict:
+        return self._shared_lists().keep_on
+
+    @keepOn_set.setter
+    def keepOn_set(self, value: dict):
+        self._shared_lists().keep_on = value
+
+    @property
+    def host_wishes(self) -> dict:
+        return self._shared_lists().wishes
+
+    @host_wishes.setter
+    def host_wishes(self, value: dict):
+        self._shared_lists().wishes = value
+
+    @property
+    def host_participants(self):
+        return self._shared_lists().participants
+
+    @host_participants.setter
+    def host_participants(self, value):
+        self._shared_lists().participants = value
+
+    @property
+    def host_tabs(self) -> dict:
+        return self._shared_lists().tabs
+
+    @host_tabs.setter
+    def host_tabs(self, value: dict):
+        self._shared_lists().tabs = value
+
     def __init__(self):
         super().__init__()
 
@@ -684,15 +723,10 @@ class App(tk.Tk):
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
-        # LogMonitor がこの dict をそのまま掴むので、以後は差し替えず中身を入れ替える
-        self.keepOn_set: dict = {}
-        # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}。
-        # Sabotage のマーダー判定に使う。これも in-place で入れ替える
-        self.host_wishes: dict = {}
-        # 参加者（＋自分）の名前。host_wishes には待機も入るので区別する。これも in-place
-        self.host_participants: set = set()
-        # ToN ListTool の複窓対応のタブ。窓ごとに対応するタブだけを使う
-        self.host_tabs: dict = {"version": 0, "tabs": {}}
+        # 続行リスト一式。全窓の LogMonitor が同じものを持つ。中身は差し替えで更新する
+        # （keepOn_set・host_wishes・host_participants・host_tabs はこの属性の窓口）。
+        # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
+        self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
@@ -1692,32 +1726,23 @@ class App(tk.Tk):
             self._load_tnl()
 
     def _apply_keep_on(self, new_set: dict):
-        """keepOn_set の中身を入れ替える。
+        """続行リストを差し替える（新しい dict の代入。走行中の全窓に即座に効く）。
 
-        LogMonitor は生成時に渡された dict を掴んだままなので、差し替え
-        （再代入）ではなく in-place で更新する。走行中の全窓に即座に効く。
+        中身の入れ替え（clear → update）はしない。その間に判定した窓が空のリストを
+        見て、続行すべきラウンドで自爆してしまう（MatchTNL.SharedLists）
         """
-        self.keepOn_set.clear()
-        self.keepOn_set.update(new_set)
+        self.keepOn_set = dict(new_set)
 
     def _apply_host_tabs(self, tabs_data: dict):
-        """タブごとの内訳。LogMonitor が同じ dict を掴むので in-place で更新する。
-
-        版を上げて、窓側の対応づけ（名前の重なり）を計算し直させる
-        """
-        tabs = self.host_tabs.setdefault("tabs", {})
-        tabs.clear()
-        tabs.update(tabs_data or {})
-        self.host_tabs["version"] = self.host_tabs.get("version", 0) + 1
+        """タブごとの内訳を差し替える。版を上げて、窓側の対応づけ（名前の重なり）を計算し直させる"""
+        version = (self.host_tabs or {}).get("version", 0) + 1
+        self.host_tabs = {"version": version, "tabs": dict(tabs_data or {})}
 
     def _apply_host_wishes(self, new_wishes: dict, participants=()):
-        """参加者別の希望も LogMonitor が同じ dict を掴む。in-place で更新する"""
-        self.host_wishes.clear()
-        self.host_wishes.update(new_wishes)
-        names = getattr(self, "host_participants", None)
-        if names is not None:
-            names.clear()
-            names.update(participants)
+        """参加者別の希望と参加者の名前を差し替える"""
+        self.host_wishes = dict(new_wishes)
+        if getattr(self, "host_participants", None) is not None:
+            self.host_participants = set(participants)
 
     def _start_host_save_polling(self):
         self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
@@ -2220,11 +2245,9 @@ class App(tk.Tk):
             # 前面が VRChat の窓かを見るために覚えておく（Begin のカーソル判定）
             SharedState.register_window_hwnd(cfg.hwnd)
             mon = LogMonitor.LogMonitor(
-                cfg, self.keepOn_set, self._log,
+                cfg, None, self._log,
                 window_idx=tab.idx + 1,
-                host_wishes=self.host_wishes,
-                host_participants=self.host_participants,
-                host_tabs=self.host_tabs,
+                lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings)
             self.monitors.append(mon)
             mon.start()

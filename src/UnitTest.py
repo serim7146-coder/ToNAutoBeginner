@@ -7066,14 +7066,16 @@ class TestHostSaveWishes(unittest.TestCase):
 
         self.assertEqual(sorted(wishes), sorted(names))
 
-    def test_apply_host_wishes_updates_in_place(self):
+    def test_apply_host_wishes_replaces_the_dict(self):
+        """中身の入れ替えではなく差し替え（読む窓が空の途中を見ない）。前の dict は触らない"""
         app = type("FakeApp", (), {})()
         app.host_wishes = {"だれか": {self.CLASSIC: {1}}}
         before = app.host_wishes
 
         mainGUI.App._apply_host_wishes(app, {"べつのひと": {self.MURDER: {5}}})
 
-        self.assertIs(app.host_wishes, before, "同じ dict のままにすること")
+        self.assertIsNot(app.host_wishes, before, "新しい dict を代入すること")
+        self.assertEqual(before, {"だれか": {self.CLASSIC: {1}}}, "前の dict は書き換えない")
         self.assertEqual(app.host_wishes, {"べつのひと": {self.MURDER: {5}}})
 
 
@@ -7184,26 +7186,31 @@ class TestLoadHostSave(unittest.TestCase):
 
         self.assertEqual(keep_on, {self.CLASSIC: {1}})
 class TestApplyKeepOn(unittest.TestCase):
-    """続行リストの差し替えは in-place（LogMonitor が同じ dict を掴んでいる）"""
+    """続行リストは差し替え（新しい dict の代入）。全窓が同じ SharedLists を持つので走行中にも効く。
+    clear → update の入れ替えだと、その間に判定した窓が空のリストを見て自爆する"""
 
     def _app(self):
         app = type("FakeApp", (), {})()
-        app.keepOn_set = {"Classic/クラシック": {1}}
+        app.lists = MatchTNL.SharedLists({"Classic/クラシック": {1}})
+        app._shared_lists = lambda: app.lists
+        for name in ("keepOn_set", "host_wishes", "host_participants", "host_tabs"):
+            setattr(type(app), name, getattr(mainGUI.App, name))
         return app
 
-    def test_updates_in_place(self):
+    def test_replaces_the_dict(self):
         app = self._app()
         before = app.keepOn_set
 
         mainGUI.App._apply_keep_on(app, {"Fog/霧": {7}})
 
-        self.assertIs(app.keepOn_set, before, "同じ dict オブジェクトのままにすること")
+        self.assertIsNot(app.keepOn_set, before, "新しい dict を代入すること")
+        self.assertEqual(before, {"Classic/クラシック": {1}}, "読んでいる途中の dict は空にしない")
         self.assertEqual(app.keepOn_set, {"Fog/霧": {7}})
 
     def test_running_monitor_sees_the_new_list(self):
         app = self._app()
-        monitor = LogMonitor.LogMonitor(WindowConfig(), app.keepOn_set,
-                                        lambda _m: None, window_idx=1)
+        monitor = LogMonitor.LogMonitor(WindowConfig(), None,
+                                        lambda _m: None, window_idx=1, lists=app.lists)
 
         mainGUI.App._apply_keep_on(app, {"Fog/霧": {7}})
 

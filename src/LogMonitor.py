@@ -55,21 +55,20 @@ HELD_LOST_INSTANCE = "インスタンス移動"
 #  窓操作（自爆・Begin・AFK防止）は ActionExecutor に委譲する。
 # ═══════════════════════════════════════════════
 class LogMonitor:
-    def __init__(self, cfg: WindowConfig, keepOn_set: dict, logger, window_idx: int = 0,
+    def __init__(self, cfg: WindowConfig, keepOn_set: dict | None, logger, window_idx: int = 0,
                  host_wishes: dict | None = None,
                  host_participants: set | None = None,
                  host_tabs: dict | None = None,
-                 on_round_settings_cleared=None):
+                 on_round_settings_cleared=None,
+                 lists: MatchTNL.SharedLists | None = None):
         self.cfg = cfg
-        self.keepOn_set = keepOn_set
-        # 参加者別の続行希望。追従OFFのときは空（＝Sabotageは通常判定へ落ちる）
-        self.host_wishes = host_wishes if host_wishes is not None else {}
-        # host_wishes のうち参加者（＋主催者本人）の名前。待機と区別するため。
-        # None なら区別しない（host_wishes が参加者だけのとき）
-        self.host_participants = host_participants
-        # ToN ListTool の複窓対応のタブ。{"version": n, "tabs": {タブ: {...}}}
-        # 全窓で共有する dict を掴む（mainGUI が in-place で入れ替える）
-        self.host_tabs = host_tabs if host_tabs is not None else {}
+        # 続行リスト一式。全窓で共有する1つを持つ（mainGUI が中の dict を差し替える）。
+        # 渡されなければ、ほかの引数からこの窓だけのものを作る（監視だけで使うとき・テスト）。
+        # 参加者別の希望は、追従OFFのときは空（＝Sabotageは通常判定へ落ちる）。
+        # 参加者（host_participants）が None なら希望の持ち主を参加者と待機で区別しない
+        self.lists = lists if lists is not None else MatchTNL.SharedLists(
+            keepOn_set if keepOn_set is not None else {}, host_wishes,
+            host_participants, host_tabs)
         self._tab_key = None        # 対応づけを計算したときの (版, 在室者)
         self._tab_index = _UNSET    # 対応づいたタブ（_UNSET はまだ計算していない）
         self.logger = logger
@@ -97,6 +96,39 @@ class LogMonitor:
             log=self._log,
             auto_begin_active=self._auto_begin_active,
         )
+
+    # ── 続行リスト一式（self.lists）の窓口。読むたびにその時点の完全なものが返る ──
+    @property
+    def keepOn_set(self) -> dict:
+        return self.lists.keep_on
+
+    @keepOn_set.setter
+    def keepOn_set(self, value: dict):
+        self.lists.keep_on = value
+
+    @property
+    def host_wishes(self) -> dict:
+        return self.lists.wishes
+
+    @host_wishes.setter
+    def host_wishes(self, value: dict):
+        self.lists.wishes = value
+
+    @property
+    def host_participants(self):
+        return self.lists.participants
+
+    @host_participants.setter
+    def host_participants(self, value):
+        self.lists.participants = value
+
+    @property
+    def host_tabs(self) -> dict:
+        return self.lists.tabs
+
+    @host_tabs.setter
+    def host_tabs(self, value: dict):
+        self.lists.tabs = value
 
     def _auto_begin_active(self) -> bool:
         """ツールが Begin を押している窓か（自動 Begin が ON で private）。
@@ -646,7 +678,8 @@ class LogMonitor:
         走査しない）
         """
         st = self.st
-        tabs = (self.host_tabs or {}).get("tabs") or {}
+        host_tabs = self.host_tabs or {}        # 1回だけ読む（途中で差し替わっても版と中身が揃う）
+        tabs = host_tabs.get("tabs") or {}
         if not tabs or SharedState.get_list_source() != "host":
             return None
         if not st.players_known:
@@ -655,7 +688,7 @@ class LogMonitor:
         # ソロの窓（自分しかいない）は、参加者0人のタブと区別できない
         if not (present - {st.local_player_name}):
             return None
-        key = ((self.host_tabs or {}).get("version"), frozenset(present))
+        key = (host_tabs.get("version"), frozenset(present))
         if key != self._tab_key:
             self._tab_key = key
             index = MatchTNL.tab_for_window(tabs, present)
@@ -682,14 +715,15 @@ class LogMonitor:
         None（＝従来どおり共有の続行リスト）になるのは、tnl のとき・参加者別の
         希望が無いとき・誰がいるか分からないとき（起動時に復元できなかった）。
         """
-        if SharedState.get_list_source() != "host" or not self.host_wishes:
+        host_wishes = self.host_wishes
+        if SharedState.get_list_source() != "host" or not host_wishes:
             return None
         if not self.st.players_known:
             return None
         present = self._present_names()
         tab = self._window_tab()
         # 対応づいた窓は、そのタブの人の希望だけを見る（別のタブは別の窓の周回）
-        source = tab["wishes"] if tab is not None else self.host_wishes
+        source = tab["wishes"] if tab is not None else host_wishes
         # 中身が空でもリストを持っている人は残す（全部 OFF＝全部自爆）
         return {name: wish for name, wish in source.items()
                 if name in present}
@@ -1109,10 +1143,11 @@ class LogMonitor:
         wishes = self._effective_wishes()
         if wishes is not None:
             return wishes
-        if self.host_participants is None:
-            return self.host_wishes
-        return {name: wish for name, wish in self.host_wishes.items()
-                if name in self.host_participants}
+        host_wishes, participants = self.host_wishes, self.host_participants
+        if participants is None:
+            return host_wishes
+        return {name: wish for name, wish in host_wishes.items()
+                if name in participants}
 
     def _shared_list_empty(self) -> bool:
         """誰がいるか分からず、共有リストも空か。

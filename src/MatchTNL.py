@@ -33,6 +33,28 @@ ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
 
 
 # ═══════════════════════════════════════════════
+#  全窓で共有する続行リスト一式
+# ═══════════════════════════════════════════════
+class SharedLists:
+    """続行リスト・参加者別の希望・参加者・タブ。画面（mainGUI）と全窓の LogMonitor が
+    同じ1つを持つ。
+
+    中の dict は書き換えない。差し替えるときは新しい dict を作って属性へ代入する。
+    clear() → update() で入れ替えると、その間に判定した窓が空のリスト（＝続行なし→自爆）を
+    見てしまう。代入なら、読む側はいつも古いか新しいかのどちらか一方の完全なものを見る
+    """
+
+    def __init__(self, keep_on=None, wishes=None, participants=None, tabs=None):
+        self.keep_on: dict = keep_on if keep_on is not None else {}
+        # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}
+        self.wishes: dict = wishes if wishes is not None else {}
+        # wishes のうち参加者（＋主催者本人）の名前。None なら区別しない
+        self.participants: set | None = participants
+        # ToN ListTool の複窓対応のタブ {"version": n, "tabs": {タブ: {...}}}
+        self.tabs: dict = tabs if tabs is not None else {"version": 0, "tabs": {}}
+
+
+# ═══════════════════════════════════════════════
 #  ラウンドタイプ → TNLキー
 # ═══════════════════════════════════════════════
 # ToN ListTool は Variant と Moon を、ラウンド別ではなくこの13枠に
