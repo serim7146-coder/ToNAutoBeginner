@@ -207,6 +207,8 @@ class LogMonitor:
             parts.append(f"ページ={event.page}")
         if event.kind == LogParser.EVENT_JOINING:
             parts.append(f"公開範囲={LogParser.instance_access(event.suffix)}")
+        if event.kind == LogParser.EVENT_REPLACEMENT:
+            parts.append(f"合図={event.flag}")
         if event.kind in (LogParser.EVENT_ENRAGE, LogParser.EVENT_STUNNED):
             parts.append(f"名前={event.player_name}")       # 通常のログに出る行（公開の情報）
         self._debug(f"[事象] {event.kind}" + (" " + " ".join(parts) if parts else ""))
@@ -1261,6 +1263,32 @@ class LogMonitor:
         self._decide(killers_round_type)
 
     # ── ログ行処理 ────────────────────────────
+    # イベントの種類 → 受けるメソッドの名前。名前で引くので、テストが差し替えたものも効く
+    _HANDLERS = {
+        LogParser.EVENT_REPLACEMENT: "_on_replacement_signal",
+        LogParser.EVENT_ENRAGE: "_on_enrage_event",
+        LogParser.EVENT_STUNNED: "_on_stunned_event",
+        LogParser.EVENT_JOY: "_on_joy",
+        LogParser.EVENT_MASTER_SWITCHED: "_on_master_switched",
+        LogParser.EVENT_USER_AUTH: "_on_user_auth",
+        LogParser.EVENT_PLAYER_JOINED: "_apply_player_event",
+        LogParser.EVENT_PLAYER_LEFT: "_apply_player_event",
+        LogParser.EVENT_SUS_PLAYER: "_on_sus_player",
+        LogParser.EVENT_VERIFIED: "_on_verified",
+        LogParser.EVENT_ROUND_START: "_on_round_start",
+        LogParser.EVENT_KILLERS_SET: "_on_killers_set",
+        LogParser.EVENT_YOU_DIED: "_on_you_died",
+        LogParser.EVENT_RESPAWN: "_on_respawn",
+        LogParser.EVENT_PAGE_COLLECTED: "_on_page_collected",
+        LogParser.EVENT_ROUND_OVER: "_on_round_over",
+        LogParser.EVENT_VERIFIED_END: "_on_verified_end",
+        LogParser.EVENT_KILLERS_UNKNOWN: "_on_killers_unknown",
+        LogParser.EVENT_KILLERS_REVEALED: "_on_killers_revealed",
+        LogParser.EVENT_JOINING: "_on_joining",
+        LogParser.EVENT_ITEM_EQUIP: "_on_item_equip",
+        LogParser.EVENT_LIVED: "_on_lived",
+    }
+
     def _process(self, line: str):
         st = self.st
         at = LogParser.log_time(line)
@@ -1276,551 +1304,545 @@ class LogMonitor:
             self._on_network_object(event.player_name)
             return
         self._debug_event(event)
+        name = self._HANDLERS.get(event.kind)
+        if name is not None:
+            getattr(self, name)(event)
 
-        if event.kind == LogParser.EVENT_CREATURE_BLOODTHIRSTY:
-            self._mark_replacement("bloodthirsty_creature_variant")
-            return
+    def _on_replacement_signal(self, event):
+        """置き換えテラーの合図（TerrorReplacement.SIGNALS）。どれも 知らせる → 差し替える。
+        Foxy だけは音声と、霧でテラー不明なときの確定が付く"""
+        flag = event.flag
+        self._log(TerrorReplacement.signal(flag).announce)
+        if flag == "foxy" and not self._hands_free():
+            PlaySound.play_sound(self.cfg.voice_foxy)
+        self._mark_replacement(flag)
+        if flag == "foxy":
+            self._foxy_in_fog()
 
-        if event.kind == LogParser.EVENT_HUNGRY_HOME_INVADER:
-            self._mark_replacement("hungry_home_invader_variant")
-            return
+    def _foxy_in_fog(self):
+        st = self.st
+        if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
+                and st.enrage_identified is None):
+            # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
+            # st.round_type は書き換えない（「Fog」の自爆指定が効かなくなる）。
+            # オルタ枠であることは引数で伝える（焼き芋の判定が見る）
+            self._on_killers([config.FOXY_ID],
+                             GroupRound.FOG_ALTERNATE_ROUND_TYPE,
+                             revealed=True)
+            # 後から revealed が来ても判定し直さない（二重に自爆する）
+            st.enrage_identified = config.FOXY_ID
 
-        if event.kind == LogParser.EVENT_ENRAGE:
-            self._on_enrage(event.player_name)
-            return
-        
-        if event.kind == LogParser.EVENT_STUNNED:
-            self._on_stunned(event.player_name)
-            return
+    def _on_enrage_event(self, event):
+        self._on_enrage(event.player_name)
 
-        if event.kind == LogParser.EVENT_JOY:
-            if self._fog_terror_unknown():
-                self._identify_fog_terror(config.JOY_ID, "Joy",
-                                          "JOY WILL SOON AWAKEN")
-            return
+    def _on_stunned_event(self, event):
+        self._on_stunned(event.player_name)
 
-        if event.kind == LogParser.EVENT_MASTER_SWITCHED:
-            # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
-            self.sequence.on_master_switched()
-            if (st.fog_reading and st.early_read_tid is None
-                    and not st.early_read_void):
-                # マスターの切り替えで全オブジェクトの同期が走ることがある。
-                # 保留しないので、その最初の名前でその場で決めてしまわないように
-                if self._may_show_fog_info():
-                    self._log("看破: マスターが切り替わりました → このラウンドの看破は使いません")
-                st.early_read_void = True
-            return
+    def _on_joy(self, event):
+        """Joy の行。霧でテラー不明なら Joy で確定する"""
+        if self._fog_terror_unknown():
+            self._identify_fog_terror(config.JOY_ID, "Joy",
+                                      "JOY WILL SOON AWAKEN")
 
-        if event.kind == LogParser.EVENT_USER_AUTH:
-            st.local_player_name = event.player_name
-            st.local_user_id = event.user_id
-            return
+    def _on_master_switched(self, event):
+        """マスターの切り替え（OnMasterClientSwitched）"""
+        st = self.st
+        # 次のラウンドは連続N数の制約を無視して強制的に特殊(S)になる
+        self.sequence.on_master_switched()
+        if (st.fog_reading and st.early_read_tid is None
+                and not st.early_read_void):
+            # マスターの切り替えで全オブジェクトの同期が走ることがある。
+            # 保留しないので、その最初の名前でその場で決めてしまわないように
+            if self._may_show_fog_info():
+                self._log("看破: マスターが切り替わりました → このラウンドの看破は使いません")
+            st.early_read_void = True
 
-        if event.kind in (LogParser.EVENT_PLAYER_JOINED,
-                          LogParser.EVENT_PLAYER_LEFT):
-            self._apply_player_event(event)
-            return
+    def _on_user_auth(self, event):
+        """ログイン（自分の名前と usr_ID）"""
+        st = self.st
+        st.local_player_name = event.player_name
+        st.local_user_id = event.user_id
 
-        if event.kind == LogParser.EVENT_SUS_PLAYER:
-            # 選出者は全員ぶん貯める。ROUND_START と同じ秒に来るので、
-            # クリアは Verified Round End 側（ROUND_START では消さない）
-            if event.player_name not in st.sus_players:
-                st.sus_players.append(event.player_name)
-            if self._same_player_name(event.player_name, st.local_player_name):
-                if st.in_round and st.round_type == "Sabotage":
-                    self._mark_sabotage_murder()
-                else:
-                    st.pending_sabotage_murder = True
-                self._log(f"Sus player一致: {event.player_name}")
-            return
+    def _on_sus_player(self, event):
+        """Sabotage の選出者"""
+        st = self.st
+        # 選出者は全員ぶん貯める。ROUND_START と同じ秒に来るので、
+        # クリアは Verified Round End 側（ROUND_START では消さない）
+        if event.player_name not in st.sus_players:
+            st.sus_players.append(event.player_name)
+        if self._same_player_name(event.player_name, st.local_player_name):
+            if st.in_round and st.round_type == "Sabotage":
+                self._mark_sabotage_murder()
+            else:
+                st.pending_sabotage_murder = True
+            self._log(f"Sus player一致: {event.player_name}")
 
-        if event.kind == LogParser.EVENT_VERIFIED:
-            # `Verified` はBegin受理専用のログではない。定期シグナルでも同じ行が出る
-            # （後ろの行では見分けられない）。見分けは VerifiedTracker（ログの時刻と、
-            # 予定と重なった1回だけツールが直前に押したか）
-            now = st.log_now
-            pressed = (st.last_begin_press_at > 0 and time.time() - st.last_begin_press_at
-                       <= config.BEGIN_PRESS_RECENT_SEC)
-            phase_before = self._verified.last_periodic
-            kind = self._verified.on_verified(now, pressed)
-            if kind == VerifiedTracker.PERIODIC:
+    def _on_verified(self, event):
+        """`Verified`（Begin の受理か、定期シグナル）"""
+        st = self.st
+        # `Verified` はBegin受理専用のログではない。定期シグナルでも同じ行が出る
+        # （後ろの行では見分けられない）。見分けは VerifiedTracker（ログの時刻と、
+        # 予定と重なった1回だけツールが直前に押したか）
+        now = st.log_now
+        pressed = (st.last_begin_press_at > 0 and time.time() - st.last_begin_press_at
+                   <= config.BEGIN_PRESS_RECENT_SEC)
+        phase_before = self._verified.last_periodic
+        kind = self._verified.on_verified(now, pressed)
+        if kind == VerifiedTracker.PERIODIC:
+            self._ignored_verified = (now, phase_before)
+            self._debug_verified("無視（定期）")
+            self._log("Verified を無視（定期シグナル）")
+            return
+        if kind == VerifiedTracker.IGNORE:
+            # Begin は Verified Round End の後にしか押せない
+            self._debug_verified("無視（Verified Round End より前）")
+            self._log("Verified を無視（Verified Round End より前）")
+            return
+        off_schedule = False
+        if not pressed and self._auto_begin_active():
+            if phase_before is None:
+                # ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
+                # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
+                self._verified.mark_periodic(now)
                 self._ignored_verified = (now, phase_before)
-                self._debug_verified("無視（定期）")
-                self._log("Verified を無視（定期シグナル）")
+                self._debug_verified("無視（ツールがまだ押していない）")
+                self._log("Verified を無視（ツールがまだ押していない → 定期）")
                 return
-            if kind == VerifiedTracker.IGNORE:
-                # Begin は Verified Round End の後にしか押せない
-                self._debug_verified("無視（Verified Round End より前）")
-                self._log("Verified を無視（Verified Round End より前）")
-                return
-            off_schedule = False
-            if not pressed and self._auto_begin_active():
-                if phase_before is None:
-                    # ツールが Begin を押す窓で、ツールがまだ押していないのに来た → 定期
-                    # （起動直後で定期の位相を知らないと、Verified Round End の直後の定期を受理と取り違える）
-                    self._verified.mark_periodic(now)
-                    self._ignored_verified = (now, phase_before)
-                    self._debug_verified("無視（ツールがまだ押していない）")
-                    self._log("Verified を無視（ツールがまだ押していない → 定期）")
-                    return
-                # 位相を知っていて予定（±TOL）に重ならない。定期は300秒に1回なので Begin
-                # （背面でカーソルも外でも、連打の UseRight で押せていることがある）
-                off_schedule = True
+            # 位相を知っていて予定（±TOL）に重ならない。定期は300秒に1回なので Begin
+            # （背面でカーソルも外でも、連打の UseRight で押せていることがある）
+            off_schedule = True
 
-            # 本物として採用。Everything recieved が続くかで事後確認する
-            st.pending_verified_time = now
-            st.begin_done = True
-            self._debug_verified("受理（予定の外）" if off_schedule else "受理")
-            self._log("✅ Connecting")
-            # 速度検知そのものは Verified Round End 側で始めている（Verified は
-            # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
-            # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
-            # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
-            if (st.instance_type == config.INSTANCE_PRIVATE
-                    and SharedState.get_speed_detect()
-                    and not self._hands_free()
-                    and not st.speed_strafe_done):
-                st.speed_strafe_done = True
-                self._start_daemon(self._action.do_speed_strafe)
-            # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
-            if st.waiting_for_equip and st.item_id:
-                st.waiting_for_equip = False
-                self._start_daemon(self._release_equip_wait_after_delay)
+        # 本物として採用。Everything recieved が続くかで事後確認する
+        st.pending_verified_time = now
+        st.begin_done = True
+        self._debug_verified("受理（予定の外）" if off_schedule else "受理")
+        self._log("✅ Connecting")
+        # 速度検知そのものは Verified Round End 側で始めている（Verified は
+        # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
+        # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
+        # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
+        if (st.instance_type == config.INSTANCE_PRIVATE
+                and SharedState.get_speed_detect()
+                and not self._hands_free()
+                and not st.speed_strafe_done):
+            st.speed_strafe_done = True
+            self._start_daemon(self._action.do_speed_strafe)
+        # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
+        if st.waiting_for_equip and st.item_id:
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_wait_after_delay)
+
+    def _on_round_start(self, event):
+        """ラウンド開始"""
+        st = self.st
+        # 採用した Verified にラウンド開始が続いた＝Begin 由来で確定。
+        # 位相は動かさない（定期ではなかったため）
+        st.pending_verified_time = 0.0
+        self._undo_ignored_verified()
+        if st.is_continue_round:
+            st.is_continue_round = False
+            st.open_special_continue = False
+            SharedState.continue_round_end(st)
+        st.in_round                    = True
+        st.round_seq                  += 1
+        self._verified.on_round_start(st.log_now)
+        st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
+        st.round_end_seen              = False
+        st.round_type                  = event.round_type
+        # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
+        st.moon_repeat                 = self.sequence.is_moon_repeat(
+            event.round_type)
+        self.sequence.on_round(event.round_type)
+        st.terror_ids                  = []
+        st.enrage_identified           = None
+        st.map_id                      = event.map_id
+        st.statistics_sent             = False
+        st.statistics_quiet            = False
+        # テラーを持たないラウンドは、この行（開始）でテラー無しで送る。後から
+        # Killers の行（ムーンの 0 0 0 など）が来ても送り直さない（statistics_sent）
+        if ConnectDB.round_type_id(event.round_type) in config.NULL_TERROR_ROUND_IDS:
+            self._send_null_terror_round()
+        st.fog_reading                 = False
+        st.early_read_hits             = {}
+        st.early_read_tid              = None
+        st.early_read_void             = False
+        st.fog_object_seen             = False
+        st.fog_no_object_deadline      = 0.0
+        st.fog_no_object_dtm           = False
+        st.eight_pages_unknown_logged  = False
+        st.fog                         = False
+        st.begin_done                  = False
+        st.speed_round_kind            = ""
+        st.speed_probe_done            = False
+        st.speed_strafe_done           = False
+        st.glorbo_afk                  = False
+        st.begin_move_done             = False
+        # 速度検知フリーズは種別に関わらずここで必ず解除する。
+        # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
+        # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
+        if st.speed_freeze_held:
+            st.speed_freeze_kind = ""
+            SharedState.speed_freeze_end(st)
+            self._log("ラウンド開始 → 速度検知フリーズ解除")
+        # ラウンド突入フリーズも、種別を判定する前に必ず解除する。
+        # 死亡せずに終わった場合（生存・切断など）の永久フリーズを防ぐ保険。
+        if st.round_freeze_held:
+            SharedState.round_freeze_end(st)
+            self._log("ラウンド開始 → ラウンド突入フリーズ解除")
+        st.is_open_special_round_round = False
+        st.item_id_at_round_start      = st.item_id
+        st.item_lost_announced         = False
+        st.item_lost_this_round        = False
+        st.randomizer_item_changed     = False
+        st.died_this_round             = False
+        st.lived_this_round            = False
+        st.item_equipped_after_death   = False
+        st.sabotage_murder_this_round  = (
+            st.round_type == "Sabotage" and st.pending_sabotage_murder
+        )
+        st.pending_sabotage_murder     = False
+        for flag in TerrorReplacement.flags():
+            setattr(st, flag, False)
+        # アイテムロスト中にラウンドが始まったらフリーズ解除
+        # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
+        if not self._auto_begin_active() and (st.waiting_for_equip or st.equip_freeze_held):
+            # ツールが Begin を押さない窓: 装備待ちのまま・装備後の猶予の間でもすぐ外す
+            held = st.equip_freeze_held
+            st.waiting_for_equip = False
+            SharedState.equip_freeze_end(st)
+            if held:
+                self._log("ラウンド開始 → 装備待ちフリーズ解除")
+        elif st.waiting_for_equip:
+            st.waiting_for_equip = False
+            SharedState.equip_freeze_end(st)
+            self._log("一時的にアイテムロストフリーズを解除")
+
+        if st.sabotage_murder_this_round:
+            self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
+        elif self._round_start_loses_item():
+            self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
+        held_reason = self._held_item_round_start_loss(st.round_type,
+                                                       st.sabotage_murder_this_round)
+        if held_reason:
+            self._lose_held_item(held_reason)
+
+        # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
+        # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
+        if st.round_type in SharedState.get_freeze_rounds() and not self._hands_free():
+            self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
+            SharedState.round_freeze_start(st)
+            self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
+                      f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
+            # 対象は依頼の5つだけ。Punished / 8 Pages の音声は速度検知用
+            voice = self._round_entry_voice(st.round_type)
+            if voice:
+                PlaySound.play_sound(voice)
+
+        if st.round_type == "Run":
+            st.is_continue_round = False
+            st.open_special_continue = False
+            self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
             return
 
-        if event.kind == LogParser.EVENT_GIGABYTES:
-            self._log("👾 The Gigabytes 出現")
-            self._mark_replacement("gigabytes")
-            return
-
-        if event.kind == LogParser.EVENT_GLORBO:
-            # Punished の Arkus の置き換え
-            self._log("🫠 Glorbo 出現（ArkusのVariant）")
-            self._mark_replacement("glorbo")
-            return
-
-        if event.kind == LogParser.EVENT_ATRACHED:
-            # SonicのVariant
-            self._log("🎮 Atrached 出現（SonicのVariant）")
-            self._mark_replacement("atrached_variant")
-            return
-
-        if event.kind == LogParser.EVENT_ROUND_START:
-            # 採用した Verified にラウンド開始が続いた＝Begin 由来で確定。
-            # 位相は動かさない（定期ではなかったため）
-            st.pending_verified_time = 0.0
-            self._undo_ignored_verified()
-            if st.is_continue_round:
-                st.is_continue_round = False
-                st.open_special_continue = False
-                SharedState.continue_round_end(st)
-            st.in_round                    = True
-            st.round_seq                  += 1
-            self._verified.on_round_start(st.log_now)
-            st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
-            st.round_end_seen              = False
-            st.round_type                  = event.round_type
-            # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
-            st.moon_repeat                 = self.sequence.is_moon_repeat(
-                event.round_type)
-            self.sequence.on_round(event.round_type)
-            st.terror_ids                  = []
-            st.enrage_identified           = None
-            st.map_id                      = event.map_id
-            st.statistics_sent             = False
-            st.statistics_quiet            = False
-            # テラーを持たないラウンドは、この行（開始）でテラー無しで送る。後から
-            # Killers の行（ムーンの 0 0 0 など）が来ても送り直さない（statistics_sent）
-            if ConnectDB.round_type_id(event.round_type) in config.NULL_TERROR_ROUND_IDS:
-                self._send_null_terror_round()
-            st.fog_reading                 = False
-            st.early_read_hits             = {}
-            st.early_read_tid              = None
-            st.early_read_void             = False
-            st.fog_object_seen             = False
-            st.fog_no_object_deadline      = 0.0
-            st.fog_no_object_dtm           = False
-            st.eight_pages_unknown_logged  = False
-            st.fog                         = False
-            st.begin_done                  = False
-            st.speed_round_kind            = ""
-            st.speed_probe_done            = False
-            st.speed_strafe_done           = False
-            st.glorbo_afk                  = False
-            st.begin_move_done             = False
-            # 速度検知フリーズは種別に関わらずここで必ず解除する。
-            # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
-            # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
-            if st.speed_freeze_held:
-                st.speed_freeze_kind = ""
-                SharedState.speed_freeze_end(st)
-                self._log("ラウンド開始 → 速度検知フリーズ解除")
-            # ラウンド突入フリーズも、種別を判定する前に必ず解除する。
-            # 死亡せずに終わった場合（生存・切断など）の永久フリーズを防ぐ保険。
-            if st.round_freeze_held:
-                SharedState.round_freeze_end(st)
-                self._log("ラウンド開始 → ラウンド突入フリーズ解除")
-            st.is_open_special_round_round = False
-            st.item_id_at_round_start      = st.item_id
-            st.item_lost_announced         = False
-            st.item_lost_this_round        = False
-            st.randomizer_item_changed     = False
-            st.died_this_round             = False
-            st.lived_this_round            = False
-            st.item_equipped_after_death   = False
-            st.sabotage_murder_this_round  = (
-                st.round_type == "Sabotage" and st.pending_sabotage_murder
-            )
-            st.pending_sabotage_murder     = False
-            for flag in TerrorReplacement.flags():
-                setattr(st, flag, False)
-            # アイテムロスト中にラウンドが始まったらフリーズ解除
-            # （has_item=Falseのまま → 次のVerified Round Endで再フリーズ）
-            if not self._auto_begin_active() and (st.waiting_for_equip or st.equip_freeze_held):
-                # ツールが Begin を押さない窓: 装備待ちのまま・装備後の猶予の間でもすぐ外す
-                held = st.equip_freeze_held
-                st.waiting_for_equip = False
-                SharedState.equip_freeze_end(st)
-                if held:
-                    self._log("ラウンド開始 → 装備待ちフリーズ解除")
-            elif st.waiting_for_equip:
-                st.waiting_for_equip = False
-                SharedState.equip_freeze_end(st)
-                self._log("一時的にアイテムロストフリーズを解除")
-
-            if st.sabotage_murder_this_round:
-                self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
-            elif self._round_start_loses_item():
-                self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
-            held_reason = self._held_item_round_start_loss(st.round_type,
-                                                           st.sabotage_murder_this_round)
-            if held_reason:
-                self._lose_held_item(held_reason)
-
-            # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
-            # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
-            if st.round_type in SharedState.get_freeze_rounds() and not self._hands_free():
-                self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
-                SharedState.round_freeze_start(st)
-                self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
-                          f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
-                # 対象は依頼の5つだけ。Punished / 8 Pages の音声は速度検知用
-                voice = self._round_entry_voice(st.round_type)
-                if voice:
-                    PlaySound.play_sound(voice)
-
-            if st.round_type == "Run":
-                st.is_continue_round = False
-                st.open_special_continue = False
-                self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
-                return
-
-            if st.round_type == "Fog":
-                # 既定では他窓を止めない。止めたいなら突入フリーズで Fog を選ぶ
-                # （上の一般の経路で張られる）。
-                # is_continue_round と continue_round_start(st) は必ずセットで外す。
-                # 片方だけ残すと、判明時に continue_round_end(st) が自分の足して
-                # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
-                # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
-                if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
-                        and "Fog" not in SharedState.get_freeze_rounds()):
-                    PlaySound.play_sound(self.cfg.voice_fog)
-                self._log(f"開始: {st.round_type}")
-                return
-
+        if st.round_type == "Fog":
+            # 既定では他窓を止めない。止めたいなら突入フリーズで Fog を選ぶ
+            # （上の一般の経路で張られる）。
+            # is_continue_round と continue_round_start(st) は必ずセットで外す。
+            # 片方だけ残すと、判明時に continue_round_end(st) が自分の足して
+            # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
+            # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
+            if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
+                    and "Fog" not in SharedState.get_freeze_rounds()):
+                PlaySound.play_sound(self.cfg.voice_fog)
             self._log(f"開始: {st.round_type}")
             return
 
-        if event.kind == LogParser.EVENT_KILLERS_SET:
-            # 特殊ラウンドを経験したら3勝扱い。3クラ前にも出る Twilight は1回目は
-            # 数えず、2回目で（過去のログの1回と監視中の1回も2回目）
-            proof = None
-            if st.round_type in config.OPEN_SPECIAL_ROUND_NOT_PROOF:
-                if st.twilight_round_seq != st.round_seq:
-                    st.twilight_round_seq = st.round_seq
-                    st.twilight_count += 1
-                    if st.twilight_count >= 2:
-                        proof = f"{st.round_type} 2回目"
-            elif st.round_type in config.SPECIAL_ROUND:
-                proof = st.round_type
-            if proof is not None:
-                if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
-                        and self.cfg.cancel_afk):
-                    self._log(f"特殊ラウンド（{proof}）を経験したので3勝扱い"
-                              " → 以降のDTM/Waldoはスキップします")
-                st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
-            if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
-                st.round_type = event.round_type
-            self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
-            return
+        self._log(f"開始: {st.round_type}")
 
-        if event.kind == LogParser.EVENT_YOU_DIED:
-            # 長押しの終わり際の死亡も拾う（_skip_time は長押しの開始時）
-            if st._skip_time > 0 and (time.time() - st._skip_time) <= (
-                    config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
-                self._log("✅ 自爆成功")
-                st._skip_time = 0.0
-            st.died_this_round = True
-            st.item_equipped_after_death = False
-            st.is_open_special_round_round = False
-            # 続行ラウンドのフリーズは死亡から少し置いて解除する。
-            # 猶予中に手動で視点調整などを挟めるようにするため。
-            if st.is_continue_round:
-                self._start_daemon(self._release_continue_freeze_after_delay,
-                                   st.round_seq)
-            if st.round_freeze_held:
-                self._start_daemon(self._release_round_freeze_after_delay,
-                                   st.round_seq)
-            if st.round_type == "Run":
-                self._mark_item_lost("Run死亡: アイテムロスト")
-                self._lose_held_item(HELD_LOST_RUN_DEATH)
-            return
+    def _on_killers_set(self, event):
+        """テラーが決まった（Killers have been set）"""
+        st = self.st
+        # 特殊ラウンドを経験したら3勝扱い。3クラ前にも出る Twilight は1回目は
+        # 数えず、2回目で（過去のログの1回と監視中の1回も2回目）
+        proof = None
+        if st.round_type in config.OPEN_SPECIAL_ROUND_NOT_PROOF:
+            if st.twilight_round_seq != st.round_seq:
+                st.twilight_round_seq = st.round_seq
+                st.twilight_count += 1
+                if st.twilight_count >= 2:
+                    proof = f"{st.round_type} 2回目"
+        elif st.round_type in config.SPECIAL_ROUND:
+            proof = st.round_type
+        if proof is not None:
+            if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
+                    and self.cfg.cancel_afk):
+                self._log(f"特殊ラウンド（{proof}）を経験したので3勝扱い"
+                          " → 以降のDTM/Waldoはスキップします")
+            st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
+            st.round_type = event.round_type
+        self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
 
-        if event.kind == LogParser.EVENT_RESPAWN:
-            if st.in_round:
-                self._mark_item_lost("リスポーン: アイテムロスト")
-                self._lose_held_item(HELD_LOST_RESPAWN)
-            return
+    def _on_you_died(self, event):
+        """死亡"""
+        st = self.st
+        # 長押しの終わり際の死亡も拾う（_skip_time は長押しの開始時）
+        if st._skip_time > 0 and (time.time() - st._skip_time) <= (
+                config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
+            self._log("✅ 自爆成功")
+            st._skip_time = 0.0
+        st.died_this_round = True
+        st.item_equipped_after_death = False
+        st.is_open_special_round_round = False
+        # 続行ラウンドのフリーズは死亡から少し置いて解除する。
+        # 猶予中に手動で視点調整などを挟めるようにするため。
+        if st.is_continue_round:
+            self._start_daemon(self._release_continue_freeze_after_delay,
+                               st.round_seq)
+        if st.round_freeze_held:
+            self._start_daemon(self._release_round_freeze_after_delay,
+                               st.round_seq)
+        if st.round_type == "Run":
+            self._mark_item_lost("Run死亡: アイテムロスト")
+            self._lose_held_item(HELD_LOST_RUN_DEATH)
 
-        if event.kind == LogParser.EVENT_PAGE_COLLECTED:
-            if self._page_loses_held_item(st.round_type, st.held_item_id):
-                self._lose_held_item(HELD_LOST_PAGE)
-            return
+    def _on_respawn(self, event):
+        """リスポーン（ラウンド中ならアイテムロスト）"""
+        st = self.st
+        if st.in_round:
+            self._mark_item_lost("リスポーン: アイテムロスト")
+            self._lose_held_item(HELD_LOST_RESPAWN)
 
-        if event.kind == LogParser.EVENT_ROUND_OVER:
-            st.in_round = False
-            st.begin_move_done = False      # 次の Begin 前の移動はこれから
-            self._verified.on_round_over(st.log_now)
-            if self._action.chase_stop():
-                self._log("チェイス停止（ラウンド終了）")
-            st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
-            st.early_read_hits = {}
-            st.fog_no_object_deadline = 0.0
-            # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
-            Recorder.on_round_over(self.window_idx)
-            # Begin待ちの起点。実処理は Verified Round End 側で走るが、
-            # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
-            st.round_over_time = time.time()
-            # 続行フリーズの解除を予約する。死亡側だけだと、生き残ったときに
-            # 予約が入らず Verified Round End の保険まで残り、他窓が
-            # RoundOver から13〜14秒も余計に止まっていた。RoundOver は
-            # 死亡・生存のどちらでも来るので、ここなら取りこぼさない。
-            # 死亡は RoundOver より先に来るので、死亡から数える動きは保たれる
-            # （解除は冪等なので二重予約は無害）
-            if st.continue_freeze_held:
-                self._start_daemon(self._release_continue_freeze_after_delay,
-                                   st.round_seq)
-            if self._waiting_for_terror_replacement():
-                self._send_round_statistics_once()
-            announce_on_round_over = not self._auto_begin_active()
-            if announce_on_round_over and not self._hands_free():
-                round_lost_item = self._round_lost_item()
-                if self._round_item_warning():
-                    if round_lost_item:
-                        st.item_id = 0
-                    st.waiting_for_equip = True
-                elif not st.item_id:
-                    st.waiting_for_equip = True
-            if st.waiting_for_equip and announce_on_round_over and not self._hands_free():
-                # ツールが Begin を押さない窓（グループ・public・自動Begin OFF）でも装備待ちで
-                # 全窓を止める（前面化・音声1回）。解除は装備（猶予の後）かラウンド開始の早い方
-                self._action._attend_to_item_loss()
-                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
-            if (self._item_begin_mode_active()
-                    and self._round_item_warning() and not self._hands_free()):
-                # アイテム取得→Begin モード。RoundOver の時点でもう分かっている
-                # （ロストは死亡などラウンド中に立つ）ので、ここで済ませる
-                if self._round_lost_item():
+    def _on_page_collected(self, event):
+        """8 Pages のページ取得"""
+        st = self.st
+        if self._page_loses_held_item(st.round_type, st.held_item_id):
+            self._lose_held_item(HELD_LOST_PAGE)
+
+    def _on_round_over(self, event):
+        """RoundOver"""
+        st = self.st
+        st.in_round = False
+        st.begin_move_done = False      # 次の Begin 前の移動はこれから
+        self._verified.on_round_over(st.log_now)
+        if self._action.chase_stop():
+            self._log("チェイス停止（ラウンド終了）")
+        st.fog_reading = False          # 公開前に終わった霧は答え合わせできない
+        st.early_read_hits = {}
+        st.fog_no_object_deadline = 0.0
+        # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
+        Recorder.on_round_over(self.window_idx)
+        # Begin待ちの起点。実処理は Verified Round End 側で走るが、
+        # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
+        st.round_over_time = time.time()
+        # 続行フリーズの解除を予約する。死亡側だけだと、生き残ったときに
+        # 予約が入らず Verified Round End の保険まで残り、他窓が
+        # RoundOver から13〜14秒も余計に止まっていた。RoundOver は
+        # 死亡・生存のどちらでも来るので、ここなら取りこぼさない。
+        # 死亡は RoundOver より先に来るので、死亡から数える動きは保たれる
+        # （解除は冪等なので二重予約は無害）
+        if st.continue_freeze_held:
+            self._start_daemon(self._release_continue_freeze_after_delay,
+                               st.round_seq)
+        if self._waiting_for_terror_replacement():
+            self._send_round_statistics_once()
+        announce_on_round_over = not self._auto_begin_active()
+        if announce_on_round_over and not self._hands_free():
+            round_lost_item = self._round_lost_item()
+            if self._round_item_warning():
+                if round_lost_item:
                     st.item_id = 0
                 st.waiting_for_equip = True
-                # このモードでは自動取得を動かさない（item_fetch_target が None）
-                self._action._attend_to_item_loss()
-                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
-            # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
-            # Verified Round End を待ってから行う（RoundOver時点だと
-            # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
-            if self.cfg.auto_begin:
-                self._start_daemon(self._action.do_after_round)
-            return
+            elif not st.item_id:
+                st.waiting_for_equip = True
+        if st.waiting_for_equip and announce_on_round_over and not self._hands_free():
+            # ツールが Begin を押さない窓（グループ・public・自動Begin OFF）でも装備待ちで
+            # 全窓を止める（前面化・音声1回）。解除は装備（猶予の後）かラウンド開始の早い方
+            self._action._attend_to_item_loss()
+            self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
+        if (self._item_begin_mode_active()
+                and self._round_item_warning() and not self._hands_free()):
+            # アイテム取得→Begin モード。RoundOver の時点でもう分かっている
+            # （ロストは死亡などラウンド中に立つ）ので、ここで済ませる
+            if self._round_lost_item():
+                st.item_id = 0
+            st.waiting_for_equip = True
+            # このモードでは自動取得を動かさない（item_fetch_target が None）
+            self._action._attend_to_item_loss()
+            self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
+        # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
+        # Verified Round End を待ってから行う（RoundOver時点だと
+        # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
+        if self.cfg.auto_begin:
+            self._start_daemon(self._action.do_after_round)
 
-        if event.kind == LogParser.EVENT_VERIFIED_END:
-            self._verified.on_round_end_verified(st.log_now)
-            # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
-            # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
-            st.sus_players = []
-            if self._waiting_for_terror_replacement():
-                self._send_round_statistics_once()
-            if st.is_continue_round:
-                # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
-                st.is_continue_round = False
-                st.open_special_continue = False
-                SharedState.continue_round_end(st)
-                self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
-            round_lost_item = self._round_lost_item()
-            round_item_warning = self._round_item_warning()
-            if not self._hands_free():
-                if round_item_warning:
-                    if round_lost_item:
-                        st.item_id = 0
-                    if not self.cfg.auto_begin and not st.waiting_for_equip:
-                        self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
-                    elif self._item_begin_mode_active():
-                        # アイテム取得→Begin モードの前面化・フリーズ・音声は
-                        # RoundOver の _attend_to_item_loss() で済ませている。
-                        # ここでは何も出さない（ログだけ）
-                        st.waiting_for_equip = True
-                        self._log("ラウンド終了 【⚠ アイテムロスト → 全窓フリーズ中】")
-                    else:
-                        st.waiting_for_equip = True
-                        self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
-                elif not st.item_id:
-                    if not self.cfg.auto_begin and not st.waiting_for_equip:
-                        self._log("ラウンド終了 【⚠ アイテム未回収 → RoundOver時に通知予定】")
-                    else:
-                        st.waiting_for_equip = True
-                        self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
+    def _on_verified_end(self, event):
+        """Verified Round End（Begin を押せる）"""
+        st = self.st
+        self._verified.on_round_end_verified(st.log_now)
+        # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
+        # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
+        st.sus_players = []
+        if self._waiting_for_terror_replacement():
+            self._send_round_statistics_once()
+        if st.is_continue_round:
+            # 通常は RoundOver で解除済み。ここは取りこぼしの保険。
+            st.is_continue_round = False
+            st.open_special_continue = False
+            SharedState.continue_round_end(st)
+            self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
+        round_lost_item = self._round_lost_item()
+        round_item_warning = self._round_item_warning()
+        if not self._hands_free():
+            if round_item_warning:
+                if round_lost_item:
+                    st.item_id = 0
+                if not self.cfg.auto_begin and not st.waiting_for_equip:
+                    self._log("ラウンド終了 【⚠ アイテムロスト → RoundOver時に通知予定】")
+                elif self._item_begin_mode_active():
+                    # アイテム取得→Begin モードの前面化・フリーズ・音声は
+                    # RoundOver の _attend_to_item_loss() で済ませている。
+                    # ここでは何も出さない（ログだけ）
+                    st.waiting_for_equip = True
+                    self._log("ラウンド終了 【⚠ アイテムロスト → 全窓フリーズ中】")
                 else:
-                    self._log("ラウンド終了")
+                    st.waiting_for_equip = True
+                    self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
+            elif not st.item_id:
+                if not self.cfg.auto_begin and not st.waiting_for_equip:
+                    self._log("ラウンド終了 【⚠ アイテム未回収 → RoundOver時に通知予定】")
+                else:
+                    st.waiting_for_equip = True
+                    self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
             else:
-                if round_item_warning:
-                    if round_lost_item:
-                        st.item_id = 0
-                    if not self.cfg.auto_begin:
-                        st.waiting_for_equip = True
-                    # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
                 self._log("ラウンド終了")
-            if self.cfg.announce_intermission and not self._hands_free():
-                PlaySound.play_sound(self.cfg.voice_intermission)
-            st.round_end_seen = True   # Beginのクリック待ちを解除する合図
-            self._start_speed_probe()
-            return
+        else:
+            if round_item_warning:
+                if round_lost_item:
+                    st.item_id = 0
+                if not self.cfg.auto_begin:
+                    st.waiting_for_equip = True
+                # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
+            self._log("ラウンド終了")
+        if self.cfg.announce_intermission and not self._hands_free():
+            PlaySound.play_sound(self.cfg.voice_intermission)
+        st.round_end_seen = True   # Beginのクリック待ちを解除する合図
+        self._start_speed_probe()
 
-        if event.kind == LogParser.EVENT_KILLERS_UNKNOWN:
-            st.fog = True
-            st.round_type = event.round_type or "Fog"
-            # 看破の行を読むのはここから公開/RoundOver まで
-            st.fog_reading = (config.FOG_EARLY_READ_ENABLED
-                              and self.early_read_capable)
-            # 看破できる起動なら、5秒たっても objects の名前が出なければ DTM（ログの時刻で見る）
-            if st.fog_reading and config.FOG_NO_OBJECT_DTM_ENABLED and st.log_now:
-                st.fog_no_object_deadline = st.log_now + config.FOG_NO_OBJECT_DTM_SEC
-            self._log("テラー不明 → revealed待ち")
-            if self._hands_free():
-                if st.round_type == "8 Pages":
-                    # 8 Pages はテラーが出るまで自爆できない（debug.log: 開始時の3回は
-                    # 1度も死なず、テラーが出た後はほぼ成功）。出た後の判定で自爆する
-                    self._log(f"開始: {st.round_type} 【放置モード→テラーが出てから自爆】")
-                else:
-                    self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
-                    self._start_daemon(self._action.do_skip)
-            return
+    def _on_killers_unknown(self, event):
+        """テラー不明（霧など）"""
+        st = self.st
+        st.fog = True
+        st.round_type = event.round_type or "Fog"
+        # 看破の行を読むのはここから公開/RoundOver まで
+        st.fog_reading = (config.FOG_EARLY_READ_ENABLED
+                          and self.early_read_capable)
+        # 看破できる起動なら、5秒たっても objects の名前が出なければ DTM（ログの時刻で見る）
+        if st.fog_reading and config.FOG_NO_OBJECT_DTM_ENABLED and st.log_now:
+            st.fog_no_object_deadline = st.log_now + config.FOG_NO_OBJECT_DTM_SEC
+        self._log("テラー不明 → revealed待ち")
+        if self._hands_free():
+            if st.round_type == "8 Pages":
+                # 8 Pages はテラーが出るまで自爆できない（debug.log: 開始時の3回は
+                # 1度も死なず、テラーが出た後はほぼ成功）。出た後の判定で自爆する
+                self._log(f"開始: {st.round_type} 【放置モード→テラーが出てから自爆】")
+            else:
+                self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
+                self._start_daemon(self._action.do_skip)
 
-        if event.kind == LogParser.EVENT_FOXY:
-            self._log("🦊 Foxyが出た！")
-            if not self._hands_free():
-                PlaySound.play_sound(self.cfg.voice_foxy)
-            self._mark_replacement("foxy")
-            if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
-                    and st.enrage_identified is None):
-                # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
-                # st.round_type は書き換えない（「Fog」の自爆指定が効かなくなる）。
-                # オルタ枠であることは引数で伝える（焼き芋の判定が見る）
-                self._on_killers([config.FOXY_ID],
-                                 GroupRound.FOG_ALTERNATE_ROUND_TYPE,
-                                 revealed=True)
-                # 後から revealed が来ても判定し直さない（二重に自爆する）
-                st.enrage_identified = config.FOXY_ID
-            return
+    def _on_killers_revealed(self, event):
+        """霧のテラーが公開された"""
+        st = self.st
+        st.fog_reading = False
+        st.fog_no_object_deadline = 0.0
+        self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
+        # 答え合わせは公開の後（食い違いの警告はもう出してよい）
+        self._check_early_read(event.terror_ids or [], event.round_type)
+        self._check_no_object_dtm(event.terror_ids or [], event.round_type)
 
-        if event.kind == LogParser.EVENT_KILLERS_REVEALED:
-            st.fog_reading = False
-            st.fog_no_object_deadline = 0.0
-            self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
-            # 答え合わせは公開の後（食い違いの警告はもう出してよい）
-            self._check_early_read(event.terror_ids or [], event.round_type)
-            self._check_no_object_dtm(event.terror_ids or [], event.round_type)
-            return
+    def _on_joining(self, event):
+        """インスタンスに入った"""
+        st = self.st
+        # インスタンスを移動するとアイテムは消える（依頼者）
+        self._lose_held_item(HELD_LOST_INSTANCE)
+        st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない
+        if st.equip_freeze_held and not self._auto_begin_active():
+            # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
+            st.waiting_for_equip = False
+            SharedState.equip_freeze_end(st)
+            self._log("インスタンス移動 → 装備待ちフリーズ解除")
+        st.instance_id = event.instance
+        st.instance_type = self._parse_instance_type(event.suffix)
+        st.instance_access = LogParser.instance_access(event.suffix)
+        # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
+        self.sequence.reset()
+        # 3クラはインスタンスに入り直すと0に戻る
+        if st.open_special_round_wins and self.cfg.cancel_afk:
+            self._log("3クラ: 別のインスタンスに入ったので 0/"
+                      f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS} に戻します")
+        st.open_special_round_wins = 0
+        st.twilight_count = 0
+        st.enrage_identified = None
+        # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
+        st.players = set()
+        st.player_names = {}
+        st.unmatched_logged = set()
+        st.players_known = True
+        st.instance_seq += 1
+        # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
+        if self.cfg.skip_rounds or self.cfg.continue_rounds:
+            self.cfg.skip_rounds = set()
+            self.cfg.continue_rounds = set()
+            self._log("インスタンスが変わりました → ラウンド指定を解除しました")
+        # GUIのチェックは監視開始後でも変えられるので、設定が空でも呼ぶ。
+        # 片方だけ外れていると、表示と動きが食い違う
+        if self._on_round_settings_cleared:
+            self._on_round_settings_cleared(self.window_idx)
+        self._log(f"インスタンスタイプ: {st.instance_type}")
 
-        if event.kind == LogParser.EVENT_JOINING:
-            # インスタンスを移動するとアイテムは消える（依頼者）
-            self._lose_held_item(HELD_LOST_INSTANCE)
-            st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない
-            if st.equip_freeze_held and not self._auto_begin_active():
-                # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
-                st.waiting_for_equip = False
-                SharedState.equip_freeze_end(st)
-                self._log("インスタンス移動 → 装備待ちフリーズ解除")
-            st.instance_id = event.instance
-            st.instance_type = self._parse_instance_type(event.suffix)
-            st.instance_access = LogParser.instance_access(event.suffix)
-            # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
-            self.sequence.reset()
-            # 3クラはインスタンスに入り直すと0に戻る
-            if st.open_special_round_wins and self.cfg.cancel_afk:
-                self._log("3クラ: 別のインスタンスに入ったので 0/"
-                          f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS} に戻します")
-            st.open_special_round_wins = 0
-            st.twilight_count = 0
-            st.enrage_identified = None
-            # 入室した瞬間からの入退室はすべて見えるので、ここからは信用できる
-            st.players = set()
-            st.player_names = {}
-            st.unmatched_logged = set()
-            st.players_known = True
-            st.instance_seq += 1
-            # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
-            if self.cfg.skip_rounds or self.cfg.continue_rounds:
-                self.cfg.skip_rounds = set()
-                self.cfg.continue_rounds = set()
-                self._log("インスタンスが変わりました → ラウンド指定を解除しました")
-            # GUIのチェックは監視開始後でも変えられるので、設定が空でも呼ぶ。
-            # 片方だけ外れていると、表示と動きが食い違う
-            if self._on_round_settings_cleared:
-                self._on_round_settings_cleared(self.window_idx)
-            self._log(f"インスタンスタイプ: {st.instance_type}")
-            return
+    def _on_item_equip(self, event):
+        """アイテム装備"""
+        st = self.st
+        self._track_randomizer_item_change(event)
+        st.equip_seen_id = event.item_id        # アイテム自動取得が Equip の結果を待つ
+        st.equip_seen_seq += 1
+        if event.item_id:
+            st.last_lost_item_id = 0            # 装備した（手で別のアイテムでも）→ もう取りに行かない
+        st.item_id = event.item_id
+        self._hold_item(event.item_id)
+        if st.speed_freeze_kind == "8pages":
+            # 8 Pages はスキャナーを取れたら再開してよい。ただし即座に
+            # 解除すると間が短すぎる（依頼者の指摘）。アイテムロスト側の
+            # 装備解除と同じ猶予を置く。種別はその場で消す——2回
+            # Equipping が来ても予約を二重にしないため
+            st.speed_freeze_kind = ""
+            self._start_daemon(self._release_speed_freeze_after_delay,
+                               st.round_seq)
+        if st.died_this_round and st.item_id:
+            st.item_equipped_after_death = True
+        self._log(f"✅ アイテム装備 (id={st.item_id})")
+        if (not self._auto_begin_active() and st.equip_freeze_held and st.item_id):
+            # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_freeze_after_equip)
+        # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
+        elif st.waiting_for_equip and st.begin_done:
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_wait_after_delay)
 
-        if event.kind == LogParser.EVENT_ITEM_EQUIP:
-            self._track_randomizer_item_change(event)
-            st.equip_seen_id = event.item_id        # アイテム自動取得が Equip の結果を待つ
-            st.equip_seen_seq += 1
-            if event.item_id:
-                st.last_lost_item_id = 0            # 装備した（手で別のアイテムでも）→ もう取りに行かない
-            st.item_id = event.item_id
-            self._hold_item(event.item_id)
-            if st.speed_freeze_kind == "8pages":
-                # 8 Pages はスキャナーを取れたら再開してよい。ただし即座に
-                # 解除すると間が短すぎる（依頼者の指摘）。アイテムロスト側の
-                # 装備解除と同じ猶予を置く。種別はその場で消す——2回
-                # Equipping が来ても予約を二重にしないため
-                st.speed_freeze_kind = ""
-                self._start_daemon(self._release_speed_freeze_after_delay,
-                                   st.round_seq)
-            if st.died_this_round and st.item_id:
-                st.item_equipped_after_death = True
-            self._log(f"✅ アイテム装備 (id={st.item_id})")
-            if (not self._auto_begin_active() and st.equip_freeze_held and st.item_id):
-                # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
-                st.waiting_for_equip = False
-                self._start_daemon(self._release_equip_freeze_after_equip)
-            # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
-            elif st.waiting_for_equip and st.begin_done:
-                st.waiting_for_equip = False
-                self._start_daemon(self._release_equip_wait_after_delay)
-            return
-
-        if event.kind == LogParser.EVENT_LIVED:
-            st.lived_this_round = True
-            # どのラウンドでも生き残ったら1勝（3で打ち止め）
-            if st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                st.open_special_round_wins += 1
-                if self.cfg.cancel_afk:
-                    self._log(f"生存数: {st.open_special_round_wins}/"
-                              f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
-                    if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                        self._log("🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします")
-            st.is_open_special_round_round = False
-            return
+    def _on_lived(self, event):
+        """生存"""
+        st = self.st
+        st.lived_this_round = True
+        # どのラウンドでも生き残ったら1勝（3で打ち止め）
+        if st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+            st.open_special_round_wins += 1
+            if self.cfg.cancel_afk:
+                self._log(f"生存数: {st.open_special_round_wins}/"
+                          f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
+                if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
+                    self._log("🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします")
+        st.is_open_special_round_round = False
 
     # ── テラー確定処理 ────────────────────────
     def _on_enrage(self, name: str):
@@ -1946,12 +1968,6 @@ class LogMonitor:
                     f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified])})と "
                     f"revealed({format_terror_ids(ids)})が食い違いました")
             return
-
-        # インスタンス制限チェック
-        itype        = st.instance_type
-        is_private   = itype == config.INSTANCE_PRIVATE
-        is_group_skip = itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
-        can_decide   = is_private or is_group_skip
 
         # 他の人がいるのに主催リストが取れない窓、この窓にいる誰の希望も
         # 無い窓はここで止める。

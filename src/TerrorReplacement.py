@@ -1,13 +1,71 @@
-"""置き換えテラーの表。
+"""置き換えテラーの表と、その合図のログ行。
 
 Killers 行のIDのまま確定しないテラーがある。別のログ行（合図）が来て初めて
 正体が分かる。実測では合図は Killers 行の**後**に来る（Gigabytes 12/12件、
 Atrached 3/3件）。ここに1か所でまとめ、待つか・どう差し替えるかを表で引く。
+
+- SIGNALS: 合図のログ行 → WindowState の属性（flag）。LogParser がこれで行を見分ける
+- TABLE: flag が立ったときに、どのIDをどう差し替えるか
+
+新しい置き換えを足すときは、config に番号、SIGNALS に合図の行、TABLE に差し替えを足す。
+WindowState に flag の属性も要る（ラウンドごとに落とす）。
 """
+import re
 from dataclasses import dataclass
 
 import config
 import ReadJson
+
+
+@dataclass(frozen=True)
+class Signal:
+    """置き換えの合図のログ行"""
+    flag: str                   # 立てる WindowState の属性（TABLE の flag と同じ）
+    pattern: re.Pattern         # 行頭の時刻などを外した行に当てる
+    sample: str                 # 実物の行（テストで流す見本）
+    announce: str               # 公開ログに出す1行
+
+
+SIGNALS: tuple[Signal, ...] = (
+    Signal("atrached_variant", re.compile(r"^Lets play a game[.][.][.]$"),
+           "Lets play a game...", "🎮 Atrached 出現（Sonic の Variant）"),
+    Signal("hungry_home_invader_variant",
+           re.compile(r"^I hear strange sounds coming from the kitchen[.]$"),
+           "I hear strange sounds coming from the kitchen.",
+           "🏠 Hungry Home Invader 出現（Slender の Variant）"),
+    # Curious の Bloodthirsty 化。Unbound の Self Inserts の中の Curious も同じ行
+    Signal("bloodthirsty_creature_variant",
+           re.compile(r"^The creature is bloodthirsty today[.][.][.]$"),
+           "The creature is bloodthirsty today...",
+           "🩸 Bloodthirsty 出現（Curious の Variant）"),
+    # 行のどこかに出る。大文字小文字も問わない
+    Signal("foxy", re.compile(r"foxy the pirate turned evil!", re.IGNORECASE),
+           "foxy the pirate turned evil!", "🦊 Foxyが出た！"),
+    # この行はまだ実ログで観測できていない（低確率で、手元のログ22本には0件）。
+    # 正確な大文字小文字と句点が分からないので緩く受ける。実物が取れたら締める
+    Signal("glorbo", re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE),
+           "the real g has appeared", "🫠 Glorbo 出現（Arkus の Variant）"),
+    # テラーIDでは判別できない（実測でIDが毎回異なる）。この行だけが手がかり。
+    # Killers have been set と同じ秒に出る
+    Signal("gigabytes", re.compile(r"^The Gigabytes have come[.]$"),
+           "The Gigabytes have come.", "👾 The Gigabytes 出現"),
+)
+
+
+def match_signal(line: str) -> Signal | None:
+    """合図の行なら、その Signal（行頭の時刻などは外してから渡す）"""
+    for row in SIGNALS:
+        if row.pattern.search(line):        # ^ で始まるものは行頭からの一致と同じ
+            return row
+    return None
+
+
+def signal(flag: str) -> Signal:
+    """flag の合図（テスト・呼び出し側の見本用）。無ければ KeyError"""
+    for row in SIGNALS:
+        if row.flag == flag:
+            return row
+    raise KeyError(flag)
 
 
 @dataclass(frozen=True)
@@ -21,7 +79,7 @@ class Replacement:
     rounds: frozenset | None
     # 合図のログを見たら立てる WindowState の属性
     flag: str
-    # 合図のログが LogParser に入っているか。分からない間は False
+    # 合図の行が SIGNALS に入っているか。分からない間は False
     wired: bool = True
     # target が分からないとき、terrors.json から名前で引く
     target_name: str = ""
@@ -84,7 +142,7 @@ TABLE: tuple[Replacement, ...] = (
     Replacement("Foxy", config.SANIC_ID, config.FOXY_ID, None, "foxy"),
     # 枠だけ。ID（terrors.json）と合図のログ（LogParser）が分かるまで無効。
     # 有効にするには terrors.json に "Neo Pilot" を足し、合図の行を LogParser に
-    # 入れて neo_pilot を立てるようにしてから wired=True にする
+    # SIGNALS に足して neo_pilot を立てるようにしてから wired=True にする
     Replacement("Neo Pilot", config.FUSION_PILOT_ID, None, None, "neo_pilot",
                 wired=False, target_name="Neo Pilot"),
     # Punished の Sewers で、Arkus が低確率で Glorbo になる。マップは条件に

@@ -519,40 +519,38 @@ LOG_LIVE_GRACE_SEC        = 120.0
 LOG_POLL_INTERVAL    = 0.3
 LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
 
-CURIOUS_CREATURE_ID = 106
-BLOODTHIRSTY_CREATURE_ID = 192
-BLOODTHIRSTY_CREATURE_LOG = "The creature is bloodthirsty today..."
-SLENDER_ID = 47
-HUNGRY_HOME_INVADER_ID = 190
-HUNGRY_HOME_INVADER_LOG = "I hear strange sounds coming from the kitchen."
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする
 ENRAGE_IDENTIFY_ENABLED = True
 STUNNED_IDENTIFY_ENABLED = True
 
-SONIC_ID = 40
-# alternate。Sanic は Foxy に置き換わることがある（foxy the pirate turned evil!）
-SANIC_ID = 136
-FOXY_ID = 316
-# alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy
+# alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy（置き換えではない）
 JOY_ID = 164
-# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
-FUSION_PILOT_ID = 163
+
+# ── 置き換えテラーのID ──
+# 置き換えの表（元 → 置き換え後・起きるラウンド）と合図のログ行は TerrorReplacement に
+# まとめてある。ここは番号だけ
+SONIC_ID = 40
+ATRACHED_ID = 191                   # Classic の Sonic → Atrached
+SLENDER_ID = 47
+HUNGRY_HOME_INVADER_ID = 190        # Classic の Slender → Hungry Home Invader
+CURIOUS_CREATURE_ID = 106
+BLOODTHIRSTY_CREATURE_ID = 192      # Curious → Wild Yet Bloodthirsty Creature（全ラウンド）
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
 # 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
 SELF_INSERTS_ID = 283
-ATRACHED_ID = 191
-ATRACHED_LOG = "Lets play a game..."
+# alternate。Sanic は Foxy に置き換わることがある
+SANIC_ID = 136
+FOXY_ID = 316
+# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
+FUSION_PILOT_ID = 163
+# Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）
+ARKUS_ID = 61
+GLORBO_ID = 317
 # 元IDが毎回違う（実測12件すべて別ID）ので、IDからは予測できない。
 # Classicの1体構成は常に候補として出現ログを待つ
 GIGABYTES_ID = 314
-GIGABYTES_LOG = "The Gigabytes have come."
-# Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）。
-# 合図の行はまだ実ログで取れていないので、大文字小文字と末尾の句点は問わない
-ARKUS_ID = 61
-GLORBO_ID = 317
-GLORBO_LOG = "the real g has appeared"
 
 # Variantテラー（Classicでもこれなら通常判定に回す）
 VARIANT_TERROR_IDS = frozenset({

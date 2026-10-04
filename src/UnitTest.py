@@ -10833,12 +10833,46 @@ class TestContinueFreezeReleaseOnRoundOver(unittest.TestCase):
 
     def test_the_booking_looks_at_the_hold_not_the_round(self):
         src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
-        over = src[src.index("if event.kind == LogParser.EVENT_ROUND_OVER:"):]
-        over = over[:over.index("\n        if event.kind", 10)]
+        over = src[src.index("    def _on_round_over(self, event):"):]
+        over = over[:over.index("\n    def ", 10)]
 
         self.assertIn("if st.continue_freeze_held:", over)
         self.assertIn("_release_continue_freeze_after_delay", over)
 
+
+class TestReplacementSignalsAreOneTable(unittest.TestCase):
+    """置き換えテラーの合図は TerrorReplacement.SIGNALS の1か所。行 → flag → 差し替え"""
+
+    def test_every_sample_line_parses_to_its_flag(self):
+        for row in TerrorReplacement.SIGNALS:
+            event = LogParser.parse("2026.10.01 12:00:00 Log        -  " + row.sample)
+            self.assertIsNotNone(event, row.flag)
+            self.assertEqual((event.kind, event.flag),
+                             (LogParser.EVENT_REPLACEMENT, row.flag))
+
+    def test_every_flag_is_a_window_state_field_cleared_each_round(self):
+        st = WindowState()
+        for row in TerrorReplacement.SIGNALS:
+            self.assertIs(getattr(st, row.flag), False, row.flag)
+            self.assertIn(row.flag, TerrorReplacement.flags(), "ラウンド開始で落とす")
+
+    def test_every_flag_replaces_something(self):
+        table_flags = {r.flag for r in TerrorReplacement.TABLE}
+        for row in TerrorReplacement.SIGNALS:
+            self.assertIn(row.flag, table_flags, row.flag)
+
+    def test_each_signal_is_announced_the_same_way(self):
+        """Atrached・Hungry Home Invader なども同じ流れ（知らせる → 差し替える）"""
+        for row in TerrorReplacement.SIGNALS:
+            logs = []
+            monitor = LogMonitor.LogMonitor(WindowConfig(), {}, logs.append, window_idx=1)
+            with patch.object(PlaySound, "play_sound"):
+                monitor._process("2026.10.01 12:00:00 Log        -  " + row.sample)
+            self.assertTrue(any(row.announce in m for m in logs), (row.flag, logs))
+
+    def test_every_handler_name_exists(self):
+        for kind, name in LogMonitor.LogMonitor._HANDLERS.items():
+            self.assertTrue(callable(getattr(LogMonitor.LogMonitor, name, None)), (kind, name))
 
 class TestContinueFreezeIsPerWindow(unittest.TestCase):
     """続行フリーズは窓ごとの保持。足していない窓が引かないこと。
@@ -15470,6 +15504,10 @@ class TestDebugLogTraces(unittest.TestCase):
         self.assertFalse(any("[事象]" in m for m in self.written), self.written)
 
     def test_freezes(self):
+        # 前のテストが張ったまま残したものを数えない（張っている窓の数を見るため）
+        for reset in (SharedState.equip_freeze_reset, SharedState.continue_round_reset,
+                      SharedState.speed_freeze_reset, SharedState.round_freeze_reset):
+            reset()
         st = WindowState(window_idx=2)
         other = WindowState(window_idx=4)
         self.addCleanup(SharedState.equip_freeze_reset)
@@ -21966,7 +22004,7 @@ class TestGigabytesDetect(unittest.TestCase):
         event = LogParser.parse(self.LINE)
 
         self.assertIsNotNone(event)
-        self.assertEqual(event.kind, LogParser.EVENT_GIGABYTES)
+        self.assertEqual((event.kind, event.flag), (LogParser.EVENT_REPLACEMENT, "gigabytes"))
 
     def test_similar_lines_do_not_match(self):
         """同じラウンドに出る紛らわしい行を拾わないこと"""
@@ -22049,7 +22087,7 @@ class TestAtrachedDetect(unittest.TestCase):
         event = LogParser.parse(self.LINE)
 
         self.assertIsNotNone(event)
-        self.assertEqual(event.kind, LogParser.EVENT_ATRACHED)
+        self.assertEqual((event.kind, event.flag), (LogParser.EVENT_REPLACEMENT, "atrached_variant"))
 
     def test_similar_lines_do_not_match(self):
         """アポストロフィ有り・ピリオドの数違いは拾わない"""
@@ -22166,7 +22204,7 @@ class TestGlorboDetect(unittest.TestCase):
         event = LogParser.parse(self.LINE)
 
         self.assertIsNotNone(event)
-        self.assertEqual(event.kind, LogParser.EVENT_GLORBO)
+        self.assertEqual((event.kind, event.flag), (LogParser.EVENT_REPLACEMENT, "glorbo"))
 
     def test_the_case_and_the_full_stop_do_not_matter(self):
         """実物の行が取れていないので、大文字小文字と句点は問わない"""
@@ -22177,7 +22215,7 @@ class TestGlorboDetect(unittest.TestCase):
                      "The real G has appeared."):
             event = LogParser.parse(self.PREFIX + body)
             self.assertIsNotNone(event, body)
-            self.assertEqual(event.kind, LogParser.EVENT_GLORBO, body)
+            self.assertEqual((event.kind, event.flag), (LogParser.EVENT_REPLACEMENT, "glorbo"), body)
 
     def test_similar_lines_do_not_match(self):
         for body in ("the real g has appeared now",
@@ -23622,14 +23660,16 @@ class TestLogParser(unittest.TestCase):
         self.assertEqual(second.player_name, "urichata")
 
     def test_bloodthirsty_creature_log_parses(self):
-        event = LogParser.parse(config.BLOODTHIRSTY_CREATURE_LOG)
+        event = LogParser.parse(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
-        self.assertEqual(event.kind, LogParser.EVENT_CREATURE_BLOODTHIRSTY)
+        self.assertEqual((event.kind, event.flag),
+                         (LogParser.EVENT_REPLACEMENT, "bloodthirsty_creature_variant"))
 
     def test_hungry_home_invader_log_parses(self):
-        event = LogParser.parse(config.HUNGRY_HOME_INVADER_LOG)
+        event = LogParser.parse(TerrorReplacement.signal("hungry_home_invader_variant").sample)
 
-        self.assertEqual(event.kind, LogParser.EVENT_HUNGRY_HOME_INVADER)
+        self.assertEqual((event.kind, event.flag),
+                         (LogParser.EVENT_REPLACEMENT, "hungry_home_invader_variant"))
 
     def test_item_equip_parses_previous_item_id(self):
         event = LogParser.parse("Equipping 94. Was using 41")
@@ -32110,7 +32150,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
     def test_bloodthirsty_log_before_killers_converts_curious_creature(self):
         monitor = self._monitor()
         monitor.cfg.auto_begin = False
-        monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+        monitor._process(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
@@ -32128,7 +32168,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Classic", revealed=False)
             mock_send.assert_not_called()
 
-            monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+            monitor._process(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
         mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
@@ -32140,7 +32180,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.CURIOUS_CREATURE_ID], "Bloodbath", revealed=False)
             mock_send.assert_not_called()
-            monitor._process(config.BLOODTHIRSTY_CREATURE_LOG)
+            monitor._process(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
         mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
@@ -32151,7 +32191,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
             mock_send.assert_not_called()
-            monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+            monitor._process(TerrorReplacement.signal("hungry_home_invader_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
         mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
@@ -32159,7 +32199,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
     def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
         monitor = self._monitor()
         monitor.cfg.auto_begin = False
-        monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+        monitor._process(TerrorReplacement.signal("hungry_home_invader_variant").sample)
 
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Classic", revealed=False)
@@ -32175,7 +32215,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
 
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([config.SLENDER_ID], "Bloodbath", revealed=False)
-            monitor._process(config.HUNGRY_HOME_INVADER_LOG)
+            monitor._process(TerrorReplacement.signal("hungry_home_invader_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.SLENDER_ID])
         self.assertFalse(monitor.st.hungry_home_invader_variant)
