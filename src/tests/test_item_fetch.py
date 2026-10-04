@@ -29,6 +29,15 @@ class TestItemCatalog(unittest.TestCase):
         self.assertIsNone(ItemCatalog.eight_pages_allowed(99, items), "表に無い")
         self.assertIsNone(ItemCatalog.item_name(99, items))
 
+    def test_the_real_file_reads_and_is_bundled(self):
+        ItemCatalog.take_load_problem()
+        items = ItemCatalog.load_items(REPO_ROOT / "item.json")
+        self.assertIsNone(ItemCatalog.take_load_problem())
+        self.assertTrue(items)
+        build = (REPO_ROOT / "build.py").read_text(encoding="utf-8")
+        self.assertIn("--include-data-files=item.json=item.json", build,
+                      "exe に入れないと空の表で動く")
+
     def test_a_missing_file_is_an_empty_table(self):
         ItemCatalog.take_load_problem()
         items = ItemCatalog.load_items(Path(tempfile.gettempdir()) / "no_such_dir_bo" / "item.json")
