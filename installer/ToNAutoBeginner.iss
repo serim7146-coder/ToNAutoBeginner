@@ -1,4 +1,4 @@
-﻿; ToNAutoBeginner のインストーラー（Inno Setup 6）。
+﻿; ToNAutoBeginner のインストーラー（Inno Setup 7 / 6）。
 ; ビルドは build.py が exe の後に続けて行う（ISCC /DAppVersion=<版> installer\ToNAutoBeginner.iss）。
 ; 手で作るときは、リポジトリ直下に ToNAutoBeginner.exe がある状態で上と同じコマンドを打つ。
 ;

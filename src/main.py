@@ -1,5 +1,5 @@
 """
-Build: リポジトリの直下で `python build.py`（exe の後にインストーラーも作る。Inno Setup 6 があれば）。
+Build: リポジトリの直下で `python build.py`（exe の後にインストーラーも作る。Inno Setup 7 か 6 があれば）。
 中身は下のコマンドと同じ（並びも同じ）＋展開先 --onefile-tempdir-spec="{CACHE_DIR}/ToNAutoBeginner/<APP_VERSION>-<ビルドの印>"
 と --product-version/--file-version（APP_VERSION の数字）。版は build.py が src/config.py から読む。
 参考（今までのコマンド。引数を変えるときは build.py の BASE_ARGS と一緒に直す）:
