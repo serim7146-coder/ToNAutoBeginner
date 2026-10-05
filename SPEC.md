@@ -228,7 +228,7 @@ LogMonitor._process(line)
 ## 12. ビルド・テスト
 
 - ビルド: リポジトリの直下で `python build.py`（Nuitka の onefile）。展開先は `%LOCALAPPDATA%\ToNAutoBeginner\<版>-<ビルドの印>`。
-  exe ができたら続けてインストーラー `dist/ToNAutoBeginner-Setup.exe` を作る（Inno Setup 6 の ISCC。`installer/ToNAutoBeginner.iss`。見つからなければ exe だけ）。
+  exe ができたら続けてインストーラー `dist/ToNAutoBeginner-Setup.exe` を作る（Inno Setup 7 か 6 の ISCC。`installer/ToNAutoBeginner.iss`。見つからなければ exe だけ）。
 - インストーラー: ユーザー単位（管理者権限なし）で `%LOCALAPPDATA%\Programs\ToNAutoBeginner` に入れる。自動更新は exe の横で差し替えるので、書き込める場所に入れる。
   起動中かは `config.APP_MUTEX_NAME` のミューテックス（`main.hold_running_mutex`。.iss の AppMutex と同じ名前）で見る。
   アップデート（自動更新・Setup の上書き）ではアンインストールは走らずデータは残る。アンインストールはインストール先・`%APPDATA%\ToNAutoBeginner`・`%LOCALAPPDATA%\ToNAutoBeginner` を全部消す。

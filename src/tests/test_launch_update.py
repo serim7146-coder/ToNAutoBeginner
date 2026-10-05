@@ -799,11 +799,15 @@ class TestBuildScript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, \
              patch.object(self.build.shutil, "which", return_value=None):
             self.assertIsNone(self.build.find_iscc({"LOCALAPPDATA": d}))
-            exe = Path(d) / "Programs" / "Inno Setup 6" / "ISCC.exe"
-            exe.parent.mkdir(parents=True)
-            exe.write_text("", encoding="utf-8")
-            self.assertEqual(self.build.find_iscc({"LOCALAPPDATA": d,
-                                                   "ProgramFiles": d, "ProgramFiles(x86)": d}), exe)
+            env = {"LOCALAPPDATA": d, "ProgramFiles": d, "ProgramFiles(x86)": d}
+            six = Path(d) / "Programs" / "Inno Setup 6" / "ISCC.exe"
+            six.parent.mkdir(parents=True)
+            six.write_text("", encoding="utf-8")
+            self.assertEqual(self.build.find_iscc(env), six)
+            seven = Path(d) / "Inno Setup 7" / "ISCC.exe"
+            seven.parent.mkdir(parents=True)
+            seven.write_text("", encoding="utf-8")
+            self.assertEqual(self.build.find_iscc(env), seven, "7 があれば 7")
 
 
 class TestInstallerScript(unittest.TestCase):

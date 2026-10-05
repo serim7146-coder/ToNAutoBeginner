@@ -9,7 +9,7 @@ src/config.py の APP_VERSION を読んで、展開先（--onefile-tempdir-spec�
 引数は src/main.py の頭のビルドコマンドと同じ（並びも同じ）で、足すのは展開先と版だけ。
 
 exe ができたら、続けてインストーラー（dist/ToNAutoBeginner-Setup.exe）を作る。
-Inno Setup 6 の ISCC.exe が要る。見つからなければ exe だけ作って終わる（失敗にはしない）。
+Inno Setup（7 か 6）の ISCC.exe が要る。見つからなければ exe だけ作って終わる（失敗にはしない）。
 場所が決まった所に無いときは、環境変数 ISCC に ISCC.exe のパスを入れる。
 """
 import os
@@ -93,12 +93,12 @@ def find_iscc(environ=None) -> Path | None:
     found = shutil.which("ISCC")
     if found:
         return Path(found)
-    candidates = [
-        Path(environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Inno Setup 6" / "ISCC.exe",
-        Path(environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
-    ]
+    roots = [Path(environ.get("ProgramFiles", r"C:\Program Files")),
+             Path(environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))]
     if environ.get("LOCALAPPDATA"):
-        candidates.append(Path(environ["LOCALAPPDATA"]) / "Programs" / "Inno Setup 6" / "ISCC.exe")
+        roots.append(Path(environ["LOCALAPPDATA"]) / "Programs")
+    # 7 があれば 7（6 と並べて入れられる。6 のスクリプトはそのまま通る）
+    candidates = [root / f"Inno Setup {major}" / "ISCC.exe" for major in (7, 6) for root in roots]
     return next((p for p in candidates if p.is_file()), None)
 
 
@@ -115,8 +115,8 @@ def main() -> int:
         return code
     iscc = find_iscc()
     if iscc is None:
-        print("Inno Setup 6（ISCC.exe）が見つからないので、インストーラーは作りません。"
-              "exe だけできています。作るなら Inno Setup 6 を入れるか、環境変数 ISCC に"
+        print("Inno Setup（ISCC.exe）が見つからないので、インストーラーは作りません。"
+              "exe だけできています。作るなら Inno Setup 7 か 6 を入れるか、環境変数 ISCC に"
               " ISCC.exe のパスを入れてからもう一度実行してください")
         return 0
     command = installer_command(iscc, version)
