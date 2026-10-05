@@ -566,7 +566,7 @@ def borrow_front(hwnd: int) -> tuple:
     """
     previous = foreground_hwnd()
     cursor = cursor_position()
-    ok = focus_window(hwnd)
+    ok = focus_vrchat(hwnd)
     if (not ok or not previous or previous == hwnd
             or previous in SharedState.managed_hwnds()):
         return ok, None
@@ -676,6 +676,30 @@ def aim_in_window_image(hwnd: int) -> tuple | None:
     if cw <= 0 or ch <= 0:
         return None
     return (cx - left + cw / 2, cy - top + ch / 2)
+
+
+def lock_cursor(hwnd: int) -> bool:
+    """前面の VRChat で CURSOR_LOCK_KEY を押して離し、カーソルを中央に固定する（依頼者の実測。
+    固定済みでも押してよい）。浮いているかは見ない（Windows のカーソルの表示では判定が外れた）。
+    キーは前面の窓へ届くので、その窓が前面のときだけ押す。押したら True"""
+    if not config.CURSOR_LOCK_KEY or foreground_hwnd() != hwnd:
+        return False
+    DebugLog.write(f"[操作] カーソルを固定 → {config.CURSOR_LOCK_KEY} を押して離す "
+                   f"hwnd={int(hwnd):#x}")
+    try:
+        _hold_key(config.CURSOR_LOCK_KEY, config.CURSOR_LOCK_PRESS_SEC)
+    except Exception:
+        DebugLog.exception("WindowOperator.lock_cursor")
+        return False
+    return True
+
+
+def focus_vrchat(hwnd: int) -> bool:
+    """VRChat の窓を前面化し、カーソルを中央に固定する"""
+    ok = focus_window(hwnd)
+    if ok:
+        lock_cursor(hwnd)
+    return ok
 
 
 def cursor_position() -> tuple | None:

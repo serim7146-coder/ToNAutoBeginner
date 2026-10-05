@@ -1615,6 +1615,43 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.assertEqual(len(window.round_legend.get_children()), 2, "手元の2ラウンド")
         self.assertIn("手元 2件", window.v_info.get())
 
+    def _update(self, window):
+        with patch.object(ConnectDB, "fetch_rounds", return_value=[]), \
+             patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            window._load_rows_async()
+            for _ in range(400):
+                self.root.update()
+                if not window._rows_loading:
+                    break
+                time.sleep(0.005)
+        self.root.update()
+
+    def test_rounds_played_after_opening_show_up_on_update(self):
+        """開いた後の Unbound（Garden Rejects）が「更新」で出る。前は開き直すまで出なかった:
+        期間の終わりが開いたときのまま・テラーの集計が絞り込みが同じなら使い回し"""
+        window = self._open(lambda s, m: [])
+        self.assertEqual(window._terror_stats("Unbound")[0], 1, "201 の1枠")
+        later = 200 + 3 * 3600
+        self.store.add_own(later, 10, 12, 209, None, None, -13)
+
+        self._update(window)
+
+        self.assertEqual(window._picker_datetime("end"),
+                         StatisticsGUI._local(later).replace(minute=59, second=59))
+        self.assertEqual(window._terror_stats("Unbound")[0], 2, "209 も数える")
+        self.assertTrue(window.v_status.get().startswith("3ラウンド"), window.v_status.get())
+
+    def test_an_end_the_user_chose_is_kept(self):
+        window = self._open(lambda s, m: [])
+        chosen = window._picker_datetime("end")
+        window._set_picker_datetime("end", chosen.replace(hour=(chosen.hour + 1) % 24))
+        chosen = window._picker_datetime("end")
+        self.store.add_own(200 + 30 * 3600, 10, 12, 209, None, None, -13)
+
+        self._update(window)
+
+        self.assertEqual(window._picker_datetime("end"), chosen)
+
 
 
 

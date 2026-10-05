@@ -15,6 +15,11 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 APP_VERSION       = "v0.6.0"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
+# インストーラー（exe 単体の人はこれで入れ直す。Migration）
+SETUP_ASSET_NAME  = "ToNAutoBeginner-Setup.exe"
+# 起動中の目印（名前付きミューテックス）。インストーラー・アンインストーラーがこれを見て、
+# 起動中なら閉じるよう案内する。installer/ToNAutoBeginner.iss の AppMutex と同じ名前にする
+APP_MUTEX_NAME    = "ToNAutoBeginnerRunning"
 
 # ── 設定ファイル（前回のtnlパスなどを保存） ──
 SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "settings.json"
@@ -270,6 +275,16 @@ SPEED_RECV_TIMEOUT_SEC = 5.0    # 速度パケットが来ないと判断する�
 # ── フォーカス取得 ──
 FOCUS_RETRY_MAX      = 3     # 前面化を試みる回数
 FOCUS_RETRY_WAIT_SEC = 0.12  # 前面化要求後に反映を待つ時間
+# VRChat を前面にしても、カーソルが中央に固定されず浮いたままのことがある。前に出すたびに
+# このキーを押して離すと固定される（依頼者の実測。固定済みでも押してよい）。空文字にすると何もしない
+CURSOR_LOCK_KEY       = "tab"
+CURSOR_LOCK_PRESS_SEC = 0.05
+# 窓を大きくするキー（WindowLayout）。既定は未設定。大きくした窓の下端に空けるすき間。
+# 完全に隠れた VRChat は描画が間引かれるので、隠れる窓はここに少し見えるように置く
+BIG_WINDOW_KEY        = ""
+BIG_WINDOW_GAP_PX     = 2
+BIG_WINDOW_SCAN_MAX   = 32     # 探す VRChat の窓の数の上限
+FULLSCREEN_LEAVE_WAIT_SEC = 1.0   # Alt+Enter でフルスクリーンから窓に戻るのを待つ
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、
 # クリックの「押す→0.1秒→離す」の間で足りているので待たない（依頼者が後で調整する）

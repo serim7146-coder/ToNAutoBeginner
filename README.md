@@ -1,5 +1,12 @@
 # 最新リリース
-[ToNAutoBeginner](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner.exe)
+* [インストーラー（おすすめ）](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner-Setup.exe)
+* [exe 単体](https://github.com/serim7146-coder/ToNAutoBeginner/releases/latest/download/ToNAutoBeginner.exe)
+
+## インストール・アンインストール
+* インストーラーは管理者権限なしで入れます。入れる場所は選べます（既定は `%LOCALAPPDATA%\Programs\ToNAutoBeginner`。Program Files など管理者権限が要る場所は選べません）。スタートメニューから起動できます。
+* アップデートは今までどおりツールが自動で行います。設定や統計は残ります。
+* アンインストールは Windows の「設定 → アプリ」から行います。設定・統計・ログ・画像（`%APPDATA%\ToNAutoBeginner`）と展開先（`%LOCALAPPDATA%\ToNAutoBeginner`）も消えます。
+* exe 単体で使っている場合は、起動したときに自動でインストーラー版へ移行します（設定・統計はそのまま。移行後に前の exe は消えます）。
 
 # ToNAutoBeginner
 **VRChatワールド「Terrors of Nowhere」向けの支援ツール**
@@ -85,3 +92,6 @@
 * 緊急停止：P（変更可）を押せばマクロを停止します。長押しは要りません。
 * マクロ開始のキー：設定すると、そのキーで「マクロ開始」を押したのと同じになります（既定は未設定）。
 * チェイス：ラウンド中に F1（時計回り）／F2（反時計回り）を押すと、前面の窓がぐるぐる回ります。もう一度押すと止まります。
+* 窓を大きくするキー：設定すると（既定は未設定）、いちばん手前の VRChat をほぼ全画面に広げます。もう一度押すと元に戻します。
+  * VRChat は窓が完全に隠れると重くなる（FPS が落ちる）ので、本物のフルスクリーンにはせず下端を少し空け、隠れてしまうほかの VRChat の窓はそこに少し見えるように寄せます。
+* 続行ラウンドが終わると、その窓を続行ラウンドが始まる前の大きさと位置に戻します（キーで大きくした・手で大きくした・フルスクリーンにした、のどれでも）。

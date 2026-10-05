@@ -43,6 +43,44 @@ class TestFocusWindow(unittest.TestCase):
 
 
 
+class TestLockCursor(unittest.TestCase):
+    """VRChat を前に出すたびに Tab を押して離し、カーソルを中央に固定する（依頼者の実測）"""
+
+    def _lock(self, front=55):
+        with patch.object(WindowOperator, "foreground_hwnd", return_value=front), \
+             patch.object(WindowOperator, "_hold_key") as key:
+            pressed = WindowOperator.lock_cursor(55)
+        return pressed, key
+
+    def test_tab_is_pressed_and_released_every_time(self):
+        pressed, key = self._lock()
+        self.assertTrue(pressed)
+        key.assert_called_once_with("tab", config.CURSOR_LOCK_PRESS_SEC)
+
+    def test_only_when_that_window_is_in_front(self):
+        pressed, key = self._lock(front=99)
+        self.assertFalse(pressed, "前面でなければ別の窓へ Tab が入る")
+        key.assert_not_called()
+
+    def test_off_when_the_key_is_empty(self):
+        with patch.object(config, "CURSOR_LOCK_KEY", ""):
+            pressed, key = self._lock()
+        self.assertFalse(pressed)
+        key.assert_not_called()
+
+    def test_borrowing_the_front_locks_it(self):
+        with patch.object(WindowOperator, "foreground_hwnd", return_value=7), \
+             patch.object(WindowOperator, "cursor_position", return_value=(1, 2)), \
+             patch.object(WindowOperator, "focus_window", return_value=True), \
+             patch.object(WindowOperator, "lock_cursor") as lock:
+            WindowOperator.borrow_front(55)
+        lock.assert_called_once_with(55)
+        with patch.object(WindowOperator, "focus_window", return_value=False), \
+             patch.object(WindowOperator, "lock_cursor") as lock:
+            self.assertFalse(WindowOperator.focus_vrchat(55))
+        lock.assert_not_called()
+
+
 class TestActionExecutorFocusFailure(unittest.TestCase):
     """フォーカスを取れない時は操作を送らない"""
 

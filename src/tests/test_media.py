@@ -868,7 +868,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_big_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
         fake.v_freeze_rounds = {}

@@ -63,7 +63,8 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | モジュール | 責務 |
 |---|---|
 | `ActionExecutor.py` | 実際の操作。自爆（背面へキー）、Begin（移動・押し方・押し直し・位置合わせ）、DTM/Waldo の AFK 対策、速度検知、チェイス、アイテム自動取得、アイテムロストの前面化と音声。 |
-| `WindowOperator.py` | Win32 の操作。前面化・背面へのキー・クリック・カーソル・窓の矩形・前面の貸し借り（`FrontLoan`）。 |
+| `WindowLayout.py` | 窓を大きくするキー（ほぼフルスクリーン。下端を `BIG_WINDOW_GAP_PX` 空け、完全に隠れる VRChat の窓は描画の上端がそのすき間に見えるよう横にずらして寄せる。完全に隠れた VRChat は描画が間引かれるため）。続行ラウンドの始まり（続行フリーズを張った時）の窓の矩形を覚え、終わり（外した時）に戻す。フルスクリーンなら Alt+Enter で窓に戻してから（実機未確認）。続行フリーズからは `SharedState.set_continue_hooks` で呼ばれ、hwnd は `WindowState.hwnd`。 |
+| `WindowOperator.py` | Win32 の操作。前面化・背面へのキー・クリック・カーソル・窓の矩形・前面の貸し借り（`FrontLoan`）。VRChat を前に出すたびに `config.CURSOR_LOCK_KEY`（Tab）を押して離し、カーソルを中央に固定する（`lock_cursor`。依頼者の実測。浮いているかは見ない。その窓が前面のときだけ押す）。 |
 | `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight）と、速度（VelocityMagnitude）の受信。窓ごとに別ポート。 |
 | `BeginDetect.py` / `BeginMiss.py` / `ScreenCapture.py` | 画像で `[ BEGIN ]` を探す（PrintWindow で背面の窓も撮る）、見つからなかった撮影を残す。 |
 | `ItemFetch.py` | アイテム自動取得。OSC で店へ移動し、SIFT＋ホモグラフィで店のボタンを見つけ、視点を回してクリックする。 |
@@ -74,6 +75,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 |---|---|
 | `VRChatLauncher.py` / `VRChatDiscovery.py` | Steam から `launch.exe` を探して窓ごとに `--profile=N`・`--osc=` で起動、窓とログの対応付け（プロセスの起動時刻とログの作成時刻）。 |
 | `AutoUpdate.py` | GitHub Releases の最新版と比べて exe を差し替える。古い展開先も消す。開発実行では無効。 |
+| `Migration.py` | exe 単体で動いている人をインストーラー版へ移す（Setup を落として画面なしで実行）。開発実行では無効。 |
 | `PlaySound.py` | MCI（winmm）で音声を鳴らす。 |
 | `WindowVolume.py` | Windows のアプリごとの音量で、窓の状態ごとに VRChat の音量を変える。 |
 | `Recorder.py` / `OBSClient.py` | 続行ラウンドを OBS（obs-websocket v5）で録る。通信は専用のスレッド。 |
@@ -221,9 +223,17 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\fog_object_names.json` | 看破の名前ごとの答え合わせ |
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
-| リポジトリの `terrors.json`・`maps.json`・`item.json`・`voice/`・`begin_templates/`・`shop_templates/` | exe に同梱するデータ（item.json は準備中でまだ無い） |
+| リポジトリの `terrors.json`・`maps.json`・`item.json`・`voice/`・`begin_templates/`・`shop_templates/` | exe に同梱するデータ |
 
 ## 12. ビルド・テスト
 
 - ビルド: リポジトリの直下で `python build.py`（Nuitka の onefile）。展開先は `%LOCALAPPDATA%\ToNAutoBeginner\<版>-<ビルドの印>`。
+  exe ができたら続けてインストーラー `dist/ToNAutoBeginner-Setup.exe` を作る（Inno Setup 6 の ISCC。`installer/ToNAutoBeginner.iss`。見つからなければ exe だけ）。
+- インストーラー: ユーザー単位（管理者権限なし）で `%LOCALAPPDATA%\Programs\ToNAutoBeginner` に入れる。自動更新は exe の横で差し替えるので、書き込める場所に入れる。
+  起動中かは `config.APP_MUTEX_NAME` のミューテックス（`main.hold_running_mutex`。.iss の AppMutex と同じ名前）で見る。
+  アップデート（自動更新・Setup の上書き）ではアンインストールは走らずデータは残る。アンインストールはインストール先・`%APPDATA%\ToNAutoBeginner`・`%LOCALAPPDATA%\ToNAutoBeginner` を全部消す。
+  `AppId` は変えない（変えると別アプリ扱いになる）。
+- 新しく入れる人はインストール先を選ぶ（`DisableDirPage=auto`。上書きでは聞かない）。Program Files など管理者権限が要る場所は選べない（.iss の `NextButtonClick`）。
+- exe 単体からの移行（`Migration.py`）: exe 単体（Inno Setup のアンインストール情報 `InstallLocation` の外）で起動したら、最新リリースの `ToNAutoBeginner-Setup.exe` を落とし、元の exe の場所を settings.json（`migrated_from`）に書いて、PowerShell の係を裏で起こしてツールを終える。係は起動中の目印が消えるのを待ち（最大60秒）、Setup を `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /launch=1` で動かす。Setup は終わるとツールを起動する。Setup が成功したら（終了コード 0）係が元の exe（と `.old`）を消す。消せなかったときはインストール版が最初の起動で消す。失敗したらその回は今のまま動き、次の起動でやり直す。移行するときは更新の確認はしない。
+- リリース: `ToNAutoBeginner.exe`（自動更新が探すのはこの名前）と `ToNAutoBeginner-Setup.exe`（移行が探す）の両方を、`APP_VERSION` と同じタグのリリースに置く。
 - テスト: `src` で `python UnitTest.py`（全部）／`python UnitTest.py test_freezes`（1ファイル）。本体は `src/tests/test_*.py`、共通の準備は `src/tests/support.py`（Windows 専用モジュールの差し替え・本物の OSC / 設定 / DB に触らない安全装置）。
