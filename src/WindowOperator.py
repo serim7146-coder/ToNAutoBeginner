@@ -678,38 +678,13 @@ def aim_in_window_image(hwnd: int) -> tuple | None:
     return (cx - left + cw / 2, cy - top + ch / 2)
 
 
-class CURSORINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD),
-                ("hCursor", wintypes.HANDLE), ("ptScreenPos", wintypes.POINT)]
-
-
-CURSOR_SHOWING = 0x00000001
-
-
-def cursor_showing() -> bool | None:
-    """Windows のカーソルが見えているか。分からなければ None"""
-    info = CURSORINFO()
-    info.cbSize = ctypes.sizeof(CURSORINFO)
-    try:
-        if not user32.GetCursorInfo(ctypes.byref(info)):
-            return None
-    except Exception:
-        DebugLog.exception("WindowOperator.cursor_showing")
-        return None
-    return bool(info.flags & CURSOR_SHOWING)
-
-
 def lock_cursor(hwnd: int) -> bool:
-    """前面の VRChat でカーソルが浮いていたら、CURSOR_LOCK_KEY を押して離して中央に固定する。
-
-    VRChat はカーソルを中央に固定している間は Windows のカーソルを隠す（前提。見えていれば
-    浮いている）。固定されているときは押さない（押すと外れるキーかもしれないので）。押したら True
-    """
+    """前面の VRChat で CURSOR_LOCK_KEY を押して離し、カーソルを中央に固定する（依頼者の実測。
+    固定済みでも押してよい）。浮いているかは見ない（Windows のカーソルの表示では判定が外れた）。
+    キーは前面の窓へ届くので、その窓が前面のときだけ押す。押したら True"""
     if not config.CURSOR_LOCK_KEY or foreground_hwnd() != hwnd:
         return False
-    if not cursor_showing():
-        return False
-    DebugLog.write(f"[操作] カーソルが浮いている → {config.CURSOR_LOCK_KEY} を押して固定 "
+    DebugLog.write(f"[操作] カーソルを固定 → {config.CURSOR_LOCK_KEY} を押して離す "
                    f"hwnd={int(hwnd):#x}")
     try:
         _hold_key(config.CURSOR_LOCK_KEY, config.CURSOR_LOCK_PRESS_SEC)
@@ -720,7 +695,7 @@ def lock_cursor(hwnd: int) -> bool:
 
 
 def focus_vrchat(hwnd: int) -> bool:
-    """VRChat の窓を前面化し、カーソルが浮いていれば固定する"""
+    """VRChat の窓を前面化し、カーソルを中央に固定する"""
     ok = focus_window(hwnd)
     if ok:
         lock_cursor(hwnd)

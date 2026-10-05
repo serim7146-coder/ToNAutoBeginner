@@ -1716,6 +1716,8 @@ class TestReturnFront(unittest.TestCase):
         for p in (patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front),
                   patch.object(WindowOperator, "cursor_position", return_value=self.CURSOR),
                   patch.object(WindowOperator, "focus_window", side_effect=focus),
+                  # Tab で固定する分は TestLockCursor で見る（ここでは順番に混ぜない）
+                  patch.object(WindowOperator, "lock_cursor"),
                   patch.object(WindowOperator, "user32", user32),
                   patch.object(WindowOperator.win32gui, "IsWindow",
                                side_effect=lambda h: h in self.alive),
