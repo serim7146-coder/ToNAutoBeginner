@@ -2204,7 +2204,9 @@ class App(tk.Tk):
         self.v_suicide_cancel_key.set(cancel_key)
         self._refresh_suicide_cancel_key_label()
         # 窓を大きくするキー。不正・ほかのキーと同じなら未設定
-        big_key = data.get("big_window_key", config.BIG_WINDOW_KEY)
+        # 保存の名前は enlarge_window_key（前の版が未設定で保存した big_window_key は読まない。
+        # 既定の Ctrl+B を一度は効かせるため）
+        big_key = data.get("enlarge_window_key", config.BIG_WINDOW_KEY)
         if not HotKey.is_valid(big_key) or self._big_key_conflict(big_key):
             big_key = ""
         self.v_big_key.set(big_key)
@@ -3157,7 +3159,7 @@ class App(tk.Tk):
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
             "start_key":     self.v_start_key.get(),
-            "big_window_key": self.v_big_key.get(),
+            "enlarge_window_key": self.v_big_key.get(),
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "item_fetch":    SharedState.get_item_fetch(),
@@ -3177,7 +3179,7 @@ class App(tk.Tk):
         # ファイルに残り続ける。危ない設定は明示的に消す
         # skip_variant_exempt はチェックボックスごと廃止した。古いファイルに
         # 残っていても読まないが、ついでに消しておく
-        for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds"):
+        for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds", "big_window_key"):
             data.pop(key, None)
         save_settings(with_obs_password(data, self.v_obs_password.get()))
 

@@ -33,9 +33,11 @@ SW_RESTORE = 9
 MONITOR_DEFAULTTONEAREST = 2
 GWL_STYLE = -16
 WS_CAPTION = 0x00C00000
+WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE = 0x0231, 0x0232
+SMTO_ABORTIFHUNG = 0x0002
 
 _lock = threading.Lock()
-_big: tuple | None = None          # (大きくした窓, {窓: 元の矩形})
+_big: tuple | None = None          # (大きくした窓, {窓: 元の矩形}, 大きくした矩形)
 _saved: dict[int, tuple] = {}      # 続行ラウンドの窓 {窓: 始まったときの矩形}
 _log = DebugLog.write
 
@@ -137,6 +139,33 @@ def _set_rect(hwnd, rect, flags=SWP_NOZORDER | SWP_NOACTIVATE):
         return False
 
 
+def _notify(hwnd, msg):
+    try:
+        win32gui.SendMessageTimeout(hwnd, msg, 0, 0, SMTO_ABORTIFHUNG, 200)
+    except Exception:
+        DebugLog.exception("WindowLayout._notify")
+
+
+def _resize_like_drag(hwnd, rect) -> bool:
+    """手で窓の端をドラッグしたときと同じく、大きさ変更の始まり・終わりの合図で挟んで大きさを変える。
+    合図なしで変えると VRChat が元の大きさに戻すことがあった（依頼者: 大きくならない）"""
+    _notify(hwnd, WM_ENTERSIZEMOVE)
+    ok = _set_rect(hwnd, rect, 0)
+    _notify(hwnd, WM_EXITSIZEMOVE)
+    return ok
+
+
+def _near(a, b, tol: int = config.BIG_WINDOW_TOLERANCE_PX) -> bool:
+    return a is not None and b is not None and all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def _put_back_others(big):
+    """寄せたほかの窓を元の位置へ（大きくした窓は触らない）"""
+    for other, rect in big[1].items():
+        if other != big[0] and _window_exists(other):
+            _set_rect(other, rect)
+
+
 def _vrchat_windows() -> list[int]:
     """VRChat の窓を Z 順の下から上へ"""
     return VRChatDiscovery.get_vrchat_windows(config.BIG_WINDOW_SCAN_MAX)
@@ -193,19 +222,51 @@ def enlarge(hwnd: int) -> bool:
         others.append((other, other_rect, client[1] - other_rect[1]))
         originals[other] = other_rect
     target, moves = plan(work, gap, margins, others)
+    big = (hwnd, originals, target)
     with _lock:
-        _big = (hwnd, originals)
+        _big = big
     for other, (x, y) in moves.items():
         try:
             win32gui.SetWindowPos(other, HWND_TOP, x, y, 0, 0,
                                   SWP_NOSIZE | SWP_NOACTIVATE)
         except Exception:
             DebugLog.exception("WindowLayout.enlarge")
-    _set_rect(hwnd, target, 0)
+    _resize_like_drag(hwnd, target)
     with SharedState._GLOBAL_ACTION_LOCK:
         WindowOperator.focus_vrchat(hwnd)
+    time.sleep(config.BIG_WINDOW_CHECK_SEC)
+    actual = _window_rect(hwnd)
+    DebugLog.write(f"[窓] 大きくする hwnd={int(hwnd):#x} 元={rect} 目標={target} 結果={actual}")
+    if not _near(actual, target):
+        with _lock:
+            if _big is big:
+                _big = None
+        _put_back_others(big)
+        _log("[窓] ⚠ 大きくできませんでした（VRChat が大きさを戻しました）。寄せた窓は戻しました")
+        return False
     _log(f"[窓] 大きくしました（隠れる窓 {len(moves)} 個は下端に少し見えるように寄せました）")
+    threading.Thread(target=_watch_big, args=(big,), daemon=True).start()
     return True
+
+
+def _watch_big(big):
+    """大きくした窓の大きさが変わったら（VRChat が戻した・手で変えた・閉じた）、寄せた窓を戻す"""
+    global _big
+    hwnd, _originals, target = big
+    while True:
+        time.sleep(config.BIG_WINDOW_WATCH_SEC)
+        with _lock:
+            if _big is not big:
+                return              # キーで戻した・続行ラウンドの終わりで戻した
+        if _window_exists(hwnd) and _near(_window_rect(hwnd), target):
+            continue
+        with _lock:
+            if _big is not big:
+                return
+            _big = None
+        _put_back_others(big)
+        _log("[窓] 大きくした窓の大きさが変わったので、寄せた窓を元に戻しました")
+        return
 
 
 def restore_big():
@@ -256,9 +317,7 @@ def restore_after_continue(hwnd: int):
         if big is not None:
             _big = None
     if big is not None:
-        for other, other_rect in big[1].items():
-            if other != hwnd and _window_exists(other):
-                _set_rect(other, other_rect)
+        _put_back_others(big)
         # キーで大きくする前の大きさを優先（続行より前に大きくしていた場合も元へ戻す）
         rect = big[1].get(hwnd, rect)
     if rect is None or not _window_exists(hwnd):

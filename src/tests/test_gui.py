@@ -3130,7 +3130,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
-            "big_window_key",
+            "enlarge_window_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",

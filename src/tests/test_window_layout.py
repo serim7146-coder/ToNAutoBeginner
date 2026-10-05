@@ -43,6 +43,10 @@ class _Screen:
             patch.object(WindowLayout.win32gui, "IsZoomed", return_value=False),
             patch.object(WindowLayout.win32gui, "IsIconic", return_value=False),
             patch.object(WindowLayout.WindowOperator, "focus_vrchat", return_value=True),
+            patch.object(WindowLayout.win32gui, "SendMessageTimeout",
+                         side_effect=lambda h, msg, *_a: self.calls.append(("msg", h, msg))),
+            patch.object(WindowLayout.time, "sleep"),
+            patch.object(WindowLayout.threading, "Thread"),     # 見張りはテストで直接回す
         ]
 
 
@@ -91,6 +95,48 @@ class TestBigWindow(unittest.TestCase):
                          "隠れない窓は動かさない")
         self.assertEqual(self.screen.rects[self.HIDDEN1][2] - self.screen.rects[self.HIDDEN1][0], 867,
                          "大きさは変えない")
+
+    def test_the_resize_is_wrapped_like_a_drag(self):
+        WindowLayout.toggle_big()
+        msgs = [c for c in self.screen.calls if c[0] == "msg"]
+        self.assertEqual(msgs, [("msg", self.BIG, WindowLayout.WM_ENTERSIZEMOVE),
+                                ("msg", self.BIG, WindowLayout.WM_EXITSIZEMOVE)])
+        resize = next(i for i, c in enumerate(self.screen.calls) if c[0] == self.BIG)
+        self.assertLess(self.screen.calls.index(msgs[0]), resize)
+        self.assertGreater(self.screen.calls.index(msgs[1]), resize)
+
+    def test_when_vrchat_refuses_the_size_the_others_go_back_at_once(self):
+        before = dict(self.screen.rects)
+        real = self.screen.set_pos
+
+        def refuse(hwnd, after, x, y, w, h, flags):
+            if hwnd == self.BIG:
+                self.screen.calls.append((hwnd, x, y, w, h, flags))
+                return                       # VRChat が大きさを戻した
+            real(hwnd, after, x, y, w, h, flags)
+        with patch.object(WindowLayout.win32gui, "SetWindowPos", side_effect=refuse):
+            self.assertFalse(WindowLayout.toggle_big())
+        self.assertEqual(self.screen.rects, before, "寄せた窓は置いてけぼりにしない")
+        self.assertIsNone(WindowLayout._big)
+        self.assertIn("大きくできませんでした", self.logs[-1])
+
+    def test_when_the_big_window_changes_size_the_others_go_back(self):
+        before = dict(self.screen.rects)
+        WindowLayout.toggle_big()
+        big = WindowLayout._big
+        self.screen.rects[self.BIG] = before[self.BIG]      # VRChat か利用者が元に戻した
+        WindowLayout._watch_big(big)
+        for hwnd in (self.HIDDEN1, self.HIDDEN2, self.OTHER_MONITOR):
+            self.assertEqual(self.screen.rects[hwnd], before[hwnd])
+        self.assertIsNone(WindowLayout._big)
+
+    def test_the_watch_ends_when_restored_by_the_key(self):
+        WindowLayout.toggle_big()
+        big = WindowLayout._big
+        WindowLayout.toggle_big()                 # キーで戻した
+        calls = len(self.screen.calls)
+        WindowLayout._watch_big(big)
+        self.assertEqual(len(self.screen.calls), calls, "もう何もしない")
 
     def test_pressing_again_puts_everything_back(self):
         before = dict(self.screen.rects)
@@ -217,7 +263,8 @@ class TestBigWindowKey(unittest.TestCase):
 
     def test_it_is_saved_and_conflicts_are_refused(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertIn('"big_window_key": self.v_big_key.get()', src)
+        self.assertIn('"enlarge_window_key": self.v_big_key.get()', src)
+        self.assertEqual(config.BIG_WINDOW_KEY, "ctrl+b", "既定は Ctrl+B")
         app = MagicMock()
         app.v_emergency_key.get.return_value = "p"
         app.v_start_key.get.return_value = "f9"
