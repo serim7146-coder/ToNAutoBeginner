@@ -14,6 +14,8 @@ SIGNIFICANCE_LEVELS = (
 )
 
 MAPS_FILENAME = "maps.json"
+# ラウンド → maps.json の印。ほかのラウンドは "normal"
+MAP_FLAG_BY_ROUND = {"Run": "run", "8 Pages": "8pages"}
 
 
 @dataclass(frozen=True)
@@ -202,18 +204,11 @@ def map_name_for_id(map_id: Any, round_name: str = "") -> str:
     if not entries:
         return f"Map {normalized_id}"
 
-    if round_name:
-        for entry in entries:
-            rounds = entry.get("rounds")
-            if isinstance(rounds, list) and round_name in rounds:
-                return str(entry.get("name") or f"Map {normalized_id}")
-
-    non_run_entries = [
-        entry
-        for entry in entries
-        if not (isinstance(entry.get("rounds"), list) and entry.get("rounds") == ["Run"])
-    ]
-    entry = non_run_entries[0] if non_run_entries else entries[0]
+    # 同じ番号のマップがあるのは Run のマップだけ（1: Dring King's Citadel と Sewers）。
+    # maps.json の印（normal / 8pages / run。1 か 0）でラウンドに合う方を選ぶ
+    flag = MAP_FLAG_BY_ROUND.get(round_name, "normal")
+    entry = next((e for e in entries if e.get(flag) == 1),
+                 next((e for e in entries if e.get("run") != 1), entries[0]))
     return str(entry.get("name") or f"Map {normalized_id}")
 
 

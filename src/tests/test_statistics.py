@@ -1315,6 +1315,24 @@ class TestStatistics(unittest.TestCase):
         self.assertEqual(Statistics.map_name_for_id(1, "Run"), "Dring King's Citadel")
         self.assertEqual(Statistics.map_name_for_id(1, "Classic"), "Sewers")
         self.assertEqual(Statistics.map_name_for_id(999, "Classic"), "Map 999")
+        self.assertEqual(Statistics.map_name_for_id(1, "8 Pages"), "Sewers",
+                         "8 Pages の印が無くても Run のマップにはしない")
+        self.assertEqual(Statistics.map_name_for_id(1), "Sewers")
+
+    def test_maps_json_has_the_three_flags(self):
+        """rounds の一覧はやめて、normal / 8pages / run の印（1 か 0）だけ持つ"""
+        entries = Statistics.map_entries()
+        self.assertTrue(entries)
+        for entry in entries:
+            self.assertNotIn("rounds", entry)
+            self.assertTrue(all(entry.get(k) in (0, 1) for k in ("normal", "8pages", "run")), entry)
+        runs = [e["name"] for e in entries if e["run"] == 1]
+        self.assertEqual(runs, ["Dring King's Citadel"])
+        eight = {e["name"] for e in entries if e["8pages"] == 1}
+        self.assertEqual(eight, {
+            "Warehouse", "Hub", "Schoolhouse", "Pools", "Backrooms", "Secret", "Innyume", "Harvest",
+            "Pizzeria", "Experimentation", "Forest", "SlashCo HQ", "Dust", "The Wall", "Park",
+            "Tunnels", "The Fishbowl", "Hotel", "Space Colony"}, "依頼者の一覧（19 マップ）")
 
     def test_map_counts_for_terror_uses_map_names(self):
         rows = [
