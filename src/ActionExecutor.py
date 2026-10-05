@@ -770,7 +770,7 @@ class ActionExecutor:
         with SharedState._GLOBAL_ACTION_LOCK:
             if not self._is_running() or self._st.in_round:
                 return
-            WindowOperator.focus_window(self._cfg.hwnd)
+            WindowOperator.focus_vrchat(self._cfg.hwnd)
 
     def _vrchat_is_in_front(self) -> bool:
         """VRChat の窓が前面か。前面ならカーソルを触らずフォールバックする。
