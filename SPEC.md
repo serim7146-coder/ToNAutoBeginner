@@ -63,6 +63,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | モジュール | 責務 |
 |---|---|
 | `ActionExecutor.py` | 実際の操作。自爆（背面へキー）、Begin（移動・押し方・押し直し・位置合わせ）、DTM/Waldo の AFK 対策、速度検知、チェイス、アイテム自動取得、アイテムロストの前面化と音声。 |
+| `WindowLayout.py` | 窓を大きくするキー（ほぼフルスクリーン。下端を `BIG_WINDOW_GAP_PX` 空け、完全に隠れる VRChat の窓は描画の上端がそのすき間に見えるよう横にずらして寄せる。完全に隠れた VRChat は描画が間引かれるため）。続行ラウンドの始まり（続行フリーズを張った時）の窓の矩形を覚え、終わり（外した時）に戻す。フルスクリーンなら Alt+Enter で窓に戻してから（実機未確認）。続行フリーズからは `SharedState.set_continue_hooks` で呼ばれ、hwnd は `WindowState.hwnd`。 |
 | `WindowOperator.py` | Win32 の操作。前面化・背面へのキー・クリック・カーソル・窓の矩形・前面の貸し借り（`FrontLoan`）。VRChat を前に出すたびに `config.CURSOR_LOCK_KEY`（Tab）を押して離し、カーソルを中央に固定する（`lock_cursor`。依頼者の実測。浮いているかは見ない。その窓が前面のときだけ押す）。 |
 | `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight）と、速度（VelocityMagnitude）の受信。窓ごとに別ポート。 |
 | `BeginDetect.py` / `BeginMiss.py` / `ScreenCapture.py` | 画像で `[ BEGIN ]` を探す（PrintWindow で背面の窓も撮る）、見つからなかった撮影を残す。 |

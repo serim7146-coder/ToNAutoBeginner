@@ -20,6 +20,7 @@ import SharedState
 import PlaySound
 import MatchTNL
 import Migration
+import WindowLayout
 import ProcessCheck
 import VRChatDiscovery
 import VRChatLauncher
@@ -773,12 +774,14 @@ class App(tk.Tk):
         self._log_line_count = 0
         self._emergency_stop_key_pressed = False
         self._start_key_pressed = False
+        self._big_key_pressed = False
         # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
         self.v_emergency_key = tk.StringVar(value=config.EMERGENCY_STOP_KEY)
         self.v_start_key = tk.StringVar(value=config.START_KEY)
+        self.v_big_key = tk.StringVar(value=config.BIG_WINDOW_KEY)    # 窓を大きくするキー
         # キーの通知（keyboard のスレッド）が読む写し。StringVar は Tk のスレッドでしか読まない
-        self._watched_keys = (config.EMERGENCY_STOP_KEY, config.START_KEY)
-        for var in (self.v_emergency_key, self.v_start_key):
+        self._watched_keys = (config.EMERGENCY_STOP_KEY, config.START_KEY, config.BIG_WINDOW_KEY)
+        for var in (self.v_emergency_key, self.v_start_key, self.v_big_key):
             var.trace_add("write", lambda *_: self._remember_watched_keys())
         self.v_suicide_cancel_key = tk.StringVar(value=config.SUICIDE_CANCEL_KEY)
         self._suicide_cancel_hook = None
@@ -789,6 +792,10 @@ class App(tk.Tk):
         self._stop_reason: str | None = None
         DebugLog.install_hooks(self)          # 例外をトレースバックごと debug.log へ
         self._build_ui()
+        # 窓を大きくする・続行ラウンドの後に戻す（WindowLayout）。ログは画面へも（Tk のスレッドで）
+        WindowLayout.set_logger(lambda m: self._after_from_hook(self._log, m))
+        SharedState.set_continue_hooks(WindowLayout.on_continue_start,
+                                       WindowLayout.on_continue_end)
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
         self._auto_detect_windows()
@@ -841,7 +848,8 @@ class App(tk.Tk):
 
     def _remember_watched_keys(self):
         """Tk のスレッドで呼ぶ。キーを変えたら通知の側が読む写しも替える（代入1回で差し替える）"""
-        self._watched_keys = (self.v_emergency_key.get(), self.v_start_key.get())
+        self._watched_keys = (self.v_emergency_key.get(), self.v_start_key.get(),
+                              self.v_big_key.get())
 
     def _on_stop_start_key_event(self, event=None):
         """keyboard のスレッドから、キーを押す・離すたびに呼ばれる。
@@ -854,10 +862,12 @@ class App(tk.Tk):
             # 設定しようとしているキーで停止や開始がかかると困る
             self._emergency_stop_key_pressed = False
             self._start_key_pressed = False
+            self._big_key_pressed = False
             return
-        stop_key, start_key = self._watched_keys
+        stop_key, start_key, big_key = self._watched_keys
         self._check_stop_key(stop_key, event)
         self._check_start_key(start_key, event)
+        self._check_big_key(big_key, event)
 
     @staticmethod
     def _key_down_now(key: str, event=None) -> bool:
@@ -913,6 +923,31 @@ class App(tk.Tk):
         if now and not self._start_key_pressed:
             self._after_from_hook(self._on_start_key, key)
         self._start_key_pressed = now
+
+    def _check_big_key(self, key: str, event=None):
+        """窓を大きくするキー。未設定なら何もしない。不正なら無効へ戻す（マクロ開始と同じ）"""
+        if not key:
+            self._big_key_pressed = False
+            return
+        try:
+            now = self._key_down_now(key, event)
+        except Exception:
+            DebugLog.exception("mainGUI._check_big_key")
+            self._big_key_pressed = False
+            self._after_from_hook(self._disable_broken_big_key, key)
+            return
+        if now and not self._big_key_pressed:
+            # 窓を動かして前に出すので、keyboard のスレッドを止めないよう裏で
+            threading.Thread(target=WindowLayout.toggle_big, daemon=True).start()
+        self._big_key_pressed = now
+
+    def _disable_broken_big_key(self, key: str):
+        if self.v_big_key.get() != key:
+            return
+        self.v_big_key.set("")
+        self._big_key_pressed = False
+        self._refresh_big_key_label()
+        self._log(f"[窓を大きく] ⚠ {key!r} は使えないキーです。解除しました")
 
     def _after_from_hook(self, func, *args):
         try:
@@ -1100,6 +1135,7 @@ class App(tk.Tk):
         """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
         for name, other in (("緊急停止", self.v_emergency_key.get()),
                             ("マクロ開始", self.v_start_key.get()),
+                            ("窓を大きく", self.v_big_key.get()),
                             ("チェイス", config.CHASE_CW_KEY),
                             ("チェイス", config.CHASE_CCW_KEY)):
             if other and key == other:
@@ -1125,7 +1161,38 @@ class App(tk.Tk):
         self._refresh_start_key_label()
         self._log("[マクロ開始] 解除しました")
 
+    def _refresh_big_key_label(self):
+        key = self.v_big_key.get()
+        text = ("窓を大きく: 未設定" if not key
+                else f"窓を大きく: {HotKey.display(key)}キー")
+        try:
+            self.lbl_big_key.config(text=text)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _clear_big_key(self):
+        if not self.v_big_key.get():
+            self._log("[窓を大きく] すでに未設定です")
+            return
+        self.v_big_key.set("")
+        self._big_key_pressed = False
+        self._refresh_big_key_label()
+        self._log("[窓を大きく] 解除しました")
+
+    def _big_key_conflict(self, key) -> str | None:
+        """窓を大きくするキーと重なるほかのキーの名前。重ならなければ None"""
+        for name, other in (("緊急停止", self.v_emergency_key.get()),
+                            ("マクロ開始", self.v_start_key.get()),
+                            ("自爆キャンセル", self.v_suicide_cancel_key.get()),
+                            ("チェイス", config.CHASE_CW_KEY),
+                            ("チェイス", config.CHASE_CCW_KEY)):
+            if other and key == other:
+                return name
+        return None
+
     def _capture_button(self, target: str):
+        if target == "big":
+            return self.btn_capture_big_key
         if target == "cancel":
             return self.btn_capture_cancel_key
         return self.btn_capture_start_key if target == "start" else self.btn_capture_key
@@ -1159,11 +1226,15 @@ class App(tk.Tk):
         self._capturing_key = False
         self._emergency_stop_key_pressed = False
         self._start_key_pressed = False
+        self._big_key_pressed = False
         try:
             self._capture_button(target).config(text="キーを押して設定",
                                                 state="normal")
         except (tk.TclError, AttributeError):
             pass
+        if target == "big":
+            self._finish_capture_big_key(key)
+            return
         if target == "start":
             self._finish_capture_start_key(key)
             return
@@ -1186,6 +1257,10 @@ class App(tk.Tk):
             return
         if key == self.v_suicide_cancel_key.get():
             self._log("[緊急停止] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
+        if key == self.v_big_key.get():
+            self._log("[緊急停止] ⚠ 窓を大きくするキーと同じキーは使えません。"
                       "設定は変えていません")
             return
         self.v_emergency_key.set(key)
@@ -1213,10 +1288,32 @@ class App(tk.Tk):
             self._log("[マクロ開始] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
                       "設定は変えていません")
             return
+        if key == self.v_big_key.get():
+            self._log("[マクロ開始] ⚠ 窓を大きくするキーと同じキーは使えません。"
+                      "設定は変えていません")
+            return
         self.v_start_key.set(key)
         self._start_key_pressed = False
         self._refresh_start_key_label()
         self._log(f"[マクロ開始] {HotKey.display(key)}キーに変更しました")
+
+    def _finish_capture_big_key(self, key):
+        """窓を大きくするキーを設定する。取れない・不正・ほかのキーと同じなら今のまま"""
+        if key is None:
+            self._log("[窓を大きく] ⚠ キーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[窓を大きく] ⚠ {key!r} は使えないキーです。設定は変えていません")
+            return
+        other = self._big_key_conflict(key)
+        if other:
+            self._log(f"[窓を大きく] ⚠ {other}のキーと同じキーは使えません。設定は変えていません")
+            return
+        self.v_big_key.set(key)
+        self._big_key_pressed = False
+        self._refresh_big_key_label()
+        self._log(f"[窓を大きく] {HotKey.display(key)}キーに変更しました"
+                  "（いちばん手前の VRChat を大きくします。もう一度押すと戻します）")
 
     def _finish_capture_cancel_key(self, key):
         """自爆キャンセルのキーを設定する。取れない・不正・ほかのキーと同じなら今のまま"""
@@ -1506,6 +1603,21 @@ class App(tk.Tk):
             command=lambda: self._begin_capture_key("cancel"))
         self.btn_capture_cancel_key.pack(side="left", padx=(6, 0))
         self._refresh_suicide_cancel_key_label()
+
+        # 窓を大きくするキー（WindowLayout）。キーの行はもう広いので次の行に置く
+        fbk = ttk.Frame(self)
+        fbk.pack(pady=(0, 4))
+        self.lbl_big_key = ttk.Label(fbk, text="", foreground=config.GUI_ORG)
+        self.lbl_big_key.pack(side="left")
+        self.btn_capture_big_key = ttk.Button(
+            fbk, text="キーを押して設定", width=16,
+            command=lambda: self._begin_capture_key("big"))
+        self.btn_capture_big_key.pack(side="left", padx=(6, 0))
+        ttk.Button(fbk, text="解除", width=6,
+                   command=self._clear_big_key).pack(side="left", padx=(4, 0))
+        ttk.Label(fbk, text="※ 手前の VRChat をほぼ全画面に。続行ラウンドが終わると元に戻します",
+                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        self._refresh_big_key_label()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
@@ -2091,6 +2203,12 @@ class App(tk.Tk):
                 cancel_key = ""
         self.v_suicide_cancel_key.set(cancel_key)
         self._refresh_suicide_cancel_key_label()
+        # 窓を大きくするキー。不正・ほかのキーと同じなら未設定
+        big_key = data.get("big_window_key", config.BIG_WINDOW_KEY)
+        if not HotKey.is_valid(big_key) or self._big_key_conflict(big_key):
+            big_key = ""
+        self.v_big_key.set(big_key)
+        self._refresh_big_key_label()
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
@@ -3039,6 +3157,7 @@ class App(tk.Tk):
                                            for row in self.tool_rows) if p],
             "emergency_stop_key": self.v_emergency_key.get(),
             "start_key":     self.v_start_key.get(),
+            "big_window_key": self.v_big_key.get(),
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "item_fetch":    SharedState.get_item_fetch(),
@@ -3161,4 +3280,6 @@ class App(tk.Tk):
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
         self._show_own_windows_again()
+        WindowLayout.restore_big()          # キーで大きくしたままなら戻す
+        SharedState.set_continue_hooks(None, None)
         self.destroy()

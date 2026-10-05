@@ -298,7 +298,42 @@ round_freeze_start, round_freeze_end = _ROUND.start, _ROUND.end
 round_freeze_reset, get_round_freeze_count = _ROUND.reset, _ROUND.get_count
 
 # 続行・霧ラウンド中。DTM/Waldo の窓は is_continue_round=True でも張らない（他窓を止めない仕様）
-_CONTINUE = _Freeze("続行", "continue_freeze_held")
+class _ContinueFreeze(_Freeze):
+    """続行ラウンドのフリーズ。始まり・終わりに窓の大きさを覚える・戻す（set_continue_hooks）"""
+
+    def start(self, st):
+        was = getattr(st, self.held_attr)
+        super().start(st)
+        if not was and getattr(st, self.held_attr):
+            _call_continue_hook(0, st)
+
+    def end(self, st):
+        was = getattr(st, self.held_attr)
+        super().end(st)
+        if was and not getattr(st, self.held_attr):
+            _call_continue_hook(1, st)
+
+
+# (始まり, 終わり)。それぞれ hwnd を受け取る。mainGUI が WindowLayout のものを入れる
+_CONTINUE_HOOKS: list = [None, None]
+
+
+def set_continue_hooks(on_start, on_end):
+    _CONTINUE_HOOKS[:] = [on_start, on_end]
+
+
+def _call_continue_hook(index: int, st):
+    hook = _CONTINUE_HOOKS[index]
+    hwnd = getattr(st, "hwnd", 0)
+    if hook is None or not hwnd:
+        return
+    try:
+        hook(hwnd)
+    except Exception:
+        DebugLog.exception("SharedState._call_continue_hook")
+
+
+_CONTINUE = _ContinueFreeze("続行", "continue_freeze_held")
 CONTINUE_ROUND_EVENT = _CONTINUE.event
 continue_round_start, continue_round_end = _CONTINUE.start, _CONTINUE.end
 continue_round_reset, get_continue_round_count = _CONTINUE.reset, _CONTINUE.get_count
