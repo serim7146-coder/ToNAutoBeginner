@@ -1768,7 +1768,7 @@ class TestItemFetch(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_big_key", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
         app.v_freeze_rounds = {}
@@ -2301,7 +2301,6 @@ class TestSuicideCancel(unittest.TestCase):
         app._hook_suicide_cancel_key = lambda: mainGUI.App._hook_suicide_cancel_key(app)
         app.v_emergency_key = _CancelKeyVar("p")
         app.v_start_key = _CancelKeyVar("")
-        app.v_big_key = _CancelKeyVar("")
         with patch.object(mainGUI.keyboard, "hook_key", return_value="new") as hook, \
              patch.object(mainGUI.keyboard, "unhook") as unhook:
             mainGUI.App._finish_capture_cancel_key(app, "f8")
@@ -2395,7 +2394,7 @@ os._exit(0)
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_big_key", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
         app.v_freeze_rounds = {}
@@ -2412,7 +2411,6 @@ os._exit(0)
         app = _with_cancel_key(type("FakeApp", (), {})(), cancel)
         app.v_emergency_key = _CancelKeyVar(emergency)
         app.v_start_key = _CancelKeyVar(start)
-        app.v_big_key = _CancelKeyVar("")
         app._hook_suicide_cancel_key = MagicMock()
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
@@ -2473,7 +2471,7 @@ class TestStartKeySettings(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_big_key", "v_freeze_8pages",
+                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
@@ -2514,7 +2512,6 @@ class TestStartKeySettings(unittest.TestCase):
                      "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_start_key = self.FakeVar("f9")
-        app.v_big_key = self.FakeVar("")
         app.v_freeze_rounds = {}
         saved = {}
 

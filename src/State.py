@@ -63,8 +63,6 @@ class WindowState:
     # マクロの回（SharedState.begin_run）。前の回の窓がフリーズを張ったり解いたりしないため。
     # None は回を問わない（監視だけで使うとき・テスト）
     run_id: Optional[int] = field(default=None, compare=False)
-    # この窓の hwnd（監視の開始で入れる。続行ラウンドの後に窓の大きさを戻すのに使う）
-    hwnd: int = field(default=0, compare=False)
     # 窓の番号（debug.log の行に付けるため。判定には使わない）
     window_idx: int = field(default=0, compare=False)
     # このラウンドで Begin 前の移動を最後までやったか（押し直しで2回動かさないため）。

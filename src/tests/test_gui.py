@@ -496,7 +496,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_big_key",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
         app.v_obs_password = self.FakeVar(password)
@@ -540,7 +540,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_big_key", "v_freeze_8pages",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
@@ -1069,7 +1069,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages",
-                     "v_freeze_punish", "v_emergency_key", "v_start_key", "v_big_key",
+                     "v_freeze_punish", "v_emergency_key", "v_start_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -1117,7 +1117,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_big_key", "v_freeze_8pages",
+                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password", "v_win_count"):
             setattr(app, name, self.FakeVar(""))
@@ -1248,7 +1248,7 @@ class TestSettingsLive(unittest.TestCase):
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_big_key", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
         fake.v_freeze_rounds = {}
@@ -2227,7 +2227,6 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_emergency_key = TestEmergencyKeySettings.FakeVar(key)
         app.v_start_key = TestEmergencyKeySettings.FakeVar("")
-        app.v_big_key = TestEmergencyKeySettings.FakeVar("")
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
         return app
@@ -2355,9 +2354,6 @@ class TestStartKeyGui(unittest.TestCase):
 
     def test_an_unset_key_is_never_asked_about(self):
         """is_pressed("") を呼ばないこと"""
-        big = self.app.v_big_key.get()
-        self.app.v_big_key.set("")               # 窓を大きくするキー（既定 Ctrl+B）も外して見る
-        self.addCleanup(self.app.v_big_key.set, big)
         called, started = self._poll()
 
         self.assertNotIn("", called)
@@ -2903,7 +2899,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_big_key", "v_freeze_8pages",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
@@ -2953,7 +2949,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_big_key", "v_tnl",
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_tnl",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_freeze_rounds = {}
@@ -3115,7 +3111,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_big_key"):
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
@@ -3133,7 +3129,6 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
-            "enlarge_window_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
@@ -3146,7 +3141,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_big_key"):
+                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
@@ -3305,7 +3300,6 @@ class TestToolLauncherSettings(unittest.TestCase):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
         app.v_start_key = TestToolLauncherSettings.FakeVar("")
-        app.v_big_key = TestToolLauncherSettings.FakeVar("")
         return app
 
     def _save(self, app):

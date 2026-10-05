@@ -844,11 +844,6 @@ def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None
     app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)
-    # 窓を大きくするキー（重なりの判定は本物）
-    if not hasattr(app, "v_big_key"):
-        app.v_big_key = _CancelKeyVar("")
-    app._refresh_big_key_label = lambda: None
-    app._big_key_conflict = lambda k: mainGUI.App._big_key_conflict(app, k)
     return app
 
 

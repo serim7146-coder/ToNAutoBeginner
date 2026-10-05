@@ -2206,7 +2206,6 @@ class TestSkipRoundsSettings(unittest.TestCase):
         app._win_count_pref = None
         app.v_emergency_key = TestSkipRoundsSettings.FakeVar("p")
         app.v_start_key = TestSkipRoundsSettings.FakeVar("")
-        app.v_big_key = TestSkipRoundsSettings.FakeVar("")
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -2325,7 +2324,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app.tabs = [self._tab(), self._tab()]
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_big_key", "v_freeze_8pages",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
                      "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))

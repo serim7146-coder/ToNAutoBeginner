@@ -279,15 +279,6 @@ FOCUS_RETRY_WAIT_SEC = 0.12  # 前面化要求後に反映を待つ時間
 # このキーを押して離すと固定される（依頼者の実測。固定済みでも押してよい）。空文字にすると何もしない
 CURSOR_LOCK_KEY       = "tab"
 CURSOR_LOCK_PRESS_SEC = 0.05
-# 窓を大きくするキー（WindowLayout）。既定は Ctrl+B。大きくした窓の下端に空けるすき間。
-# 完全に隠れた VRChat は描画が間引かれるので、隠れる窓はここに少し見えるように置く
-BIG_WINDOW_KEY        = "ctrl+b"
-BIG_WINDOW_GAP_PX     = 2
-BIG_WINDOW_SCAN_MAX   = 32     # 探す VRChat の窓の数の上限
-BIG_WINDOW_CHECK_SEC  = 0.5    # 大きくしてから、本当に大きくなったかを見るまで
-BIG_WINDOW_WATCH_SEC  = 0.5    # 大きくした窓の大きさが変わっていないかを見る間隔
-BIG_WINDOW_TOLERANCE_PX = 2    # 大きさが「変わった」とみなすずれ
-FULLSCREEN_LEAVE_WAIT_SEC = 1.0   # Alt+Enter でフルスクリーンから窓に戻るのを待つ
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、
 # クリックの「押す→0.1秒→離す」の間で足りているので待たない（依頼者が後で調整する）
