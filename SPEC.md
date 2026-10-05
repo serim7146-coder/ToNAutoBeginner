@@ -224,6 +224,7 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
 | リポジトリの `terrors.json`・`maps.json`・`item.json`・`voice/`・`begin_templates/`・`shop_templates/` | exe に同梱するデータ |
+| `maps.json` の各マップ | `id`・`name` と印 `normal`（通常ラウンドで出る）・`8pages`（8 Pages で選ばれる）・`run`（Run のマップ）。1 か 0。同じ番号は 1 だけ（Dring King's Citadel と Sewers）で、統計の名前はラウンドに合う印で選ぶ（`Statistics.map_name_for_id`） |
 
 ## 12. ビルド・テスト
 
