@@ -1,6 +1,5 @@
 {
-  "source": "VRChat output logs listed in the 2026-05-26 request",
-  "note": "normal = 通常ラウンドで出る / 8pages = 8 Pages で選ばれる（依頼者の一覧。画像の Pool はログの表記の Pools） / run = Run のマップ（1 か 0）",
+  "note": "normal = 通常ラウンドで出る / 8pages = 8 Pages で選ばれる / run = Run のマップ（1 か 0）",
   "maps": [
     {"id": 0, "name": "Warehouse", "normal": 1, "8pages": 1, "run": 0},
     {"id": 1, "name": "Dring King's Citadel", "normal": 0, "8pages": 0, "run": 1},
