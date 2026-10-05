@@ -2027,6 +2027,21 @@ class TestKeepFetchingTheLostItem(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process(self.P + body)
 
+    def test_an_8_pages_loss_without_a_page_is_fetched(self):
+        """8 Pages の開始でロストと判定し、ページを取らずに終わった（2026-10-05 窓6: 自爆した）。
+        所持の記録はまだ失っていないが、持っていたものを取りに行く"""
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x22, osc_port=9000, auto_begin=True), {},
+                                        lambda _m: None, window_idx=2)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor._running = True
+        self._line(monitor, "Equipping 29.")
+        self._line(monitor, "This round is taking place at Hub (71) and the round type is 8 Pages")
+        self.assertEqual(monitor.st.item_id, 0, "ロストと判定")
+        self.assertEqual(monitor.st.held_item_id, 29, "所持はまだ失っていない（ページを取っていない）")
+        self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29))
+
     def test_the_next_unrecovered_round_still_fetches(self):
         monitor = self._lost_last_round()
         self.assertEqual(monitor._action.item_fetch_target(), ("Survival", 29))

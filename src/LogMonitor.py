@@ -926,6 +926,11 @@ class LogMonitor:
         st.item_lost_this_round = True
         st.randomizer_item_changed = False
         st.item_id = 0
+        if st.held_item_id:
+            # 持っていたものが分かっていれば、自動取得はそれを取りに行く。8 Pages の開始は
+            # 所持の記録ではまだ失わない（ページを取ったときに失う）ので、ここで覚えないと
+            # ロストと判定したのに何も取りに行かなかった（依頼者 2026-10-05）
+            st.last_lost_item_id = st.held_item_id
         if message and not already_lost:
             if not had_item:
                 head = message.rsplit(": ", 1)[0]
