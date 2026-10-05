@@ -311,6 +311,8 @@ class StatisticsWindow(tk.Toplevel):
         self._reanalyze_job: str | None = None
         self._rows_loading = False
         self._range_set = False
+        # 期間の終わりとしてツールが入れた値。利用者が変えていなければ、更新のたびに最新まで伸ばす
+        self._auto_end: datetime | None = None
         self._filter: RoundStore.Filter | None = None
         self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
         self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
@@ -562,15 +564,30 @@ class StatisticsWindow(tk.Toplevel):
         self._rows_loading = False
         self.v_info.set(f"最終更新 {datetime.now().strftime('%H:%M:%S')} / 手元 {self.store.count()}件")
         self._populate_rounds()
-        if not self._range_set:
-            first, last = self.store.time_range()
-            if first is not None:
+        first, last = self.store.time_range()
+        if first is not None:
+            if not self._range_set:
                 self._set_picker_datetime("start", _local(first))
-                self._set_picker_datetime("end", _local(last))
                 self._range_set = True
+                self._set_auto_end(last)
+            elif self._end_is_auto():
+                self._set_auto_end(last)    # 最初に開いた後のラウンドも期間に入れる
+        # 行が増えたので、絞り込みが同じでも集計し直す（前は開き直すまで古い集計のままだった）
+        self._filter = None
         self._analyze()
         if not ok:
             self.v_status.set("更新できませんでした（手元の分を表示）")
+
+    def _set_auto_end(self, last):
+        self._set_picker_datetime("end", _local(last))
+        self._auto_end = self._picker_datetime("end")
+
+    def _end_is_auto(self) -> bool:
+        """期間の終わりが、ツールが入れた値のままか（利用者が変えていないか）"""
+        try:
+            return self._auto_end is not None and self._picker_datetime("end") == self._auto_end
+        except (ValueError, tk.TclError):
+            return False
 
     # ── ラウンドの選択 ───────────────────────────
     def _populate_rounds(self):
@@ -701,7 +718,7 @@ class StatisticsWindow(tk.Toplevel):
             return
 
         flt = self._make_filter(start_at, end_at, rounds)
-        if flt != self._filter:
+        if flt != self._filter:     # 絞り込みが変わった・行が増えた（_on_rows_loaded が None にする）
             self._filter = flt
             self._terror_stats_cache.clear()
             self._map_counts_cache.clear()
