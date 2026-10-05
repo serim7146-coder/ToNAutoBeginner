@@ -174,18 +174,19 @@ def _vrchat_windows() -> list[int]:
 # ── 大きくする・戻す（キー） ──────────────────────
 
 def toggle_big() -> bool:
-    """大きくしていれば戻す。していなければ、いちばん手前の VRChat を大きくする。
-    大きくしたら True"""
+    """前面の VRChat で押されたときだけ働く。大きくしていれば戻し、していなければその窓を
+    大きくする。ほかのアプリ（Chrome など。Ctrl+B はブックマークバー）が前面なら何もしない
+    （キーは全体で拾うので、前は前面に関係なく手前の VRChat を大きくしていた）。大きくしたら True"""
+    front = WindowOperator.foreground_hwnd()
+    if front not in _vrchat_windows():
+        DebugLog.write(f"[窓] 前面が VRChat ではないので、窓を大きくするキーは何もしません hwnd={front:#x}")
+        return False
     with _lock:
         big = _big
     if big is not None:
         restore_big()
         return False
-    windows = _vrchat_windows()
-    if not windows:
-        _log("[窓] VRChat の窓が見つかりません")
-        return False
-    return enlarge(windows[-1])
+    return enlarge(front)
 
 
 def enlarge(hwnd: int) -> bool:

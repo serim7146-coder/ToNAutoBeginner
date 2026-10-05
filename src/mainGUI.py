@@ -1615,7 +1615,7 @@ class App(tk.Tk):
         self.btn_capture_big_key.pack(side="left", padx=(6, 0))
         ttk.Button(fbk, text="解除", width=6,
                    command=self._clear_big_key).pack(side="left", padx=(4, 0))
-        ttk.Label(fbk, text="※ 手前の VRChat をほぼ全画面に。続行ラウンドが終わると元に戻します",
+        ttk.Label(fbk, text="※ 前面の VRChat をほぼ全画面に。続行ラウンドが終わると元に戻します",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
         self._refresh_big_key_label()
 

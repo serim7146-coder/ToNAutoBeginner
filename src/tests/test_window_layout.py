@@ -14,6 +14,7 @@ class _Screen:
 
     def __init__(self, rects):
         self.rects = dict(rects)        # {hwnd: (左, 上, 右, 下)}
+        self.front = None               # 前面の窓（None ならいちばん手前の VRChat）
         self.fullscreen: set = set()
         self.calls = []
 
@@ -47,6 +48,9 @@ class _Screen:
                          side_effect=lambda h, msg, *_a: self.calls.append(("msg", h, msg))),
             patch.object(WindowLayout.time, "sleep"),
             patch.object(WindowLayout.threading, "Thread"),     # 見張りはテストで直接回す
+            # 前面は「いちばん手前の VRChat」（キーは前面の VRChat で押された）
+            patch.object(WindowLayout.WindowOperator, "foreground_hwnd",
+                         side_effect=lambda: self.front if self.front is not None else order[-1]),
         ]
 
 
@@ -137,6 +141,19 @@ class TestBigWindow(unittest.TestCase):
         calls = len(self.screen.calls)
         WindowLayout._watch_big(big)
         self.assertEqual(len(self.screen.calls), calls, "もう何もしない")
+
+    def test_nothing_happens_when_another_app_is_in_front(self):
+        """Chrome などが前面のとき（Ctrl+B はブックマークバー）は大きくも戻しもしない"""
+        before = dict(self.screen.rects)
+        self.screen.front = 0x999
+        self.assertFalse(WindowLayout.toggle_big())
+        self.assertEqual(self.screen.rects, before)
+        self.assertEqual(self.screen.calls, [])
+
+    def test_the_vrchat_in_front_is_the_one_enlarged(self):
+        self.screen.front = self.HIDDEN1           # いちばん手前でなくても、前面の VRChat
+        self.assertTrue(WindowLayout.toggle_big())
+        self.assertEqual(WindowLayout._big[0], self.HIDDEN1)
 
     def test_pressing_again_puts_everything_back(self):
         before = dict(self.screen.rects)

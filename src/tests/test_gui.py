@@ -2355,6 +2355,9 @@ class TestStartKeyGui(unittest.TestCase):
 
     def test_an_unset_key_is_never_asked_about(self):
         """is_pressed("") を呼ばないこと"""
+        big = self.app.v_big_key.get()
+        self.app.v_big_key.set("")               # 窓を大きくするキー（既定 Ctrl+B）も外して見る
+        self.addCleanup(self.app.v_big_key.set, big)
         called, started = self._poll()
 
         self.assertNotIn("", called)
