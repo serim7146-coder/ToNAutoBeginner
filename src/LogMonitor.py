@@ -149,7 +149,6 @@ class LogMonitor:
 
     def start(self):
         self.st.run_id = SharedState.current_run()      # この回の窓（止めた後に張るフリーズは数えない）
-        self.st.hwnd = self.cfg.hwnd                     # 続行ラウンドの後に窓の大きさを戻すため
         self._running = True
         self._stop_event.clear()
         self.early_read_capable = bool(
