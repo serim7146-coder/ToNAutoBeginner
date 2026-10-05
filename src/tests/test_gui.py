@@ -2355,6 +2355,9 @@ class TestStartKeyGui(unittest.TestCase):
 
     def test_an_unset_key_is_never_asked_about(self):
         """is_pressed("") を呼ばないこと"""
+        big = self.app.v_big_key.get()
+        self.app.v_big_key.set("")               # 窓を大きくするキー（既定 Ctrl+B）も外して見る
+        self.addCleanup(self.app.v_big_key.set, big)
         called, started = self._poll()
 
         self.assertNotIn("", called)
@@ -3130,7 +3133,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
-            "big_window_key",
+            "enlarge_window_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",

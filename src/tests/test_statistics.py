@@ -1332,7 +1332,7 @@ class TestStatistics(unittest.TestCase):
         self.assertEqual(eight, {
             "Warehouse", "Hub", "Schoolhouse", "Pools", "Backrooms", "Secret", "Innyume", "Harvest",
             "Pizzeria", "Experimentation", "Forest", "SlashCo HQ", "Dust", "The Wall", "Park",
-            "Tunnels", "The Fishbowl", "Hotel", "Space Colony"}, "依頼者の一覧（19 マップ）")
+            "Tunnels", "The Fishbowl", "Hotel", "Space Colony"}, "8 Pages で選ばれる 19 マップ")
 
     def test_map_counts_for_terror_uses_map_names(self):
         rows = [
