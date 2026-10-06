@@ -6,7 +6,7 @@
 * インストーラーは管理者権限なしで入れます。入れる場所は選べます（既定は `%LOCALAPPDATA%\Programs\ToNAutoBeginner`。Program Files など管理者権限が要る場所は選べません）。スタートメニューから起動できます。
 * アップデートは今までどおりツールが自動で行います。設定や統計は残ります。
 * アンインストールは Windows の「設定 → アプリ」から行います。設定・統計・ログ・画像（`%APPDATA%\ToNAutoBeginner`）と展開先（`%LOCALAPPDATA%\ToNAutoBeginner`）も消えます。
-* exe 単体で使っている場合は、起動したときに自動でインストーラー版へ移行します（設定・統計はそのまま。移行後に前の exe は消えます）。
+* exe 単体で使っている場合は、起動したときに自動でインストーラー版へ移行します（設定・統計はそのまま。移行後に前の exe は消えます）。入れる場所は、前の exe があったフォルダです（Program Files など入れられない場所なら `%LOCALAPPDATA%\Programs\ToNAutoBeginner`）。
 
 # ToNAutoBeginner
 **VRChatワールド「Terrors of Nowhere」向けの支援ツール**

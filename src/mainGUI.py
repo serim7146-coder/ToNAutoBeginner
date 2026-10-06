@@ -2651,18 +2651,21 @@ class App(tk.Tk):
         except OSError:
             setup = Path(tmp)
         save_settings({**load_settings(), Migration.SETTINGS_KEY: str(exe)})
+        # 入れる場所は古い exe のフォルダ（入れられない場所なら Setup の既定）
+        install_dir = Migration.target_dir(Path(exe), Migration.installed_dir())
         messagebox.showinfo(
             "インストーラー版へ移行",
             "インストーラー版へ移行するため、いったん終了します。\n"
             "設定と統計はそのまま引き継がれます。\n"
             "1分ほどで自動で起動します（スタートメニューからも起動できます）。")
-        if not Migration.launch_setup(setup, Path(exe)):
+        if not Migration.launch_setup(setup, Path(exe), install_dir):
             self._log("[移行] インストーラーを起動できませんでした。今回はこのまま使えます")
             messagebox.showwarning("インストーラー版へ移行",
                                    "インストーラーを起動できませんでした。今回はこのまま使えます"
                                    "（次の起動でやり直します）。")
             return
-        DebugLog.write(f"[環境] インストーラー版へ移行（元の exe: {exe}）")
+        DebugLog.write(f"[環境] インストーラー版へ移行（元の exe: {exe}、入れる場所: "
+                       f"{install_dir or 'Setup の既定'}）")
         self._on_close()
 
     def _cleanup_migrated_exe(self):

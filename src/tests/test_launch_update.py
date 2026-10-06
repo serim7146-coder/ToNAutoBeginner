@@ -1157,6 +1157,46 @@ class TestMigrationRules(unittest.TestCase):
         self.assertIn("'D:/tools/ToNAutoBeginner.exe', 'D:/tools/ToNAutoBeginner.exe.old'",
                       script[removal:])
 
+    def test_setup_installs_into_the_old_exes_folder(self):
+        setup = Path("C:/Temp/ToNAutoBeginner-Setup.exe")
+        script = Migration.setup_script(setup, Path("D:/my tools/x.exe"), Path("D:/my tools"))
+        self.assertIn("""'/launch=1','/DIR="D:/my tools"'""", script, "空白があっても1つの引数")
+        removal = script[script.index("if ($p.ExitCode -eq 0)"):]
+        self.assertIn("'D:/my tools/x.exe', 'D:/my tools/x.exe.old'", removal,
+                      "名前が違う古い exe は消す")
+        self.assertNotIn("/DIR=", Migration.setup_script(setup, Path("D:/my tools/x.exe")))
+
+    def test_an_exe_overwritten_by_setup_is_not_removed(self):
+        """同じフォルダに同じ名前で入れたら、その exe はもう新しいもの。.old だけ消す"""
+        setup = Path("C:/Temp/ToNAutoBeginner-Setup.exe")
+        old = Path("D:/tools") / config.UPDATE_ASSET_NAME
+        script = Migration.setup_script(setup, old, Path("D:/tools"))
+        removal = script[script.index("if ($p.ExitCode -eq 0)"):]
+        self.assertNotIn(f"'{old}'", removal)
+        self.assertIn(f"'{old}.old'", removal)
+
+    def test_the_target_is_the_old_folder_when_it_can_be_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / "tools"
+            folder.mkdir()
+            old = folder / "ToNAutoBeginner.exe"
+            with patch.dict(os.environ, {e: "" for e in Migration.PROTECTED_DIR_ENVS}):
+                self.assertEqual(Migration.target_dir(old, None), Path(os.path.abspath(folder)))
+                self.assertIsNone(Migration.target_dir(old, Path("C:/Apps/ToNAutoBeginner")),
+                                  "もう入れてある人はその場所のまま")
+                self.assertIsNone(Migration.target_dir(Path(Path(d).anchor) / "x.exe", None),
+                                  "ドライブの直下には入れない")
+                with patch.object(Migration, "_writable", return_value=False):
+                    self.assertIsNone(Migration.target_dir(old, None), "書き込めない")
+            with patch.dict(os.environ, {"ProgramFiles": d}):
+                self.assertIsNone(Migration.target_dir(old, None), "管理者権限が要る場所")
+            self.assertEqual(list(folder.iterdir()), [], "書き込めるか見た跡は残さない")
+
+    def test_the_protected_folders_match_the_installer(self):
+        iss = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
+        for env in Migration.PROTECTED_DIR_ENVS:
+            self.assertIn(f"GetEnv('{env}')", iss)
+
     def test_the_installer_relaunches_after_a_silent_migration(self):
         iss = (REPO_ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8-sig")
         self.assertIn("Check: LaunchAfterSilentInstall", iss)
@@ -1214,10 +1254,14 @@ class TestMigrationInTheApp(unittest.TestCase):
             tmp.write_text("setup", encoding="utf-8")
             mainGUI.save_settings({"win_count": 3})
             with patch.object(mainGUI.messagebox, "showinfo"), \
+                 patch.object(Migration, "installed_dir", return_value=None), \
+                 patch.object(Migration, "target_dir", return_value=Path("D:/tools")) as target, \
                  patch.object(Migration, "launch_setup", return_value=True) as launch:
                 mainGUI.App._finish_migration(app, Path("D:/tools/ToNAutoBeginner.exe"), tmp)
             setup = Path(d) / config.SETUP_ASSET_NAME
-            launch.assert_called_once_with(setup, Path("D:/tools/ToNAutoBeginner.exe"))
+            target.assert_called_once_with(Path("D:/tools/ToNAutoBeginner.exe"), None)
+            launch.assert_called_once_with(setup, Path("D:/tools/ToNAutoBeginner.exe"),
+                                           Path("D:/tools"))
             self.assertTrue(setup.exists())
         data = mainGUI.load_settings()
         self.assertEqual(data[Migration.SETTINGS_KEY], str(Path("D:/tools/ToNAutoBeginner.exe")))

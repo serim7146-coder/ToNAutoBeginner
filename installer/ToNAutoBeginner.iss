@@ -10,7 +10,10 @@
 ; - 起動中かは AppMutex（src/config.py の APP_MUTEX_NAME と同じ名前）で見る
 ; - 新しく入れる人はインストール先を選ぶ（上書きのときは前の場所のまま聞かない）。
 ;   管理者権限が要る場所（Program Files など）は選べない（自動更新が書き込めない）
-; - exe 単体からの移行（src/Migration.py）は /VERYSILENT /launch=1 で動かす。終わったら起動する
+; - exe 単体からの移行（src/Migration.py）は /VERYSILENT /launch=1 で動かす。終わったら起動する。
+;   入れる場所は元の exe のフォルダ（/DIR）。入れられない場所なら /DIR を付けず既定の場所へ
+; - NextButtonClick は画面なしでも呼ばれる（Inno Setup のヘルプ）。そのときにメッセージで
+;   止まらないよう SuppressibleMsgBox を使う
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -93,9 +96,9 @@ begin
     if IsUnder(Dir, GetEnv('ProgramW6432')) or IsUnder(Dir, GetEnv('ProgramFiles'))
        or IsUnder(Dir, GetEnv('ProgramFiles(x86)')) or IsUnder(Dir, GetEnv('SystemRoot')) then
     begin
-      MsgBox('Program Files など、管理者権限が要るフォルダには入れられません' + #13#10 +
-             '（自動更新で書き換えられなくなります）。別のフォルダを選んでください。',
-             mbError, MB_OK);
+      SuppressibleMsgBox('Program Files など、管理者権限が要るフォルダには入れられません' + #13#10 +
+                         '（自動更新で書き換えられなくなります）。別のフォルダを選んでください。',
+                         mbError, MB_OK, IDOK);
       Result := False;
     end;
   end;
