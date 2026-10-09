@@ -190,7 +190,7 @@ class TestOscBranching(unittest.TestCase):
 
     def _executor(self, osc_port):
         cfg = WindowConfig(hwnd=123, osc_port=osc_port)
-        st = WindowState()
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
 
     def test_uses_osc_only_when_port_assigned(self):
@@ -204,7 +204,7 @@ class TestOscBranching(unittest.TestCase):
              patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "hold_key") as mock_key:
             ex.move("forward", 2.1)
-        mock_press.assert_called_once_with("/input/MoveForward", 2.1, stop=ex._stopped)
+        mock_press.assert_called_once_with("/input/MoveForward", 2.1, stop=ex._move_stopped)
         mock_key.assert_not_called()
 
     def test_move_falls_back_to_the_background_key_without_osc(self):
@@ -214,7 +214,7 @@ class TestOscBranching(unittest.TestCase):
                           return_value=True) as mock_key,              patch.object(WindowOperator, "focus_window") as focus:
             ex.move("forward", 2.1)
 
-        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1, stop=ex._stopped)
+        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1, stop=ex._move_stopped)
         focus.assert_not_called()
 
     def test_a_failed_background_key_is_logged(self):
@@ -1640,7 +1640,8 @@ class TestStopReleasesHolds(unittest.TestCase):
 
     def test_the_begin_move_uses_the_stop(self):
         running = {"on": True}
-        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), WindowState(),
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000),
+                                           WindowState(instance_type=config.INSTANCE_PRIVATE),
                                            lambda: running["on"], lambda _m: None)
         with patch.object(ex._osc, "press_multi") as multi, patch.object(ex._osc, "stop_all"):
             ex.move_forward_left(2.0, 0.1)

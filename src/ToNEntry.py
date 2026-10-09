@@ -27,10 +27,13 @@ import WindowOperator
 
 class ToNEntry:
     def __init__(self, hwnd: int, osc_port: int = None, window_index: int = 0,
-                 log=None, is_running=None):
+                 log=None, is_running=None, can_operate=None):
         self._hwnd = hwnd
         self._log = log or (lambda _m: None)
         self._is_running = is_running or (lambda: True)
+        # この窓で移動・クリックしてよいか（private だけ。ActionExecutor.can_operate_in）。
+        # 渡されなければ分からない → しない
+        self._can_operate = can_operate or (lambda: False)
         if osc_port is None:
             osc_port, _out = OSCClient.ports_for_window(window_index)
         self._osc = OSCClient.OSCClient(osc_port)
@@ -110,6 +113,8 @@ class ToNEntry:
                    "back": "/input/MoveBackward"}.get(direction)
         if not address:
             return False
+        if not self._can_operate():
+            return False
         self._log(f"OSC移動 {direction} {seconds}秒")
         ok = self._osc.press(address, seconds, stop=lambda: not self._is_running())
         self._osc.stop_all(repeat=1)     # 入力が残らないよう必ず解除
@@ -122,7 +127,7 @@ class ToNEntry:
         （移動はOSCでフォーカス不要なのでロックしない）。
         """
         with SharedState._GLOBAL_ACTION_LOCK:
-            if not self._is_running():
+            if not self._is_running() or not self._can_operate():
                 return False
             ok, loan = WindowOperator.borrow_front(self._hwnd)
             if not ok:
@@ -147,6 +152,9 @@ class ToNEntry:
             右 → クリック（BGM）→ クリック（LET ME PLAY）
         最後の2回は的がほぼ同じ位置にあるため移動せず続けて押す。
         """
+        if not self._can_operate():
+            self._log("入室時の自動操作はプライベートのインスタンスだけで行います → しません")
+            return False
         if not self.wait_for_panel():
             return False
 

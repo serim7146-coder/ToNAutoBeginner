@@ -69,6 +69,14 @@ def depth_target(direction: str) -> float:
             else config.BEGIN_ADJUST_BACK_TARGET_W)
 
 
+def can_operate_in(instance_type: str) -> bool:
+    """このインスタンスで OSC 操作・クリック操作（移動・マウス・カーソル・チェイス）をしてよいか。
+    private（招待・招待+・フレンド・フレンド+）だけ（依頼者）。種類が分からない（入室前・
+    ログに入室の行が無い）ときは今までの private の判定と同じく不可。
+    前面化・窓の切り替え・音・判定・グループの自爆（キー）はこれを見ない"""
+    return instance_type == config.INSTANCE_PRIVATE
+
+
 class ActionExecutor:
     # 検出器が使えないことは、アプリ起動中に1回だけ告げる
     _detector_unavailable_logged = False
@@ -117,6 +125,10 @@ class ActionExecutor:
     def uses_osc(self) -> bool:
         return self._osc is not None
 
+    def can_operate(self) -> bool:
+        """この窓で OSC 操作・クリック操作をしてよいか（can_operate_in）。送る入口は全部これを見る"""
+        return can_operate_in(self._st.instance_type)
+
     # ── チェイス（押し続けて回る）──────────────────
     # 向き → (OSC のアドレス2つ, OSC が使えない窓のキー2つ)。Shift なし
     CHASE_INPUTS = {
@@ -125,12 +137,17 @@ class ActionExecutor:
     }
 
     def chase_key(self, direction: str) -> str:
-        """チェイスのキー。"start" / "stop"（同じ向き）/ "switch"（反対の向き）。
+        """チェイスのキー。"start" / "stop"（同じ向き）/ "switch"（反対の向き）/
+        "denied"（private でない。回っていれば止める）。
 
         どのスレッドから呼んでもよい（鍵）。前面を奪わないので
         _GLOBAL_ACTION_LOCK は取らない
         """
         with self._chase_lock:
+            if not self.can_operate():
+                if self._chase_dir is not None:
+                    self._stop_chase_locked()
+                return "denied"
             current = self._chase_dir
             if current == direction:
                 self._stop_chase_locked()
@@ -175,7 +192,7 @@ class ActionExecutor:
         osc = self._osc
         if osc is not None:
             try:
-                while True:
+                while self.can_operate():
                     for address in addresses:
                         osc.send(address, 1)
                     if stop.wait(config.CHASE_RESEND_SEC):
@@ -183,6 +200,16 @@ class ActionExecutor:
             finally:
                 for address in addresses:       # stop_all() は使わない
                     osc.send(address, 0)
+            # private でなくなった（インスタンスの移動）。入室の処理が止めている最中なら
+            # そちらに任せる（鍵を待たない・2回言わない）
+            if stop.is_set():
+                return
+            with self._chase_lock:
+                if self._chase_stop is not stop:
+                    return
+                self._chase_dir = self._chase_stop = self._chase_thread = None
+            self._log("チェイス停止（プライベートのインスタンスではなくなりました）")
+            return
         if not WindowOperator.hold_keys_background(self._cfg.hwnd, keys, stop,
                                                    config.CHASE_RESEND_SEC):
             with self._chase_lock:
@@ -193,6 +220,10 @@ class ActionExecutor:
     def _stopped(self) -> bool:
         """マクロが止められたか。押している最中の移動・長押しはこれでその場で離す"""
         return not self._is_running()
+
+    def _move_stopped(self) -> bool:
+        """移動を押している最中にやめるか。止めた・private でなくなった（自爆は見ない）"""
+        return self._stopped() or not self.can_operate()
 
     def _trace(self, msg: str):
         """debug.log へ（公開ログには出さない）。窓の番号を付ける"""
@@ -212,6 +243,9 @@ class ActionExecutor:
         """
         if seconds <= 0:
             return
+        if not self.can_operate():
+            self._trace(f"[操作] 移動 {direction} しない（private でない）")
+            return False
         self._trace(f"[操作] 移動 {direction} {seconds:.2f}秒（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
             address = {"forward": "/input/MoveForward",
@@ -219,12 +253,12 @@ class ActionExecutor:
                        "left": "/input/MoveLeft",
                        "right": "/input/MoveRight"}.get(direction)
             if address:
-                ok = self._osc.press(address, seconds, stop=self._stopped)
+                ok = self._osc.press(address, seconds, stop=self._move_stopped)
                 self._osc.stop_all(repeat=1)
                 return ok is not False
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
         if key and not WindowOperator.hold_key_background(
-                self._cfg.hwnd, key, seconds, stop=self._stopped):
+                self._cfg.hwnd, key, seconds, stop=self._move_stopped):
             self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
             return False
         return True
@@ -241,11 +275,14 @@ class ActionExecutor:
         OSCが使えない窓は背面へのキー送信になるため同時押しができない。
         その場合は従来どおり逐次で動かす（前進 → 左）。
         """
+        if not self.can_operate():
+            self._trace("[操作] 前進＋左 しない（private でない）")
+            return False
         self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
                     f"（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
             ok = self._osc.press_multi([("/input/MoveForward", forward_sec),
-                                        ("/input/MoveLeft", left_sec)], stop=self._stopped)
+                                        ("/input/MoveLeft", left_sec)], stop=self._move_stopped)
             self._osc.stop_all(repeat=1)
             return ok is not False
         ok = self.move("forward", forward_sec) is not False
@@ -386,6 +423,8 @@ class ActionExecutor:
 
     def _restore_pending_view(self):
         """前に無くて戻せなかった縦の視点（アイテム取得）を、前面にした直後に何より先に戻す"""
+        if not self.can_operate():
+            return                  # マウスは送らない（残りは覚えたまま）
         dy, self._pending_view_dy = self._pending_view_dy, 0
         if not dy:
             return
@@ -551,7 +590,7 @@ class ActionExecutor:
         return (self._is_running() and not st.in_round and not st.begin_done
                 and st.round_seq == round_seq
                 and self._begin_given_up_round != round_seq
-                and st.instance_type == config.INSTANCE_PRIVATE)
+                and self.can_operate())
 
     def _click_begin_again(self, round_seq: int, click_only: bool = False) -> bool:
         """押すところだけやり直す。他窓の解除を待ってから押す"""
@@ -815,7 +854,7 @@ class ActionExecutor:
         Begin が押される。スレッドは、押せた・停止・次のラウンドが始まった、
         のいずれかで自分から終わる
         """
-        if not self._begin_by_cursor():
+        if not self._begin_by_cursor() or not self.can_operate():
             return None
         stop = threading.Event()
         self._trace("[操作] UseRight の連打を開始")
@@ -836,7 +875,7 @@ class ActionExecutor:
         reach_at, reach = 0.0, False    # 連打で押せる状態か（前面か、カーソルがこの窓の上）
         while not stop.is_set():
             if (not self._is_running() or st.begin_done or st.in_round
-                    or st.round_seq != round_seq):
+                    or st.round_seq != round_seq or not self.can_operate()):
                 return
             if time.time() < start:
                 stop.wait(0.1)
@@ -886,7 +925,7 @@ class ActionExecutor:
             if st.begin_done:
                 return True             # 間に受理されていた
             if (not self._is_running() or st.in_round
-                    or st.round_seq != round_seq):
+                    or st.round_seq != round_seq or not self.can_operate()):
                 return False
             if attempt:
                 # 1回目との間に VRChat が前面になっていたら、カーソルに触らない
@@ -968,6 +1007,8 @@ class ActionExecutor:
         tail = "（押し直し）" if again else ""
         round_seq = st.round_seq
         self._last_press = "click"
+        if not self.can_operate():
+            return False
         if (not click_only and self._begin_by_cursor()
                 and not self._vrchat_is_in_front()):
             stop = self._start_use_spam(st.round_seq) if again else None
@@ -994,7 +1035,7 @@ class ActionExecutor:
                 # 受理済みの Begin をもう一度押して前面を奪う
                 self._log("Begin: 受理されたので前面化しません")
                 return True
-            if not self._is_running() or st.in_round:
+            if not self._is_running() or st.in_round or not self.can_operate():
                 return False
             ok, loan = self._borrow_front()
             if not ok:
@@ -1217,7 +1258,7 @@ class ActionExecutor:
         押し直しの回数の上限は今の Begin と同じ（受理・開始・停止で止まる）
         """
         st = self._st
-        if st.instance_type != config.INSTANCE_PRIVATE:
+        if not self.can_operate():
             return
         if (not self._is_running() or st.in_round or st.begin_done
                 or st.round_seq != round_seq):
@@ -1258,7 +1299,7 @@ class ActionExecutor:
             if remain > 0:
                 time.sleep(remain)
         # Beginはフレ/フレ+/招待/招待+のみ
-        if st.instance_type != config.INSTANCE_PRIVATE:
+        if not self.can_operate():
             return
         if not self._is_running() or st.in_round:
             self._log("Begin キャンセル（停止 or 次のラウンドが開始）")
@@ -1351,7 +1392,7 @@ class ActionExecutor:
         if SharedState.get_item_begin_mode():
             return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者）
         if (not SharedState.get_item_fetch() or self._osc is None
-                or not self._auto_begin_active()):
+                or not self._auto_begin_active() or not self.can_operate()):
             return None
         item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える）
         if self._hands_free() and item_id != RoundDecision.guidance_plush_id():
@@ -1365,6 +1406,8 @@ class ActionExecutor:
         st = self._st
         if not self._is_running():
             return "stopped"
+        if not self.can_operate():
+            return "not_private"
         if st.in_round or st.round_seq != round_seq:
             return "round"
         if st.item_id and not st.waiting_for_equip:
@@ -1400,7 +1443,8 @@ class ActionExecutor:
 
         fetcher = ItemFetch.Fetcher(
             osc=self._osc, grounded=grounded, capture=capture,
-            mouse=_FrontOnlyMouse(self._cfg.hwnd, lambda: self._fetch_stopped(round_seq, deadline)),
+            mouse=_FrontOnlyMouse(self._cfg.hwnd, lambda: self._fetch_stopped(round_seq, deadline),
+                                  allowed=self.can_operate),
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
             stopped=lambda: self._fetch_stopped(round_seq, deadline),
             log=lambda m: DebugLog.write(f"{head} {m}"),
@@ -1430,6 +1474,7 @@ class ActionExecutor:
             why = {"failed": "取れませんでした", "timeout": f"{config.ITEM_FETCH_LIMIT_SEC:.0f}秒で間に合いません",
                    "round": "ラウンドが始まりました", "stopped": "停止しました",
                    "frozen": "ほかの窓がフリーズしました",
+                   "not_private": "プライベートのインスタンスではなくなりました",
                    "front_lost": "この窓が前面でなくなりました"}.get(outcome, outcome)
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
@@ -1560,7 +1605,8 @@ class ActionExecutor:
         アイテムロスト後は動かさない（拾いに行く操作の邪魔をしないため）。
         """
         st = self._st
-        if not SharedState.get_speed_detect() or not self._cfg.osc_port or self._hands_free():
+        if (not SharedState.get_speed_detect() or not self._cfg.osc_port or self._hands_free()
+                or not self.can_operate()):
             return
         if st.waiting_for_equip:
             self._log("アイテムロスト後のため速度検知の横移動はしません")
@@ -1708,6 +1754,8 @@ class ActionExecutor:
             elapsed = 0.0
             if _should_stop():
                 break
+            if not self.can_operate():
+                continue            # private でなければ送らない（ループは条件どおりに終わる）
             # OSCでも背面キーでもフォーカス不要。他窓の操作を妨げない
             self.move("forward", config.OPERATOR_WAIT_SEC)
             self._log("移動キー送信（ジャンプ代替）")
@@ -1844,12 +1892,15 @@ class _FrontOnlyMouse(_FetchMouse):
     """アイテム取得のマウス。送る前・クリックの前に前面がこの窓かを確かめ、違えば送らずにやめる。
     相対移動とクリックは前面の窓に届くので、ほかの窓（人が操作している続行ラウンドなど）の視点を回さない"""
 
-    def __init__(self, hwnd: int, stopped=None):
+    def __init__(self, hwnd: int, stopped=None, allowed=None):
         self._hwnd = hwnd
         self._stopped = stopped     # 送る前にも止まる条件（ほかの窓のフリーズなど）を見る
+        self._allowed = allowed     # 送ってよいインスタンスか（ActionExecutor.can_operate）。戻すときも見る
         self.restoring = False      # 視点を戻すときは、止まる条件は見ない（前面かだけ見る）
 
     def _check_front(self):
+        if self._allowed is not None and not self._allowed():
+            raise ItemFetch.Stopped("not_private")
         if self._stopped is not None and not self.restoring:
             reason = self._stopped()
             if reason:

@@ -1769,7 +1769,7 @@ class TestReturnFront(unittest.TestCase):
 
     # ── 2. 入室のクリック: 離して0.3秒後 ──────────────────
     def test_the_entry_click_waits_after_the_release_before_giving_back(self):
-        entry = ToNEntry.ToNEntry(self.VRC, osc_port=9000)
+        entry = ToNEntry.ToNEntry(self.VRC, osc_port=9000, can_operate=lambda: True)
         with patch.object(ToNEntry.time, "sleep",
                           side_effect=lambda s: self.events.append(("sleep", s))):
             self.assertTrue(entry.click("警告同意"))

@@ -10,7 +10,7 @@ class TestToNEntry(unittest.TestCase):
     def _entry(self, logs=None):
         return ToNEntry.ToNEntry(
             0x1234, osc_port=19990,
-            log=(logs.append if logs is not None else None))
+            log=(logs.append if logs is not None else None), can_operate=lambda: True)
 
     def test_steps_have_expected_shape(self):
         """手順の構造を確認する。
@@ -93,7 +93,8 @@ class TestToNEntry(unittest.TestCase):
 
     def test_run_stops_when_cancelled(self):
         """中止フラグが立ったら操作を止め、入力も解除する"""
-        entry = ToNEntry.ToNEntry(0x1234, osc_port=19990, is_running=lambda: False)
+        entry = ToNEntry.ToNEntry(0x1234, osc_port=19990, is_running=lambda: False,
+                                  can_operate=lambda: True)
         with patch.object(entry, "wait_for_panel", return_value=True), \
              patch.object(entry, "move") as mock_move, \
              patch.object(entry._osc, "stop_all") as mock_stop:
@@ -154,7 +155,7 @@ class TestToNEntryLocking(unittest.TestCase):
     """入室操作はクリックだけ排他にする"""
 
     def _entry(self):
-        return ToNEntry.ToNEntry(0x1234, osc_port=19990)
+        return ToNEntry.ToNEntry(0x1234, osc_port=19990, can_operate=lambda: True)
 
     def test_click_takes_the_global_lock(self):
         entry = self._entry()

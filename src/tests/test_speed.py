@@ -76,7 +76,7 @@ class TestHandsFreeSpeedDetect(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_speed_strafe()
             ex.do_speed_detect()
-        self.assertTrue(move.called)
+        move.assert_not_called()                # 横移動（OSC）は private だけ（DF）。判定は今のまま
         self.assertEqual(calls, [1])
 
 

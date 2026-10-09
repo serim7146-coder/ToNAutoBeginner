@@ -290,7 +290,7 @@ class TestDebugLogTraces(unittest.TestCase):
         self.assertIn("[操作] 背面キー w 0.50秒 hwnd=0x10", self.written)
 
     def test_osc_moves_and_the_chase(self):
-        st = WindowState(window_idx=5)
+        st = WindowState(window_idx=5, instance_type=config.INSTANCE_PRIVATE)
         ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
                                            lambda: True, lambda _m: None)
         ex._osc = MagicMock()
@@ -309,21 +309,21 @@ class TestDebugLogTraces(unittest.TestCase):
                                              config.BEGIN_LEFT_SEC_LATER),
                                             ("Classic", "通常", config.BEGIN_FORWARD_SEC, config.BEGIN_LEFT_SEC)):
             self.written.clear()
-            st = WindowState(window_idx=1, round_type=round_type)
+            st = WindowState(window_idx=1, round_type=round_type, instance_type=config.INSTANCE_PRIVATE)
             ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
                                                lambda: True, lambda _m: None)
             ex._osc = MagicMock()
             ex._osc.press_multi.return_value = True
             ex._begin_move()
             ex._osc.press_multi.assert_called_once_with([("/input/MoveForward", fwd),
-                                                     ("/input/MoveLeft", left)], stop=ex._stopped)
+                                                     ("/input/MoveLeft", left)], stop=ex._move_stopped)
             self.assertIn(f"[操作] [窓1] Begin前の移動: {kind} 前進{fwd}秒・左{left}秒"
                           f"（round_type={round_type}）", self.written)
             self.assertIn("[操作] [窓1] Begin前の移動: 最後までやった", self.written)
             self.assertTrue(st.begin_move_done)
 
     def test_a_begin_move_that_could_not_send(self):
-        st = WindowState(window_idx=2, round_type="Classic")
+        st = WindowState(window_idx=2, round_type="Classic", instance_type=config.INSTANCE_PRIVATE)
         ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=1, osc_port=9000), st,
                                            lambda: True, lambda _m: None)
         ex._osc = MagicMock()

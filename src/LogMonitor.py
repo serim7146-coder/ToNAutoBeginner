@@ -169,13 +169,18 @@ class LogMonitor:
         self._action.stop_velocity_receiver()
 
     def on_chase_key(self, direction: str, key_label: str):
-        """チェイスのキー（この窓が前面のときに押された）。ラウンド中だけ"""
+        """チェイスのキー（この窓が前面のときに押された）。private のラウンド中だけ"""
+        if not self._action.can_operate():
+            self._log("チェイスはプライベートのインスタンスだけで使えます")
+            return
         if not self.st.in_round:
             self._log("チェイスはラウンド中だけ使えます")
             return
         name = "時計回り" if direction == "cw" else "反時計回り"
         result = self._action.chase_key(direction)
-        if result == "start":
+        if result == "denied":          # 見た直後にインスタンスが変わった
+            self._log("チェイスはプライベートのインスタンスだけで使えます")
+        elif result == "start":
             self._log(f"チェイス開始（{name}・{key_label}）")
         elif result == "stop":
             self._log(f"チェイス停止（{key_label}）")
@@ -1786,6 +1791,8 @@ class LogMonitor:
         st.instance_id = event.instance
         st.instance_type = self._parse_instance_type(event.suffix)
         st.instance_access = LogParser.instance_access(event.suffix)
+        if not self._action.can_operate() and self._action.chase_stop():
+            self._log("チェイス停止（プライベートのインスタンスではなくなりました）")
         # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
         self.sequence.reset()
         # 3クラはインスタンスに入り直すと0に戻る

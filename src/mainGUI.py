@@ -14,6 +14,7 @@ import config
 import DebugLog
 import UIFont
 from config import resource_path
+import ActionExecutor
 import AutoUpdate
 import LogMonitor
 import SharedState
@@ -2944,10 +2945,10 @@ class App(tk.Tk):
             self._log("[入室操作] 設定がOFFのためスキップします")
             return
         launched = getattr(self, "_launched_tab_indices", None)
-        targets = [(tab.idx + 1, tab._get_selected_hwnd())
+        targets = [(tab.idx + 1, tab._get_selected_hwnd(), tab.v_log.get().strip())
                    for tab in self.tabs
                    if launched is None or tab.idx in launched]
-        targets = [(no, h) for no, h in targets if h]
+        targets = [(no, h, log) for no, h, log in targets if h]
         if not targets:
             self._log("[入室操作] 対象の窓がありません")
             return
@@ -2959,7 +2960,7 @@ class App(tk.Tk):
 
         def worker():
             try:
-                for window_no, hwnd in targets:
+                for window_no, hwnd, log_path in targets:
                     if self._entry_stop.is_set():
                         self._log("[入室操作] 中止しました")
                         return
@@ -2968,6 +2969,9 @@ class App(tk.Tk):
                         window_index=window_no - 1,   # OSCポートの割り当てに使う
                         log=lambda m, n=window_no: self._log("[窓%d] %s" % (n, m)),
                         is_running=lambda: not self._entry_stop.is_set(),
+                        # 移動・クリックは private だけ（ログの最後の入室で見る。分からなければしない）
+                        can_operate=lambda p=log_path: bool(p) and ActionExecutor.can_operate_in(
+                            LogMonitor.LogMonitor.detect_instance_type_from_log(p)),
                     )
                     try:
                         if entry.run() and press_begin and not self._entry_stop.is_set():

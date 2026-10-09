@@ -195,7 +195,8 @@ class TestChaseExecutor(unittest.TestCase):
         self.addCleanup(p.stop)
         self.logs = []
         self.ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x100, osc_port=9000),
-                                                WindowState(in_round=True), lambda: True,
+                                                WindowState(in_round=True, instance_type=config.INSTANCE_PRIVATE),
+                                                lambda: True,
                                                 self.logs.append)
         self.osc = _ChaseOsc(self)
         self.ex._osc = self.osc
@@ -302,6 +303,7 @@ class TestChaseMonitor(unittest.TestCase):
         self.osc = _ChaseOsc(self)
         self.monitor._action._osc = self.osc
         self.monitor.st.in_round = True
+        self.monitor.st.instance_type = config.INSTANCE_PRIVATE
         self.addCleanup(self.monitor._action.chase_stop)
 
     def test_outside_a_round_it_only_says_so(self):
@@ -517,6 +519,7 @@ class TestChaseKeysEndToEnd(unittest.TestCase):
         self.logs = []
         self.monitor.logger = self.logs.append
         self.monitor._action._osc = _ChaseOsc(self)
+        self.monitor.st.instance_type = config.INSTANCE_PRIVATE
         self.app.monitors = [self.monitor]
         self.addCleanup(self.monitor._action.chase_stop)
 

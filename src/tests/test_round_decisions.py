@@ -3144,7 +3144,8 @@ class TestOpenSpecialAfterUnlock(unittest.TestCase):
         self.assertTrue(monitor.st.is_open_special_round_round)
 
     def test_the_afk_loop_does_not_stop_at_three_wins(self):
-        st = WindowState(in_round=True, is_open_special_round_round=True, open_special_round_wins=3)
+        st = WindowState(in_round=True, is_open_special_round_round=True, open_special_round_wins=3,
+                         instance_type=config.INSTANCE_PRIVATE)
         moves = []
         for after_unlock, expected in ((False, 0), (True, 1)):
             moves.clear()
