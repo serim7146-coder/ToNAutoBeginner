@@ -3,14 +3,16 @@
 手順（2026-10-03 実機。窓 1920x1080・OSC。3店とも手が空から 5.5〜6.4 秒で装備できた）:
     1. 移動（OSC）: 左を押したまま跳んで柵を越え（着地2回）、後ろ→後ろ＋左、左へ90度回る
     2. 窓を前に出す（店のボタンはマウスの左クリックでしか押せない。UseRight は効かない）
-    3. 店の画面を SIFT の特徴点＋ホモグラフィで見つけ、見本の上のボタンの位置を今の画面へ写す。
-       画面中央の照準がボタンに重なるまでマウスの相対移動で視点を回し、左クリック
-       （店のボタン → Equip）
-    4. ログの Equipping <id> で装備できたかを確かめる（来ない・0・違う番号なら Equip を押し直す）
+    3. 店の画面を SIFT の特徴点＋ホモグラフィで見つけ、見本の四隅が撮影に入るまで視点を回す
+       （横が先。縦は要るときだけ。入っていれば動かさない）
+    4. Tab を押したまま SetCursorPos でカーソルを店のボタンの点（見本の上のボタンの位置を写した点）へ
+       置いてクリック。Equip も同じホモグラフィで写した点の周りの緑の文字（無ければその点）へ同じく
+       （Tab を押している間はカーソルが視点を回さずに動き、照準ではなくカーソルの位置で押せる。
+       依頼者 2026-10-10 の実機）
+    5. ログの Equipping <id> で装備できたかを確かめる（来ない・0・違う番号なら Equip を押し直す）
 
 店を開くと説明欄には直前に持っていたアイテムが出ているので、一覧から選ぶ操作はしない。
-OSC・接地・撮影・マウス・ログは差し替えられる（Fetcher の引数）。画面の照準合わせは
-locate()（特徴点）と Aimer（視点を回す量）に分けてある。
+OSC・接地・撮影・マウス・ログは差し替えられる（Fetcher の引数）。
 """
 import math
 import threading
@@ -19,6 +21,7 @@ import time
 import config
 
 TEMPLATE_FILE = "shop_templates/shop_main.png"   # 店の最初の画面（1920x1080 の x760〜1140・y245〜505）
+TEMPLATE_SIZE = (380, 260)  # 見本の幅・高さ（四隅を写すのに使う）
 # 見本の中のボタンの位置（切り出しの左上が 0,0）。Equip は店を開いた後の画面にあるが、
 # 見本のタイトル・枠・色見本の帯で位置が決まる（実機で3店とも1回で合った）
 BUTTONS = {
@@ -36,28 +39,23 @@ MIN_GOOD = 12               # 良い対応の数
 MIN_INLIERS = 10            # ホモグラフィのインライア
 RANSAC_PX = 5.0
 
-# 照準合わせ
-TOL_X, TOL_Y = 6, 4         # Aimer を許しを渡さずに使うときの既定（画面の px）
-# 押してよいずれ（見本の px）。画面の許しは、見本の 1px が画面で何 px か（locate の倍率）を掛ける。
-# Equip は枠の高さの真ん中あたり（小さく写ると縦 ±4px 決め打ちではボタンの端で押していた）
-BUTTON_TOL = {"Equip": (8, 3), "Enkephalin": (14, 10), "Survival": (14, 10), "Event": (14, 10)}
-TOL_MIN_PX = 1.0            # 画面の許しの最小
+# 店の画面を映す
+# 見本の四隅が撮影の端からこの割合（撮影の幅・高さに対して）より内側にあれば、全体が映っている
+PANEL_MARGIN = 0.02
+PANEL_TRIES = 6             # 全体を映すのに視点を動かす回数の上限
+PANEL_SETTLE_PX = 2.0       # 見本の真ん中が照準からこれ以内なら、その向きに動かしても入らない
 SCALE_PROBE = 10            # 倍率を測るのに、点の ±この px を写す
 # gain（画面px ／ マウス1）は視点の感度で人によって違う（依頼者の PC で 横0.81・縦0.59）。決め打ちに
-# しない: 最初のボタンを狙う前に、横・縦それぞれ小さく動かして測る（calibrate）
+# しない: 視点を動かすのが要るときだけ、横・縦それぞれ小さく動かして測る（calibrate）
 CALIB_UNITS = 24            # 測りで送る量（保存した gain が無いとき）
 CALIB_PX = 20.0             # 保存した gain があれば、画面でこれくらい動く量を送る
 CALIB_UNITS_RANGE = (6, 160)
 GAIN_SANE = (0.05, 20.0)    # 測った gain がこの外なら1回測り直し、だめなら失敗
-GAIN_KEEP = (0.5, 2.0)      # 以後の測り直しは、測った値のこの倍率の外を捨てる
-TRUST_REJECTS = 2           # 保存した感度で合わせる間に、範囲の外がこれだけ出たら測り直す
-GAIN_MIN_SENT = 8           # 送った量がこれ以上の軸だけ gain を測り直す
 MOVE_CAP = 160              # 1回に送る量の上限（マウスの単位）
 STEP = 6                    # 一度に送る量（大きく送ると Windows のマウスの加速で行き過ぎる）
-# 送る間隔（測り・照準合わせ・縦の戻しで共通。変えたら保存した感度は使わず測り直す）
+# 送る間隔（測り・全体を映す動き・縦の戻しで共通。変えたら保存した感度は使わず測り直す）
 STEP_SEC = 0.005
 AFTER_MOVE_SEC = 0.06
-AIM_TRIES = 12              # 1つのボタンにつき合わせる回数
 MISS_TRIES = 6              # 店の画面が見つからないときの撮り直し
 MISS_SEC = 0.08
 CLICK_SEC = 0.04
@@ -76,6 +74,7 @@ TURN_SEC = 0.50             # 左へ90度
 EQUIP_TRIES = 3
 EQUIP_WAIT_SEC = 0.8        # Equipping <id> を待つ
 EQUIP_POLL_SEC = 0.02
+SHOP_OPEN_WAIT_SEC = 0.5    # 店のボタンを押してから、Equip の緑の文字が出るのを待つ上限（1回目だけ）
 
 
 def shop_for(item_id, items) -> str | None:
@@ -162,16 +161,11 @@ def locate(bgr, point, template=None):
     return x, y, sx, sy, int(mask.sum()), project
 
 
-# Equip は緑の文字のど真ん中を狙う。狙いの点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
+# Equip は緑の文字のど真ん中を押す。押す点の近くの緑の画素の重心。窓は見本の px で持ち、倍率で写す。
 # 窓は Equip の近くだけ（左の一覧・上のアイテム名の緑の文字を入れない）
 GREEN_HSV_LOW = (40, 80, 90)        # OpenCV の HSV（H は 0〜179）
 GREEN_HSV_HIGH = (90, 255, 255)
-GREEN_WINDOW = (30, 15)             # 狙いの点から 横 ±30・縦 ±15（見本の px）
-# 店の中の Equip は locate を使わず、店のボタンを押した回の位置から追う（店の中は見本と中身が違い、
-# 手がかりが 10〜17 点しか取れず倍率が外れる）。locate は緑の文字が続けて見つからないときだけ
-GREEN_MISSES_FOR_LOCATE = 3         # 緑の文字がこの回数続けて見つからなければ locate を使う
-LOCATE_SCALE_TOL = 0.2              # 覚えた倍率からこの割合以上ずれた locate の結果は捨てる
-LOCATE_ASPECT_MAX = 1.3             # 横と縦の倍率の比がこれを超える locate の結果は捨てる
+GREEN_WINDOW = (30, 15)             # 押す点から 横 ±30・縦 ±15（見本の px）
 GREEN_MIN_AREA = 3.0                # 緑の画素がこれ未満（見本の px² に直して）なら見つからない
 
 
@@ -200,13 +194,7 @@ def green_center(bgr, pos, scale):
         return None
 
 
-def screen_tol(name: str, scale) -> tuple:
-    """押してよいずれ（画面の px）。見本の許し × 倍率、最小 TOL_MIN_PX"""
-    tx, ty = BUTTON_TOL[name]
-    return max(TOL_MIN_PX, tx * scale[0]), max(TOL_MIN_PX, ty * scale[1])
-
-
-# ── 照準を寄せる量 ──────────────────────────────
+# ── 視点を動かす量 ──────────────────────────────
 
 def split_move(mx: float, my: float, step: int = STEP) -> list:
     """(mx, my) を1回 step 以下の整数の刻みに分ける（合計は四捨五入した mx, my）"""
@@ -219,45 +207,18 @@ def split_move(mx: float, my: float, step: int = STEP) -> list:
     return out
 
 
-class Aimer:
-    """照準とボタンのずれから、マウスを送る量を決める。実際に動いた量で gain を測り直す
-    （最初に測った gain の GAIN_KEEP 倍の外は捨てる）"""
+def panel_corners(project) -> list:
+    """見本の四隅を、撮影の上へ写した点 [(x, y)]×4（左上・右上・左下・右下）"""
+    w, h = TEMPLATE_SIZE
+    return [tuple(project(c)[:2]) for c in ((0, 0), (w, 0), (0, h), (w, h))]
 
-    def __init__(self, gain):
-        self.gain = list(gain)
-        self.limits = tuple((GAIN_KEEP[0] * g, GAIN_KEEP[1] * g) for g in gain)
-        self._last = None           # (前の位置 x, y, 送った量 mx, my)
-        self.rejected = 0           # 範囲の外で捨てた測り直しの数（保存した感度が合わない目安）
 
-    def forget(self):
-        """ボタンが変わった（前の位置と比べない）"""
-        self._last = None
-
-    def observe(self, pos):
-        """新しい撮影でのボタンの位置。前に送った量と比べて gain を測り直す"""
-        if self._last is not None:
-            lx, ly, mx, my = self._last
-            for axis, (before, now, sent) in enumerate(((lx, pos[0], mx), (ly, pos[1], my))):
-                if abs(sent) < GAIN_MIN_SENT:
-                    continue
-                g = (before - now) / sent
-                low, high = self.limits[axis]
-                if low <= g <= high:
-                    self.gain[axis] = 0.5 * self.gain[axis] + 0.5 * g
-                else:
-                    self.rejected += 1
-        self._last = None
-
-    def move_for(self, pos, aim, tol=None) -> tuple | None:
-        """押してよければ None。まだなら送る量 (mx, my)（上限 ±MOVE_CAP）。tol は画面の許し (横, 縦)"""
-        tol_x, tol_y = tol or (TOL_X, TOL_Y)
-        dx, dy = pos[0] - aim[0], pos[1] - aim[1]
-        if abs(dx) <= tol_x and abs(dy) <= tol_y:
-            return None
-        mx = max(-MOVE_CAP, min(MOVE_CAP, dx / self.gain[0]))
-        my = max(-MOVE_CAP, min(MOVE_CAP, dy / self.gain[1]))
-        self._last = (pos[0], pos[1], mx, my)
-        return mx, my
+def panel_outside(corners, size) -> tuple:
+    """四隅が撮影の端の余白（PANEL_MARGIN）の外へはみ出しているか (横, 縦)。size は撮影の (幅, 高さ)"""
+    w, h = size
+    mx, my = PANEL_MARGIN * w, PANEL_MARGIN * h
+    return (any(x < mx or x > w - mx for x, _y in corners),
+            any(y < my or y > h - my for _x, y in corners))
 
 
 # ── 取りに行く ──────────────────────────────────
@@ -274,8 +235,10 @@ class CountingMouse:
         self.total[0] += dx
         self.total[1] += dy
 
-    def click(self):
-        self.inner.click()
+    def click_at(self, x: float, y: float) -> bool:
+        """Tab を押したまま、撮影の (x, y) へカーソルを置いてクリックする。押したら True。
+        視点は回らない（数えない）"""
+        return self.inner.click_at(x, y)
 
 
 class Stopped(Exception):
@@ -288,12 +251,12 @@ class Fetcher:
     osc:        send(address, value)・stop_all(repeat)
     grounded:   () → 接地しているか（True/False。分からなければ None）
     capture:    () → (BGR の撮影, 照準の位置 (x, y)) か None
-    mouse:      move_rel(dx, dy)・click()
+    mouse:      move_rel(dx, dy)・click_at(撮影の x, y)（Tab ＋カーソル＋クリック。押したら True）
     equip_seen: () → (Equipping を受けた回数, 最後の id)
     stopped:    () → やめる理由（str）か None
     log:        debug.log へ（窓の番号は呼び出し側が付ける）
-    saved_gain: 前にうまくいった gain（横, 縦）か None。測りで送る量を決めるのに使う
-                （gain そのものは毎回 calibrate で測る）
+    saved_gain: 前に測った gain（横, 縦）か None。視点を動かすときはまずこれを使い、全体を映せなければ
+                測り直して1回やり直す
     """
 
     def __init__(self, osc, grounded, capture, mouse, equip_seen, stopped, log,
@@ -301,7 +264,7 @@ class Fetcher:
         self.osc = osc
         self.grounded = grounded
         self.capture = capture
-        self.mouse = CountingMouse(mouse)   # 測りと照準合わせの動きを全部数える
+        self.mouse = CountingMouse(mouse)   # 測りと全体を映す動きを全部数える
         self.equip_seen = equip_seen
         self.stopped = stopped
         self.log = log
@@ -309,10 +272,12 @@ class Fetcher:
         self.sleep = sleep or time.sleep
         self.clock = clock or time.time
         self.saved_gain = saved_gain
-        self.aimer = None           # calibrate で作る
+        self.gain = None            # 視点を動かすのに使う感度（保存した値か calibrate で測った値）
+        self.gain_from_saved = False
         self.measured_gain = None   # calibrate で測った感度（保存するのはこれだけ）
-        # 店のボタンを押した回の撮影で写した Equip: {"d": (照準からの差 x, y), "scale": (横, 縦)}
-        self.equip_hint = None
+        # 店のボタンを押した撮影の同じホモグラフィで写した Equip: ((x, y), (横, 縦の倍率))。
+        # 視点は動かさないので、店の中でもそのまま使える
+        self.equip_point = None
 
     def _check(self):
         reason = self.stopped()
@@ -384,171 +349,93 @@ class Fetcher:
             self.sleep(STEP_SEC)
         self.log(f"アイテム取得: 視点を戻した（縦 {dy}）")
 
-    # ── 3. 照準合わせとクリック ──
-    def aim_click(self, name: str, trust_check: bool = False) -> bool:
-        """trust_check: 保存した感度で合わせている。実際の動きが感度の 0.5〜2 倍の外に
-        TRUST_REJECTS 回出たら、合わないとみなしてその場でやめる（測り直すため）"""
-        if name == "Equip" and self.equip_hint is not None:
-            return self._aim_equip_by_hint()
-        point = BUTTONS[name]
-        self.aimer.forget()
-        misses = 0
-        last_scale = None               # 前の回の倍率（照準の真下の緑を見るのに使う）
-        for tries in range(1, AIM_TRIES + 1):
+    # ── 3. 店の画面の全体を映す・店のボタン ──
+    def frame_panel(self, shop: str):
+        """見本の四隅が撮影に入るまで視点を動かす（横が先。横が入って縦がはみ出すときだけ縦）。
+        入っていれば動かさない（感度も測らない）。入った撮影の (撮影, 照準, locate の結果) か None"""
+        point = BUTTONS[shop]
+        misses = moves = 0
+        while True:
             self._check()
             shot = self.capture()
             found = self.locate(shot[0], point) if shot is not None else None
-            pos = None if found is None else found[:2]
-            scale = (found[2:4] if found is not None and len(found) >= 4
-                     else last_scale if found is None else (1.0, 1.0))
-            inliers = found[4] if found is not None and len(found) >= 5 else None
-            head = f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり {'-' if inliers is None else inliers} 点"
-            if name == "Equip" and shot is not None and scale is not None:
-                # 照準の真下に Equip の緑の文字があれば、locate に関係なく押す（locate はアイテムの
-                # 画面では手がかりが少なく、ときどき大きく外れた位置を出す）
-                under = green_center(shot[0], shot[1], scale)
-                tol = screen_tol(name, scale)
-                if (under is not None and abs(under[0] - shot[1][0]) <= tol[0]
-                        and abs(under[1] - shot[1][1]) <= tol[1]):
-                    self._check()
-                    self.mouse.click()
-                    self.log(self._aim_line(head, under, scale, "照準の真下の緑", shot[1], "押す"))
-                    self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・照準の真下の緑・"
-                             f"ずれ 横 {under[0] - shot[1][0]:.1f}・縦 {under[1] - shot[1][1]:.1f} ／ "
-                             f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
-                    return True
-            if pos is None:
-                self.log(f"{head}・見つからない")
+            if found is None or len(found) < 6 or not callable(found[5]):
                 misses += 1
+                self.log(f"アイテム取得: 店の画面 {misses} 回目: 見つからない")
                 if misses > MISS_TRIES:
-                    self.log(f"アイテム取得: {name}: 店の画面が見つかりません")
-                    return False
-                self._wait(MISS_SEC)
-                continue
-            last_scale = scale
-            how = ""
-            if name == "Equip":
-                center = green_center(shot[0], pos, scale)
-                how = "緑の文字・" if center is not None else "座標・"
-                pos = center if center is not None else pos
-            self.aimer.observe(pos)
-            if trust_check and self.aimer.rejected >= TRUST_REJECTS:
-                self.log(f"アイテム取得: {name}: 保存した感度で合いません")
-                return False
-            tol = screen_tol(name, scale)
-            move = self.aimer.move_for(pos, shot[1], tol)
-            aim_how = how.rstrip("・") or "座標"
-            if move is None:
-                if name != "Equip" and len(found) >= 6 and callable(found[5]):
-                    ex, ey, esx, esy = found[5](BUTTONS["Equip"])     # 押すと決めた撮影の同じ写し方で
-                    self.equip_hint = {"d": (ex - shot[1][0], ey - shot[1][1]), "scale": (esx, esy)}
-                self._check()
-                self.mouse.click()
-                self.log(self._aim_line(head, pos, scale, aim_how, shot[1], "押す"))
-                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・{how}"
-                         f"ずれ 横 {pos[0] - shot[1][0]:.1f}・縦 {pos[1] - shot[1][1]:.1f} ／ "
-                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
-                return True
-            self.log(self._aim_line(head, pos, scale, aim_how, shot[1],
-                                    f"動かす 横 {move[0]:.1f}・縦 {move[1]:.1f}"))
-            for dx, dy in split_move(*move):
-                self.mouse.move_rel(dx, dy)
-                self.sleep(STEP_SEC)
-            self._wait(AFTER_MOVE_SEC)
-        self.log(f"アイテム取得: {name}: 合わせきれません")
-        return False
-
-    def _locate_is_sane(self, found, scale) -> bool:
-        """locate の倍率が覚えた倍率から LOCATE_SCALE_TOL 以内、横と縦の比が LOCATE_ASPECT_MAX 以内か"""
-        if found is None or len(found) < 4:
-            return False
-        fx, fy = found[2], found[3]
-        if not all(abs(f - s) < LOCATE_SCALE_TOL * s for f, s in ((fx, scale[0]), (fy, scale[1]))):
-            return False
-        return max(fx, fy) / min(fx, fy) <= LOCATE_ASPECT_MAX   # 0 は上の 2 割で弾いている
-
-    def _aim_equip_by_hint(self) -> bool:
-        """店の中の Equip。locate は使わず、店のボタンを押した回に覚えた位置（照準 + d）から追う:
-        照準の真下の緑 → 予測の近くの緑 → 予測。緑が GREEN_MISSES_FOR_LOCATE 回続けて無いときだけ
-        locate（倍率がおかしい結果は捨てる）。動かしたら d を「送った量 × 感度」だけ進める"""
-        name = "Equip"
-        hint = self.equip_hint
-        scale = hint["scale"]
-        tol = screen_tol(name, scale)
-        self.aimer.forget()
-        no_green = 0
-        for tries in range(1, AIM_TRIES + 1):
-            self._check()
-            shot = self.capture()
-            head = f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり - 点"
-            if shot is None:
-                self.log(f"{head}・見つからない")
+                    self.log("アイテム取得: 店の画面が見つかりません")
+                    return None
                 self._wait(MISS_SEC)
                 continue
             img, aim = shot
-            under = green_center(img, aim, scale)
-            if under is not None and abs(under[0] - aim[0]) <= tol[0] and abs(under[1] - aim[1]) <= tol[1]:
-                self._check()
-                self.mouse.click()
-                self.log(self._aim_line(head, under, scale, "照準の真下の緑", aim, "押す"))
-                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・照準の真下の緑・"
-                         f"ずれ 横 {under[0] - aim[0]:.1f}・縦 {under[1] - aim[1]:.1f} ／ "
-                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
-                return True
-            d = hint["d"]
-            predicted = (aim[0] + d[0], aim[1] + d[1])
-            center = green_center(img, predicted, scale)
-            measured = center is not None
-            if center is not None:
-                target, how, no_green = center, "予測の近くの緑", 0
+            project = found[5]
+            out_x, out_y = panel_outside(panel_corners(project), (img.shape[1], img.shape[0]))
+            cx, cy = project((TEMPLATE_SIZE[0] / 2, TEMPLATE_SIZE[1] / 2))[:2]
+            dx, dy = cx - aim[0], cy - aim[1]
+            where = ("入っている" if not (out_x or out_y)
+                     else "はみ出す（" + "・".join(n for n, o in (("横", out_x), ("縦", out_y)) if o) + "）")
+            self.log(f"アイテム取得: 店の画面: 手がかり {found[4]} 点・四隅 {where}・"
+                     f"真ん中のずれ 横 {dx:.1f}・縦 {dy:.1f}（動かした {moves} 回）")
+            if not (out_x or out_y):
+                return img, aim, found
+            if out_x and abs(dx) > PANEL_SETTLE_PX:
+                want = (dx, 0.0)                # 横が先
+            elif out_y and abs(dy) > PANEL_SETTLE_PX:
+                want = (0.0, dy)
             else:
-                target, how = predicted, "予測"
-                no_green += 1
-                if no_green >= GREEN_MISSES_FOR_LOCATE:
-                    found = self.locate(img, BUTTONS[name])
-                    if found is not None:
-                        inliers = found[4] if len(found) >= 5 else None
-                        head = (f"アイテム取得: {name} 合わせ {tries} 回目: 手がかり "
-                                f"{'-' if inliers is None else inliers} 点")
-                        if self._locate_is_sane(found, scale):
-                            target, how, measured = found[:2], "写真（最後の手段）", True
-                        else:
-                            how = f"写真（捨てた: 倍率 {found[2]:.2f}/{found[3]:.2f}）" if len(found) >= 4 \
-                                else "写真（捨てた）"
-            hint["d"] = (target[0] - aim[0], target[1] - aim[1])
-            if measured:
-                self.aimer.observe(target)
-            else:
-                self.aimer.forget()     # 予測は確かめていない位置。感度の測り直しに使わない
-            move = self.aimer.move_for(target, aim, tol)
-            if move is None:
-                self._check()
-                self.mouse.click()
-                self.log(self._aim_line(head, target, scale, how, aim, "押す"))
-                self.log(f"アイテム取得: {name} クリック（合わせ {tries} 回・{how}・"
-                         f"ずれ 横 {target[0] - aim[0]:.1f}・縦 {target[1] - aim[1]:.1f} ／ "
-                         f"許し 横 {tol[0]:.1f}・縦 {tol[1]:.1f}）")
-                return True
-            self.log(self._aim_line(head, target, scale, how, aim,
-                                    f"動かす 横 {move[0]:.1f}・縦 {move[1]:.1f}"))
-            sent_x = sent_y = 0
-            for dx, dy in split_move(*move):
-                self.mouse.move_rel(dx, dy)
-                sent_x += dx
-                sent_y += dy
+                self.log("アイテム取得: 店の画面が入りきりません（真ん中に寄せても はみ出す）")
+                return None
+            if moves >= PANEL_TRIES:
+                self.log(f"アイテム取得: 店の画面が入りきりません（{moves} 回動かした）")
+                return None
+            if self.gain is None:
+                if not self._use_gain(shop):
+                    return None
+                if self.measured_gain is not None:
+                    continue                    # 測りで視点が動いた。撮り直してから決める
+            units = tuple(max(-MOVE_CAP, min(MOVE_CAP, d / g)) for d, g in zip(want, self.gain))
+            self.log(f"アイテム取得: 店の画面: 視点を動かす 横 {units[0]:.1f}・縦 {units[1]:.1f}")
+            for sx, sy in split_move(*units):
+                self.mouse.move_rel(sx, sy)
                 self.sleep(STEP_SEC)
-            # 視点を回した分だけ、Equip は照準に対して逆へ動く
-            dx0, dy0 = hint["d"]
-            hint["d"] = (dx0 - sent_x * self.aimer.gain[0], dy0 - sent_y * self.aimer.gain[1])
+            moves += 1
             self._wait(AFTER_MOVE_SEC)
-        self.log(f"アイテム取得: {name}: 合わせきれません")
-        return False
 
-    @staticmethod
-    def _aim_line(head, pos, scale, how, aim, action) -> str:
-        """照準合わせの1回の記録"""
-        return (f"{head}・位置 ({pos[0]:.1f}, {pos[1]:.1f})・倍率 {scale[0]:.2f}/{scale[1]:.2f}・"
-                f"狙い {how}・ずれ 横 {pos[0] - aim[0]:.1f}・縦 {pos[1] - aim[1]:.1f}・{action}")
+    def _use_gain(self, shop: str) -> bool:
+        """視点を動かす感度を決める。保存した値があればそれ、無ければ測る"""
+        if self.saved_gain:
+            self.gain = tuple(self.saved_gain)
+            self.gain_from_saved = True
+            self.log(f"アイテム取得: 感度 保存した値を使う（横 {self.gain[0]:.3f}・縦 {self.gain[1]:.3f}）")
+            return True
+        return self.calibrate(shop)
+
+    def press_shop(self, shop: str, framed) -> bool:
+        """全体が映った撮影で、店のボタンの点へ Tab ＋カーソルで押す。同じ写し方で Equip の点も覚える"""
+        _img, _aim, found = framed
+        x, y = found[:2]
+        ex, ey, esx, esy = found[5](BUTTONS["Equip"])
+        self.equip_point = ((ex, ey), (esx, esy))
+        self._check()
+        ok = self.mouse.click_at(x, y)
+        self.log(f"アイテム取得: {shop} のボタン: 点 ({x:.1f}, {y:.1f})（撮影）・Tab＋カーソルで"
+                 f"{'押した' if ok else '押せません'}（Equip の点 ({ex:.1f}, {ey:.1f})）")
+        return ok
+
+    def _equip_target(self, first: bool) -> tuple:
+        """Equip を押す点と、どう決めたか。覚えた点の周りの緑の文字の重心、無ければ覚えた点。
+        1回目は店が開くのを SHOP_OPEN_WAIT_SEC まで待つ（緑が出るまで撮り直す）"""
+        pos, scale = self.equip_point
+        deadline = self.clock() + (SHOP_OPEN_WAIT_SEC if first else 0.0)
+        while True:
+            self._check()
+            shot = self.capture()
+            center = green_center(shot[0], pos, scale) if shot is not None else None
+            if center is not None:
+                return center, "緑の文字"
+            if self.clock() >= deadline:
+                return pos, "覚えた点"
+            self._wait(MISS_SEC)
 
     # ── 4. Equip とログ ──
     def _wait_equip(self, seq_before: int):
@@ -566,7 +453,12 @@ class Fetcher:
     def equip(self, target_id: int) -> bool:
         for attempt in range(1, EQUIP_TRIES + 1):
             seq_before = self.equip_seen()[0]
-            if not self.aim_click("Equip"):
+            (x, y), how = self._equip_target(first=attempt == 1)
+            self._check()
+            ok = self.mouse.click_at(x, y)
+            self.log(f"アイテム取得: Equip: 点 ({x:.1f}, {y:.1f})（撮影・{how}）・Tab＋カーソルで"
+                     f"{'押した' if ok else '押せません'}（{attempt}/{EQUIP_TRIES}回目）")
+            if not ok:
                 return False
             got = self._wait_equip(seq_before)
             if got == target_id:
@@ -597,7 +489,7 @@ class Fetcher:
         return int(max(low, min(high, round(CALIB_PX / self.saved_gain[axis]))))
 
     def calibrate(self, name: str) -> bool:
-        """最初のボタンを狙う前に、横・縦それぞれ小さく動かして撮り直し、実際の動きから gain を
+        """視点を動かす前に、横・縦それぞれ小さく動かして撮り直し、実際の動きから gain を
         測る。GAIN_SANE の外なら1回測り直し、だめなら False。店の画面が見つからなければ False"""
         point = BUTTONS[name]
         gain = []
@@ -627,20 +519,22 @@ class Fetcher:
                 # 2回とも範囲外: 前にうまくいった値があればそれで続ける
                 gain.append(float(self.saved_gain[axis]))
                 self.log(f"アイテム取得: {label}の感度は保存した値 {gain[-1]:.3f} で続けます")
-        self.aimer = Aimer(gain)
-        self.measured_gain = tuple(gain)    # 保存してよいのは測った値だけ（合わせで直した値は保存しない）
+        self.gain = tuple(gain)
+        self.gain_from_saved = False
+        self.measured_gain = tuple(gain)    # 保存してよいのは測った値だけ
         self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
         return True
 
     def buy(self, shop: str, target_id: int) -> bool:
-        """店の前で、窓が前に出ている状態から。感度 → 店のボタン → Equip。
-        保存した感度があれば測らずに使う。それで店のボタンに合わなければ、測り直して1回やり直す"""
-        if self.saved_gain:
-            self.aimer = Aimer(self.saved_gain)
-            self.log(f"アイテム取得: 感度 保存した値を使う（横 {self.saved_gain[0]:.3f}・"
-                     f"縦 {self.saved_gain[1]:.3f}）")
-            if self.aim_click(shop, trust_check=True):
-                return self.equip(target_id)
-            self.log("アイテム取得: 感度 測り直し（保存した値で合わない）")
+        """店の前で、窓が前に出ている状態から。全体を映す → 店のボタン → Equip。
+        保存した感度で視点を動かして映せなければ、測り直して1回やり直す"""
+        framed = self.frame_panel(shop)
+        if framed is None and self.gain_from_saved:
+            self.log("アイテム取得: 感度 測り直し（保存した値で店の画面が入りきらない）")
             self.saved_gain = None      # 合わなかった値で測りの量を決めない・頼らない
-        return self.calibrate(shop) and self.aim_click(shop) and self.equip(target_id)
+            self.gain = None
+            self.gain_from_saved = False
+            framed = self.frame_panel(shop)
+        if framed is None:
+            return False
+        return self.press_shop(shop, framed) and self.equip(target_id)

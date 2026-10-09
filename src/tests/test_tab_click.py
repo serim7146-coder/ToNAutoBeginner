@@ -106,64 +106,6 @@ class TestClickWithTab(unittest.TestCase):
         self.assertIn("[操作] クリック（Tab の後）", [c.args[0] for c in write.call_args_list])
 
 
-class TestItemFetchClicks(unittest.TestCase):
-    HWND = 0x55
-    AIM = (640.0, 360.0)
-
-    def setUp(self):
-        self.inputs = _Inputs(self)
-        self.front = {"hwnd": self.HWND}
-        p = patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front["hwnd"])
-        p.start()
-        self.addCleanup(p.stop)
-        self.allowed = {"on": True}
-        self.mouse = ActionExecutor._FrontOnlyMouse(self.HWND, allowed=lambda: self.allowed["on"])
-
-    def test_each_click_is_a_whole_tab_click(self):
-        """Equip の押し直し（3回）も、1回ごとに Tab を押して離す"""
-        for _ in range(3):
-            self.mouse.click()
-        self.assertEqual(self.inputs.calls, _one_click(False, ItemFetch.CLICK_SEC) * 3)
-
-    def test_the_front_lost_after_tab(self):
-        self.inputs.on_sleep = lambda: self.front.update(hwnd=0x66)    # 待つ間に前面が変わる
-        with self.assertRaises(ItemFetch.Stopped) as cm:
-            self.mouse.click()
-        self.assertEqual(cm.exception.args[0], "front_lost")
-        self.assertEqual(self.inputs.keys(), [("press", TAB), ("release", TAB)])
-
-    def test_no_tab_to_a_window_that_is_not_in_front(self):
-        self.front["hwnd"] = 0x66
-        with self.assertRaises(ItemFetch.Stopped):
-            self.mouse.click()
-        self.assertEqual(self.inputs.calls, [])
-
-    def test_no_tab_outside_private(self):
-        self.allowed["on"] = False
-        with self.assertRaises(ItemFetch.Stopped):
-            self.mouse.click()
-        self.assertEqual(self.inputs.calls, [])
-
-    def test_the_shop_button_and_the_equip_clicks_go_through_the_mouse(self):
-        """店のボタン・Equip（照準の真下の緑・予測の近くの緑・押し直し）は全部 self.mouse.click()"""
-        src = Path(ItemFetch.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("pydirectinput", src)
-        self.assertNotIn("keyboard", src)
-        self.assertGreaterEqual(src.count("self.mouse.click()"), 4)
-        self.assertEqual(src.count(".click()"), src.count("self.mouse.click()") + src.count("self.inner.click()"))
-
-    def test_a_shop_button_click_through_the_fetcher(self):
-        f = ItemFetch.Fetcher(
-            osc=MagicMock(), grounded=lambda: True, capture=lambda: ("shot", self.AIM),
-            mouse=self.mouse, equip_seen=lambda: (0, 0), stopped=lambda: None,
-            log=lambda _m: None, locate_fn=lambda _img, _pt: (self.AIM[0], self.AIM[1], 1.0, 1.0),
-            sleep=lambda _s: None)
-        f.aimer = ItemFetch.Aimer((0.9, 0.55))
-        self.assertTrue(f.aim_click("Survival"))
-        self.assertEqual(self.inputs.keys(), [("press", TAB), ("down", False), ("up", False),
-                                              ("release", TAB)])
-
-
 class TestBeginAndEntryClicks(unittest.TestCase):
     def setUp(self):
         self.inputs = _Inputs(self)

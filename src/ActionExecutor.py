@@ -1490,6 +1490,7 @@ class ActionExecutor:
     def _fetch_in_front(self, fetcher, shop: str, item_id: int) -> str:
         with SharedState._GLOBAL_ACTION_LOCK:
             fetcher._check()                # ロックを待つ間にラウンドが始まったら押さない
+            cursor = WindowOperator.cursor_position()   # 前面を借りる前の Windows のカーソル
             ok, loan = self._borrow_front()
             if not ok:
                 return "failed"
@@ -1517,8 +1518,26 @@ class ActionExecutor:
                 except Exception:
                     DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
                 # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す
-                self._pending_view_dy += -fetcher.mouse.total[1]
-                WindowOperator.return_front(loan)
+                try:
+                    self._pending_view_dy += -fetcher.mouse.total[1]
+                    WindowOperator.return_front(loan)
+                finally:
+                    self._put_cursor_back(cursor)
+
+    def _put_cursor_back(self, cursor):
+        """アイテム取得で動かした Windows のカーソルを、取得の前にあった場所へ戻す（依頼者）。
+        前面を返した後、この窓が前面でなくなってから（前面の VRChat はマウスを掴んでいて、Tab を
+        押していないときに置くと視点が回る）。この窓がまだ前面なら戻さず debug.log に残す"""
+        head = f"[操作] [窓{self._st.window_idx}] アイテム取得:"
+        if cursor is None:
+            return
+        if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
+            DebugLog.write(f"{head} この窓がまだ前面なので、カーソルを取得前の位置 {cursor} へ戻しません")
+            return
+        if WindowOperator.set_cursor_position(cursor):
+            DebugLog.write(f"{head} カーソルを取得前の位置 {cursor} へ戻した")
+        else:
+            DebugLog.write(f"{head} カーソルを取得前の位置 {cursor} へ戻せません")
 
     # ── 速度によるラウンド種別の検知 ────────────
     #  判定（do_speed_detect）と横移動（do_speed_strafe）は独立している。
@@ -1771,9 +1790,6 @@ class _FetchMouse:
         import pydirectinput
         pydirectinput.moveRel(dx, dy, relative=True, _pause=False)
 
-    @staticmethod
-    def click():
-        WindowOperator.click_with_tab(ItemFetch.CLICK_SEC, pause=False)
 
 
 # ── Begin 前の移動の実測（記録だけ）──────────────────
@@ -1909,10 +1925,18 @@ class _FrontOnlyMouse(_FetchMouse):
         self._check_front()
         _FetchMouse.move_rel(dx, dy)
 
-    def click(self):
+    def click_at(self, x: float, y: float) -> bool:
+        """Tab を押したまま、撮影の (x, y)（＋窓の左上 ＝ 画面の点）へカーソルを置いてクリックする。
+        Tab を押して待つ間に前面が変わったら、クリックせずに Tab を離してやめる（front_lost）"""
         self._check_front()
-        # Tab を押して待つ間に前面が変わったら、クリックせずに Tab を離してやめる
-        if not WindowOperator.click_with_tab(
-                ItemFetch.CLICK_SEC, pause=False,
-                still_front=lambda: WindowOperator.foreground_hwnd() == self._hwnd):
+        origin = WindowOperator.window_origin(self._hwnd)
+        if origin is None:
             raise ItemFetch.Stopped("front_lost")
+        point = (int(round(x + origin[0])), int(round(y + origin[1])))
+        if WindowOperator.click_with_tab(
+                ItemFetch.CLICK_SEC, pause=False, point=point,
+                still_front=lambda: WindowOperator.foreground_hwnd() == self._hwnd):
+            return True
+        if WindowOperator.foreground_hwnd() != self._hwnd:
+            raise ItemFetch.Stopped("front_lost")
+        return False                    # カーソルを置けなかった

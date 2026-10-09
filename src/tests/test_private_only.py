@@ -148,8 +148,8 @@ class TestOperationsOnlyInPrivate(unittest.TestCase):
                          side_effect=lambda *a: self.inputs.append("mouse"))
         p.start()
         self.addCleanup(p.stop)
-        p = patch.object(ActionExecutor._FetchMouse, "click",
-                         side_effect=lambda *a: self.inputs.append("mouse_click"))
+        p = patch.object(WindowOperator, "click_with_tab",
+                         side_effect=lambda *a, **k: self.inputs.append("mouse_click") or True)
         p.start()
         self.addCleanup(p.stop)
 
@@ -272,7 +272,7 @@ class TestOperationsOnlyInPrivate(unittest.TestCase):
                 mouse.move_rel(0, 6)
             self.assertEqual(cm.exception.args[0], "not_private")
             with self.assertRaises(ItemFetch.Stopped):
-                mouse.click()
+                mouse.click_at(10, 10)
         self.assertEqual(self.inputs, ["mouse"])
 
     def test_the_view_left_over_is_kept_not_sent(self):

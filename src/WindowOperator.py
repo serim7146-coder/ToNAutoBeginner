@@ -702,6 +702,25 @@ def focus_vrchat(hwnd: int) -> bool:
     return ok
 
 
+def set_cursor_position(point) -> bool:
+    """Windows のカーソルを画面の point へ置く。置けたら True"""
+    try:
+        return bool(user32.SetCursorPos(int(point[0]), int(point[1])))
+    except Exception:
+        DebugLog.exception("WindowOperator.set_cursor_position")
+        return False
+
+
+def window_origin(hwnd: int) -> tuple | None:
+    """窓の左上（GetWindowRect。ScreenCapture.capture_window の撮影の (0, 0) が画面のどこか）"""
+    try:
+        left, top, _right, _bottom = win32gui.GetWindowRect(hwnd)
+    except Exception:
+        DebugLog.exception("WindowOperator.window_origin")
+        return None
+    return left, top
+
+
 def cursor_position() -> tuple | None:
     point = wintypes.POINT()
     try:
@@ -786,24 +805,31 @@ def click():
     _click()
 
 
-def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> bool:
+def click_with_tab(hold_sec: float, still_front=None, pause: bool = True, point=None) -> bool:
     """ツールのクリックの入口。前面の窓で Tab を押したまま左クリックする:
-    Tab を押す → CLICK_TAB_LEAD_SEC 待つ → mouseDown → hold_sec → mouseUp → Tab を離す。
-    Tab を押すとカーソルが照準（真ん中）へ戻る（依頼者）。Tab は何があっても離す。
+    Tab を押す →（point があれば SetCursorPos）→ CLICK_TAB_LEAD_SEC 待つ → mouseDown → hold_sec →
+    mouseUp → Tab を離す。Tab を押すとカーソルが照準（真ん中）へ戻り、押している間はカーソルが
+    視点を回さずに動く（依頼者 2026-10-10 の実機）。Tab は何があっても離す。
     キーは lock_cursor() と同じ keyboard で送る（前面の VRChat に Tab が効いている経路）。
 
+    point（画面の点）を渡すと、Tab を押した後にカーソルをそこへ置き、照準ではなくその点を押す
+    （置けなければクリックせずに False）。
     still_front（呼ぶと前面がまだその窓か）を渡すと、待った後にもう一度見て、違えば
     クリックせずに Tab を離して False を返す。クリックしたら True。
     pause は pydirectinput の _pause（アイテム取得は待たない）"""
     key = config.CLICK_TAB_KEY
     keyboard.press(key)
     try:
+        if point is not None and not set_cursor_position(point):
+            DebugLog.write(f"[操作] クリックしない（カーソルを {tuple(point)} へ置けない）")
+            return False
         if config.CLICK_TAB_LEAD_SEC > 0:
             time.sleep(config.CLICK_TAB_LEAD_SEC)
         if still_front is not None and not still_front():
             DebugLog.write("[操作] クリックしない（Tab の後に前面でなくなった）")
             return False
-        DebugLog.write("[操作] クリック（Tab の後）")
+        DebugLog.write("[操作] クリック（Tab の後）" if point is None
+                       else f"[操作] クリック（Tab＋カーソル {tuple(point)}）")
         pydirectinput.mouseDown(_pause=pause)
         time.sleep(hold_sec)
         pydirectinput.mouseUp(_pause=pause)
