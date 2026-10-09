@@ -235,8 +235,15 @@ class CountingMouse:
         self.total[0] += dx
         self.total[1] += dy
 
+    def tab_down(self):
+        """Tab を押す（店の操作の間ずっと押したまま）"""
+        self.inner.tab_down()
+
+    def tab_up(self):
+        self.inner.tab_up()
+
     def click_at(self, x: float, y: float) -> bool:
-        """Tab を押したまま、撮影の (x, y) へカーソルを置いてクリックする。押したら True。
+        """（Tab を押したまま）撮影の (x, y) へカーソルを置いてクリックする。押したら True。
         視点は回らない（数えない）"""
         return self.inner.click_at(x, y)
 
@@ -251,7 +258,8 @@ class Fetcher:
     osc:        send(address, value)・stop_all(repeat)
     grounded:   () → 接地しているか（True/False。分からなければ None）
     capture:    () → (BGR の撮影, 照準の位置 (x, y)) か None
-    mouse:      move_rel(dx, dy)・click_at(撮影の x, y)（Tab ＋カーソル＋クリック。押したら True）
+    mouse:      move_rel(dx, dy)・tab_down()・tab_up()・click_at(撮影の x, y)（Tab を押したまま
+                カーソルを置いて読み直し、置けていればクリック。押したら True）
     equip_seen: () → (Equipping を受けた回数, 最後の id)
     stopped:    () → やめる理由（str）か None
     log:        debug.log へ（窓の番号は呼び出し側が付ける）
@@ -537,4 +545,11 @@ class Fetcher:
             framed = self.frame_panel(shop)
         if framed is None:
             return False
-        return self.press_shop(shop, framed) and self.equip(target_id)
+        # Tab は店の操作の間に1回だけ押したまま（依頼者「タブ→クリック→クリック→タブ離す」）。
+        # 視点はもう動かさない。どの終わり方でも、前面を返す・視点を戻すより前（ここ）で離す
+        self.mouse.tab_down()
+        try:
+            self._wait(config.FETCH_TAB_SETTLE_SEC)     # VRChat が Tab を読んでカーソルを真ん中へ戻し終える
+            return self.press_shop(shop, framed) and self.equip(target_id)
+        finally:
+            self.mouse.tab_up()

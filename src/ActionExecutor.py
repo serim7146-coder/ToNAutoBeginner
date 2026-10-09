@@ -1925,18 +1925,41 @@ class _FrontOnlyMouse(_FetchMouse):
         self._check_front()
         _FetchMouse.move_rel(dx, dy)
 
+    def tab_down(self):
+        """Tab を押す。前面でない窓には押さない（Tab は前面の窓へ届く）"""
+        self._check_front()
+        WindowOperator.press_tab()
+
+    def tab_up(self):
+        WindowOperator.release_tab()
+
     def click_at(self, x: float, y: float) -> bool:
-        """Tab を押したまま、撮影の (x, y)（＋窓の左上 ＝ 画面の点）へカーソルを置いてクリックする。
-        Tab を押して待つ間に前面が変わったら、クリックせずに Tab を離してやめる（front_lost）"""
+        """（Tab を押したまま）撮影の (x, y)（＋窓の左上 ＝ 画面の点）へカーソルを置き、
+        FETCH_CURSOR_SETTLE_SEC 待って読み直す。±FETCH_CURSOR_TOL_PX の外（VRChat に真ん中へ
+        戻されたなど）なら置き直す（FETCH_CURSOR_TRIES 回まで）。置けていれば前面を確かめてクリック。
+        置けなければクリックせずに False。前面でなくなっていれば front_lost"""
         self._check_front()
         origin = WindowOperator.window_origin(self._hwnd)
         if origin is None:
             raise ItemFetch.Stopped("front_lost")
         point = (int(round(x + origin[0])), int(round(y + origin[1])))
-        if WindowOperator.click_with_tab(
-                ItemFetch.CLICK_SEC, pause=False, point=point,
-                still_front=lambda: WindowOperator.foreground_hwnd() == self._hwnd):
-            return True
-        if WindowOperator.foreground_hwnd() != self._hwnd:
-            raise ItemFetch.Stopped("front_lost")
-        return False                    # カーソルを置けなかった
+        tol = config.FETCH_CURSOR_TOL_PX
+        read = None
+        for tries in range(1, config.FETCH_CURSOR_TRIES + 1):
+            self._check_front()
+            WindowOperator.set_cursor_position(point)
+            time.sleep(config.FETCH_CURSOR_SETTLE_SEC)
+            read = WindowOperator.cursor_position()
+            placed = (read is not None and abs(read[0] - point[0]) <= tol
+                      and abs(read[1] - point[1]) <= tol)
+            DebugLog.write(f"[操作] カーソル: 置いた {point} → 読み直し {read}（置き直し {tries - 1} 回）"
+                           + ("" if placed else " ずれている"))
+            if placed:
+                break
+        else:
+            DebugLog.write(f"[操作] クリックしない（カーソルを {point} へ {config.FETCH_CURSOR_TRIES} 回置けない）")
+            return False
+        self._check_front()             # 待つ間に前面が変わったら押さない
+        DebugLog.write(f"[操作] クリック（Tab を押したまま {point}）")
+        WindowOperator.mouse_click(ItemFetch.CLICK_SEC, pause=False)
+        return True

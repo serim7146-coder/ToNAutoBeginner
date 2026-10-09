@@ -17,6 +17,7 @@ class _Panel:
         self.mouse = [0, 0]
         self.moves = []
         self.clicks = []
+        self.events = []            # Tab・クリックの順番
         self.locates = 0
         self.found = True
         self.on_click = None
@@ -44,7 +45,14 @@ class _Panel:
         self.mouse[0] += dx
         self.mouse[1] += dy
 
+    def tab_down(self):
+        self.events.append("tab_down")
+
+    def tab_up(self):
+        self.events.append("tab_up")
+
     def click_at(self, x, y):
+        self.events.append(("click", round(x, 1), round(y, 1)))
         self.clicks.append((round(x, 1), round(y, 1)))
         if self.on_click:
             self.on_click()
@@ -312,13 +320,105 @@ class TestTheOldAimIsGone(unittest.TestCase):
         self.assertEqual(panel.clicks, [(366.0, 195.0)])
 
 
+class TestTabHeldThroughTheShop(_FetchCase):
+    """Tab は店の操作の間に1回だけ押したまま: 押す → 0.1 秒 → 店のボタン → Equip（押し直しも）→ 離す"""
+
+    def _sleeps(self):
+        slept = []
+
+        def sleep(sec):
+            slept.append(sec)
+            self.now[0] += sec
+        return slept, sleep
+
+    def test_the_order(self):
+        panel = _Panel()
+        f = self._fetcher(panel)
+        slept, f.sleep = self._sleeps()
+        before_tab = []
+        real = panel.tab_down
+        panel.tab_down = lambda: before_tab.append(len(slept)) or real()
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertEqual(panel.events, ["tab_down", ("click", 1036.0, 505.0), ("click", 950.0, 587.0),
+                                        "tab_up"])
+        self.assertEqual(slept[before_tab[0]], config.FETCH_TAB_SETTLE_SEC, "押してすぐ 0.1 秒待つ")
+        self.assertEqual(config.FETCH_TAB_SETTLE_SEC, 0.1)
+
+    def test_presses_again_keep_tab_held(self):
+        panel = _Panel()
+        f = self._fetcher(panel, answers=(None, 0, 29))
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertEqual(panel.events.count("tab_down"), 1)
+        self.assertEqual(panel.events.count("tab_up"), 1)
+        self.assertEqual(panel.events[0], "tab_down")
+        self.assertEqual(panel.events[-1], "tab_up")
+        self.assertEqual(len(panel.clicks), 4, "店のボタン＋Equip 3回")
+
+    def test_the_panel_moves_are_done_before_tab(self):
+        panel = _Panel(left=1700.0)
+        real_move, real_tab = panel.move_rel, panel.tab_down
+        panel.move_rel = lambda dx, dy: panel.events.append("move") or real_move(dx, dy)
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        first_tab = panel.events.index("tab_down")
+        self.assertTrue(all(e == "move" for e in panel.events[:first_tab]))
+        self.assertNotIn("move", panel.events[first_tab:], "Tab を押している間は視点を動かさない")
+        self.assertIsNotNone(real_tab)
+
+    def test_every_ending_lets_tab_go(self):
+        def stop_on(n, error):
+            def click(x, y):
+                panel.events.append("click")
+                if len([e for e in panel.events if e == "click"]) == n:
+                    raise error
+                return True
+            return click
+        for n, error in ((1, ItemFetch.Stopped("front_lost")), (2, ItemFetch.Stopped("frozen")),
+                         (2, ItemFetch.Stopped("not_private")), (1, ValueError("x"))):
+            panel = _Panel()
+            f = self._fetcher(panel)
+            panel.click_at = stop_on(n, error)
+            with self.assertRaises(type(error)):
+                f.buy("Survival", 29)
+            self.assertEqual(panel.events[-1], "tab_up", error)
+            self.assertEqual(panel.events.count("tab_up"), 1)
+
+    def test_a_stop_while_waiting_after_tab_lets_it_go(self):
+        panel = _Panel()
+        f = self._fetcher(panel)
+        f.stopped = lambda: "round" if "tab_down" in panel.events else None
+        with self.assertRaises(ItemFetch.Stopped):
+            f.buy("Survival", 29)
+        self.assertEqual(panel.events, ["tab_down", "tab_up"])
+
+    def test_failures_let_it_go(self):
+        panel = _Panel()
+        panel.click_ok = False
+        f = self._fetcher(panel)
+        self.assertFalse(f.buy("Survival", 29))
+        self.assertEqual(panel.events[-1], "tab_up")
+        panel = _Panel()
+        f = self._fetcher(panel, answers=(None, None, None))
+        self.assertFalse(f.buy("Survival", 29))
+        self.assertEqual(panel.events[-1], "tab_up")
+
+    def test_no_panel_no_tab(self):
+        panel = _Panel()
+        panel.found = False
+        f = self._fetcher(panel)
+        self.assertFalse(f.buy("Survival", 29))
+        self.assertEqual(panel.events, [])
+
+
 class TestCursorClickInTheWindow(unittest.TestCase):
-    """_FrontOnlyMouse.click_at: 撮影の点＋窓の左上へ、Tab ＋カーソル＋クリック"""
+    """_FrontOnlyMouse: Tab（前面の窓だけ）と、カーソルを置いて読み直してからのクリック"""
     HWND = 0x55
 
     def setUp(self):
         self.calls = []
         self.front = {"hwnd": self.HWND}
+        self.reads = []                 # 読み直しで返す位置（空なら置いた点）
+        self.placed = None
         rec = self.calls
 
         class Keyboard:
@@ -339,33 +439,103 @@ class TestCursorClickInTheWindow(unittest.TestCase):
             rec.append(("sleep", sec))
             if self.on_sleep:
                 self.on_sleep()
+
+        def put(point):
+            rec.append(("cursor", tuple(point)))
+            self.placed = tuple(point)
+            return True
+
+        def read():
+            got = self.reads.pop(0) if self.reads else self.placed
+            rec.append(("read", got))
+            return got
         self.on_sleep = None
-        user32 = MagicMock()
-        user32.SetCursorPos.side_effect = lambda x, y: rec.append(("cursor", (x, y))) or True
+        self.written = []
         for p in (patch.object(WindowOperator, "keyboard", Keyboard()),
                   patch.object(WindowOperator, "pydirectinput", Mouse()),
                   patch.object(WindowOperator, "time", _module_time(sleep)),
-                  patch.object(WindowOperator, "user32", user32),
+                  patch.object(ActionExecutor, "time", _module_time(sleep)),
+                  patch.object(WindowOperator, "set_cursor_position", side_effect=put),
+                  patch.object(WindowOperator, "cursor_position", side_effect=read),
                   patch.object(WindowOperator, "window_origin", return_value=(100, 50)),
-                  patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front["hwnd"])):
+                  patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front["hwnd"]),
+                  patch.object(DebugLog, "write", side_effect=self.written.append)):
             p.start()
             self.addCleanup(p.stop)
         self.allowed = {"on": True}
         self.mouse = ActionExecutor._FrontOnlyMouse(self.HWND, allowed=lambda: self.allowed["on"])
 
-    def test_tab_then_the_cursor_then_the_click(self):
-        self.assertTrue(self.mouse.click_at(1035.6, 505.2))
-        self.assertEqual(self.calls, [("press", "tab"), ("cursor", (1136, 555)),
-                                      ("sleep", config.CLICK_TAB_LEAD_SEC), ("down",),
-                                      ("sleep", ItemFetch.CLICK_SEC), ("up",), ("release", "tab")])
+    def _click(self):
+        return [("sleep", ItemFetch.CLICK_SEC)]
 
-    def test_the_front_lost_after_tab(self):
+    def test_the_constants(self):
+        self.assertEqual((config.FETCH_CURSOR_SETTLE_SEC, config.FETCH_CURSOR_TRIES, config.FETCH_CURSOR_TOL_PX),
+                         (0.05, 3, 2))
+
+    def test_place_wait_read_then_click(self):
+        self.assertTrue(self.mouse.click_at(1035.6, 505.2))
+        self.assertEqual(self.calls, [("cursor", (1136, 555)), ("sleep", 0.05), ("read", (1136, 555)),
+                                      ("down",), ("sleep", ItemFetch.CLICK_SEC), ("up",)])
+        self.assertIn("[操作] カーソル: 置いた (1136, 555) → 読み直し (1136, 555)（置き直し 0 回）",
+                      self.written)
+
+    def test_within_2px_is_placed(self):
+        self.reads = [(1138, 553)]
+        self.assertTrue(self.mouse.click_at(1035.6, 505.2))
+        self.assertEqual(self.calls.count(("down",)), 1)
+        self.assertEqual(len([c for c in self.calls if c[0] == "cursor"]), 1)
+
+    def test_3px_off_is_placed_again(self):
+        for off in ((3, 0), (0, -3)):
+            self.calls.clear()
+            self.reads = [(1136 + off[0], 555 + off[1])]
+            self.assertTrue(self.mouse.click_at(1035.6, 505.2))
+            self.assertEqual(len([c for c in self.calls if c[0] == "cursor"]), 2, off)
+
+    def test_moved_back_to_the_middle_is_placed_again(self):
+        self.reads = [(1280, 719), (1280, 719)]          # VRChat に真ん中へ戻された
+        self.assertTrue(self.mouse.click_at(1035.6, 505.2))
+        self.assertEqual([c for c in self.calls if c[0] in ("cursor", "read")],
+                         [("cursor", (1136, 555)), ("read", (1280, 719)),
+                          ("cursor", (1136, 555)), ("read", (1280, 719)),
+                          ("cursor", (1136, 555)), ("read", (1136, 555))])
+        self.assertEqual(self.calls.count(("down",)), 1)
+        self.assertIn("[操作] カーソル: 置いた (1136, 555) → 読み直し (1136, 555)（置き直し 2 回）",
+                      self.written)
+
+    def test_three_misses_do_not_click(self):
+        self.reads = [(1280, 719)] * 3
+        self.assertFalse(self.mouse.click_at(1035.6, 505.2))
+        self.assertNotIn(("down",), self.calls)
+        self.assertEqual(len([c for c in self.calls if c[0] == "cursor"]), 3)
+        self.assertIn("[操作] クリックしない（カーソルを (1136, 555) へ 3 回置けない）", self.written)
+
+    def test_an_unreadable_cursor_is_not_placed(self):
+        self.reads = [None] * 3
+        self.assertFalse(self.mouse.click_at(10, 10))
+        self.assertNotIn(("down",), self.calls)
+
+    def test_the_front_lost_while_waiting(self):
         self.on_sleep = lambda: self.front.update(hwnd=0x66)
         with self.assertRaises(ItemFetch.Stopped) as cm:
             self.mouse.click_at(10, 10)
         self.assertEqual(cm.exception.args[0], "front_lost")
         self.assertNotIn(("down",), self.calls)
-        self.assertEqual(self.calls[-1], ("release", "tab"))
+
+    def test_tab_only_to_the_window_in_front_and_in_private(self):
+        self.mouse.tab_down()
+        self.mouse.tab_up()
+        self.assertEqual(self.calls, [("press", "tab"), ("release", "tab")])
+        self.calls.clear()
+        self.front["hwnd"] = 0x66
+        with self.assertRaises(ItemFetch.Stopped):
+            self.mouse.tab_down()
+        self.front["hwnd"] = self.HWND
+        self.allowed["on"] = False
+        with self.assertRaises(ItemFetch.Stopped):
+            self.mouse.tab_down()
+        self.assertEqual(self.calls, [])
+        self.assertIn("[操作] Tab を押した（離すまで押したまま）", self.written)
 
     def test_not_in_front_or_not_private_sends_nothing(self):
         self.front["hwnd"] = 0x66
@@ -377,16 +547,78 @@ class TestCursorClickInTheWindow(unittest.TestCase):
             self.mouse.click_at(10, 10)
         self.assertEqual(self.calls, [])
 
-    def test_a_cursor_that_cannot_be_placed_does_not_click(self):
-        WindowOperator.user32.SetCursorPos.side_effect = lambda x, y: False
-        self.assertFalse(self.mouse.click_at(10, 10))
-        self.assertEqual(self.calls, [("press", "tab"), ("release", "tab")])
-
     def test_no_window_rect_stops(self):
         with patch.object(WindowOperator, "window_origin", return_value=None):
             with self.assertRaises(ItemFetch.Stopped):
                 self.mouse.click_at(10, 10)
         self.assertEqual(self.calls, [])
+
+    def test_begin_and_entry_clicks_are_as_before(self):
+        """Begin・ToN 入室のクリック（DG）は今どおり Tab を1回ごとに押して離す"""
+        WindowOperator.click()
+        self.assertEqual([c for c in self.calls if c[0] != "sleep"],
+                         [("press", "tab"), ("down",), ("up",), ("release", "tab")])
+
+
+class TestTabIsLetGoBeforeTheFrontIsGivenBack(unittest.TestCase):
+    """_fetch_in_front: Tab を離す → 視点を戻す → 前面を返す → カーソルを戻す"""
+    HWND = 0x55
+
+    def setUp(self):
+        self.events = []
+        self.front = {"hwnd": 0x900}
+
+        def borrow(hwnd):
+            self.front["hwnd"] = hwnd
+            return True, "loan"
+
+        def give_back(_loan):
+            self.events.append("return")
+            self.front["hwnd"] = 0x900
+            return True
+        for p in (patch.object(WindowOperator, "cursor_position", return_value=(11, 22)),
+                  patch.object(WindowOperator, "borrow_front", side_effect=borrow),
+                  patch.object(WindowOperator, "return_front", side_effect=give_back),
+                  patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: self.front["hwnd"]),
+                  patch.object(WindowOperator, "set_cursor_position",
+                               side_effect=lambda p: self.events.append("cursor") or True),
+                  patch.object(DebugLog, "write")):
+            p.start()
+            self.addCleanup(p.stop)
+        cfg = WindowConfig(hwnd=self.HWND, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, window_idx=1)
+        self.ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+    def test_tab_up_comes_first(self):
+        for error in (None, ItemFetch.Stopped("front_lost"), ValueError("x")):
+            self.events.clear()
+            panel = _Panel(top=900.0)                # 縦を動かすので、視点を戻す動きもある
+            panel.mouse_events = self.events
+            real_tab_up, real_move = panel.tab_up, panel.move_rel
+            panel.tab_up = lambda: self.events.append("tab_up") or real_tab_up()
+            panel.move_rel = lambda dx, dy: self.events.append("move") or real_move(dx, dy)
+            panel.restoring = False
+
+            def click(x, y, error=error):
+                if error is not None:
+                    raise error
+                return True
+            panel.click_at = click
+            f = ItemFetch.Fetcher(
+                osc=MagicMock(), grounded=lambda: True, capture=panel.capture, mouse=panel,
+                equip_seen=lambda c=itertools.count(): (next(c), 29), stopped=lambda: None,
+                log=lambda _m: None, locate_fn=panel.locate, sleep=lambda _s: None, clock=time.monotonic,
+                saved_gain=(0.9, 0.55))
+            self.front["hwnd"] = self.HWND
+            if error is None:
+                self.ex._fetch_in_front(f, "Survival", 29)
+            else:
+                with self.assertRaises(type(error)):
+                    self.ex._fetch_in_front(f, "Survival", 29)
+            after = self.events[self.events.index("tab_up"):]
+            self.assertEqual(after[0], "tab_up", error)
+            self.assertIn("move", after, "視点を戻すのは Tab を離した後")
+            self.assertEqual(after[-2:], ["return", "cursor"], error)
 
 
 class TestTheCursorGoesBack(unittest.TestCase):

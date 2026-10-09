@@ -805,37 +805,49 @@ def click():
     _click()
 
 
-def click_with_tab(hold_sec: float, still_front=None, pause: bool = True, point=None) -> bool:
-    """ツールのクリックの入口。前面の窓で Tab を押したまま左クリックする:
-    Tab を押す →（point があれば SetCursorPos）→ CLICK_TAB_LEAD_SEC 待つ → mouseDown → hold_sec →
-    mouseUp → Tab を離す。Tab を押すとカーソルが照準（真ん中）へ戻り、押している間はカーソルが
-    視点を回さずに動く（依頼者 2026-10-10 の実機）。Tab は何があっても離す。
+def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> bool:
+    """Begin・ToN 入室のクリックの入口。前面の窓で Tab を押したまま左クリックする:
+    Tab を押す → CLICK_TAB_LEAD_SEC 待つ → mouseDown → hold_sec → mouseUp → Tab を離す。
+    Tab を押すとカーソルが照準（真ん中）へ戻る（依頼者）。Tab は何があっても離す。
     キーは lock_cursor() と同じ keyboard で送る（前面の VRChat に Tab が効いている経路）。
+    アイテム取得は Tab を店の操作の間ずっと押したままにする（press_tab・release_tab・mouse_click）。
 
-    point（画面の点）を渡すと、Tab を押した後にカーソルをそこへ置き、照準ではなくその点を押す
-    （置けなければクリックせずに False）。
     still_front（呼ぶと前面がまだその窓か）を渡すと、待った後にもう一度見て、違えば
     クリックせずに Tab を離して False を返す。クリックしたら True。
-    pause は pydirectinput の _pause（アイテム取得は待たない）"""
+    pause は pydirectinput の _pause"""
     key = config.CLICK_TAB_KEY
     keyboard.press(key)
     try:
-        if point is not None and not set_cursor_position(point):
-            DebugLog.write(f"[操作] クリックしない（カーソルを {tuple(point)} へ置けない）")
-            return False
         if config.CLICK_TAB_LEAD_SEC > 0:
             time.sleep(config.CLICK_TAB_LEAD_SEC)
         if still_front is not None and not still_front():
             DebugLog.write("[操作] クリックしない（Tab の後に前面でなくなった）")
             return False
-        DebugLog.write("[操作] クリック（Tab の後）" if point is None
-                       else f"[操作] クリック（Tab＋カーソル {tuple(point)}）")
+        DebugLog.write("[操作] クリック（Tab の後）")
         pydirectinput.mouseDown(_pause=pause)
         time.sleep(hold_sec)
         pydirectinput.mouseUp(_pause=pause)
     finally:
         keyboard.release(key)
     return True
+
+
+def press_tab():
+    """Tab を押す（離すまで押したまま。アイテム取得の店の操作）。前面の窓へ届く"""
+    DebugLog.write("[操作] Tab を押した（離すまで押したまま）")
+    keyboard.press(config.CLICK_TAB_KEY)
+
+
+def release_tab():
+    DebugLog.write("[操作] Tab を離した")
+    keyboard.release(config.CLICK_TAB_KEY)
+
+
+def mouse_click(hold_sec: float, pause: bool = False):
+    """前面の窓の今のカーソルの位置を左クリックする（Tab は呼び出し側が押している）"""
+    pydirectinput.mouseDown(_pause=pause)
+    time.sleep(hold_sec)
+    pydirectinput.mouseUp(_pause=pause)
 
 
 def _click():
