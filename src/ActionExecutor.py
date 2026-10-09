@@ -1773,10 +1773,7 @@ class _FetchMouse:
 
     @staticmethod
     def click():
-        import pydirectinput
-        pydirectinput.mouseDown(_pause=False)
-        time.sleep(ItemFetch.CLICK_SEC)
-        pydirectinput.mouseUp(_pause=False)
+        WindowOperator.click_with_tab(ItemFetch.CLICK_SEC, pause=False)
 
 
 # ── Begin 前の移動の実測（記録だけ）──────────────────
@@ -1914,4 +1911,8 @@ class _FrontOnlyMouse(_FetchMouse):
 
     def click(self):
         self._check_front()
-        _FetchMouse.click()
+        # Tab を押して待つ間に前面が変わったら、クリックせずに Tab を離してやめる
+        if not WindowOperator.click_with_tab(
+                ItemFetch.CLICK_SEC, pause=False,
+                still_front=lambda: WindowOperator.foreground_hwnd() == self._hwnd):
+            raise ItemFetch.Stopped("front_lost")

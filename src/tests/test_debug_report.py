@@ -280,13 +280,13 @@ class TestDebugLogTraces(unittest.TestCase):
 
     def test_operations(self):
         with patch.object(WindowOperator, "_focus_window", return_value=True), \
-             patch.object(WindowOperator, "_click"), \
+             patch.object(WindowOperator, "time", _module_time(lambda _s: None)), \
              patch.object(WindowOperator, "_hold_key_background", return_value=True):
             WindowOperator.focus_window(0x10)
             WindowOperator.click()
             WindowOperator.hold_key_background(0x10, "w", 0.5)
         self.assertIn("[操作] 前面化 hwnd=0x10 → 成功", self.written)
-        self.assertIn("[操作] クリック", self.written)
+        self.assertIn("[操作] クリック（Tab の後）", self.written)
         self.assertIn("[操作] 背面キー w 0.50秒 hwnd=0x10", self.written)
 
     def test_osc_moves_and_the_chase(self):

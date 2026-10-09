@@ -783,8 +783,33 @@ def _cursor_landed(point: tuple) -> bool:
 
 
 def click():
-    DebugLog.write("[操作] クリック")
     _click()
+
+
+def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> bool:
+    """ツールのクリックの入口。前面の窓で Tab を押したまま左クリックする:
+    Tab を押す → CLICK_TAB_LEAD_SEC 待つ → mouseDown → hold_sec → mouseUp → Tab を離す。
+    Tab を押すとカーソルが照準（真ん中）へ戻る（依頼者）。Tab は何があっても離す。
+    キーは lock_cursor() と同じ keyboard で送る（前面の VRChat に Tab が効いている経路）。
+
+    still_front（呼ぶと前面がまだその窓か）を渡すと、待った後にもう一度見て、違えば
+    クリックせずに Tab を離して False を返す。クリックしたら True。
+    pause は pydirectinput の _pause（アイテム取得は待たない）"""
+    key = config.CLICK_TAB_KEY
+    keyboard.press(key)
+    try:
+        if config.CLICK_TAB_LEAD_SEC > 0:
+            time.sleep(config.CLICK_TAB_LEAD_SEC)
+        if still_front is not None and not still_front():
+            DebugLog.write("[操作] クリックしない（Tab の後に前面でなくなった）")
+            return False
+        DebugLog.write("[操作] クリック（Tab の後）")
+        pydirectinput.mouseDown(_pause=pause)
+        time.sleep(hold_sec)
+        pydirectinput.mouseUp(_pause=pause)
+    finally:
+        keyboard.release(key)
+    return True
 
 
 def _click():
@@ -828,7 +853,5 @@ def _click():
         窓ごとに別デスクトップ CreateDesktopなら窓ごとに前面を持てるが、切り替えない
                              と画面が見えなくなるため採用しない（依頼者の判断）
     """
-    pydirectinput.mouseDown()
-    time.sleep(0.1)
-    pydirectinput.mouseUp()
+    click_with_tab(0.1)
     time.sleep(config.OPERATOR_WAIT_SEC)
