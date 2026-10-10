@@ -29,6 +29,7 @@ import ToolLauncher
 import HotKey
 import ToNEntry
 import OSCClient
+import OSCQuery
 import OBSClient
 import Recorder
 import SecretStore
@@ -3216,6 +3217,7 @@ class App(tk.Tk):
         self._save_settings_now()
         self._stop_reason = "ウィンドウを閉じた"      # debug.log の停止の理由
         self._stop()
+        OSCQuery.shutdown()                         # 残っていれば広告を取り下げる
         self._unhook_chase_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()

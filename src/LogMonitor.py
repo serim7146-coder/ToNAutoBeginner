@@ -334,7 +334,8 @@ class LogMonitor:
         if self._hands_free():
             return          # 完全放置モードの窓では速度検知を動かさない（ログも出さない）
         st.speed_probe_done = True
-        self._log("速度検知 開始")
+        if self._action.speed_receiving:        # 受け取れていない窓では言わない（DN）
+            self._log("速度検知 開始")
         self._start_daemon(self._action.do_speed_detect)
 
     def _round_entry_voice(self, round_type: str) -> str:

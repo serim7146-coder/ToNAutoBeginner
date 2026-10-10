@@ -4,13 +4,14 @@ VRChatからのOSC受信（アバターの移動速度）
 ToNはラウンド種別に応じてプレイヤーの移動速度を変える。Beginを押した直後から
 新しい速度が効くため、ROUND_STARTを待たずに種別を先読みできる。
 
-窓ごとに VRChat の送信ポート（OSCClient.ports_for_window() の2つ目）をbindする。
+受け取るのはツールに1つの OSCQuery のサービス（OSCQuery.py）。VRChat の送信ポート（9001 など）は
+bind しない（先に開いたアプリだけが受け取れるため。DN）。サービスが送り元のポート → PID → 窓で
+振り分けて、窓ごとの VelocityReceiver に渡す。
 
 注意: VRChatはアバターが持っているパラメータしか送らない。VelocityMagnitudeが
 アバターに定義されていないと1件も飛んでこないため、呼び出し側は ever_received を
 見て機能を止めること（無言で壊れないように）。
 """
-import socket
 import struct
 import threading
 import time
@@ -49,15 +50,14 @@ def parse_message(data: bytes):
 
 
 class VelocityReceiver:
-    """1つの窓の VelocityMagnitude / Grounded を受け取る"""
+    """1つの窓の VelocityMagnitude / Grounded を受け取る（OSCQuery のサービスから、この窓の分だけ）"""
 
-    def __init__(self, port: int, log=None, host: str = "127.0.0.1"):
-        self._port = port
-        self._host = host
+    def __init__(self, hwnd: int, log=None, window_label: str = ""):
+        self._hwnd = hwnd
         self._log = log or (lambda _m: None)
-        self._sock = None
-        self._thread = None
-        self._running = False
+        self.window_label = window_label or f"hwnd={int(hwnd or 0):#x}"
+        self._pid = 0
+        self._registered = False
         self._lock = threading.Lock()
         self._speed = None
         self._grounded = None      # 未受信。Groundedを持たないアバターもある
@@ -69,45 +69,30 @@ class VelocityReceiver:
         self._stable_value = None   # 直近で「変化していない」とみなしている値
         self._stable_since = 0.0    # その値になった時刻
 
+    @property
+    def pid(self) -> int:
+        """この窓の VRChat のプロセス（振り分けに使う。取れるまで取り直す）"""
+        if not self._pid:
+            import OSCQuery
+            self._pid = OSCQuery._pid_of_window(self._hwnd)
+        return self._pid
+
     def start(self) -> bool:
-        """受信を開始する。ポートを開けなければ False。"""
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind((self._host, self._port))
-            sock.settimeout(0.2)
-        except OSError as e:
-            DebugLog.exception("OSCReceiver.start")
-            self._log(f"速度受信ポート{self._port}を開けません: {e}")
-            return False
-        self._sock = sock
+        """OSCQuery のサービスに登録する（無ければ立てる）。立てられなければ False"""
+        import OSCQuery
         self._started = time.time()
-        self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        if not OSCQuery.acquire(self):
+            self._log("速度受信（OSCQuery）を開始できません")
+            return False
+        self._registered = True
         return True
 
     def stop(self):
-        self._running = False
-        sock, self._sock = self._sock, None
-        if sock is not None:
-            try:
-                sock.close()
-            except Exception:
-                DebugLog.exception("OSCReceiver.stop")
-                pass
-
-    def _run(self):
-        while self._running and self._sock is not None:
-            try:
-                data, _addr = self._sock.recvfrom(4096)
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            parsed = parse_message(data)
-            if parsed is None:
-                continue
-            self._handle(*parsed)
+        if not self._registered:
+            return
+        self._registered = False
+        import OSCQuery
+        OSCQuery.release(self)
 
     def _handle(self, address, value):
         """受信した1件を反映する"""

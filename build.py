@@ -38,6 +38,8 @@ BASE_ARGS = [
     "--include-module=win32process",
     "--include-module=win32crypt",
     "--include-package=cv2",
+    "--include-package=zeroconf",
+    "--include-package=ifaddr",
     "--include-data-files=.env=.env",
     "--include-data-files=ToNAutoBeginnerIcon.ico=ToNAutoBeginnerIcon.ico",
     "--include-data-files=maps.json=maps.json",
