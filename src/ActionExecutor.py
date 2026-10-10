@@ -14,6 +14,7 @@ import OSCClient
 import OSCReceiver
 import PlaySound
 import RespawnButton
+import RunFace
 import RoundDecision
 from State import WindowConfig, WindowState
 
@@ -1585,10 +1586,45 @@ class ActionExecutor:
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
                 self._osc.press(address, sec, stop=lambda: not self._run_still(round_seq))
                 self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
+            fixed = self._face_the_stairs(round_seq)
             if self._run_still(round_seq):
-                self._log("Run: リスポーンして正面を向きました")
+                self._log("Run: リスポーンして正面を向きました"
+                          + (f"（向きを {fixed} 回直しました）" if fixed else ""))
         finally:
             self._run_respawn_idle.set()
+
+    def _face_the_stairs(self, round_seq: int) -> int:
+        """撮影で階段の上の赤い光を探し、真ん中からずれていれば短く回して直す（背面・OSC。前面は借りない。
+        ほかの窓のフリーズ中でもよい）。光が左（回し足りない）→ LookLeft、右 → LookRight を
+        |ずれ| / (RUN_FACE_RATE × 幅) 秒（下限 RUN_FACE_MIN_SEC）。RUN_FACE_TRIES 回まで。直した回数を返す"""
+        head = f"[操作] [窓{self._st.window_idx}] Run: 向き"
+        fixed = 0
+        while True:
+            if not self._run_still(round_seq):
+                return fixed
+            time.sleep(config.RUN_FACE_SETTLE_SEC)      # 回し終えてから撮る
+            shot = self._capture_bgr()
+            light = RunFace.find_light(shot) if shot is not None else None
+            if light is None:
+                DebugLog.write(f"{head}: 階段の光が見つからない → 今の向きのまま（直した {fixed} 回）")
+                return fixed
+            width = shot.shape[1]
+            dx = light[0] - width / 2
+            if abs(dx) <= width * config.RUN_FACE_TOL:
+                DebugLog.write(f"{head}: 光 x {light[0]:.1f}（幅 {width}）・ずれ {dx:+.1f} → 正面（直した {fixed} 回）")
+                return fixed
+            if fixed >= config.RUN_FACE_TRIES:
+                DebugLog.write(f"{head}: {fixed} 回直しても ずれ {dx:+.1f} → やめる")
+                return fixed
+            if not self._run_still(round_seq):
+                return fixed
+            address = "/input/LookLeft" if dx < 0 else "/input/LookRight"
+            sec = max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width))
+            DebugLog.write(f"{head}: 光 x {light[0]:.1f}（幅 {width}・塊 {light[1]}）・ずれ {dx:+.1f} → "
+                           f"{address} {sec:.3f}秒")
+            self._osc.press(address, sec, stop=lambda: not self._run_still(round_seq))
+            self._osc.stop_all(repeat=1)
+            fixed += 1
 
     def _respawn_when_free(self, round_seq: int) -> str | None:
         """ほかの窓のフリーズが無いときに、前面を借りてリスポーンする。できたら None、だめなら理由。
