@@ -21,6 +21,21 @@ class KillerDecision:
     is_continue_round: bool
 
 
+ALTERNATE_SUFFIX = " (Alternate)"
+
+
+def selectable_round_name(round_type: str) -> str:
+    """ラウンドの種類 → 選べる名前（全続行・自爆するラウンドのチェックボックスの名前）。
+    Killers の行の種類は「Ghost (Alternate)」のように (Alternate) が付く。付ける前の名前が
+    config.SKIP_ROUND_SELECTABLE にあるもの（Fog・Ghost・8 Pages）だけ外す（依頼者 2026-10-10:
+    Ghost を選んだら Ghost (Alternate) にも効かせる）。ほか（単独の Alternate など）はそのまま"""
+    if round_type and round_type.endswith(ALTERNATE_SUFFIX):
+        base = round_type[:-len(ALTERNATE_SUFFIX)]
+        if base in config.SKIP_ROUND_SELECTABLE:
+            return base
+    return round_type
+
+
 def normalize_killer_ids(ids: list[int], round_type: str, state_round_type: str = "") -> list[int]:
     normalized = MatchTNL.apply_alternate_offset(ids, round_type)
     if state_round_type == "Unbound":

@@ -1250,7 +1250,7 @@ class LogMonitor:
         ids = st.terror_ids if ids is None else ids
         if bloodthirsty is None:
             bloodthirsty = st.bloodthirsty_creature_variant
-        if st.round_type not in self.cfg.skip_rounds:
+        if RoundDecision.selectable_round_name(st.round_type) not in self.cfg.skip_rounds:
             return False
         if RoundDecision.is_open_special_round_target(
                 ids, st.round_type, st.open_special_round_wins,
@@ -2057,7 +2057,7 @@ class LogMonitor:
             if reason:
                 return ("hands_free", reason)
         # privateのラウンド指定。全続行が先。続行リストは見ない
-        if is_private and st.round_type in self.cfg.continue_rounds:
+        if is_private and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds:
             return ("continue_rounds",)
         # privateのラウンド指定自爆。続行リストより優先する
         if (is_private and self.cfg.skip_rounds
