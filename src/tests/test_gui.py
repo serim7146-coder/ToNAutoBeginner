@@ -3130,6 +3130,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "ton_instance_access", "profiles", "freeze_8pages",
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
+            "continue_drop_item", "continue_restore_window",
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")

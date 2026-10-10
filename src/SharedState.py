@@ -163,6 +163,13 @@ get_item_fetch_gain, set_item_fetch_gain = _ITEM_FETCH_GAIN.get, _ITEM_FETCH_GAI
 _ITEM_BEGIN_MODE = _Setting(False)
 get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MODE.set
 
+# 続行ラウンドの後にアイテムを落とす・窓を元の位置に戻す（全窓共通・既定 ON）
+_CONTINUE_DROP_ITEM = _Setting(True, bool)
+get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTINUE_DROP_ITEM.set
+_CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
+get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
+                                                            _CONTINUE_RESTORE_WINDOW.set)
+
 
 # ═══════════════════════════════════════════════
 #  全窓フリーズ（装備待ち・速度検知・ラウンド突入・続行）
@@ -298,7 +305,36 @@ round_freeze_start, round_freeze_end = _ROUND.start, _ROUND.end
 round_freeze_reset, get_round_freeze_count = _ROUND.reset, _ROUND.get_count
 
 # 続行・霧ラウンド中。DTM/Waldo の窓は is_continue_round=True でも張らない（他窓を止めない仕様）
-_CONTINUE = _Freeze("続行", "continue_freeze_held")
+class _ContinueFreeze(_Freeze):
+    """続行ラウンドのフリーズ。この窓が張った・外した瞬間に st.continue_hook(True / False) を呼ぶ
+    （続行ラウンドの始まりに窓の位置を覚え、終わりにアイテムを落として窓を戻す。LogMonitor が入れる）。
+    前の回の窓・止めたとき（reset）は呼ばない"""
+
+    def start(self, st):
+        was = st.continue_freeze_held
+        super().start(st)
+        if not was and st.continue_freeze_held:
+            _call_continue_hook(st, True)
+
+    def end(self, st):
+        was = st.continue_freeze_held
+        stale = _stale(st)
+        super().end(st)
+        if was and not st.continue_freeze_held and not stale:
+            _call_continue_hook(st, False)
+
+
+def _call_continue_hook(st, started: bool):
+    hook = getattr(st, "continue_hook", None)
+    if hook is None:
+        return
+    try:
+        hook(started)
+    except Exception:
+        DebugLog.exception("SharedState._call_continue_hook")
+
+
+_CONTINUE = _ContinueFreeze("続行", "continue_freeze_held")
 CONTINUE_ROUND_EVENT = _CONTINUE.event
 continue_round_start, continue_round_end = _CONTINUE.start, _CONTINUE.end
 continue_round_reset, get_continue_round_count = _CONTINUE.reset, _CONTINUE.get_count

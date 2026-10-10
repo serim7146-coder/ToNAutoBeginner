@@ -3220,14 +3220,21 @@ class TestBeginNeverDropsTheItem(unittest.TestCase):
 
         self.assertTrue(monitor.st.waiting_for_equip)
 
-    def test_the_source_sends_no_drop_at_all(self):
-        """DropRight を送る箇所がコードから無くなっていること"""
+    def test_the_source_sends_no_drop_for_begin(self):
+        """Begin のために落とす処理がコードから無くなっていること。DropRight を送るのは
+        続行ラウンドの後（依頼者 2026-10-10・_drop_item_after_continue）の1か所だけ"""
         here = Path(ActionExecutor.__file__).parent
         for name in ("ActionExecutor.py", "LogMonitor.py", "WindowOperator.py",
                      "config.py", "State.py", "SharedState.py"):
             src = (here / name).read_text(encoding="utf-8")
-            self.assertNotIn("DropRight", src, name)
             self.assertNotIn("item_dropped_for_begin", src, name)
+            if name != "ActionExecutor.py":
+                self.assertNotIn("DropRight", src, name)
+        src = (here / "ActionExecutor.py").read_text(encoding="utf-8")
+        self.assertEqual(src.count('"/input/DropRight"'), 1)
+        body = src[src.index("    def _drop_item_after_continue("):]
+        body = body[:body.index("\n    def ", 1)]
+        self.assertIn('"/input/DropRight"', body)
 
     def test_the_next_round_needs_no_flag_to_reset(self):
         """ラウンド開始でロスト関連が戻ること（落とした印はもう無い）"""

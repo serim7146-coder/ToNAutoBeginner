@@ -702,6 +702,84 @@ def focus_vrchat(hwnd: int) -> bool:
     return ok
 
 
+def window_rect(hwnd: int) -> tuple | None:
+    """窓の矩形 (左, 上, 右, 下)（GetWindowRect）。取れなければ None"""
+    try:
+        return tuple(int(v) for v in win32gui.GetWindowRect(hwnd))
+    except Exception:
+        DebugLog.exception("WindowOperator.window_rect")
+        return None
+
+
+def window_state(hwnd: int) -> str | None:
+    """窓の状態。"normal"・"maximized"・"minimized"・"fullscreen"（窓の矩形＝モニターの矩形で
+    タイトルバーなし）。窓が無い・取れなければ None"""
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return None
+        if win32gui.IsIconic(hwnd):
+            return "minimized"
+        if win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED:
+            return "maximized"
+        if _is_fullscreen(hwnd):
+            return "fullscreen"
+        return "normal"
+    except Exception:
+        DebugLog.exception("WindowOperator.window_state")
+        return None
+
+
+def _is_fullscreen(hwnd: int) -> bool:
+    if win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE) & win32con.WS_CAPTION:
+        return False                    # タイトルバーがある
+    monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+    return tuple(win32api.GetMonitorInfo(monitor)["Monitor"]) == tuple(win32gui.GetWindowRect(hwnd))
+
+
+def normal_rect(hwnd: int) -> tuple | None:
+    """最大化・最小化の前の、元の矩形（GetWindowPlacement の rcNormalPosition）"""
+    try:
+        return tuple(int(v) for v in win32gui.GetWindowPlacement(hwnd)[4])
+    except Exception:
+        DebugLog.exception("WindowOperator.normal_rect")
+        return None
+
+
+def move_window(hwnd: int, left: int, top: int) -> bool:
+    """窓の位置だけ動かす（大きさ・重なり順・前面は変えない）"""
+    try:
+        win32gui.SetWindowPos(hwnd, 0, int(left), int(top), 0, 0,
+                              win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+    except Exception:
+        DebugLog.exception("WindowOperator.move_window")
+        return False
+    DebugLog.write(f"[操作] 窓の位置を動かす hwnd={int(hwnd):#x} → ({int(left)}, {int(top)})")
+    return True
+
+
+def restore_without_activating(hwnd: int) -> bool:
+    """最大化を元の矩形に戻す。前面は奪わない（SetWindowPlacement に SW_SHOWNOACTIVATE。
+    ShowWindow(SW_RESTORE) は前面にした: 2026-10-10 の実機）。それでも前面になったら、前の窓へ返す"""
+    before = foreground_hwnd()
+    try:
+        flags, _show, pt_min, pt_max, normal = win32gui.GetWindowPlacement(hwnd)
+        win32gui.SetWindowPlacement(hwnd, (flags, win32con.SW_SHOWNOACTIVATE, pt_min, pt_max, normal))
+    except Exception:
+        DebugLog.exception("WindowOperator.restore_without_activating")
+        return False
+    DebugLog.write(f"[操作] 最大化を解除（前面にしない） hwnd={int(hwnd):#x} → {tuple(normal)}")
+    if before and before != hwnd and foreground_hwnd() == hwnd:
+        DebugLog.write(f"[操作] 最大化を解除したら前面になった → hwnd={int(before):#x} へ返す")
+        focus_window(before)
+    return True
+
+
+def send_keys(keys: str):
+    """前面の窓へキーの組み合わせを押して離す（例 "alt+enter"）"""
+    DebugLog.write(f"[操作] 前面キー {keys}")
+    keyboard.send(keys)
+
+
 def set_cursor_position(point) -> bool:
     """Windows のカーソルを画面の point へ置く。置けたら True"""
     try:

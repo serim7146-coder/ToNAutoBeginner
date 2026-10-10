@@ -120,6 +120,7 @@ class ActionExecutor:
         # 立ち上がりのサンプルを永久に取りこぼす。
         self._speed_ready = threading.Event()
         self._receiver = None             # 監視中ずっと生かす速度受信器
+        self._continue_rect = None        # 続行ラウンドの始まりの窓の矩形（窓を戻す先）
 
     @property
     def uses_osc(self) -> bool:
@@ -1524,20 +1525,129 @@ class ActionExecutor:
                 finally:
                     self._put_cursor_back(cursor)
 
-    def _put_cursor_back(self, cursor):
-        """アイテム取得で動かした Windows のカーソルを、取得の前にあった場所へ戻す（依頼者）。
+    def _put_cursor_back(self, cursor, what: str = "アイテム取得", when: str = "取得前"):
+        """アイテム取得（など）で動かした Windows のカーソルを、前にあった場所へ戻す（依頼者）。
         前面を返した後、この窓が前面でなくなってから（前面の VRChat はマウスを掴んでいて、Tab を
         押していないときに置くと視点が回る）。この窓がまだ前面なら戻さず debug.log に残す"""
-        head = f"[操作] [窓{self._st.window_idx}] アイテム取得:"
+        head = f"[操作] [窓{self._st.window_idx}] {what}:"
         if cursor is None:
             return
         if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
-            DebugLog.write(f"{head} この窓がまだ前面なので、カーソルを取得前の位置 {cursor} へ戻しません")
+            DebugLog.write(f"{head} この窓がまだ前面なので、カーソルを{when}の位置 {cursor} へ戻しません")
             return
         if WindowOperator.set_cursor_position(cursor):
-            DebugLog.write(f"{head} カーソルを取得前の位置 {cursor} へ戻した")
+            DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻した")
         else:
-            DebugLog.write(f"{head} カーソルを取得前の位置 {cursor} へ戻せません")
+            DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻せません")
+
+    # ── 続行ラウンドの後（アイテムを落とす・窓を戻す）──────────
+    def remember_continue_window(self):
+        """続行ラウンドの始まり（この窓が続行フリーズを張った瞬間）。窓を戻す設定が ON なら、
+        戻す先の矩形を覚える。フルスクリーン・最小化なら覚えない（終わりでも戻さない）。
+        最大化なら元の矩形（rcNormalPosition。実機で並べた位置だった）を覚える"""
+        self._continue_rect = None
+        hwnd = self._cfg.hwnd
+        if not SharedState.get_continue_restore_window() or not hwnd:
+            return
+        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの始まり:"
+        state = WindowOperator.window_state(hwnd)
+        if state in (None, "minimized", "fullscreen"):
+            DebugLog.write(f"{head} 窓が{ {None: '無い', 'minimized': '最小化', 'fullscreen': 'フルスクリーン'}[state]}"
+                           "ので位置を覚えません（終わりでも戻しません）")
+            return
+        rect = (WindowOperator.normal_rect(hwnd) if state == "maximized"
+                else WindowOperator.window_rect(hwnd))
+        if rect is None:
+            return
+        self._continue_rect = rect
+        DebugLog.write(f"{head} 窓の位置を覚えた {rect}"
+                       + ("（最大化の元の矩形）" if state == "maximized" else ""))
+
+    def after_continue_round(self):
+        """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）。この順で:
+        1. アイテムを落とす（/input/DropRight を押して離す。OSC なので private だけ。持っているかは見ない）
+        2. 窓を始まりの位置へ戻す（覚えた矩形があるときだけ。どのインスタンスでも）"""
+        rect, self._continue_rect = self._continue_rect, None
+        if not self._is_running():
+            return
+        if SharedState.get_continue_drop_item():
+            self._drop_item_after_continue()
+        if rect is not None and SharedState.get_continue_restore_window():
+            self._restore_continue_window(rect)
+
+    def _drop_item_after_continue(self):
+        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
+        if self._osc is None or not self.can_operate():
+            DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でない'}）")
+            return
+        self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._move_stopped)
+        DebugLog.write(f"{head} /input/DropRight を押して離した")
+        self._log("続行ラウンドが終わったので、アイテムを落としました")
+
+    def _restore_continue_window(self, rect):
+        """窓を rect（始まりの矩形）の位置へ戻す。フルスクリーンなら前面を借りて Alt+Enter で窓に
+        戻してから。最大化なら前面を奪わずに元に戻してから。大きさは変えない（位置だけ）"""
+        hwnd = self._cfg.hwnd
+        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
+        state = WindowOperator.window_state(hwnd)
+        if state in (None, "minimized"):
+            DebugLog.write(f"{head} 窓が{'無い' if state is None else '最小化'}ので戻しません")
+            return
+        if state == "fullscreen":
+            if self._leave_fullscreen_and_move(rect):
+                self._log("窓を元の位置に戻しました（フルスクリーンを解除）")
+            return
+        how = ""
+        if state == "maximized":
+            if not WindowOperator.restore_without_activating(hwnd):
+                return
+            how = "（最大化を解除）"
+        if self._move_window_back(rect) or how:
+            self._log(f"窓を元の位置に戻しました{how}")
+
+    def _leave_fullscreen_and_move(self, rect) -> bool:
+        """前面を借りて Alt+Enter → 窓に戻るのを待つ → 位置だけ戻す → 前面を返す。窓に戻ったら True"""
+        hwnd = self._cfg.hwnd
+        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
+        with SharedState._GLOBAL_ACTION_LOCK:
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(hwnd)
+            if not ok:
+                DebugLog.write(f"{head} 前面にできないのでフルスクリーンを解除しません")
+                return False
+            try:
+                WindowOperator.send_keys("alt+enter")
+                deadline = time.time() + config.CONTINUE_WINDOWED_WAIT_SEC
+                while WindowOperator.window_state(hwnd) == "fullscreen":
+                    if time.time() >= deadline:
+                        DebugLog.write(f"{head} Alt+Enter の後 {config.CONTINUE_WINDOWED_WAIT_SEC:.0f} 秒で"
+                                       "窓に戻りません → 位置は動かしません")
+                        return False
+                    time.sleep(config.CONTINUE_WINDOWED_POLL_SEC)
+                DebugLog.write(f"{head} フルスクリーンを解除した（Alt+Enter）")
+                self._move_window_back(rect)
+                return True
+            finally:
+                try:
+                    WindowOperator.return_front(loan)
+                finally:
+                    self._put_cursor_back(cursor, "続行ラウンドの終わり", "前面を借りる前")
+
+    def _move_window_back(self, rect) -> bool:
+        """位置が rect の左上と違えば、位置だけ戻す（大きさは変えない）。動かしたら True"""
+        hwnd = self._cfg.hwnd
+        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
+        now = WindowOperator.window_rect(hwnd)
+        if now is None:
+            return False
+        if (now[0], now[1]) == (rect[0], rect[1]):
+            DebugLog.write(f"{head} 窓の位置は始まりのまま {now}")
+            return False
+        size, was = (now[2] - now[0], now[3] - now[1]), (rect[2] - rect[0], rect[3] - rect[1])
+        if size != was:
+            DebugLog.write(f"{head} 窓の大きさが始まりと違う（始まり {was[0]}x{was[1]}・今 {size[0]}x{size[1]}）"
+                           " → 大きさは変えずに位置だけ戻す")
+        return WindowOperator.move_window(hwnd, rect[0], rect[1])
 
     # ── 速度によるラウンド種別の検知 ────────────
     #  判定（do_speed_detect）と横移動（do_speed_strafe）は独立している。

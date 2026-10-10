@@ -251,6 +251,10 @@ def setUpModule():
     # オフラインと同じに失敗させる（urlopen を差し替えるテストは、その間それが勝つ）
     _real_paths["urlopen"] = urllib.request.urlopen
     urllib.request.urlopen = _refuse_network
+    # 続行ラウンドの後の操作（DropRight・窓を戻す）は、既定 ON でも、ほかのテストの続行ラウンドで
+    # 動かさない（OSC・窓の移動を送らない）。確かめるテストだけが ON にする
+    SharedState.set_continue_drop_item(False)
+    SharedState.set_continue_restore_window(False)
 
 
 def _refuse_network(*_args, **_kwargs):
@@ -838,9 +842,10 @@ class _CancelKeyVar:
 
 def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     """偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）。
-    アイテム自動取得のボタンの表示もここで足す"""
+    アイテム自動取得のボタン・続行ラウンドの後のチェックの表示もここで足す"""
     app.v_suicide_cancel_key = _CancelKeyVar(key)
     app._refresh_item_fetch_button = lambda: None
+    app._refresh_continue_after_checks = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None
     app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)

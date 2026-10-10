@@ -96,6 +96,8 @@ class WindowState:
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、
     # DTM/Waldo の窓は is_continue_round=True でもこちらは False（他窓を止めない）
     continue_freeze_held: bool = False
+    # 続行フリーズを張った・外した瞬間に呼ぶ（引数 True / False。LogMonitor が入れる）
+    continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0
     begin_done: bool = False
     speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）

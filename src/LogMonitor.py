@@ -130,6 +130,14 @@ class LogMonitor:
     def host_tabs(self, value: dict):
         self.lists.tabs = value
 
+    def _on_continue_freeze(self, started: bool):
+        """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
+        始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりはアイテムを落として窓を戻す（待つので別スレッド）"""
+        if started:
+            self._action.remember_continue_window()
+        elif self._running:
+            self._start_daemon(self._action.after_continue_round)
+
     def _auto_begin_active(self) -> bool:
         """ツールが Begin を押している窓か（自動 Begin が ON で private）。
 
@@ -149,6 +157,7 @@ class LogMonitor:
 
     def start(self):
         self.st.run_id = SharedState.current_run()      # この回の窓（止めた後に張るフリーズは数えない）
+        self.st.continue_hook = self._on_continue_freeze
         self._running = True
         self._stop_event.clear()
         self.early_read_capable = bool(

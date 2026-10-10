@@ -1559,6 +1559,18 @@ class App(tk.Tk):
                         variable=self.v_fog_early_read,
                         command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
 
+        # 続行ラウンドの後（全窓共通・保存・既定 ON）
+        fcr = ttk.Frame(self)
+        fcr.pack(pady=(0, 4))
+        self.v_continue_drop_item = tk.BooleanVar(value=True)
+        self.v_continue_restore_window = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fcr, text="続行ラウンドの後にアイテムを落とす",
+                        variable=self.v_continue_drop_item,
+                        command=self._on_continue_after_changed).pack(side="left")
+        ttk.Checkbutton(fcr, text="続行ラウンドの後に窓を元の位置に戻す",
+                        variable=self.v_continue_restore_window,
+                        command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
+
         ffr = ttk.Frame(self)
         ffr.pack(pady=(0, 4))
         ttk.Label(ffr, text="ラウンド突入でフリーズ:").pack(side="left")
@@ -1747,6 +1759,19 @@ class App(tk.Tk):
     def _on_fog_early_read_changed(self):
         FogEarlyRead.set_early_read_enabled(self.v_fog_early_read.get())   # 次の判定から効く
         self._schedule_settings_save()
+
+    def _on_continue_after_changed(self):
+        SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
+        SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
+        self._schedule_settings_save()
+
+    def _refresh_continue_after_checks(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_continue_drop_item.set(SharedState.get_continue_drop_item())
+            self.v_continue_restore_window.set(SharedState.get_continue_restore_window())
+        except (tk.TclError, AttributeError):
+            pass
 
     def _load_fog_early_read_setting(self, data: dict):
         enabled = data.get("fog_early_read_enabled", False)
@@ -2120,6 +2145,10 @@ class App(tk.Tk):
         self._apply_obs_settings()
         self._load_window_volume_settings(data)    # 古い settings.json でも既定値
         self._load_fog_early_read_setting(data)
+        # 続行ラウンドの後: 無い（古い settings.json）・壊れた値は ON（既定）
+        SharedState.set_continue_drop_item(data.get("continue_drop_item") is not False)
+        SharedState.set_continue_restore_window(data.get("continue_restore_window") is not False)
+        self._refresh_continue_after_checks()
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -3059,6 +3088,8 @@ class App(tk.Tk):
             "obs_port":      self.v_obs_port.get().strip(),
             **self._window_volume_settings(),
             **self._fog_early_read_setting(),
+            "continue_drop_item":      SharedState.get_continue_drop_item(),
+            "continue_restore_window": SharedState.get_continue_restore_window(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
