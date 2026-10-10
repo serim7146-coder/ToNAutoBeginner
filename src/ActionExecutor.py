@@ -1449,7 +1449,8 @@ class ActionExecutor:
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
             stopped=lambda: self._fetch_stopped(round_seq, deadline),
             log=lambda m: DebugLog.write(f"{head} {m}"),
-            saved_gain=self._saved_fetch_gain())
+            saved_gain=self._saved_fetch_gain(),
+            client_height=lambda: WindowOperator.client_height(self._cfg.hwnd))
         name = f"{shop} Shop の id={item_id}"
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")

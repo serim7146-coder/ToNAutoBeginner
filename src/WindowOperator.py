@@ -702,6 +702,16 @@ def focus_vrchat(hwnd: int) -> bool:
     return ok
 
 
+def client_height(hwnd: int) -> int | None:
+    """窓のクライアント領域の高さ（GetClientRect）。取れなければ None"""
+    try:
+        _l, _t, _w, height = win32gui.GetClientRect(hwnd)
+    except Exception:
+        DebugLog.exception("WindowOperator.client_height")
+        return None
+    return int(height) if height and height > 0 else None
+
+
 def window_state(hwnd: int) -> str | None:
     """窓の状態。"normal"・"maximized"・"minimized"・"fullscreen"（窓の矩形＝モニターの矩形で
     タイトルバーなし）。窓が無い・取れなければ None"""

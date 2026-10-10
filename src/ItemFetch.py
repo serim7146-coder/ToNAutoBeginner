@@ -44,6 +44,12 @@ RANSAC_PX = 5.0
 PANEL_MARGIN = 0.02
 PANEL_TRIES = 6             # 全体を映すのに視点を動かす回数の上限
 PANEL_SETTLE_PX = 2.0       # 見本の真ん中が照準からこれ以内なら、その向きに動かしても入らない
+# 照準の左下の HUD（Intermission／Time の枠。頭に固定）。押す点がここに入ったら店の画面を真ん中へ寄せる。
+# 照準からの位置をクライアントの高さで割った割合（VRChat は縦の画角が決まっている）。
+# 2026-10-10 の6窓の撮影（hud_w1〜6.png）の明るい画素は 横 -0.210〜-0.094・縦 +0.066〜+0.132。
+# 枠・右のアイコン・下の小さな文字まで、上下左右に 0.02 前後の余白を足した
+HUD_X = (-0.23, -0.07)
+HUD_Y = (0.05, 0.15)
 SCALE_PROBE = 10            # 倍率を測るのに、点の ±この px を写す
 # gain（画面px ／ マウス1）は視点の感度で人によって違う（依頼者の PC で 横0.81・縦0.59）。決め打ちに
 # しない: 視点を動かすのが要るときだけ、横・縦それぞれ小さく動かして測る（calibrate）
@@ -213,6 +219,12 @@ def panel_corners(project) -> list:
     return [tuple(project(c)[:2]) for c in ((0, 0), (w, 0), (0, h), (w, h))]
 
 
+def in_hud(point, aim, height) -> bool:
+    """撮影の点が HUD の範囲（照準 ＋ HUD_X・HUD_Y × クライアントの高さ）に入っているか"""
+    rx, ry = (point[0] - aim[0]) / height, (point[1] - aim[1]) / height
+    return HUD_X[0] <= rx <= HUD_X[1] and HUD_Y[0] <= ry <= HUD_Y[1]
+
+
 def panel_outside(corners, size) -> tuple:
     """四隅が撮影の端の余白（PANEL_MARGIN）の外へはみ出しているか (横, 縦)。size は撮影の (幅, 高さ)"""
     w, h = size
@@ -268,8 +280,10 @@ class Fetcher:
     """
 
     def __init__(self, osc, grounded, capture, mouse, equip_seen, stopped, log,
-                 locate_fn=locate, sleep=None, clock=None, saved_gain=None):
+                 locate_fn=locate, sleep=None, clock=None, saved_gain=None, client_height=None):
         self.osc = osc
+        # () → 窓のクライアント領域の高さ（HUD の範囲の大きさ）。無い・取れなければ撮影の高さ
+        self.client_height = client_height
         self.grounded = grounded
         self.capture = capture
         self.mouse = CountingMouse(mouse)   # 測りと全体を映す動きを全部数える
@@ -380,18 +394,26 @@ class Fetcher:
             out_x, out_y = panel_outside(panel_corners(project), (img.shape[1], img.shape[0]))
             cx, cy = project((TEMPLATE_SIZE[0] / 2, TEMPLATE_SIZE[1] / 2))[:2]
             dx, dy = cx - aim[0], cy - aim[1]
+            height = (self.client_height() if self.client_height else None) or img.shape[0]
+            hud = [name for name, pt in (("店のボタン", BUTTONS[shop]), ("Equip", BUTTONS["Equip"]))
+                   if in_hud(project(pt)[:2], aim, height)]
             where = ("入っている" if not (out_x or out_y)
                      else "はみ出す（" + "・".join(n for n, o in (("横", out_x), ("縦", out_y)) if o) + "）")
             self.log(f"アイテム取得: 店の画面: 手がかり {found[4]} 点・四隅 {where}・"
+                     f"HUD に重なる点 {'・'.join(hud) if hud else 'なし'}・"
                      f"真ん中のずれ 横 {dx:.1f}・縦 {dy:.1f}（動かした {moves} 回）")
-            if not (out_x or out_y):
+            if not (out_x or out_y or hud):
                 return img, aim, found
-            if out_x and abs(dx) > PANEL_SETTLE_PX:
+            # はみ出している・押す点が HUD に重なる → 店の画面の真ん中を照準へ寄せる（横が先。縦は要るときだけ）
+            if (out_x or (hud and not out_y)) and abs(dx) > PANEL_SETTLE_PX:
                 want = (dx, 0.0)                # 横が先
-            elif out_y and abs(dy) > PANEL_SETTLE_PX:
+            elif (out_y or hud) and abs(dy) > PANEL_SETTLE_PX:
                 want = (0.0, dy)
-            else:
+            elif out_x or out_y:
                 self.log("アイテム取得: 店の画面が入りきりません（真ん中に寄せても はみ出す）")
+                return None
+            else:
+                self.log(f"アイテム取得: 押す点が HUD に重なります（真ん中に寄せても {'・'.join(hud)}）")
                 return None
             if moves >= PANEL_TRIES:
                 self.log(f"アイテム取得: 店の画面が入りきりません（{moves} 回動かした）")

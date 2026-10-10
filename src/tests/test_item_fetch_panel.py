@@ -704,3 +704,147 @@ class TestTheCursorGoesBack(unittest.TestCase):
             self.assertEqual(self.ex._fetch_in_front(self._fetcher(lambda *_a: True), "Survival", 29),
                              "failed")
         self.assertEqual(self.events, ["read"], "前面を借りられなければカーソルは動かしていない")
+
+
+class TestKeepTheButtonsOffTheHud(_FetchCase):
+    """押す点（店のボタン・Equip）が照準の左下の HUD（Intermission／Time の枠）に重なるなら、
+    店の画面の真ん中を照準へ寄せてから押す（DK。2026-10-10 08:17 の窓2）"""
+
+    def test_the_range(self):
+        self.assertEqual((ItemFetch.HUD_X, ItemFetch.HUD_Y), ((-0.23, -0.07), (0.05, 0.15)))
+        aim = (433.5, 362.5)
+        # 6窓の撮影の HUD の明るい画素の範囲（窓1）の四隅は入る
+        for x, y in ((295, 407), (371, 407), (295, 450), (371, 450)):
+            self.assertTrue(ItemFetch.in_hud((x, y), aim, 663), (x, y))
+        # 照準・照準の右・上は入らない
+        for x, y in (aim, (500, 420), (380, 330), (433.5 - 0.05 * 663, 420), (350, 362.5 + 0.17 * 663)):
+            self.assertFalse(ItemFetch.in_hud((x, y), aim, 663), (x, y))
+
+    def test_the_range_follows_the_height(self):
+        for height in (663, 1440, 331):
+            aim = (height, height / 2)
+            inside = (aim[0] - 0.13 * height, aim[1] + 0.076 * height)     # 08:17 の Equip の割合
+            outside = (aim[0] - 0.05 * height, aim[1] + 0.076 * height)
+            self.assertTrue(ItemFetch.in_hud(inside, aim, height), height)
+            self.assertFalse(ItemFetch.in_hud(outside, aim, height), height)
+
+    def _window2_0817(self, size=(1920, 1080), scale=1.0):
+        """08:17 の窓2 の並び（高さで割った割合を、この大きさに直す）: 四隅は入っていて、
+        真ん中のずれ 横 -0.12・縦 +0.03（高さ比）、Equip が照準から (-0.130, +0.076)"""
+        h = size[1]
+        aim = (size[0] / 2, h / 2)
+        equip = (aim[0] - 0.130 * h, aim[1] + 0.076 * h)
+        panel = _Panel(left=equip[0] - 180 * scale, top=equip[1] - 177 * scale, scale=scale, size=size)
+        return panel
+
+    def test_window_2_at_0817_is_moved_before_pressing(self):
+        panel = self._window2_0817()
+        self.assertTrue(panel.inside(), "四隅は入っている（前は動かさずに押していた）")
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves, "視点を動かした")
+        self.assertEqual(sum(dy for _dx, dy in panel.moves), 0, "横だけで外れる")
+        equip = panel.clicks[1]
+        self.assertFalse(ItemFetch.in_hud(equip, panel.aim, 1080), equip)
+        self.assertTrue(any("HUD に重なる点 Equip" in m for m in self.logs), self.logs)
+        self.assertTrue(any("HUD に重なる点 なし" in m for m in self.logs), "寄せた後にもう一度見た")
+
+    def test_the_same_at_another_window_size(self):
+        panel = self._window2_0817(size=(851, 663), scale=0.6)
+        f = self._fetcher(panel)
+        f.client_height = lambda: 663
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves)
+        self.assertFalse(ItemFetch.in_hud(panel.clicks[1], panel.aim, 663))
+
+    def test_the_client_height_not_the_shot_height(self):
+        """撮影は窓の画像（タイトルバー込み 702）。割るのはクライアントの高さ（663）。境目の点で違いが出る"""
+        panel = _Panel(size=(867, 702))
+        equip = (panel.aim[0] - 0.072 * 663, panel.aim[1] + 0.10 * 663)   # 663 なら中・702 なら外
+        self.assertTrue(ItemFetch.in_hud(equip, panel.aim, 663))
+        self.assertFalse(ItemFetch.in_hud(equip, panel.aim, 702))
+        panel.left0, panel.top0 = equip[0] - 180, equip[1] - 177
+        self.assertTrue(panel.inside())
+        f = self._fetcher(panel)
+        f.client_height = lambda: 663
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves)
+
+    def test_the_shop_button_in_the_hud_is_moved_too(self):
+        h = 1080
+        aim = (960, 540)
+        button = (aim[0] - 0.15 * h, aim[1] + 0.07 * h)            # Survival の点が HUD の中
+        panel = _Panel(left=button[0] - 266, top=button[1] - 95)
+        self.assertTrue(panel.inside())
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves)
+        self.assertFalse(ItemFetch.in_hud(panel.clicks[0], aim, h))
+        self.assertTrue(any("HUD に重なる点 店のボタン" in m for m in self.logs), self.logs)
+
+    def test_both_outside_the_hud_do_not_move(self):
+        panel = _Panel(left=640.0, top=380.0)       # 真ん中のずれ 横 -130 でも、点は HUD の外
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertEqual(panel.moves, [])
+        self.assertTrue(all(not ItemFetch.in_hud(c, panel.aim, 1080) for c in panel.clicks))
+
+    def test_still_in_the_hud_when_centred_fails(self):
+        panel = _Panel(left=960 - 190, top=540 - 130)               # 真ん中が照準の上
+        with patch.object(ItemFetch, "HUD_X", (-0.05, 0.05)), patch.object(ItemFetch, "HUD_Y", (0.0, 0.1)):
+            f = self._fetcher(panel)
+            self.assertFalse(f.buy("Survival", 29))
+        self.assertEqual(panel.clicks, [])
+        self.assertIn("アイテム取得: 押す点が HUD に重なります（真ん中に寄せても Equip）", self.logs)
+
+    def test_it_gives_up_after_6_moves_like_the_overflow(self):
+        panel = self._window2_0817()
+        panel.gain = (0.0001, 0.55)                 # 動かしても変わらない
+        f = self._fetcher(panel, saved_gain=None)
+        with patch.object(f, "calibrate", side_effect=lambda _n: setattr(f, "gain", (0.9, 0.55))
+                          or setattr(f, "measured_gain", (0.9, 0.55)) or True):
+            self.assertFalse(f.buy("Survival", 29))
+        self.assertIn("アイテム取得: 店の画面が入りきりません（6 回動かした）", self.logs)
+
+    def test_up_and_down_when_sideways_is_already_centred(self):
+        """横は照準に合っていても、Enkephalin（真ん中から左へ 84）が HUD に入る → 縦だけ寄せる。
+        動かした縦は、今どおり後で戻す"""
+        panel = _Panel(left=960 - 190, top=540 + 108 - 130)       # 真ん中が照準の真下 0.1×高さ
+        self.assertTrue(panel.inside())
+        self.assertTrue(ItemFetch.in_hud((770 + 106, 518 + 129), panel.aim, 1080))
+        f = self._fetcher(panel, answers=(70,))
+        self.assertTrue(f.buy("Enkephalin", 70))
+        self.assertTrue(panel.moves)
+        self.assertTrue(all(dx == 0 for dx, _dy in panel.moves), "横はもう合っている")
+        self.assertFalse(ItemFetch.in_hud(panel.clicks[0], panel.aim, 1080))
+        f.restore_view()
+        self.assertEqual(sum(dy for _dx, dy in panel.moves), 0, "縦は戻す")
+
+    def test_the_window_height_is_asked_from_the_window(self):
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x55, osc_port=9000),
+                                           WindowState(instance_type=config.INSTANCE_PRIVATE),
+                                           lambda: True, lambda _m: None)
+        made = {}
+
+        class Stop(Exception):
+            pass
+
+        def fetcher(**kw):
+            made.update(kw)
+            raise Stop
+        with patch.object(ItemFetch, "Fetcher", side_effect=fetcher), \
+             patch.object(WindowOperator, "client_height", return_value=663) as height, \
+             patch.object(DebugLog, "write"):
+            with self.assertRaises(Stop):
+                ex._fetch_item(ex._st.round_seq, "Survival", 29)
+            self.assertEqual(made["client_height"](), 663)
+        height.assert_called_with(0x55)
+
+    def test_client_height(self):
+        with patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 851, 663)):
+            self.assertEqual(WindowOperator.client_height(0x55), 663)
+        with patch.object(WindowOperator.win32gui, "GetClientRect", return_value=(0, 0, 0, 0)):
+            self.assertIsNone(WindowOperator.client_height(0x55))
+        with patch.object(WindowOperator.win32gui, "GetClientRect", side_effect=OSError), \
+             patch.object(DebugLog, "exception"):
+            self.assertIsNone(WindowOperator.client_height(0x55))
