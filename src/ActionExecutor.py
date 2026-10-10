@@ -127,6 +127,7 @@ class ActionExecutor:
         # （Begin 前の移動・アイテム取得・押し直し）は、終わるまで待つ
         self._run_respawn_idle = threading.Event()
         self._run_respawn_idle.set()
+        self._noted_round_over_after_respawn = False   # debug.log に1回だけ
 
     @property
     def uses_osc(self) -> bool:
@@ -1560,10 +1561,21 @@ class ActionExecutor:
         return True
 
     def _run_still(self, round_seq: int) -> bool:
-        """まだ Run のラウンドの中で、続けてよいか（停止・private でない・次のラウンド → False）"""
+        """リスポーンする前: まだ Run のラウンドの中で、続けてよいか（停止・private でない・次のラウンド・
+        Run が終わった → False）"""
         st = self._st
         return (self._is_running() and st.in_round and st.round_seq == round_seq
                 and self.can_operate())
+
+    def _run_after_respawn(self, round_seq: int) -> bool:
+        """リスポーンした後（後ろへ・左へ・向きの直し）: 続けてよいか。ToN はリスポーン（opt out）で
+        その人のラウンドをその場で終わらせる（同じ秒に RoundOver）ので in_round は見ない。
+        停止・次のラウンドが始まった（round_seq が変わった）・private でない → False（DP）"""
+        st = self._st
+        if self._is_running() and st.round_seq == round_seq and not st.in_round                 and not self._noted_round_over_after_respawn:
+            self._noted_round_over_after_respawn = True
+            DebugLog.write(f"[操作] [窓{st.window_idx}] Run: リスポーンの後に RoundOver が来た → 後ろへ・正面へは続ける")
+        return self._is_running() and st.round_seq == round_seq and self.can_operate()
 
     def do_run_respawn(self, round_seq: int):
         """Run のラウンドに入ったとき（依頼者 2026-10-10）: リスポーン（前面・鍵の中）→
@@ -1573,6 +1585,7 @@ class ActionExecutor:
             DebugLog.write(f"{head} リスポーンしません（{'設定 OFF' if not SharedState.get_run_respawn() else 'OSC が使えない窓' if self._osc is None else 'private でない'}）")
             return
         self._run_respawn_idle.clear()
+        self._noted_round_over_after_respawn = False
         try:
             why = self._respawn_when_free(round_seq)
             if why:
@@ -1580,14 +1593,14 @@ class ActionExecutor:
                 return
             for address, sec in (("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
-                if not self._run_still(round_seq):
+                if not self._run_after_respawn(round_seq):
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
                     return
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
-                self._osc.press(address, sec, stop=lambda: not self._run_still(round_seq))
+                self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
                 self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
             fixed = self._face_the_stairs(round_seq)
-            if self._run_still(round_seq):
+            if self._run_after_respawn(round_seq):
                 self._log("Run: リスポーンして正面を向きました"
                           + (f"（向きを {fixed} 回直しました）" if fixed else ""))
         finally:
@@ -1600,7 +1613,7 @@ class ActionExecutor:
         head = f"[操作] [窓{self._st.window_idx}] Run: 向き"
         fixed = 0
         while True:
-            if not self._run_still(round_seq):
+            if not self._run_after_respawn(round_seq):
                 return fixed
             time.sleep(config.RUN_FACE_SETTLE_SEC)      # 回し終えてから撮る
             shot = self._capture_bgr()
@@ -1616,13 +1629,13 @@ class ActionExecutor:
             if fixed >= config.RUN_FACE_TRIES:
                 DebugLog.write(f"{head}: {fixed} 回直しても ずれ {dx:+.1f} → やめる")
                 return fixed
-            if not self._run_still(round_seq):
+            if not self._run_after_respawn(round_seq):
                 return fixed
             address = "/input/LookLeft" if dx < 0 else "/input/LookRight"
             sec = max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width))
             DebugLog.write(f"{head}: 光 x {light[0]:.1f}（幅 {width}・塊 {light[1]}）・ずれ {dx:+.1f} → "
                            f"{address} {sec:.3f}秒")
-            self._osc.press(address, sec, stop=lambda: not self._run_still(round_seq))
+            self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
             self._osc.stop_all(repeat=1)
             fixed += 1
 

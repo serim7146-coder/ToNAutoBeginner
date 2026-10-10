@@ -501,3 +501,97 @@ class TestTheSetting(unittest.TestCase):
         mainGUI.App._on_run_respawn_changed(app)
         self.assertFalse(SharedState.get_run_respawn())
         app._schedule_settings_save.assert_called_once()
+
+
+class TestRoundOverRightAfterTheRespawn(_Case):
+    """ToN はリスポーン（opt out）でその人のラウンドを終わらせる（同じ秒に RoundOver）。
+    リスポーンした後は in_round を見ずに、後ろへ・左へ・向きの直しを最後まで続ける（DP。01:35 の窓4）"""
+
+    def _round_over_while_backing(self):
+        seen = []
+
+        def press(address, stop):
+            if address == "/input/MoveBackward":
+                self.st.in_round = False                    # 04.988 round_over
+                seen.append(stop())
+        self.osc.on_press = press
+        return seen
+
+    def test_window_4_at_0135_goes_on_to_the_end(self):
+        seen = self._round_over_while_backing()
+        with patch.object(DebugLog, "write") as write:
+            self._run()
+        self.assertEqual(seen, [False], "RoundOver では止めない")
+        self.assertEqual(self.w.events[-4:], [("osc", "/input/MoveBackward", 2.85), "release",
+                                              ("osc", "/input/LookLeft", 0.9), "release"])
+        self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
+        notes = [c.args[0] for c in write.call_args_list if "RoundOver が来た" in c.args[0]]
+        self.assertEqual(notes, ["[操作] [窓2] Run: リスポーンの後に RoundOver が来た → 後ろへ・正面へは続ける"])
+
+    def test_the_facing_fix_goes_on_after_the_round_over(self):
+        self._round_over_while_backing()
+        lights = iter([(433.5 - 120, 500), (433.5, 500)])
+        frame = __import__("numpy").zeros((702, 867, 3), "uint8")
+        with patch.object(self.ex, "_capture_bgr", return_value=frame), \
+             patch.object(ActionExecutor.RunFace, "find_light", side_effect=lambda _s: next(lights)):
+            self._run()
+        self.assertEqual([e for e in self.w.events if e[0] == "osc"][-1][1], "/input/LookLeft")
+        self.assertEqual(len([e for e in self.w.events if e[0] == "osc"]), 3, "後ろ・左 0.9・直し 1 回")
+        self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました（向きを 1 回直しました）"])
+
+    def test_the_begin_move_comes_after_all_of_it(self):
+        begun = []
+        later = []
+
+        def press(address, stop):
+            if address == "/input/MoveBackward":
+                self.st.in_round = False                    # RoundOver → Begin 待ちが始まる
+                t = threading.Thread(target=self.ex.do_after_round, daemon=True)
+                later.append(t)
+                t.start()
+                time.sleep(0.1)
+        self.osc.on_press = press
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(self.ex, "_begin_precheck",
+                          side_effect=lambda **k: begun.append(list(self.w.events)) and False):
+            self._run()
+            later[0].join(2.0)
+        self.assertEqual(len(begun), 1)
+        self.assertEqual(begun[0][-2:], [("osc", "/input/LookLeft", 0.9), "release"],
+                         "後ろへ・左へが終わってから Begin へ")
+
+    def test_the_next_round_after_the_round_over_stops_it(self):
+        def press(address, stop):
+            if address == "/input/MoveBackward":
+                self.st.in_round = False
+                self.assertFalse(stop())
+                self.st.round_seq += 1                      # 次のラウンドが始まった
+                self.st.in_round = True
+                self.assertTrue(stop())
+        self.osc.on_press = press
+        self._run()
+        self.assertNotIn(("osc", "/input/LookLeft", 0.9), self.w.events)
+        self.assertEqual(self.logs, [])
+
+    def test_stopping_after_the_round_over_stops_it(self):
+        def press(address, stop):
+            if address == "/input/MoveBackward":
+                self.st.in_round = False
+                self.running["on"] = False
+                self.assertTrue(stop())
+        self.osc.on_press = press
+        self._run()
+        self.assertNotIn(("osc", "/input/LookLeft", 0.9), self.w.events)
+
+    def test_a_run_already_over_before_the_respawn_does_not_respawn(self):
+        self.st.in_round = False
+        self._run()
+        self.assertEqual(self.w.events, [])
+        self.assertEqual(self.logs, ["Run: リスポーンできませんでした（止めた・ラウンドが変わった）"])
+
+    def test_a_round_over_while_the_menu_is_open_stops_before_the_respawn(self):
+        """リスポーンする前（メニュー・ボタン）は今どおり in_round も見る"""
+        self.w.on_find = lambda: setattr(self.st, "in_round", False)
+        self._run()
+        self.assertNotIn(("click", 0.08), self.w.events)
+        self.assertFalse([e for e in self.w.events if e[0] == "osc"])
