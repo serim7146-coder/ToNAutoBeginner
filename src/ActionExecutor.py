@@ -13,6 +13,7 @@ import WindowOperator
 import OSCClient
 import OSCReceiver
 import PlaySound
+import RespawnButton
 import RoundDecision
 from State import WindowConfig, WindowState
 
@@ -121,6 +122,10 @@ class ActionExecutor:
         self._speed_ready = threading.Event()
         self._receiver = None             # 監視中ずっと生かす速度受信器
         self._continue_rect = None        # 続行ラウンドの始まりの窓の矩形（窓を戻す先）
+        # Run のリスポーン（後ろへ・正面へまで）が終わっているか。動き出すこの窓のほかの操作
+        # （Begin 前の移動・アイテム取得・押し直し）は、終わるまで待つ
+        self._run_respawn_idle = threading.Event()
+        self._run_respawn_idle.set()
 
     @property
     def uses_osc(self) -> bool:
@@ -1261,6 +1266,8 @@ class ActionExecutor:
         st = self._st
         if not self.can_operate():
             return
+        if not self._wait_run_respawn():
+            return
         if (not self._is_running() or st.in_round or st.begin_done
                 or st.round_seq != round_seq):
             return
@@ -1290,6 +1297,8 @@ class ActionExecutor:
         st = self._st
         round_seq = st.round_seq
         clicked = False
+        if not self._wait_run_respawn():
+            return
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
@@ -1540,6 +1549,190 @@ class ActionExecutor:
             DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻した")
         else:
             DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻せません")
+
+    # ── Run のリスポーン → 後ろへ → 正面へ ──────────────────
+    def _wait_run_respawn(self) -> bool:
+        """Run のリスポーン（後ろへ・正面へまで）が走っていれば終わるのを待つ。止めたら False"""
+        while not self._run_respawn_idle.wait(config.RUN_RESPAWN_POLL_SEC):
+            if not self._is_running():
+                return False
+        return True
+
+    def _run_still(self, round_seq: int) -> bool:
+        """まだ Run のラウンドの中で、続けてよいか（停止・private でない・次のラウンド → False）"""
+        st = self._st
+        return (self._is_running() and st.in_round and st.round_seq == round_seq
+                and self.can_operate())
+
+    def do_run_respawn(self, round_seq: int):
+        """Run のラウンドに入ったとき（依頼者 2026-10-10）: リスポーン（前面・鍵の中）→
+        後ろへ RUN_RESPAWN_BACK_SEC → 左へ RUN_RESPAWN_TURN_SEC（背面・OSC）。private・OSC の窓だけ"""
+        head = f"[操作] [窓{self._st.window_idx}] Run:"
+        if not SharedState.get_run_respawn() or self._osc is None or not self.can_operate():
+            DebugLog.write(f"{head} リスポーンしません（{'設定 OFF' if not SharedState.get_run_respawn() else 'OSC が使えない窓' if self._osc is None else 'private でない'}）")
+            return
+        self._run_respawn_idle.clear()
+        try:
+            why = self._respawn_when_free(round_seq)
+            if why:
+                self._log(f"Run: リスポーンできませんでした（{why}）")
+                return
+            for address, sec in (("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC),
+                                 ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
+                if not self._run_still(round_seq):
+                    DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
+                    return
+                DebugLog.write(f"{head} {address} {sec:.2f}秒")
+                self._osc.press(address, sec, stop=lambda: not self._run_still(round_seq))
+                self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
+            if self._run_still(round_seq):
+                self._log("Run: リスポーンして正面を向きました")
+        finally:
+            self._run_respawn_idle.set()
+
+    def _respawn_when_free(self, round_seq: int) -> str | None:
+        """ほかの窓のフリーズが無いときに、前面を借りてリスポーンする。できたら None、だめなら理由。
+        ほかの窓がフリーズを張っている間は前面を借りずに待つ（自分の分は数えない）。前面を借りている
+        途中でほかの窓が張ったら、メニューを閉じて前面を返し、解けたらやり直す"""
+        head = f"[操作] [窓{self._st.window_idx}] Run:"
+        while True:
+            while not self._nobody_else_frozen():
+                if not self._run_still(round_seq):
+                    DebugLog.write(f"{head} ほかの窓のフリーズが解けないまま Run が終わった → やらない")
+                    return "ほかの窓のフリーズ中に Run が終わった"
+                time.sleep(config.RUN_RESPAWN_POLL_SEC)
+            if not self._run_still(round_seq):
+                return "止めた・ラウンドが変わった"
+            result = self._respawn_in_front(round_seq)
+            if result != "frozen":
+                return result
+            DebugLog.write(f"{head} ほかの窓がフリーズを張った → 前面を返して、解けたらやり直す")
+
+    def _respawn_stop(self, round_seq: int) -> str | None:
+        """前面を借りている間の見張り。"frozen"（ほかの窓のフリーズ）・理由（止めた等）・None（続けてよい）"""
+        if not self._run_still(round_seq):
+            return "止めた・ラウンドが変わった"
+        if not self._nobody_else_frozen():
+            return "frozen"
+        if WindowOperator.foreground_hwnd() != self._cfg.hwnd:
+            return "この窓が前面でなくなった"
+        return None
+
+    def _respawn_wait(self, sec: float, round_seq: int) -> str | None:
+        """sec 待つ（見張りながら）"""
+        deadline = time.time() + sec
+        while time.time() < deadline:
+            stop = self._respawn_stop(round_seq)
+            if stop:
+                return stop
+            time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
+        return self._respawn_stop(round_seq)
+
+    def _capture_bgr(self):
+        bits, w, h = ScreenCapture.capture_window(self._cfg.hwnd)
+        if not bits or w <= 0 or h <= 0 or len(bits) < w * h * 4:
+            return None
+        import numpy as np
+        bgra = np.frombuffer(bits, dtype=np.uint8)[:w * h * 4].reshape(h, w, 4)
+        return np.ascontiguousarray(bgra[:, :, :3])
+
+    def _respawn_in_front(self, round_seq: int) -> str | None:
+        """鍵の中で前面を借りて: Esc → 撮る → ボタンを探す → カーソルを置いて読み直す → クリック →
+        「Player respawned」を待つ。どの終わり方でも、メニューが開いたままなら Esc で閉じ、前面を返し、
+        カーソルを戻す。None（できた）・"frozen"（ほかの窓のフリーズ）・理由"""
+        st = self._st
+        hwnd = self._cfg.hwnd
+        head = f"[操作] [窓{st.window_idx}] Run:"
+        with SharedState._GLOBAL_ACTION_LOCK:
+            stop = self._respawn_stop_before_front(round_seq)
+            if stop:
+                return stop
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(hwnd)
+            if not ok:
+                return "前面にできない"
+            menu = False
+            try:
+                stop = self._respawn_stop(round_seq)
+                if stop:
+                    return stop
+                WindowOperator.send_keys("esc")
+                menu = True
+                stop = self._respawn_wait(config.RESPAWN_MENU_WAIT_SEC, round_seq)
+                if stop:
+                    return stop
+                found = None
+                for tries in range(1, config.RESPAWN_FIND_TRIES + 1):
+                    shot = self._capture_bgr()
+                    found = RespawnButton.find(shot) if shot is not None else None
+                    DebugLog.write(f"{head} ボタンを探す {tries} 回目: "
+                                   + ("見つからない" if found is None else
+                                      f"中心 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・倍率 {found[3]:.2f}"))
+                    if found is not None:
+                        break
+                    if tries < config.RESPAWN_FIND_TRIES:
+                        stop = self._respawn_wait(config.RESPAWN_FIND_RETRY_SEC, round_seq)
+                        if stop:
+                            return stop
+                if found is None:
+                    return "リスポーンのボタンが見つからない"
+                origin = WindowOperator.window_origin(hwnd)
+                if origin is None:
+                    return "窓が無い"
+                point = (int(round(found[0] + origin[0])), int(round(found[1] + origin[1])))
+                if not self._place_cursor(point, head):
+                    return "カーソルを置けない"
+                stop = self._respawn_stop(round_seq)
+                if stop:
+                    return stop
+                seen = st.respawn_seen_seq
+                DebugLog.write(f"{head} リスポーンのボタンを押す {point}")
+                WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
+                deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
+                while st.respawn_seen_seq == seen:
+                    if time.time() >= deadline:
+                        DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
+                        return "リスポーンの行が来ない"
+                    stop = self._respawn_stop(round_seq)
+                    if stop:
+                        return stop
+                    time.sleep(config.RUN_RESPAWN_POLL_SEC)
+                menu = False                    # 押せた（メニューは閉じている）
+                DebugLog.write(f"{head} 「Player respawned」を受けた")
+                return None
+            finally:
+                try:
+                    if menu and WindowOperator.foreground_hwnd() == hwnd:
+                        WindowOperator.send_keys("esc")     # メニューを閉じる
+                        DebugLog.write(f"{head} メニューを閉じた（Esc）")
+                finally:
+                    try:
+                        WindowOperator.return_front(loan)
+                    finally:
+                        self._put_cursor_back(cursor, "Run", "前面を借りる前")
+
+    def _respawn_stop_before_front(self, round_seq: int) -> str | None:
+        """鍵を取った後、前面を借りる前の見張り（前面かどうかはまだ見ない）"""
+        if not self._run_still(round_seq):
+            return "止めた・ラウンドが変わった"
+        if not self._nobody_else_frozen():
+            return "frozen"
+        return None
+
+    def _place_cursor(self, point, head) -> bool:
+        """カーソルを置いて FETCH_CURSOR_SETTLE_SEC 待って読み直す。±FETCH_CURSOR_TOL_PX の外なら置き直す
+        （FETCH_CURSOR_TRIES 回まで。アイテム取得 DI と同じ考え）。置けたら True"""
+        tol = config.FETCH_CURSOR_TOL_PX
+        for tries in range(1, config.FETCH_CURSOR_TRIES + 1):
+            WindowOperator.set_cursor_position(point)
+            time.sleep(config.FETCH_CURSOR_SETTLE_SEC)
+            read = WindowOperator.cursor_position()
+            placed = (read is not None and abs(read[0] - point[0]) <= tol and abs(read[1] - point[1]) <= tol)
+            DebugLog.write(f"{head} カーソル: 置いた {point} → 読み直し {read}（置き直し {tries - 1} 回）"
+                           + ("" if placed else " ずれている"))
+            if placed:
+                return True
+        return False
 
     # ── 続行ラウンドの後（アイテムを落とす・窓を戻す）──────────
     def remember_continue_window(self):

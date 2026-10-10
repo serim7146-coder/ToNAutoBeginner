@@ -296,6 +296,15 @@ FETCH_CURSOR_TOL_PX     = 2      # 読み直した位置が置いた点からこ
 CONTINUE_DROP_PRESS_SEC   = 0.1   # 落とす操作を押している長さ
 CONTINUE_WINDOWED_WAIT_SEC = 2.0  # Alt+Enter の後、窓に戻るのを待つ上限
 CONTINUE_WINDOWED_POLL_SEC = 0.1
+# Run のラウンドに入ったら、リスポーン → 後ろへ → 正面を向く（依頼者 2026-10-10。窓2 で詰めた値）
+RESPAWN_MENU_WAIT_SEC = 1.0       # Esc を押してからメニューを撮るまで
+RESPAWN_FIND_TRIES    = 3         # ボタンを探す撮影の回数（見つからなければ撮り直す）
+RESPAWN_FIND_RETRY_SEC = 0.3
+RESPAWN_CLICK_SEC     = 0.08      # リスポーンのボタンを押している長さ
+RESPAWN_LOG_WAIT_SEC  = 2.0       # 押してから「Player respawned」の行を待つ上限
+RUN_RESPAWN_BACK_SEC  = 2.85      # リスポーンの後、後ろへ下がる長さ（赤い膜を後ろ向きに通る）
+RUN_RESPAWN_TURN_SEC  = 0.9       # その後、左へ回る長さ（真後ろ → 正面。0.8 は足りない・1.0 は回しすぎ）
+RUN_RESPAWN_POLL_SEC  = 0.1       # ほかの窓のフリーズが解けるのを待つ・行を待つ間隔
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、
 # クリックの「押す→0.1秒→離す」の間で足りているので待たない（依頼者が後で調整する）

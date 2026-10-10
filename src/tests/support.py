@@ -255,6 +255,7 @@ def setUpModule():
     # 動かさない（OSC・窓の移動を送らない）。確かめるテストだけが ON にする
     SharedState.set_continue_drop_item(False)
     SharedState.set_continue_restore_window(False)
+    SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
 
 
 def _refuse_network(*_args, **_kwargs):
@@ -846,6 +847,7 @@ def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     app.v_suicide_cancel_key = _CancelKeyVar(key)
     app._refresh_item_fetch_button = lambda: None
     app._refresh_continue_after_checks = lambda: None
+    app._refresh_run_respawn_check = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None
     app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)

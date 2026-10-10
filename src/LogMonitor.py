@@ -1475,6 +1475,9 @@ class LogMonitor:
         st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
         st.round_end_seen              = False
         st.round_type                  = event.round_type
+        if st.round_type == "Run" and SharedState.get_run_respawn():
+            # リスポーン → 後ろへ → 正面を向く。private・OSC の窓かは中で見る
+            self._start_daemon(self._action.do_run_respawn, st.round_seq)
         # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
         st.moon_repeat                 = self.sequence.is_moon_repeat(
             event.round_type)
@@ -1635,6 +1638,7 @@ class LogMonitor:
     def _on_respawn(self, event):
         """リスポーン（ラウンド中ならアイテムロスト）"""
         st = self.st
+        st.respawn_seen_seq += 1        # Run のリスポーン（ActionExecutor.do_run_respawn）が待つ
         if st.in_round:
             self._mark_item_lost("リスポーン: アイテムロスト")
             self._lose_held_item(HELD_LOST_RESPAWN)

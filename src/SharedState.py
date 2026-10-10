@@ -167,6 +167,9 @@ get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MOD
 _CONTINUE_DROP_ITEM = _Setting(True, bool)
 get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTINUE_DROP_ITEM.set
 _CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
+# Run のラウンドに入ったらリスポーンして正面を向く（全窓共通・既定 ON）
+_RUN_RESPAWN = _Setting(True, bool)
+get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set
 get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
                                                             _CONTINUE_RESTORE_WINDOW.set)
 

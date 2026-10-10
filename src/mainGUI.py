@@ -1570,6 +1570,11 @@ class App(tk.Tk):
         ttk.Checkbutton(fcr, text="続行ラウンドの後に窓を元の位置に戻す",
                         variable=self.v_continue_restore_window,
                         command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
+        # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）
+        self.v_run_respawn = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fcr, text="Run でリスポーンして正面を向く",
+                        variable=self.v_run_respawn,
+                        command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
 
         ffr = ttk.Frame(self)
         ffr.pack(pady=(0, 4))
@@ -1764,6 +1769,17 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
         SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
         self._schedule_settings_save()
+
+    def _on_run_respawn_changed(self):
+        SharedState.set_run_respawn(self.v_run_respawn.get())
+        self._schedule_settings_save()
+
+    def _refresh_run_respawn_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_run_respawn.set(SharedState.get_run_respawn())
+        except (tk.TclError, AttributeError):
+            pass
 
     def _refresh_continue_after_checks(self):
         """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
@@ -2149,6 +2165,8 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(data.get("continue_drop_item") is not False)
         SharedState.set_continue_restore_window(data.get("continue_restore_window") is not False)
         self._refresh_continue_after_checks()
+        SharedState.set_run_respawn(data.get("run_respawn") is not False)   # 無い・壊れた値は ON（既定）
+        self._refresh_run_respawn_check()
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -3090,6 +3108,7 @@ class App(tk.Tk):
             **self._fog_early_read_setting(),
             "continue_drop_item":      SharedState.get_continue_drop_item(),
             "continue_restore_window": SharedState.get_continue_restore_window(),
+            "run_respawn":             SharedState.get_run_respawn(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が

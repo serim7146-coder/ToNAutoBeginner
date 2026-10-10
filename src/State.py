@@ -128,6 +128,8 @@ class WindowState:
     last_lost_item_id: int = 0
     # Equipping <id> を受けた回数と最後の id（アイテム自動取得が Equip の結果を待つ）
     equip_seen_seq: int = 0
+    # 「Player respawned」を受けた回数（Run のリスポーンが押せたかを待つ）
+    respawn_seen_seq: int = 0
     equip_seen_id: int = 0
     waiting_for_equip: bool = False
     equip_freeze_held: bool = False

@@ -46,6 +46,7 @@ BASE_ARGS = [
     "--include-data-dir=voice=voice",
     "--include-data-dir=begin_templates=begin_templates",
     "--include-data-dir=shop_templates=shop_templates",
+    "--include-data-dir=src/respawn_templates=respawn_templates",
     "--enable-plugin=tk-inter",
     "--lto=yes",
     "--clang",
