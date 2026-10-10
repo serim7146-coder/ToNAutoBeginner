@@ -702,15 +702,6 @@ def focus_vrchat(hwnd: int) -> bool:
     return ok
 
 
-def window_rect(hwnd: int) -> tuple | None:
-    """窓の矩形 (左, 上, 右, 下)（GetWindowRect）。取れなければ None"""
-    try:
-        return tuple(int(v) for v in win32gui.GetWindowRect(hwnd))
-    except Exception:
-        DebugLog.exception("WindowOperator.window_rect")
-        return None
-
-
 def window_state(hwnd: int) -> str | None:
     """窓の状態。"normal"・"maximized"・"minimized"・"fullscreen"（窓の矩形＝モニターの矩形で
     タイトルバーなし）。窓が無い・取れなければ None"""
