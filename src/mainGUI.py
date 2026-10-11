@@ -29,6 +29,7 @@ import ToolLauncher
 import HotKey
 import ToNEntry
 import OSCClient
+import OSCQuery
 import OBSClient
 import Recorder
 import SecretStore
@@ -2905,6 +2906,8 @@ class App(tk.Tk):
         self._launched_tab_indices = [tab.idx for tab in plan_tabs]
         existing = len(baseline)
         use_osc = self.v_use_osc.get()
+        if use_osc:
+            OSCQuery.ensure()       # 起動する VRChat が最初から名乗りを見つけられるように（DS）
         self.btn_launch.config(state="disabled")
         self.lbl_launch.config(text="起動中…", foreground=config.GUI_YLW)
         self._save_launch_settings()
@@ -3236,6 +3239,7 @@ class App(tk.Tk):
         self._save_settings_now()
         self._stop_reason = "ウィンドウを閉じた"      # debug.log の停止の理由
         self._stop()
+        OSCQuery.shutdown()                         # 残っていれば広告を取り下げる
         self._unhook_chase_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()

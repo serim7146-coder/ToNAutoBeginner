@@ -9,13 +9,15 @@ class TestNoRealOsc(unittest.TestCase):
 
     def setUp(self):
         self.sends, self.binds = list(_OscSocketTrap.sends), list(_OscSocketTrap.binds)
+        self.servers = list(_OscSocketTrap.servers)
 
     def tearDown(self):
         _OscSocketTrap.sends[:] = self.sends                # このテストで足した分は全体の見張りに残さない
         _OscSocketTrap.binds[:] = self.binds
+        _OscSocketTrap.servers[:] = self.servers
 
     def test_the_modules_use_the_trap(self):
-        for mod in (OSCClient, OSCReceiver):
+        for mod in (OSCClient, OSCReceiver, OSCQuery):
             self.assertIs(mod.socket, _OscSocketTrap.module, mod.__name__)
 
     def test_a_send_is_caught_not_sent(self):
@@ -27,10 +29,20 @@ class TestNoRealOsc(unittest.TestCase):
             _OscSocketTrap.check()
 
     def test_a_bind_is_caught_not_opened(self):
+        """OSCQuery の受け口（UDP）・HTTP・mDNS の広告は見張りに捕まる（本物を開かない・広告しない）"""
         receiver = OSCReceiver.VelocityReceiver(9001)
-        self.assertTrue(receiver.start())
-        receiver.stop()
-        self.assertEqual(_OscSocketTrap.binds[-1], ("127.0.0.1", 9001))
+        with patch.object(OSCQuery, "_pid_of_window", return_value=0):
+            self.assertTrue(receiver.start())
+            service = OSCQuery.current()
+            deadline = time.time() + 2
+            while not any(s.startswith("mDNS") for s in _OscSocketTrap.servers) and time.time() < deadline:
+                time.sleep(0.01)
+            receiver.stop()
+            OSCQuery.shutdown()                         # サービスは出しっぱなし（DS）。ここで取り下げる
+        self.assertEqual(_OscSocketTrap.binds[-1], ("127.0.0.1", 0), "空いているポート（固定のポートではない）")
+        self.assertIn("HTTP", _OscSocketTrap.servers)
+        self.assertIn(f"mDNS {service.name}", _OscSocketTrap.servers)
+        self.assertIsNone(OSCQuery.current())
         with self.assertRaises(AssertionError):
             _OscSocketTrap.check()
 

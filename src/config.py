@@ -296,6 +296,9 @@ FETCH_CURSOR_TOL_PX     = 2      # 読み直した位置が置いた点からこ
 CONTINUE_DROP_PRESS_SEC   = 0.1   # 落とす操作を押している長さ
 CONTINUE_WINDOWED_WAIT_SEC = 2.0  # Alt+Enter の後、窓に戻るのを待つ上限
 CONTINUE_WINDOWED_POLL_SEC = 0.1
+# 速さの受信（DS）: まず OSCQuery で待ち、この秒数でその窓から届かなければ固定ポート（VRChat の送信ポート）を開く
+OSCQUERY_CONNECT_WAIT_SEC = 15.0
+
 # Run のラウンドに入ったら、リスポーン → 後ろへ → 正面を向く（依頼者 2026-10-10。窓2 で詰めた値）
 RESPAWN_MENU_WAIT_SEC = 1.0       # Esc を押してからメニューを撮るまで
 RESPAWN_FIND_TRIES    = 3         # ボタンを探す撮影の回数（見つからなければ撮り直す）

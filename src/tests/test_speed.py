@@ -434,7 +434,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
         return ex, logs
 
     class FakeReceiver:
-        def __init__(self, port, log=None, on_param=None):
+        def __init__(self, port, log=None, on_param=None, **_kw):
             self.port = port
             self.started = False
             self.stopped = False
@@ -456,7 +456,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
             receiver = monitor._action._receiver
             self.assertIsNotNone(receiver, "監視開始で受信を始めること")
             self.assertTrue(receiver.started)
-            self.assertEqual(receiver.port, 9011, "VRChatが送ってくる側のポート")
+            self.assertEqual(receiver.port, monitor.cfg.hwnd, "窓（hwnd）で受ける。VRChat の送信ポートは開かない")
 
             monitor.stop()
 
@@ -487,7 +487,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
         ex, logs = self._executor()
 
         class DeadReceiver:
-            def __init__(self, port, log=None, on_param=None):
+            def __init__(self, port, log=None, on_param=None, **_kw):
                 pass
 
             def start(self):
@@ -525,6 +525,7 @@ class TestSpeedStrafe(unittest.TestCase):
         logs = []
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
         ex._speed_ready.set()   # 受信の準備は済んでいる前提
+        ex._receiver = MagicMock(ever_received=True)   # 速さも受け取れている（DN）
         return ex, st, logs
 
     def test_moves_right_once_then_left_once(self):
@@ -585,6 +586,7 @@ class TestSpeedProbeOrder(unittest.TestCase):
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         logs = []
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        ex._receiver = MagicMock(ever_received=True)   # 速さは受け取れている（DN）
         return ex, st, logs
 
     def test_strafe_waits_until_the_receiver_is_ready(self):
@@ -613,7 +615,7 @@ class TestSpeedProbeOrder(unittest.TestCase):
         ex, _st, _logs = self._executor()
 
         class FakeReceiver:
-            def __init__(self, port, log=None, on_param=None):
+            def __init__(self, port, log=None, on_param=None, **_kw):
                 pass
 
             def start(self):
@@ -632,7 +634,7 @@ class TestSpeedProbeOrder(unittest.TestCase):
         self.assertFalse(ex._speed_ready.is_set(), "停止したら待ちに戻す")
 
     def test_strafe_moves_anyway_after_the_timeout(self):
-        """待ち切れなくても移動する（受信が使えなくても横移動は他を壊さない）"""
+        """準備を待ち切れなくても、速さを受け取れていれば移動する"""
         ex, _st, logs = self._executor()
         moves = []
 

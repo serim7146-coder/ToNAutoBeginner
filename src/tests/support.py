@@ -125,6 +125,7 @@ import VRChatDiscovery
 import VRChatLauncher
 import OSCClient
 import OSCReceiver
+import OSCQuery
 import OBSClient
 import Recorder
 import SecretStore
@@ -169,6 +170,7 @@ def _module_time(sleep):
 class _OscSocketTrap:
     sends = []              # (送り先, 先頭のバイト)
     binds = []              # 開こうとした受け口
+    servers = []            # OSCQuery の HTTP・mDNS の広告（本物なら開いた・広告した）
 
     class Socket:
         def __init__(self, *args, **kwargs):
@@ -180,6 +182,10 @@ class _OscSocketTrap:
 
         def bind(self, addr):
             _OscSocketTrap.binds.append(addr)
+            self._addr = addr
+
+        def getsockname(self):
+            return getattr(self, "_addr", ("0.0.0.0", 0))
 
         def settimeout(self, sec):
             self._timeout = sec
@@ -203,19 +209,53 @@ class _OscSocketTrap:
     module.SOCK_DGRAM = socket.SOCK_DGRAM
     module.SOL_SOCKET = socket.SOL_SOCKET
     module.SO_REUSEADDR = socket.SO_REUSEADDR
+    module.inet_aton = socket.inet_aton
+
+    class FakeHTTP:
+        server_address = ("127.0.0.1", 0)
+
+        def serve_forever(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    class FakeZeroconf:
+        def unregister_service(self, _info):
+            pass
+
+        def close(self):
+            pass
 
     @classmethod
     def install(cls):
-        for mod in (OSCClient, OSCReceiver):
+        for mod in (OSCClient, OSCReceiver, OSCQuery):
             mod.socket = cls.module
+
+        def http(_handler):
+            cls.servers.append("HTTP")
+            return cls.FakeHTTP()
+
+        def advertise(name, http_port, osc_port):
+            cls.servers.append(f"mDNS {name}")
+            return cls.FakeZeroconf(), []
+        # 本物の入口は残しておく（引数を確かめるテストが、中の bind・zeroconf を偽物にして呼ぶ）
+        cls.real = {"udp": OSCQuery._udp_socket, "http": OSCQuery._http_server,
+                    "advertise": OSCQuery._advertise}
+        OSCQuery._http_server = http
+        OSCQuery._advertise = advertise
 
     @classmethod
     def check(cls):
         """本物なら OSC を送っていた・受け口を開いていたテストがあれば失敗（tearDownModule から）"""
-        if cls.sends or cls.binds:
+        if cls.sends or cls.binds or cls.servers:
             raise AssertionError(
                 f"テストが OSC のソケットに届いた（本物なら送っていた）: 送信 {len(cls.sends)} 通"
-                f"（先頭 {cls.sends[:3]}）・受け口 {cls.binds[:5]}。send を偽物にするか、移動を偽物にすること")
+                f"（先頭 {cls.sends[:3]}）・受け口 {cls.binds[:5]}・OSCQuery {cls.servers[:5]}。"
+                "send を偽物にするか、移動を偽物にすること")
 
 
 _OscSocketTrap.install()

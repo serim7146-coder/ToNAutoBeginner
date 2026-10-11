@@ -38,6 +38,41 @@ except Exception:
     pass
 
 
+def _processes():
+    """動いているプロセスの (PID, exe 名) を1つずつ返す。取れなければ OSError"""
+    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+        raise OSError("CreateToolhelp32Snapshot に失敗")
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            return
+        while True:
+            yield int(entry.th32ProcessID), entry.szExeFile
+            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                return
+    finally:
+        try:
+            kernel32.CloseHandle(snapshot)
+        except Exception:
+            pass
+
+
+def process_name(pid: int) -> str | None:
+    """PID のプロセスの exe 名（例 ToNUtils.exe）。分からなければ None"""
+    if not pid:
+        return None
+    try:
+        with contextlib.closing(_processes()) as processes:
+            for found, name in processes:
+                if found == pid:
+                    return name
+    except Exception:
+        return None
+    return None
+
+
 def _process_names():
     """動いているプロセスの exe 名（小文字）を1つずつ返す。スナップショットは1回だけ取る。
     取れなければ OSError（呼び出し側が失敗として扱う）"""

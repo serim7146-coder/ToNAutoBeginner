@@ -5,3 +5,4 @@ keyboard
 python-dotenv
 numpy
 opencv-python-headless
+zeroconf            # OSCQuery の mDNS の広告（速さの受信。DN）

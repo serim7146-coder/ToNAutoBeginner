@@ -1955,10 +1955,11 @@ class ActionExecutor:
         if self._receiver is not None:
             self._speed_ready.set()
             return True
-        # 送信ポートは受信+1とは限らない（ログの --osc= から取れていれば
-        # それを使う）。ToNUtilsが立てた窓は 9003/9004 だった
+        # まず OSCQuery で待ち、届かなければ VRChat の送信ポート（ログの --osc= から取れていればそれ。
+        # 受信+1 とは限らない。ToNUtils が立てた窓は 9003/9004 だった）を開く（DS）
         out_port = self._cfg.osc_out_port or self._cfg.osc_port + 1
-        receiver = OSCReceiver.VelocityReceiver(out_port, self._log)
+        receiver = OSCReceiver.VelocityReceiver(self._cfg.hwnd, out_port, self._log,
+                                                window_label=f"窓{self._st.window_idx}")
         if not receiver.start():
             self._log("速度受信を開始できないため種別検知を無効化します")
             self._speed_ready.set()
@@ -1966,6 +1967,13 @@ class ActionExecutor:
         self._receiver = receiver
         self._speed_ready.set()
         return True
+
+    @property
+    def speed_receiving(self) -> bool:
+        """この窓の速さを受け取れているか（1件でも受けた）。受け取れていない間は速度検知の
+        横移動をしない・「速度検知 開始」と言わない（DN: 横移動するのに検知できない、を出さない）"""
+        receiver = self._receiver
+        return receiver is not None and receiver.ever_received
 
     def stop_velocity_receiver(self):
         """速度受信を止める（監視停止時）"""
@@ -2023,10 +2031,13 @@ class ActionExecutor:
         if st.waiting_for_equip:
             self._log("アイテムロスト後のため速度検知の横移動はしません")
             return
-        # 受信のbindが済むまで待つ。待てなくても移動はする（受信が使えなくても
-        # 横移動そのものは他を壊さない）。
+        # 受信の準備が済むまで待つ
         if not self._speed_ready.wait(timeout=config.SPEED_READY_TIMEOUT_SEC):
             self._log("速度受信の準備を待てませんでした（移動は行います）")
+        if not self.speed_receiving:
+            # 速さが届いていない窓で動いても検知できない（DN。依頼者に届いた不具合の報告）
+            self._trace("[操作] 速度検知の横移動をしない（速さを受け取れていない）")
+            return
         round_seq = st.round_seq
         for direction, sec in (("right", config.SPEED_PROBE_RIGHT_SEC),
                                ("left", config.SPEED_PROBE_LEFT_SEC)):

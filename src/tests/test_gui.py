@@ -297,18 +297,19 @@ class TestOSCPortsFromAssignment(unittest.TestCase):
         self.assertTrue(any("netstat失敗" in m for m in app.logs), app.logs)
 
     # ── 速度受信のポート ─────────────────────────
-    def test_the_receiver_uses_the_out_port_from_the_log(self):
-        """送信ポートは受信+1とは限らない"""
-        for out_port, expected in ((9004, 9004), (0, 9001)):
+    def test_the_receiver_does_not_open_the_out_port(self):
+        """VRChat の送信ポート（--osc= の 9004 や 9001）は開かない。窓（hwnd）で OSCQuery から受ける（DN）"""
+        for out_port in (9004, 0):
             cfg = WindowConfig(hwnd=123, osc_port=9000, osc_out_port=out_port)
-            ex = ActionExecutor.ActionExecutor(cfg, WindowState(),
+            ex = ActionExecutor.ActionExecutor(cfg, WindowState(window_idx=2),
                                                lambda: True, lambda _m: None)
 
             with patch.object(ActionExecutor.OSCReceiver, "VelocityReceiver") as mock_recv:
                 mock_recv.return_value.start.return_value = True
                 ex.start_velocity_receiver()
 
-            self.assertEqual(mock_recv.call_args.args[0], expected, out_port)
+            self.assertEqual(mock_recv.call_args.args[0], 123, out_port)
+            self.assertEqual(mock_recv.call_args.kwargs["window_label"], "窓2")
 
 
 
@@ -2760,6 +2761,12 @@ class TestToolLauncherRows(unittest.TestCase):
 
 class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
     """起動は常に「窓ごとのToN新規インスタンス」。exeは自動検出だけ"""
+
+    def setUp(self):
+        # 起動の前に OSCQuery のサービスを立てる（DS）。ここでは立てない（スレッドをその場で回すので）
+        p = patch.object(mainGUI.OSCQuery, "ensure")
+        self.ensure = p.start()
+        self.addCleanup(p.stop)
 
     class FakeVar:
         def __init__(self, value=""):
