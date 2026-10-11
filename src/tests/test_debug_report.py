@@ -650,7 +650,9 @@ class TestBugReportDialog(unittest.TestCase):
 
     def test_the_window_defaults_to_the_selected_tab(self):
         self.app.nb.select(self.app.tabs[1])
-        self.assertEqual(self._dialog().v_window.get(), "窓2")
+        dialog = self._dialog()
+        self.assertEqual(dialog.selected_windows(), [2], "開いたときは今の窓だけ")
+        self.assertFalse(dialog.v_all_windows.get())
 
     def test_all_attachments_are_on_and_the_note_is_shown(self):
         dialog = self._dialog()
@@ -695,12 +697,13 @@ class TestBugReportDialog(unittest.TestCase):
         self.app.tabs[2].v_log.set(r"C:\logs\output_log_3.txt")
         dialog = self._dialog()
         dialog.text.insert("1.0", "止まった")
-        dialog.v_window.set("窓3")
+        for n, var in dialog.v_windows.items():
+            var.set(n == 3)
         built, send = self._send_ok(dialog)
         send.assert_called_once()
         self.assertEqual(built[0][0], "止まった")
-        self.assertEqual(built[0][1], 3)
-        self.assertEqual(built[0][4], r"C:\logs\output_log_3.txt", "選んだ窓のログ")
+        self.assertEqual(built[0][1], [3])
+        self.assertEqual(built[0][4], {3: r"C:\logs\output_log_3.txt"}, "選んだ窓のログ")
         self.assertIn("[報告] 送信しました", self.logs)
         self.assertFalse(dialog.winfo_exists(), "成功したら閉じる")
         self.assertGreater(self.app._report_cooldown_remaining(), 59)

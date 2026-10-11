@@ -607,10 +607,18 @@ class ReportDialog(tk.Toplevel):
         row = ttk.Frame(body)
         row.pack(fill="x", pady=(0, 6))
         ttk.Label(row, text="窓:").pack(side="left")
-        windows = ["なし"] + [f"窓{tab.idx + 1}" for tab in app.tabs]
-        self.v_window = tk.StringVar(value=app._current_tab_label())
-        ttk.Combobox(row, textvariable=self.v_window, values=windows, state="readonly",
-                     width=8).pack(side="left", padx=(6, 0))
+        # 窓ごとのチェック＋「すべて」（DR）。何も入れなければ窓なし。開いたときは今の窓だけ
+        current = app._current_tab_label()
+        self.v_windows = {}
+        for tab in app.tabs:
+            n = tab.idx + 1
+            self.v_windows[n] = tk.BooleanVar(value=f"窓{n}" == current)
+            ttk.Checkbutton(row, text=f"窓{n}", variable=self.v_windows[n],
+                            command=self._on_window_check).pack(side="left", padx=(6, 0))
+        self.v_all_windows = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row, text="すべて", variable=self.v_all_windows,
+                        command=self._on_all_windows).pack(side="left", padx=(10, 0))
+        self._on_window_check()
         self.v_include = {}
         checks = ttk.Frame(body)
         checks.pack(fill="x")
@@ -626,9 +634,19 @@ class ReportDialog(tk.Toplevel):
         self.btn_send.pack(anchor="e", pady=(6, 0))
         self._refresh_cooldown()
 
-    def _window_number(self) -> int:
-        label = self.v_window.get()
-        return int(label[1:]) if label.startswith("窓") and label[1:].isdigit() else 0
+    def selected_windows(self) -> list[int]:
+        """チェックの入った窓の番号（小さい順）。空なら窓なし"""
+        return [n for n, var in sorted(self.v_windows.items()) if var.get()]
+
+    def _on_all_windows(self):
+        """「すべて」を入れたら全部の窓に、外したら全部外す"""
+        on = self.v_all_windows.get()
+        for var in self.v_windows.values():
+            var.set(on)
+
+    def _on_window_check(self):
+        """窓のチェックが全部入っていれば「すべて」も入る"""
+        self.v_all_windows.set(bool(self.v_windows) and all(v.get() for v in self.v_windows.values()))
 
     def _refresh_cooldown(self):
         """送れてから REPORT_COOLDOWN_SEC は送信を押せない"""
@@ -655,11 +673,12 @@ class ReportDialog(tk.Toplevel):
             self.v_status.set("送り先が設定されていません")
             self.app._log("[報告] 送り先が設定されていません")
             return
-        window = self._window_number()
+        windows = self.selected_windows()
+        all_windows = len(self.app.tabs)
         include = {key: var.get() for key, var in self.v_include.items()}
         # Tk の値はメインスレッドで取っておく
         gui_log = self.app.log_text.get("1.0", "end")
-        vrchat_log = self.app._tab_log_path(window)
+        vrchat_logs = {n: self.app._tab_log_path(n) for n in windows}
         settings = load_settings()
         self._sending = True
         self.btn_send.config(state="disabled")
@@ -668,10 +687,11 @@ class ReportDialog(tk.Toplevel):
         def worker():
             try:
                 now = datetime.now()
-                name, data = BugReport.build_report(requirement, window, include, gui_log,
-                                                    vrchat_log, settings, now)
-                ok, message = BugReport.send(url, BugReport.content(config.APP_VERSION, window,
-                                                                    requirement, now), name, data)
+                name, data = BugReport.build_report(requirement, windows, include, gui_log,
+                                                    vrchat_logs, settings, now, all_windows=all_windows)
+                ok, message = BugReport.send(url, BugReport.content(config.APP_VERSION, windows,
+                                                                    requirement, now, all_windows),
+                                             name, data)
             except Exception as e:
                 DebugLog.exception("mainGUI.ReportDialog.worker")
                 ok, message = False, f"送れませんでした（{type(e).__name__}）"

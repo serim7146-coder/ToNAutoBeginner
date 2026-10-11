@@ -113,25 +113,48 @@ def settings_for_report(data: dict) -> dict:
 
 
 # ── 本文と zip ─────────────────────────────────
-def content(version: str, window, requirement: str, now: datetime) -> str:
+def content(version: str, window, requirement: str, now: datetime, all_windows: int = 0) -> str:
     """Discord の本文（2000 文字に収める）"""
-    head = f"🐞 不具合報告 {version} / {window_label(window)} / {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    head = (f"🐞 不具合報告 {version} / {window_label(window, all_windows)} / "
+            f"{now.strftime('%Y-%m-%d %H:%M:%S')}\n")
     text = head + requirement
     if len(text) <= CONTENT_MAX:
         return text
     return head + requirement[:CONTENT_MAX - len(head) - len(CONTENT_MORE)] + CONTENT_MORE
 
 
-def window_label(window) -> str:
-    return f"窓{window}" if window else "窓なし"
+def selected_windows(window) -> list[int]:
+    """窓の選び方（窓の番号1つ・0＝窓なし・番号の並び）を、番号の並び（小さい順・重複なし）にする"""
+    if isinstance(window, (list, tuple, set)):
+        return sorted({int(w) for w in window if w})
+    return [int(window)] if window else []
+
+
+def window_label(window, all_windows: int = 0) -> str:
+    """「窓2」「窓1・窓3・窓5」「全窓（6）」「窓なし」。all_windows は今の窓の数（2 以上で全部選べば全窓）"""
+    windows = selected_windows(window)
+    if not windows:
+        return "窓なし"
+    if all_windows >= 2 and windows == list(range(1, all_windows + 1)):
+        return f"全窓（{all_windows}）"
+    return "・".join(f"窓{n}" for n in windows)
 
 
 def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_log_path,
                  settings: dict, now: datetime, debug_log_path=None,
-                 version: str | None = None) -> tuple[str, bytes]:
-    """(zip のファイル名, zip の中身)。REPORT_MAX_BYTES を超えたら VRChat のログを減らす"""
+                 version: str | None = None, all_windows: int = 0) -> tuple[str, bytes]:
+    """(zip のファイル名, zip の中身)。REPORT_MAX_BYTES を超えたら VRChat のログを減らす。
+
+    window は窓の番号1つ（0 は窓なし）か番号の並び（DR: 複数・全部）。vrchat_log_path は1つの窓なら
+    そのパス、複数なら {窓の番号: パス}。VRChat のログは全部の窓で同じ長さずつ（始めは
+    REPORT_VRCHAT_LOG_START_BYTES ÷ 窓の数、収まらなければ全部を半分に）。1 窓・窓なしは今までと同じ中身"""
     version = version or config.APP_VERSION
     debug_log_path = debug_log_path or config.DEBUG_LOG_PATH
+    windows = selected_windows(window)
+    if isinstance(vrchat_log_path, dict):
+        log_paths = vrchat_log_path
+    else:
+        log_paths = {windows[0]: vrchat_log_path} if windows else {}
     files: dict[str, bytes] = {}
     notes: list[str] = []
 
@@ -158,40 +181,45 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
         notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 入れていません（未選択）")
     else:
         # Run の向きの撮影（DQ）も同じチェックで入れる（ほかのプレイヤーの名前が写りうる）
-        images = {**BeginMiss.files_for(window), **RunFace.files_for(window)}
+        for files_for in (BeginMiss.files_for, RunFace.files_for):
+            for n in windows or [0]:
+                images.update(files_for(n))
         if not images:
             notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 無し")
     dropped: list[str] = []
 
-    vrchat_name = f"vrchat_log_window{window}.txt" if window else ""
-    limit = config.REPORT_VRCHAT_LOG_START_BYTES
+    limit = config.REPORT_VRCHAT_LOG_START_BYTES // max(1, len(windows))
     while True:
         vr_notes = []
         vr_files = {}
         if not include.get(VRCHAT_LOG, False):
             vr_notes.append("- 選んだ窓の VRChat のログ: 入れていません（未選択）")
-        elif not window:
+        elif not windows:
             vr_notes.append("- 選んだ窓の VRChat のログ: 入れていません（窓を選んでいない）")
-        elif not vrchat_log_path:
-            vr_notes.append("- 選んだ窓の VRChat のログ: 入れていません（窓に未割り当て）")
-        else:
-            data = tail_bytes(vrchat_log_path, limit)
+        for n in (windows if include.get(VRCHAT_LOG, False) else []):
+            label = "選んだ窓の VRChat のログ" if len(windows) == 1 else f"窓{n} の VRChat のログ"
+            path = log_paths.get(n) or ""
+            name = f"vrchat_log_window{n}.txt"
+            if not path:
+                vr_notes.append(f"- {label}: 入れていません（窓に未割り当て）")
+                continue
+            data = tail_bytes(path, limit)
             if data is None:
-                vr_notes.append("- 選んだ窓の VRChat のログ: 入れていません（ファイルが無い）")
+                vr_notes.append(f"- {label}: 入れていません（ファイルが無い）")
             elif limit < config.REPORT_VRCHAT_LOG_MIN_BYTES:
-                vr_notes.append("- 選んだ窓の VRChat のログ: 入れていません（大きすぎて収まらない）")
+                vr_notes.append(f"- {label}: 入れていません（大きすぎて収まらない）")
             else:
-                vr_files[vrchat_name] = _clean(data.decode("utf-8", errors="replace")).encode("utf-8")
-                cut = "（末尾）" if _size(vrchat_log_path) > limit else ""
-                vr_notes.append(f"- 選んだ窓の VRChat のログ: {vrchat_name}{cut}")
+                vr_files[name] = _clean(data.decode("utf-8", errors="replace")).encode("utf-8")
+                cut = "（末尾）" if _size(path) > limit else ""
+                vr_notes.append(f"- {label}: {name}{cut}")
         image_notes = ([f"- 撮影（Begin・Run の向きで見つからなかったとき）: {', '.join(images)}"] if images else [])
         image_notes += [f"- 撮影 {name}: 入れていません（大きすぎて収まらない）" for name in dropped]
-        report = _report_txt(requirement, window, now, version, notes + image_notes + vr_notes)
+        report = _report_txt(requirement, window, now, version, notes + image_notes + vr_notes, all_windows)
         data = _zip({"report.txt": report.encode("utf-8"), **files, **images, **vr_files})
         if len(data) <= config.REPORT_MAX_BYTES:
             return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
         if vr_files:
-            limit //= 2                 # 先に VRChat のログを削る（今の順番のまま）
+            limit //= 2                 # 先に VRChat のログを削る（全部の窓で同じ長さずつ）
         elif images:
             name = list(images)[-1]     # それでも収まらなければ撮影を新しい方から外す
             images.pop(name)
@@ -200,11 +228,11 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
             return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
 
 
-def _report_txt(requirement, window, now, version, notes) -> str:
+def _report_txt(requirement, window, now, version, notes, all_windows: int = 0) -> str:
     runtime = "exe" if "__compiled__" in globals() else "python"
     return _clean("\n".join([
         f"不具合報告 {version}",
-        f"窓: {window_label(window)}",
+        f"窓: {window_label(window, all_windows)}",
         f"時刻: {now.strftime('%Y-%m-%d %H:%M:%S')}",
         f"Windows: {platform.platform()}",
         f"実行: {runtime}（Python {sys.version.split()[0]}）",
