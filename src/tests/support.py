@@ -888,6 +888,7 @@ def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     app._refresh_item_fetch_button = lambda: None
     app._refresh_continue_after_checks = lambda: None
     app._refresh_run_respawn_check = lambda: None
+    app._refresh_chase_check = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None
     app._suicide_cancel_key_conflict = lambda k: mainGUI.App._suicide_cancel_key_conflict(app, k)

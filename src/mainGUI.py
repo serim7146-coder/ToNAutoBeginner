@@ -968,10 +968,11 @@ class App(tk.Tk):
     # 200ms ごとの is_pressed() では、短く押した F1/F2（0.1秒前後）が見に行く
     # 合間に収まって取りこぼす。押した・離した通知で拾う（suppress しない）
     def _hook_chase_keys(self):
-        """アプリ起動時に1回。keyboard が無ければ何もしない"""
+        """アプリ起動時と、チェイスを使う設定を ON に戻したとき。keyboard が無い・設定が OFF なら拾わない"""
+        self._unhook_chase_keys()           # 二重に拾わない
         self._chase_keys_down = set()
         self._chase_hooks = []
-        if keyboard is None:
+        if keyboard is None or not SharedState.get_chase_enabled():
             return
         for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
             # 1キーに1つのフック。keyboard は同じキーのフックを1つの表の項目で持つので、
@@ -1060,7 +1061,7 @@ class App(tk.Tk):
             self._log(f"{head} → ラウンド中の窓はありません（何もしません）")
 
     def _unhook_chase_keys(self):
-        """アプリ終了時に外す"""
+        """アプリ終了時と、チェイスを使う設定を OFF にしたときに外す"""
         for hook in getattr(self, "_chase_hooks", []):   # 登録できたものだけ
             try:
                 keyboard.unhook(hook)
@@ -1073,8 +1074,8 @@ class App(tk.Tk):
     def _on_chase_key(self, direction: str, key: str):
         """押した瞬間に前面の、監視している窓だけを回す。それ以外は何もしない
         （ほかのアプリで F1 を使っていることがある）"""
-        if not self._running or not self.monitors:
-            return
+        if not self._running or not self.monitors or not SharedState.get_chase_enabled():
+            return                  # 外す前に積まれた通知も、OFF なら何もしない
         front = WindowOperator.foreground_hwnd()
         for monitor in self.monitors:
             if front and monitor.cfg.hwnd == front:
@@ -1122,8 +1123,9 @@ class App(tk.Tk):
         """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
         for name, other in (("緊急停止", self.v_emergency_key.get()),
                             ("マクロ開始", self.v_start_key.get()),
-                            ("チェイス", config.CHASE_CW_KEY),
-                            ("チェイス", config.CHASE_CCW_KEY)):
+                            # チェイスを使わないなら F1・F2 はほかのキーに使ってよい（DT）
+                            ("チェイス", config.CHASE_CW_KEY if SharedState.get_chase_enabled() else ""),
+                            ("チェイス", config.CHASE_CCW_KEY if SharedState.get_chase_enabled() else "")):
             if other and key == other:
                 return name
         return None
@@ -1593,6 +1595,11 @@ class App(tk.Tk):
                         command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）
         self.v_run_respawn = tk.BooleanVar(value=True)
+        # チェイス（F1・F2）を使う（全窓共通・保存・既定 ON）
+        self.v_chase_enabled = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fcr, text="チェイス（F1・F2）を使う",
+                        variable=self.v_chase_enabled,
+                        command=self._on_chase_enabled_changed).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(fcr, text="Run でリスポーンして正面を向く",
                         variable=self.v_run_respawn,
                         command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
@@ -1790,6 +1797,28 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
         SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
         self._schedule_settings_save()
+
+    def _on_chase_enabled_changed(self):
+        """OFF: F1・F2 を外し、回っている窓は止めて離す。ON: 拾い直す"""
+        on = bool(self.v_chase_enabled.get())
+        SharedState.set_chase_enabled(on)
+        if on:
+            self._hook_chase_keys()
+            self._log("[チェイス] チェイス（F1・F2）を使います")
+        else:
+            self._unhook_chase_keys()
+            for monitor in getattr(self, "monitors", None) or []:
+                if monitor._action.chase_stop():
+                    monitor._log("チェイス停止（チェイスを使わない設定）")
+            self._log("[チェイス] チェイス（F1・F2）を使いません")
+        self._schedule_settings_save()
+
+    def _refresh_chase_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_chase_enabled.set(SharedState.get_chase_enabled())
+        except (tk.TclError, AttributeError):
+            pass
 
     def _on_run_respawn_changed(self):
         SharedState.set_run_respawn(self.v_run_respawn.get())
@@ -2188,6 +2217,8 @@ class App(tk.Tk):
         self._refresh_continue_after_checks()
         SharedState.set_run_respawn(data.get("run_respawn") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_run_respawn_check()
+        SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
+        self._refresh_chase_check()
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -3132,6 +3163,7 @@ class App(tk.Tk):
             "continue_drop_item":      SharedState.get_continue_drop_item(),
             "continue_restore_window": SharedState.get_continue_restore_window(),
             "run_respawn":             SharedState.get_run_respawn(),
+            "chase_enabled":           SharedState.get_chase_enabled(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が

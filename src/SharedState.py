@@ -167,6 +167,10 @@ get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MOD
 _CONTINUE_DROP_ITEM = _Setting(True, bool)
 get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTINUE_DROP_ITEM.set
 _CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
+# チェイス（F1・F2）を使う（全窓共通・既定 ON。OFF ならキーを拾わない）
+_CHASE_ENABLED = _Setting(True, bool)
+get_chase_enabled, set_chase_enabled = _CHASE_ENABLED.get, _CHASE_ENABLED.set
+
 # Run のラウンドに入ったらリスポーンして正面を向く（全窓共通・既定 ON）
 _RUN_RESPAWN = _Setting(True, bool)
 get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set

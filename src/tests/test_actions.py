@@ -976,6 +976,7 @@ class TestOptimization(unittest.TestCase):
     # ── 2. チェイスのキー ───────────────────────────
     def _keys_app(self, fail_on=None):
         app = type("FakeApp", (), {})()
+        app._unhook_chase_keys = lambda: mainGUI.App._unhook_chase_keys(app)
         app.logs = []
         app._log = app.logs.append
         keyboard = MagicMock()
@@ -1032,6 +1033,7 @@ class TestOptimization(unittest.TestCase):
         keyboard.hook_key.side_effect = hook_key
         keyboard.unhook.side_effect = lambda remove: hooks[remove]()
         app = type("FakeApp", (), {})()
+        app._unhook_chase_keys = lambda: mainGUI.App._unhook_chase_keys(app)
         app._log = lambda _m: None
         with patch.object(mainGUI, "keyboard", keyboard), \
              patch.object(DebugLog, "exception") as exception:
