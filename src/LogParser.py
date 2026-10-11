@@ -165,8 +165,16 @@ RE_NETWORK_OBJECT_BARE = (
 )
 
 
+# 持ち主 0 へ戻す行（番号つき・番号なし）。ラウンドの終わりに前のラウンドの物（前のテラー・
+# monsterDetectionBox など）が一斉に出るので、今のラウンドのテラーではない。看破には使わない（DU）。
+# 例 2026-10-11 14:54:05 `Transferred ownership of [59] ChristianBrutralSniper to 0`（霧は Withered Bonnie）
+RE_TRANSFER_TO_ZERO = re.compile(r"^\[NetworkProcessing\] Transferred ownership of .+ to 0$")
+
+
 def network_object_name(line: str) -> str:
-    """`[NetworkProcessing]` の行からオブジェクト名を取り出す。無ければ空文字"""
+    """`[NetworkProcessing]` の行からオブジェクト名を取り出す。無ければ空文字。持ち主 0 へ戻す行も空文字"""
+    if RE_TRANSFER_TO_ZERO.match(line):
+        return ""
     m = RE_NETWORK_OBJECT.match(line)
     if not m:
         for bare in RE_NETWORK_OBJECT_BARE:      # 番号ありの形を優先する
