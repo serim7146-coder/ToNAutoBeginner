@@ -428,13 +428,15 @@ class TestDv2MainScreen(_AppCase):
                           for c in w.winfo_children()))
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
-                                 ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定")])
+                                 ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
+                                 ("Checkbutton", "Utilsの判断に従う")])        # EB
         variables = [str(w.cget("variable")) for w in row.pack_slaves()
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
                                                       self.app.v_continue_restore_window,
                                                       self.app.v_run_respawn,
-                                                      self.app.v_fog_early_read)])
+                                                      self.app.v_fog_early_read,
+                                                      self.app.v_follow_utils)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
         row = self.app.freeze_frame.pack_slaves()[0]

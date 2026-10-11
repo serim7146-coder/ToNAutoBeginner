@@ -1859,6 +1859,11 @@ class App(tk.Tk):
         ttk.Checkbutton(fcr, text="霧即時判定",
                         variable=self.v_fog_early_read,
                         command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
+        # ToN Utils の続行の判断に従う（全窓共通・保存・既定 OFF。EB）
+        self.v_follow_utils = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fcr, text="Utilsの判断に従う",
+                        variable=self.v_follow_utils,
+                        command=self._on_follow_utils_changed).pack(side="left", padx=(12, 0))
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
 
@@ -2205,6 +2210,19 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
         SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
         self._schedule_settings_save()
+
+    def _on_follow_utils_changed(self):
+        on = bool(self.v_follow_utils.get())
+        SharedState.set_follow_utils(on)
+        self._log("[Utils] " + ("Utils の判断に従います（Utils が判断できない窓は、このツールで判定）" if on
+                               else "Utils の判断に従いません（このツールで判定）"))
+        self._schedule_settings_save()
+
+    def _refresh_follow_utils_check(self):
+        try:
+            self.v_follow_utils.set(SharedState.get_follow_utils())
+        except (tk.TclError, AttributeError):
+            pass
 
     def _on_chase_enabled_changed(self):
         """OFF: F1・F2 を外し、回っている窓は止めて離す。ON: 拾い直す"""
@@ -2647,6 +2665,8 @@ class App(tk.Tk):
         self._refresh_run_respawn_check()
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_chase_check()
+        SharedState.set_follow_utils(data.get("follow_utils") is True)    # 無い・壊れた値は OFF（EB）
+        App._refresh_follow_utils_check(self)
         self._window_layout = _as_window_layout(data.get("window_layout"))   # 壊れた値は捨てる（DX）
         App._refresh_forget_layout_button(self)
         self._apply_saved_window_settings()
@@ -3637,6 +3657,7 @@ class App(tk.Tk):
             "run_respawn":             SharedState.get_run_respawn(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
+            "follow_utils":            SharedState.get_follow_utils(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
             **self._launch_options_setting(),

@@ -508,6 +508,10 @@ SAVELOAD_LOG_POLL_SEC    = 0.25
 # 入室の Begin の後に Guidance Plush を取りに行く（DZ）。押した後の最初の Verified を待つ上限
 PLUSH_VERIFIED_WAIT_SEC  = 60.0
 PLUSH_VERIFIED_POLL_SEC  = 0.25
+# ToN Utils の続行の判断に従う（EB）。起点（killers_set／killers_revealed）から Utils の press・hold を待つ上限。
+# 実測の press は判定から 0.2〜1.58 秒（110 回）。何も来なければ続行
+UTILS_WAIT_SEC           = 3.0
+UTILS_POLL_SEC           = 0.1
 
 TON_ENTRY_PANEL_TIMEOUT  = 180.0  # パネル出現を待つ上限（読み込みが重い）
 TON_ENTRY_POLL_SEC       = 2.0    # パネル確認の間隔

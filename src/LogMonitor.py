@@ -21,6 +21,7 @@ import MatchTNL
 import RoundDecision
 import RoundSequence
 import TerrorReplacement
+import UtilsWatch
 import GroupRound
 from ActionExecutor import ActionExecutor
 from State import WindowConfig, WindowState
@@ -1612,6 +1613,7 @@ class LogMonitor:
             st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
             st.round_type = event.round_type
+        st.utils_anchor_seq = st.round_seq          # Utils の判断を待ち始めてよい（EB）
         self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
 
     def _on_you_died(self, event):
@@ -1794,6 +1796,7 @@ class LogMonitor:
         st = self.st
         st.fog_reading = False
         st.fog_no_object_deadline = 0.0
+        st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判断する（EB）
         self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
         # 答え合わせは公開の後（食い違いの警告はもう出してよい）
         self._check_early_read(event.terror_ids or [], event.round_type)
@@ -2006,7 +2009,8 @@ class LogMonitor:
         if not self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
 
-        if revealed and st.enrage_identified is not None:
+        if (revealed and st.enrage_identified is not None
+                and st.utils_deferred_seq != st.round_seq):   # Utils を待っているなら判定へ進む（EB）
             # Enrage で前倒し済み。やり直すと二重にアナウンスして二重に自爆する。
             # 食い違いは残す——前倒しの精度は半分なので、外したときに分かるように
             if st.enrage_identified not in ids:
@@ -2149,6 +2153,13 @@ class LogMonitor:
         st = self.st
         plan = self._plan(round_type, st.terror_ids,
                           st.bloodthirsty_creature_variant)
+        if plan[0] != "restricted" and self._follow_utils(round_type, plan):
+            return
+        self._run_plan(round_type, plan)
+
+    def _run_plan(self, round_type: str, plan: tuple):
+        """決まった手順（plan）を実行する"""
+        st = self.st
         kind = plan[0]
         if kind == "group":
             self._apply_group_decision(round_type)
@@ -2176,6 +2187,75 @@ class LogMonitor:
             self._start_glorbo_continue(round_type)
             return
         self._decide_with_keep_on_set(round_type, plan)
+
+    # ── ToN Utils の続行の判断に従う（EB）────────────────
+    def _follow_utils(self, round_type: str, plan: tuple) -> bool:
+        """Utils が判断する窓なら、その判断を待つ（True）。この窓はこのツールが判定するなら False。
+        起点（killers_set・killers_revealed）の前に分かったとき（看破・Enrage・Joy・スタン・Foxy）は、
+        自爆も続行フリーズもせずに明かされるのを待つ"""
+        if not SharedState.get_follow_utils():
+            return False
+        st = self.st
+        watch = UtilsWatch.shared()
+        source, reason = watch.window_reason(self.cfg.log_path)
+        if reason:
+            if st.utils_reason != reason:
+                st.utils_reason = reason
+                self._log(f"Utils の判断が読めないため、このツールで判定します（{reason}）")
+            return False
+        st.utils_reason = None
+        if st.utils_source_logged != source:
+            st.utils_source_logged = source
+            DebugLog.write(f"[Utils] 窓{self.window_idx} ↔ source {source[:8]}")
+        if st.utils_anchor_seq != st.round_seq:
+            if st.utils_deferred_seq != st.round_seq:
+                st.utils_deferred_seq = st.round_seq
+                self._log("Utils: 明かされるまで判断を待ちます")
+            return True
+        if st.utils_wait_seq == st.round_seq:
+            return True                 # もう待っている
+        st.utils_wait_seq = st.round_seq
+        self._log(f"判定: {format_terror_ids(st.terror_ids)} / {round_type}"
+                  f"（このツールの判定: {self._outcome(plan)}）→ Utils の判断を待ちます")
+        watch.refresh()                 # 前のラウンドの行を読み終えてから数え始める
+        since = time.monotonic()
+        self._start_daemon(self._wait_utils, round_type, plan, st.round_seq, source, since)
+        return True
+
+    def _wait_utils(self, round_type: str, plan: tuple, round_seq: int, source: str, since: float):
+        """起点から UTILS_WAIT_SEC、その窓の press・hold を待つ。press → スキップ（このツールは押さない）。
+        hold → このツールが今までどおり判定・自爆。何も無い → 続行（【プレイ】の流れ）。
+        ラウンドが終わったら何もしない"""
+        watch = UtilsWatch.shared()
+        deadline = since + config.UTILS_WAIT_SEC
+        while True:
+            if not self._round_still_active(round_seq):
+                return
+            watch.refresh()
+            action = watch.action_since(source, since)
+            if action or time.monotonic() >= deadline:
+                break
+            time.sleep(config.UTILS_POLL_SEC)
+        if not self._round_still_active(round_seq):
+            return
+        DebugLog.write(f"[Utils] 窓{self.window_idx} Utils: "
+                       + (f"{action} {time.monotonic() - since:.1f} 秒" if action
+                          else f"無し（{config.UTILS_WAIT_SEC:.0f} 秒）"))
+        if action == "press":
+            self._clear_stale_continue_round()
+            self._log("Utils: 自爆（スキップ）")
+            return
+        if action == "hold":
+            self._log("Utils: 許可されていないため、このツールで判定")
+            self._run_plan(round_type, plan)
+            return
+        self._log("Utils: 続行")
+        if plan[0] == "glorbo":
+            self._start_glorbo_continue(round_type)
+        elif plan[0] == "list" and plan[1]:
+            self._decide_with_keep_on_set(round_type, plan)     # DTM/Waldo の続行もそのまま
+        else:
+            self._decide_with_keep_on_set(round_type, ("list", True, False))
 
     def _start_glorbo_continue(self, round_type: str):
         """Glorbo の続行: 普通の続行と同じくフリーズ・アナウンス・録画（放置モードでは

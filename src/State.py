@@ -99,6 +99,13 @@ class WindowState:
     # 続行フリーズを張ったラウンドの round_seq。そのラウンドのアイテムは続行の終わり
     # （after_continue_round）で落とすので、RoundOver では落とさない（DW: 二重にしない）
     continue_freeze_round: int = -1
+    # ToN Utils の判断に従う（EB）: 起点（killers_set・killers_revealed）が来たラウンド・待ち始めたラウンド・
+    # 看破などで先に分かって明かされるのを待っているラウンド。最後に画面へ出した「読めない理由」・窓の対応
+    utils_anchor_seq: int = -1
+    utils_wait_seq: int = -1
+    utils_deferred_seq: int = -1
+    utils_reason: object = None
+    utils_source_logged: str = ""
     # RoundOver で落とすと決めたラウンドの round_seq（-1 = 無し）と、落としたラウンドの round_seq
     drop_after_round_seq: int = -1
     dropped_round_seq: int = -1
