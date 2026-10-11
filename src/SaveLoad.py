@@ -7,9 +7,11 @@
 - コード欄の見本: 全画面 2560×1440 の窓の x 1900〜2150・y 700〜840（コード欄の左寄りと、上下の説明の
   左寄り）。倍率は「窓のクライアントの高さ / 1440」を中心に ±0.05（0.01 刻み）。クリックの点は見本の
   左上から (100, 64)×倍率
-- 入力欄の見本: 入力欄の右の送信の矢印（1280×720 に縮めた撮影から切り出した。倍率の基準は高さ 720）。
-  窓の下寄り・右寄りの範囲だけを探す（入力欄が出ていない撮影では 0.48 前後・出ていれば 1.0。
-  2026-10-12 の実機の撮影 9 枚）
+- 入力欄の見本: 入力欄の右の送信の矢印（1280×720 に縮めた撮影から切り出した）。VRChat の入力欄は画面に
+  貼り付いた UI で、大きさは min(幅 / 1280, 高さ / 720) で決まる（EA: 851×664 の窓で実測 0.65。高さだけで
+  決めると 0.92 になり見つからなかった。ワールドの中の板のコード欄は高さで決まる）。
+  窓の下寄り・右寄りの範囲だけを探す（入力欄が出ていない撮影では 0.48〜0.55・出ていれば 0.98〜1.0。
+  2026-10-12 の実機の撮影）
 """
 import threading
 
@@ -19,7 +21,8 @@ import DebugLog
 CODEBOX_FILE = "saveload_templates/codebox_left.png"
 ARROW_FILE = "saveload_templates/send_arrow.png"
 CODEBOX_BASE_HEIGHT = 1440          # コード欄の見本を作った窓の高さ
-ARROW_BASE_HEIGHT = 720             # 矢印の見本を作った撮影の高さ
+ARROW_BASE_WIDTH = 1280             # 矢印の見本を作った撮影の幅・高さ
+ARROW_BASE_HEIGHT = 720
 CLICK_OFFSET = (100, 64)            # コード欄の見本の左上からクリックの点まで（倍率 1）
 MATCH_MIN = 0.8
 SCALE_SPAN, SCALE_STEP = 0.05, 0.01
@@ -91,18 +94,24 @@ def find_codebox(bgr, client_height: int, template=None):
     return x + CLICK_OFFSET[0] * s, y + CLICK_OFFSET[1] * s, score, s
 
 
-def input_box_shown(bgr, client_height: int, template=None) -> bool:
-    """VRChat の入力欄（送信の矢印）が窓の下寄り・右寄りに出ているか"""
+def arrow_scale(client_width: int, client_height: int) -> float:
+    """矢印の見本の倍率の基準。入力欄は min(幅 / 1280, 高さ / 720) で大きさが決まる（EA）"""
+    return min(client_width / ARROW_BASE_WIDTH, client_height / ARROW_BASE_HEIGHT)
+
+
+def input_box_shown(bgr, client_width: int, client_height: int, template=None) -> bool:
+    """VRChat の入力欄（送信の矢印）が窓の下寄り・右寄りに出ているか。大きさは窓のクライアントの幅と高さ"""
     import cv2
     template = _load(ARROW_FILE) if template is None else template
-    if template is None or len(template) == 0 or not hasattr(bgr, "shape") or client_height <= 0:
+    if (template is None or len(template) == 0 or not hasattr(bgr, "shape")
+            or client_width <= 0 or client_height <= 0):
         return False
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
     left, top, right, bottom = ARROW_REGION
     x0, y0 = int(w * left), int(h * top)
     roi = gray[y0:int(h * bottom), x0:int(w * right)]
-    base = client_height / ARROW_BASE_HEIGHT
+    base = arrow_scale(client_width, client_height)
     hit = _best(roi, template, [base * s for s in ARROW_SCALES], (x0, y0))
     return hit is not None and hit[2] >= MATCH_MIN
 

@@ -27,6 +27,7 @@ class _World:
         self.front_lost_at = front_lost_at
         self.captures_after_paste = 0
         self.captures = 0
+        self.box_sizes = []
         self.clipboard = []
         tmp = tempfile.TemporaryDirectory()
         test.addCleanup(tmp.cleanup)
@@ -63,7 +64,8 @@ class _World:
                 with open(w.log_path, "a", encoding="utf-8") as f:
                     f.write("2026.10.12 10:00:01 Debug      -  Loaded Data Successfully!\\n")
 
-        def box_shown(bgr, height):
+        def box_shown(bgr, width, height):
+            w.box_sizes.append((width, height))
             w.box_polls += 1
             return w.box_after is not None and w.box_polls >= w.box_after
 
@@ -86,6 +88,7 @@ class _World:
                 (WindowOperator, "foreground_hwnd", lambda: w.front),
                 (WindowOperator, "window_origin", lambda h: ORIGIN),
                 (WindowOperator, "client_height", lambda h: 1440),
+                (WindowOperator, "client_size", lambda h: (2560, 1440)),
                 (WindowOperator, "press_tab", lambda: event(("tab_down",))),
                 (WindowOperator, "release_tab", lambda: event(("tab_up",))),
                 (WindowOperator, "mouse_click", lambda sec, pause=False: event(("click", sec))),
@@ -155,6 +158,7 @@ class TestTheSequence(unittest.TestCase):
         world = _World(self, box_after=3)
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "loaded")
         self.assertEqual(world.box_polls, 3)
+        self.assertEqual(set(world.box_sizes), {(2560, 1440)}, "クライアントの幅と高さを渡す（EA）")
 
     def test_no_capture_after_the_paste(self):
         world = _World(self)
@@ -247,12 +251,44 @@ class TestFinding(unittest.TestCase):
 
     def test_the_input_box_arrow(self):
         h, w = 720, 1280
-        self.assertTrue(SaveLoad.input_box_shown(self._shot(w, h, self.arrow, (908, 548), 1.0), h))
-        self.assertFalse(SaveLoad.input_box_shown(self._shot(w, h, self.arrow, (20, 20), 1.0), h),
+        self.assertTrue(SaveLoad.input_box_shown(self._shot(w, h, self.arrow, (908, 548), 1.0), w, h))
+        self.assertFalse(SaveLoad.input_box_shown(self._shot(w, h, self.arrow, (20, 20), 1.0), w, h),
                          "下寄り・右寄りの範囲の外は見ない")
-        self.assertFalse(SaveLoad.input_box_shown(self._shot(w, h, self.np.zeros((8, 8), self.np.uint8), (0, 0), 1.0), h))
+        self.assertFalse(SaveLoad.input_box_shown(
+            self._shot(w, h, self.np.zeros((8, 8), self.np.uint8), (0, 0), 1.0), w, h))
         big = self._shot(2560, 1440, self.arrow, (1816, 1096), 2.0)
-        self.assertTrue(SaveLoad.input_box_shown(big, 1440), "倍率は高さ / 720")
+        self.assertTrue(SaveLoad.input_box_shown(big, 2560, 1440))
+
+    # ── EA: 入力欄の大きさは min(幅 / 1280, 高さ / 720) ──
+    def test_the_arrow_scale_is_the_smaller_of_width_and_height(self):
+        self.assertAlmostEqual(SaveLoad.arrow_scale(851, 664), 0.665, places=3)
+        self.assertEqual(SaveLoad.arrow_scale(2560, 1440), 2.0)
+        self.assertEqual(SaveLoad.arrow_scale(3440, 1440), 2.0, "横長は高さで")
+        self.assertEqual(SaveLoad.arrow_scale(1280, 1440), 1.0, "縦長は幅で")
+
+    def _real(self, name, size, client):
+        """実機の撮影の、探す範囲（左 45〜95%・上 55〜95%）だけを切り出した写し（灰色。右下の隅は消した）を、
+        元の大きさの撮影に貼り戻す。窓の大きさは数字で渡す"""
+        cv2, np = self.cv2, self.np
+        crop = cv2.imdecode(np.fromfile(str(Path(__file__).parent / "data" / "saveload" / name), np.uint8),
+                            cv2.IMREAD_GRAYSCALE)
+        h, w = size
+        img = np.zeros((h, w), np.uint8)
+        x0, y0 = int(w * 0.45), int(h * 0.55)
+        img[y0:y0 + crop.shape[0], x0:x0 + crop.shape[1]] = crop
+        return SaveLoad.input_box_shown(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), *client)
+
+    def test_the_real_small_window_with_the_input_box(self):
+        """6 窓整列の 1 升（クライアント 851×664・撮影 867×703）で入力欄が開いている（中は空）"""
+        self.assertTrue(self._real("small_popup.png", (703, 867), (851, 664)))
+
+    def test_the_real_shots_without_the_input_box(self):
+        self.assertFalse(self._real("small_no_popup.png", (703, 867), (851, 664)))
+        self.assertFalse(self._real("full_half_no_popup.png", (720, 1280), (1280, 720)),
+                         "全画面（半分に縮めた写し）")
+
+    def test_the_codebox_still_uses_the_height(self):
+        self.assertEqual(SaveLoad.codebox_scales(664)[0], round(664 / 1440, 3))
 
 
 # ── クリップボード（偽の win32clipboard）────────────────────

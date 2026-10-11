@@ -357,8 +357,8 @@ class ToNEntry:
         deadline = time.time() + config.SAVELOAD_BOX_WAIT_SEC
         while self._is_running():
             bgr = self._capture_bgr()
-            height = WindowOperator.client_height(self._hwnd) or 0
-            if bgr is not None and SaveLoad.input_box_shown(bgr, height):
+            width, height = WindowOperator.client_size(self._hwnd) or (0, 0)
+            if bgr is not None and SaveLoad.input_box_shown(bgr, width, height):
                 DebugLog.write("[コードの読み込み] 入力欄が出た")
                 return True
             if time.time() >= deadline:

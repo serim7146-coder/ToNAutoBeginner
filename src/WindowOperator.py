@@ -702,6 +702,16 @@ def focus_vrchat(hwnd: int) -> bool:
     return ok
 
 
+def client_size(hwnd: int) -> tuple | None:
+    """窓のクライアント領域の (幅, 高さ)（GetClientRect）。取れなければ None"""
+    try:
+        _l, _t, width, height = win32gui.GetClientRect(hwnd)
+    except Exception:
+        DebugLog.exception("WindowOperator.client_size")
+        return None
+    return (int(width), int(height)) if width > 0 and height > 0 else None
+
+
 def client_height(hwnd: int) -> int | None:
     """窓のクライアント領域の高さ（GetClientRect）。取れなければ None"""
     try:
