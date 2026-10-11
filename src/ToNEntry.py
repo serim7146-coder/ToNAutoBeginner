@@ -20,6 +20,7 @@ import win32gui
 import config
 import DebugLog
 import OSCClient
+import SaveLoad
 import ScreenCapture
 import SharedState
 import WindowOperator
@@ -202,6 +203,136 @@ class ToNEntry:
         ok = self.click("Begin")
         self._osc.stop_all()
         return ok
+
+    # ── セーブコードの読み込み（DY）────────────────
+    # セーブコードは、画面のログにも debug.log にも出さない（長さも）。Ctrl+V の後は撮らない
+
+    def load_code(self, code: str, log_path: str) -> str:
+        """入室の選択画面の後・Begin の前に、Save/Load のコード欄へ code を貼って Enter。
+        "loaded"（ログで確かめた）・"unconfirmed"（貼ったがログに出ない）・"skipped"（貼っていない）。
+        どれでも呼ぶ側は Begin を押す（依頼者）"""
+        if not self._can_operate():
+            return "skipped"
+        if not code:
+            self._log("⚠ クリップボードが空のためコードを読み込みません")
+            return "skipped"
+        bgr = self._capture_bgr()
+        height = WindowOperator.client_height(self._hwnd) or 0
+        found = SaveLoad.find_codebox(bgr, height) if bgr is not None else None
+        if found is None:
+            self._log("⚠ コード欄が見つかりません → コードを読み込みません")
+            return "skipped"
+        DebugLog.write(f"[コードの読み込み] コード欄 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・"
+                       f"倍率 {found[3]:.2f}")
+        offset = SaveLoad.log_size(log_path) if log_path else 0
+        result = self._paste_code(code, found)
+        if result != "pasted":
+            self._log(f"⚠ コードを読み込めませんでした（{result}）")
+            return "skipped"
+        deadline = time.time() + config.SAVELOAD_LOG_WAIT_SEC
+        while self._is_running():
+            if log_path and SaveLoad.log_has_loaded_line(log_path, offset):
+                self._log("✅ コードを読み込みました")
+                return "loaded"
+            if time.time() >= deadline:
+                break
+            time.sleep(config.SAVELOAD_LOG_POLL_SEC)
+        self._log("⚠ コードの読み込みを確認できませんでした")
+        return "unconfirmed"
+
+    def _capture_bgr(self):
+        bits, w, h = self.capture()
+        if not bits or w <= 0 or h <= 0 or len(bits) < w * h * 4:
+            return None
+        import numpy as np
+        bgra = np.frombuffer(bits, dtype=np.uint8)[:w * h * 4].reshape(h, w, 4)
+        return np.ascontiguousarray(bgra[:, :, :3])       # 書き出さない（メモリの中だけ）
+
+    def _still_ours(self) -> bool:
+        return self._is_running() and WindowOperator.foreground_hwnd() == self._hwnd
+
+    def _paste_code(self, code: str, found) -> str:
+        """鍵の中で前面を借りて: Tab を押したまま → カーソルをコード欄へ → クリック → Tab を離す →
+        入力欄が出るのを待つ → コードをクリップボードへ入れ直す → Ctrl+V → Enter。
+        どの終わり方でも Tab を離し、前面とカーソルを返す。"pasted" か、貼らなかった理由"""
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._is_running() or not self._can_operate():
+                return "中止"
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(self._hwnd)
+            if not ok:
+                return "前面にできない"
+            tab = False
+            try:
+                origin = WindowOperator.window_origin(self._hwnd)
+                if origin is None or not self._still_ours():
+                    return "中止" if not self._is_running() else "前面でなくなった"
+                point = (int(round(found[0] + origin[0])), int(round(found[1] + origin[1])))
+                WindowOperator.press_tab()
+                tab = True
+                if config.CLICK_TAB_LEAD_SEC > 0:
+                    time.sleep(config.CLICK_TAB_LEAD_SEC)
+                if not self._place_cursor(point):
+                    return "カーソルを置けない"
+                if not self._still_ours():
+                    return "中止" if not self._is_running() else "前面でなくなった"
+                DebugLog.write(f"[コードの読み込み] コード欄をクリック {point}")
+                WindowOperator.mouse_click(config.SAVELOAD_CLICK_SEC)
+                WindowOperator.release_tab()
+                tab = False
+                if not self._wait_input_box():
+                    return "入力欄が出ない" if self._is_running() else "中止"
+                if not self._still_ours():
+                    return "中止" if not self._is_running() else "前面でなくなった"
+                if not SaveLoad.write_clipboard(code):
+                    return "クリップボードに入れられない"
+                # ここから後は撮らない（入力欄にコードが写る）
+                WindowOperator.send_keys("ctrl+v")
+                time.sleep(config.SAVELOAD_PASTE_ENTER_SEC)
+                if not self._still_ours():
+                    return "中止" if not self._is_running() else "前面でなくなった"
+                WindowOperator.send_keys("enter")
+                DebugLog.write("[コードの読み込み] 貼って Enter を押した")
+                return "pasted"
+            finally:
+                try:
+                    if tab:
+                        WindowOperator.release_tab()
+                finally:
+                    try:
+                        WindowOperator.return_front(loan)
+                    finally:
+                        if cursor is not None:
+                            WindowOperator.set_cursor_position(cursor)
+
+    def _place_cursor(self, point) -> bool:
+        """カーソルを point へ置いて読み直す。ずれていれば置き直す（ItemFetch と同じ回数・幅）"""
+        tol = config.FETCH_CURSOR_TOL_PX
+        for _tries in range(config.FETCH_CURSOR_TRIES):
+            if not self._still_ours():
+                return False
+            WindowOperator.set_cursor_position(point)
+            time.sleep(config.FETCH_CURSOR_SETTLE_SEC)
+            read = WindowOperator.cursor_position()
+            if read is not None and abs(read[0] - point[0]) <= tol and abs(read[1] - point[1]) <= tol:
+                return True
+        DebugLog.write(f"[コードの読み込み] カーソルを {point} へ置けない")
+        return False
+
+    def _wait_input_box(self) -> bool:
+        """入力欄（送信の矢印）が出るまで撮って見る（最大 SAVELOAD_BOX_WAIT_SEC）。撮影は書き出さない"""
+        deadline = time.time() + config.SAVELOAD_BOX_WAIT_SEC
+        while self._is_running():
+            bgr = self._capture_bgr()
+            height = WindowOperator.client_height(self._hwnd) or 0
+            if bgr is not None and SaveLoad.input_box_shown(bgr, height):
+                DebugLog.write("[コードの読み込み] 入力欄が出た")
+                return True
+            if time.time() >= deadline:
+                DebugLog.write(f"[コードの読み込み] {config.SAVELOAD_BOX_WAIT_SEC:.0f}秒で入力欄が出ない")
+                return False
+            time.sleep(config.SAVELOAD_BOX_POLL_SEC)
+        return False
 
     def close(self):
         try:

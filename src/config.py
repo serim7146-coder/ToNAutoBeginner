@@ -498,6 +498,13 @@ TON_ENTRY_STEPS = [
 # 入室直後は位置が違うため、ラウンド終了後の BEGIN_FORWARD_SEC とは別の値。
 TON_ENTRY_BEGIN_FORWARD_SEC = 5.30
 TON_ENTRY_BEGIN_LEFT_SEC    = 0.12
+# 入室の選択画面の後・Begin の前に、Save/Load のコード欄へクリップボードのセーブコードを貼る（DY）
+SAVELOAD_CLICK_SEC       = 0.15   # コード欄を押している長さ
+SAVELOAD_BOX_WAIT_SEC    = 3.0    # 入力欄（送信の矢印）が出るのを待つ上限
+SAVELOAD_BOX_POLL_SEC    = 0.2
+SAVELOAD_PASTE_ENTER_SEC = 0.3    # Ctrl+V から Enter まで
+SAVELOAD_LOG_WAIT_SEC    = 8.0    # Enter の後、ログに「Loaded Data Successfully」が出るのを待つ上限
+SAVELOAD_LOG_POLL_SEC    = 0.25
 
 TON_ENTRY_PANEL_TIMEOUT  = 180.0  # パネル出現を待つ上限（読み込みが重い）
 TON_ENTRY_POLL_SEC       = 2.0    # パネル確認の間隔

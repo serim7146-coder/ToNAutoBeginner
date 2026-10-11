@@ -143,6 +143,7 @@ import ItemCatalog
 import WindowVolume
 import ScreenCapture
 import ToNEntry
+import SaveLoad
 import mainGUI
 import UIFont
 import AutoUpdate
@@ -259,6 +260,13 @@ class _OscSocketTrap:
 
 
 _OscSocketTrap.install()
+
+
+# ── テストで本物のクリップボードを読み書きしない（DY: セーブコードが入っている）──────
+# 本物の入口は残しておく（中身を確かめるテストが、win32clipboard を偽物にして呼ぶ）
+REAL_CLIPBOARD = {"read": SaveLoad.read_clipboard, "write": SaveLoad.write_clipboard}
+SaveLoad.read_clipboard = lambda: ""
+SaveLoad.write_clipboard = lambda _text: False
 
 
 # ── テストで本物の設定を書き換えない ─────────────────────

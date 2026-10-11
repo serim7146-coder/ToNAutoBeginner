@@ -37,6 +37,7 @@ import FogEarlyRead
 import BugReport
 import WindowVolume
 import WindowArrange
+import SaveLoad
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -3472,6 +3473,8 @@ class App(tk.Tk):
             self._log("[入室操作] 対象の窓がありません")
             return
         press_begin = self.v_ton_begin.get()
+        # セーブコードは最初に 1 回だけ読み、全窓に同じものを貼る（DY。中身はどこにも書かない）
+        save_code = SaveLoad.read_clipboard() if press_begin else ""
         self._entry_stop.clear()
         self.btn_stop_entry.config(state="normal")
         self._log("[入室操作] 開始します（中止は「入室操作を中止」ボタンか %sキー）"
@@ -3494,7 +3497,10 @@ class App(tk.Tk):
                     )
                     try:
                         if entry.run() and press_begin and not self._entry_stop.is_set():
-                            entry.press_begin()
+                            # Begin へ動く前（入室直後の位置でしか見えない）。読み込めなくても Begin は押す
+                            entry.load_code(save_code, log_path)
+                            if not self._entry_stop.is_set():
+                                entry.press_begin()
                     except Exception as e:
                         DebugLog.exception("mainGUI.worker")
                         self._log("[窓%d] 入室操作でエラー: %s" % (window_no, e))
