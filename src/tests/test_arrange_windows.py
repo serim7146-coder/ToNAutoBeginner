@@ -1,5 +1,6 @@
 """窓を整列する（DX）。本物の窓は動かさない（SetWindowPos・モニター・DWM は偽物）"""
 from tests.support import *  # noqa: F401,F403
+import inspect
 import WindowArrange
 
 WORK = (0, 0, 2560, 1400)               # タスクバー（下 40px）を除いた作業領域
@@ -67,23 +68,75 @@ class TestGrid(unittest.TestCase):
 
 # ── 窓を動かす（偽物の Windows）─────────────────────
 class _Windows:
-    """偽の WindowOperator。起きたことは events に残す"""
+    """偽の WindowOperator。起きたことは events に残す。
+    after_restore: 最小化を戻したときの状態（最大化・フルスクリーンから最小化した窓）。
+    stuck: Alt+Enter しても窓に戻らない窓。no_front: 前面にできない窓。
+    時計とスレッドも偽物（整列はその場で走る・待つのは時計を進めるだけ）"""
 
-    def __init__(self, test, states, rects=None):
+    def __init__(self, test, states, rects=None, after_restore=None, stuck=(), no_front=()):
         self.states = dict(states)
         self.rects = rects or {}
+        self.after_restore = after_restore or {}
+        self.stuck, self.no_front = set(stuck), set(no_front)
         self.events = []
         self.areas = []
+        self.front = 0x900
+        self.cursor = (11, 22)
+        self.now = [0.0]
+        self.lock_held = []
         w = self
+
+        def restore(h):
+            w.events.append(("restore", h))
+            w.states[h] = w.after_restore.get(h, "normal") if w.states.get(h) == "minimized" else "normal"
+            return True
+
+        def borrow(h):
+            w.lock_held.append(SharedState._GLOBAL_ACTION_LOCK.locked())
+            if h in w.no_front:
+                w.events.append(("borrow_failed", h))
+                return False, None
+            w.events.append(("borrow", h))
+            w.front = h
+            return True, ("loan", h)
+
+        def give_back(loan):
+            w.events.append(("return", loan[1]))
+            w.front = 0x900
+            return True
+
+        def keys(k):
+            w.events.append(("keys", k, w.front))
+            if w.front not in w.stuck and w.states.get(w.front) == "fullscreen":
+                w.states[w.front] = "normal"
+
+        def set_cursor(p):
+            w.events.append(("cursor", p))
+            w.cursor = p
+            return True
+
+        def sleep(sec):
+            w.now[0] += sec
+        fake_time = type(sys)("time_for_test")
+        fake_time.time = fake_time.monotonic = lambda: w.now[0]
+        fake_time.sleep = sleep
+        for target, name, value in ((mainGUI, "time", fake_time), (mainGUI.threading, "Thread", RunNow)):
+            p = patch.object(target, name, value)
+            p.start()
+            test.addCleanup(p.stop)
         for name, fake in (
+                ("borrow_front", borrow),
+                ("return_front", give_back),
+                ("send_keys", keys),
+                ("cursor_position", lambda: w.cursor),
+                ("set_cursor_position", set_cursor),
                 ("window_state", lambda h: w.states.get(h)),
                 ("window_rect", lambda h: w.rects.get(h)),
                 ("normal_rect", lambda h: w.rects.get(("normal", h))),
                 ("work_area", lambda h: w.areas.append(h) or WORK),
                 ("frame_margins", lambda h: MARGINS),
                 ("rect_on_screen", lambda r: r[0] > -5000),
-                ("restore_without_activating",
-                 lambda h: w.events.append(("restore", h)) or w.states.__setitem__(h, "normal") or True),
+                ("restore_without_activating", restore),
                 ("set_window_rect", lambda h, r: w.events.append(("rect", h, tuple(r))) or True),
                 ("focus_window", lambda h: w.events.append(("focus", h)) or True)):
             p = patch.object(WindowOperator, name, side_effect=fake)
@@ -115,7 +168,8 @@ def _app(hwnds, layout=None):
     app._log = app.logs.append
     app._window_layout = layout or {}
     app._schedule_settings_save = MagicMock()
-    for name in ("_arrange_targets", "_arrange_windows", "_remember_window_layout",
+    for name in ("_arrange_targets", "_arrange_windows", "_arrange_windows_now",
+                 "_leave_fullscreen_for_arrange", "_remember_window_layout",
                  "_forget_window_layout", "_refresh_forget_layout_button"):
         setattr(app, name, getattr(mainGUI.App, name).__get__(app))
     return app
@@ -148,15 +202,13 @@ class TestArrange(unittest.TestCase):
         self.assertLess(kinds.index(("restore", HW[0])), kinds.index(("rect", HW[0])))
         self.assertNotIn("focus", [e[0] for e in windows.events], "前面を奪わない")
 
-    def test_fullscreen_minimized_and_missing_are_skipped(self):
-        windows = _Windows(self, {HW[0]: "normal", HW[1]: "fullscreen", HW[2]: "minimized", HW[3]: "normal"})
-        app = _app(HW[:5])                          # 窓5 は閉じた（状態が取れない）
+    def test_a_missing_window_is_skipped(self):
+        windows = _Windows(self, {HW[0]: "normal", HW[3]: "normal"})
+        app = _app([HW[0], 0, HW[2], HW[3]])            # 窓2 は割り当てなし・窓3 は閉じた
         app._arrange_windows()
         self.assertEqual(set(windows.moved()), {HW[0], HW[3]})
         self.assertEqual(windows.moved()[HW[3]], (1280 - 7, 0, 2560 + 7, 1407), "残った 2 窓で並べる")
-        for text in ("窓2: フルスクリーンのため整列しません", "窓3: 最小化のため整列しません",
-                     "窓5: 窓が見つからないため整列しません"):
-            self.assertIn(f"[整列] {text}", app.logs)
+        self.assertIn("[整列] 窓3: 窓が見つからないため整列しません", app.logs)
 
     def test_no_window(self):
         windows = _Windows(self, {})
@@ -325,3 +377,109 @@ class TestTheReadme(unittest.TestCase):
         section = section[:section.index("\n### ", 1)]
         for word in ("配置を覚える", "✕", "VRAM", "8 窓は 4×2", "縦長", "[困ったとき](#困ったとき)"):
             self.assertIn(word, section, word)
+
+
+# ── DX2: フルスクリーン・最小化の窓も並べる ───────────────────
+class TestFullscreenAndMinimized(unittest.TestCase):
+    def test_fullscreen_borrow_alt_enter_wait_return_then_arrange(self):
+        windows = _Windows(self, {HW[0]: "fullscreen", HW[1]: "normal"})
+        app = _app(HW[:2])
+        app._arrange_windows()
+        order = [e[:2] for e in windows.events]
+        self.assertEqual(order[:4], [("borrow", HW[0]), ("keys", "alt+enter"), ("return", HW[0]),
+                                     ("cursor", (11, 22))], "前面を返してカーソルも戻す")
+        self.assertEqual(windows.events[1], ("keys", "alt+enter", HW[0]), "その窓が前面のときに")
+        self.assertEqual(windows.lock_held, [True], "_GLOBAL_ACTION_LOCK の中で")
+        self.assertEqual(windows.moved()[HW[0]], (-7, 0, 1287, 1407))
+        self.assertLess(order.index(("return", HW[0])), order.index(("rect", HW[0])))
+        self.assertEqual(app.logs[-1], "[整列] 窓を整列しました（2窓・2×1。フルスクリーンを解除: 窓1）")
+
+    def test_several_fullscreens_one_at_a_time(self):
+        windows = _Windows(self, {h: "fullscreen" for h in HW[:3]})
+        _app(HW[:3])._arrange_windows()
+        kinds = [e[0] for e in windows.events if e[0] in ("borrow", "return")]
+        self.assertEqual(kinds, ["borrow", "return"] * 3, "借りる→返すを 1 窓ずつ")
+        self.assertEqual(len(windows.moved()), 3)
+
+    def test_a_fullscreen_that_does_not_come_back_is_skipped(self):
+        windows = _Windows(self, {HW[0]: "fullscreen", HW[1]: "normal"}, stuck={HW[0]})
+        app = _app(HW[:2])
+        app._arrange_windows()
+        self.assertNotIn(HW[0], windows.moved())
+        self.assertIn(("return", HW[0]), [e[:2] for e in windows.events], "戻らなくても前面は返す")
+        self.assertIn(("cursor", (11, 22)), windows.events)
+        self.assertGreaterEqual(windows.now[0], config.CONTINUE_WINDOWED_WAIT_SEC, "待ってから諦める")
+        self.assertIn("[整列] 窓1: フルスクリーンを解除できないため整列しません", app.logs)
+        self.assertEqual(windows.moved()[HW[1]], (-7, 0, 2567, 1407), "残りの 1 窓で並べる")
+
+    def test_a_fullscreen_that_cannot_be_brought_to_the_front_is_skipped(self):
+        windows = _Windows(self, {HW[0]: "fullscreen"}, no_front={HW[0]})
+        app = _app(HW[:1])
+        app._arrange_windows()
+        self.assertNotIn("keys", [e[0] for e in windows.events], "前面にできなければ Alt+Enter しない")
+        self.assertEqual(windows.moved(), {})
+        self.assertIn("[整列] 窓1: フルスクリーンを解除できないため整列しません", app.logs)
+
+    def test_minimized_is_restored_without_the_front(self):
+        windows = _Windows(self, {HW[0]: "normal", HW[1]: "minimized"})
+        app = _app(HW[:2])
+        app._arrange_windows()
+        self.assertNotIn("borrow", [e[0] for e in windows.events], "前面を奪わない")
+        order = [e[:2] for e in windows.events]
+        self.assertLess(order.index(("restore", HW[1])), order.index(("rect", HW[1])))
+        self.assertEqual(app.logs[-1], "[整列] 窓を整列しました（2窓・2×1。最小化を戻す: 窓2）")
+
+    def test_minimized_from_maximized_is_restored_twice(self):
+        windows = _Windows(self, {HW[0]: "minimized"}, after_restore={HW[0]: "maximized"})
+        _app(HW[:1])._arrange_windows()
+        self.assertEqual([e for e in windows.events if e[0] == "restore"],
+                         [("restore", HW[0]), ("restore", HW[0])], "戻す→最大化を解く")
+        self.assertNotIn("borrow", [e[0] for e in windows.events])
+        self.assertIn(HW[0], windows.moved())
+
+    def test_minimized_from_fullscreen_gets_alt_enter(self):
+        windows = _Windows(self, {HW[0]: "minimized"}, after_restore={HW[0]: "fullscreen"})
+        app = _app(HW[:1])
+        app._arrange_windows()
+        kinds = [e[0] for e in windows.events]
+        self.assertEqual(kinds[:4], ["restore", "borrow", "keys", "return"])
+        self.assertIn(HW[0], windows.moved())
+        self.assertEqual(app.logs[-1],
+                         "[整列] 窓を整列しました（1窓・1×1。フルスクリーンを解除: 窓1、最小化を戻す: 窓1）")
+
+    def test_still_minimized_is_skipped(self):
+        windows = _Windows(self, {HW[0]: "minimized"}, after_restore={HW[0]: "minimized"})
+        app = _app(HW[:1])
+        app._arrange_windows()
+        self.assertEqual(windows.moved(), {})
+        self.assertIn("[整列] 窓1: 最小化を戻せないため整列しません", app.logs)
+
+    def test_remember_still_skips_fullscreen_without_alt_enter(self):
+        windows = _Windows(self, {HW[0]: "fullscreen", HW[1]: "minimized"},
+                           rects={HW[0]: (0, 0, 2560, 1440), HW[1]: (1, 1, 5, 5)})
+        app = _app(HW[:2])
+        app._remember_window_layout()
+        self.assertEqual(windows.events, [], "覚えるときは Alt+Enter も最小化を戻すこともしない")
+        self.assertEqual(app._window_layout, {})
+
+    def test_a_second_press_while_arranging_does_nothing(self):
+        windows = _Windows(self, {HW[0]: "normal"})
+        app = _app(HW[:1])
+        app._arranging = True
+        app._arrange_windows()
+        self.assertEqual(windows.events, [])
+        app._arranging = False
+        app._arrange_windows()
+        self.assertFalse(app._arranging, "終わったら押せる")
+        self.assertIn(HW[0], windows.moved())
+
+    def test_the_tk_thread_is_not_used_for_the_work(self):
+        """Alt+Enter の後に待つので、整列は別のスレッドで動かす（窓の番号は Tk のスレッドで読む）"""
+        src = inspect.getsource(mainGUI.App._arrange_windows)
+        self.assertIn("threading.Thread(target=work, daemon=True).start()", src)
+        self.assertLess(src.index("targets = self._arrange_targets()"), src.index("threading.Thread"))
+
+    def test_the_readme(self):
+        readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn("フルスクリーンの窓は、Alt+Enter で窓に戻してから並べます", readme)
+        self.assertIn("最大化・最小化の窓は、前面を奪わずに元に戻してから並べます", readme)

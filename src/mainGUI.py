@@ -1931,18 +1931,48 @@ class App(tk.Tk):
 
     def _arrange_windows(self):
         """「窓を整列」: 覚えた配置の窓はその矩形へ、ほかは窓1 のモニターの作業領域を等分した升へ。
-        前面は奪わない。最大化は戻してから、フルスクリーン・最小化・無い窓は飛ばす"""
+        フルスクリーンは前面を借りて Alt+Enter で窓に戻してから、最小化・最大化は前面を奪わずに
+        戻してから（DX2）。Alt+Enter の後に窓に戻るのを待つので、Tk のスレッドでは動かさない。
+        窓の番号と hwnd・覚えた配置は、ここ（Tk のスレッド）で読んで渡す"""
+        if getattr(self, "_arranging", False):
+            return                  # 前の整列がまだ終わっていない
+        self._arranging = True
         targets = self._arrange_targets()
-        movable = []
+        layout = dict(getattr(self, "_window_layout", {}) or {})
+
+        def work():
+            try:
+                self._arrange_windows_now(targets, layout)
+            except Exception:
+                DebugLog.exception("mainGUI._arrange_windows")
+            finally:
+                self._arranging = False
+        threading.Thread(target=work, daemon=True).start()
+
+    def _arrange_windows_now(self, targets, layout):
+        movable, unfullscreened, unminimized = [], [], []
         for number, hwnd in targets:
             state = WindowOperator.window_state(hwnd)
             if state is None:
                 self._log(f"[整列] 窓{number}: 窓が見つからないため整列しません")
-            elif state in ("fullscreen", "minimized"):
-                reason = "フルスクリーン" if state == "fullscreen" else "最小化"
-                self._log(f"[整列] 窓{number}: {reason}のため整列しません")
-            else:
-                movable.append((number, hwnd, state))
+                continue
+            if state == "minimized":
+                # 前面を奪わずに戻す。最大化・フルスクリーンから最小化した窓は、それに戻る
+                WindowOperator.restore_without_activating(hwnd)
+                state = WindowOperator.window_state(hwnd)
+                if state in (None, "minimized"):
+                    self._log(f"[整列] 窓{number}: 最小化を戻せないため整列しません")
+                    continue
+                unminimized.append(number)
+            if state == "fullscreen":
+                if not self._leave_fullscreen_for_arrange(number, hwnd):
+                    self._log(f"[整列] 窓{number}: フルスクリーンを解除できないため整列しません")
+                    continue
+                unfullscreened.append(number)
+                state = WindowOperator.window_state(hwnd)
+            if state == "maximized":
+                WindowOperator.restore_without_activating(hwnd)
+            movable.append((number, hwnd))
         if not movable:
             self._log("[整列] 並べる窓がありません")
             return
@@ -1951,9 +1981,8 @@ class App(tk.Tk):
         if area is None:
             self._log("[整列] ⚠ 画面の大きさを取れませんでした。整列しません")
             return
-        layout = getattr(self, "_window_layout", {}) or {}
         remembered, auto = {}, []
-        for number, hwnd, state in movable:
+        for number, hwnd in movable:
             rect = layout.get(str(number))
             if rect and WindowOperator.rect_on_screen(rect):
                 remembered[number] = rect
@@ -1961,9 +1990,7 @@ class App(tk.Tk):
                 auto.append(number)
         cells = dict(zip(auto, WindowArrange.cells(area, len(auto))))
         DebugLog.write(f"[整列] 作業領域={area} 自動={auto} 覚えた配置={remembered}")
-        for number, hwnd, state in movable:
-            if state == "maximized":
-                WindowOperator.restore_without_activating(hwnd)
+        for number, hwnd in movable:
             if number in remembered:
                 rect = remembered[number]
             else:
@@ -1974,7 +2001,41 @@ class App(tk.Tk):
             parts.append(f"{len(auto)}窓・{WindowArrange.size_text(len(auto))}")
         if remembered:
             parts.append("覚えた配置: " + "・".join(f"窓{n}" for n in sorted(remembered)))
-        self._log(f"[整列] 窓を整列しました（{'、'.join(parts)}）")
+        extras = []
+        if unfullscreened:
+            extras.append("フルスクリーンを解除: " + "・".join(f"窓{n}" for n in unfullscreened))
+        if unminimized:
+            extras.append("最小化を戻す: " + "・".join(f"窓{n}" for n in unminimized))
+        tail = ("。" + "、".join(extras)) if extras else ""
+        self._log(f"[整列] 窓を整列しました（{'、'.join(parts)}{tail}）")
+
+    def _leave_fullscreen_for_arrange(self, number: int, hwnd: int) -> bool:
+        """前面を借りて Alt+Enter → 窓に戻るのを待つ → 前面とカーソルを返す（DJ と同じやり方。
+        前面を借りるのは 1 窓ずつ・_GLOBAL_ACTION_LOCK の中）。窓に戻ったら True"""
+        head = f"[整列] 窓{number}:"
+        with SharedState._GLOBAL_ACTION_LOCK:
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(hwnd)
+            if not ok:
+                DebugLog.write(f"{head} 前面にできないのでフルスクリーンを解除しません")
+                return False
+            try:
+                WindowOperator.send_keys("alt+enter")
+                deadline = time.monotonic() + config.CONTINUE_WINDOWED_WAIT_SEC
+                while WindowOperator.window_state(hwnd) == "fullscreen":
+                    if time.monotonic() >= deadline:
+                        DebugLog.write(f"{head} Alt+Enter の後 {config.CONTINUE_WINDOWED_WAIT_SEC:.0f} 秒で"
+                                       "窓に戻りません")
+                        return False
+                    time.sleep(config.CONTINUE_WINDOWED_POLL_SEC)
+                DebugLog.write(f"{head} フルスクリーンを解除した（Alt+Enter）")
+                return True
+            finally:
+                try:
+                    WindowOperator.return_front(loan)
+                finally:
+                    if cursor is not None:
+                        WindowOperator.set_cursor_position(cursor)
 
     def _remember_window_layout(self):
         """「配置を覚える」: 今の各窓の矩形を窓の番号ごとに覚える（最大化は元の矩形）。
