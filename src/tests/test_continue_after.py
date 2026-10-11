@@ -409,8 +409,10 @@ class TestTheSettings(unittest.TestCase):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_continue_drop_item = tk.BooleanVar(value=True)", gui)
         self.assertIn("self.v_continue_restore_window = tk.BooleanVar(value=True)", gui)
-        self.assertIn('text="続行ラウンドの後にアイテムを落とす"', gui)
-        self.assertIn('text="続行ラウンドの後に窓を元の位置に戻す"', gui)
+        # DV2: 行の頭に見出し、チェックは短く
+        self.assertIn('text="続行ラウンドの後:"', gui)
+        self.assertIn('text="アイテムを落とす"', gui)
+        self.assertIn('text="窓を戻す"', gui)
 
     def test_the_checks_change_the_setting(self):
         app = type("FakeApp", (), {})()

@@ -135,9 +135,9 @@ class TestTheSetting(unittest.TestCase):
         self.assertIn("_CHASE_ENABLED = _Setting(True, bool)", src)
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_chase_enabled = tk.BooleanVar(value=True)", gui)
-        self.assertIn('text="チェイス（F1・F2）を使う"', gui)
+        self.assertIn('text="チェイスを使う"', gui)         # DV2: キーの表示はキーの行に任せる
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("「チェイス（F1・F2）を使う」", readme)
+        self.assertIn("「チェイスを使う」", readme)
 
     def test_load(self):
         for data, expected in (({}, True), ({"chase_enabled": "x"}, True), ({"chase_enabled": False}, False)):

@@ -1269,7 +1269,7 @@ class TestSettingsLive(unittest.TestCase):
         self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
         self.assertNotIn("突入で全窓停止", src)
         self.assertNotIn("ラウンドごとの扱い", src)
-        self.assertIn('text="霧を即時判定する（Friends・Invite+・Invite のみ）"', src)
+        self.assertIn('text="霧の即時判定"', src)            # DV2 で短く
 
     # ── 窓ごとの設定を動作中も反映 ─────────────────────
     def _live_app(self, running=True):
@@ -1360,12 +1360,12 @@ class TestGuiTweaks(unittest.TestCase):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('text="③ サウンド設定"', src)
         self.assertNotIn("音声アナウンス設定", src)
-        self.assertIn('text="霧を即時判定する（Friends・Invite+・Invite のみ）"', src)
+        self.assertIn('text="霧の即時判定"', src)            # DV2 で短く
         self.assertNotIn("霧看破を使う", src)
 
     # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────
     def _speed_check(self, text):
-        """フリーズの枠の「先読み（速度検知）」の行（DV）"""
+        """フリーズの枠の「速度検知」の行（DV・DV2）"""
         row = self.app.freeze_frame.pack_slaves()[0]
         for child in row.winfo_children():
             if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
@@ -3143,6 +3143,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
+            "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")

@@ -368,6 +368,7 @@ class TestChaseKeysInTheApp(unittest.TestCase):
         app._on_chase_key = lambda d, k: mainGUI.App._on_chase_key(app, d, k)
         app._chase_key_down = lambda d, k: mainGUI.App._chase_key_down(app, d, k)
         app._unhook_chase_keys = lambda: mainGUI.App._unhook_chase_keys(app)
+        _with_chase_keys(app)
         self.keyboard = MagicMock()
         self.handlers = {}
 
@@ -472,6 +473,7 @@ class TestChaseKeysInTheApp(unittest.TestCase):
     def test_without_keyboard_nothing_is_hooked(self):
         app = type("FakeApp", (), {})()
         app._unhook_chase_keys = lambda: mainGUI.App._unhook_chase_keys(app)
+        _with_chase_keys(app)
         with patch.object(mainGUI, "keyboard", None):
             mainGUI.App._hook_chase_keys(app)
         self.assertEqual(app._chase_hooks, [])

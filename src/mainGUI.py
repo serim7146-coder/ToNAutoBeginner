@@ -804,6 +804,9 @@ class App(tk.Tk):
         for var in (self.v_emergency_key, self.v_start_key):
             var.trace_add("write", lambda *_: self._remember_watched_keys())
         self.v_suicide_cancel_key = tk.StringVar(value=config.SUICIDE_CANCEL_KEY)
+        # チェイスのキー（DV2: 変えられる・解除できる。既定は F1・F2）
+        self.v_chase_cw_key = tk.StringVar(value=config.CHASE_CW_KEY)
+        self.v_chase_ccw_key = tk.StringVar(value=config.CHASE_CCW_KEY)
         self._suicide_cancel_hook = None
         self._suicide_cancel_down = False
         self._capturing_key = False
@@ -905,6 +908,10 @@ class App(tk.Tk):
                    for part in parts if code not in part)
 
     def _check_stop_key(self, key: str, event=None):
+        if not key:
+            # 解除した（DV2）。is_pressed("") を呼ばない・既定値へも倒さない
+            self._emergency_stop_key_pressed = False
+            return
         try:
             now = self._key_down_now(key, event)
         except Exception:
@@ -975,7 +982,9 @@ class App(tk.Tk):
         self._chase_hooks = []
         if keyboard is None or not SharedState.get_chase_enabled():
             return
-        for direction, key in (("cw", config.CHASE_CW_KEY), ("ccw", config.CHASE_CCW_KEY)):
+        for direction, key in (("cw", self.v_chase_cw_key.get()), ("ccw", self.v_chase_ccw_key.get())):
+            if not key:
+                continue            # 解除したキーは拾わない（DV2）
             # 1キーに1つのフック。keyboard は同じキーのフックを1つの表の項目で持つので、
             # 押す・離すを別々に登録すると、外すときに2つ目が KeyError になる（離す方が
             # 外れずに残る）。押した・離したは event_type で分ける
@@ -1138,7 +1147,26 @@ class App(tk.Tk):
                   "キーに戻しました")
 
     def _emergency_key_text(self) -> str:
-        return f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー"
+        key = self.v_emergency_key.get()
+        return "緊急停止: 未設定" if not key else f"緊急停止: {HotKey.display(key)}キー"
+
+    @staticmethod
+    def _chase_name(direction: str) -> str:
+        return "チェイス（時計回り）" if direction == "cw" else "チェイス（反時計回り）"
+
+    def _chase_key_text(self, direction: str) -> str:
+        name = self._chase_name(direction)
+        key = self._chase_key_var(direction).get()
+        return f"{name}: 未設定" if not key else f"{name}: {HotKey.display(key)}キー"
+
+    def _chase_keys_summary(self) -> str:
+        keys = [self._chase_key_var(d).get() for d in ("cw", "ccw")]
+        if not any(keys):
+            return "チェイス: 未設定"
+        return "チェイス: " + "/".join(HotKey.display(k) if k else "未設定" for k in keys)
+
+    def _chase_key_var(self, direction: str):
+        return self.v_chase_cw_key if direction == "cw" else self.v_chase_ccw_key
 
     def _suicide_cancel_key_text(self) -> str:
         key = self.v_suicide_cancel_key.get()
@@ -1161,7 +1189,8 @@ class App(tk.Tk):
         try:
             self.lbl_keys.config(text="・".join((self._emergency_key_text(),
                                                  self._suicide_cancel_key_text(),
-                                                 self._start_key_text())))
+                                                 self._start_key_text(),
+                                                 self._chase_keys_summary())))
         except (tk.TclError, AttributeError):
             pass
 
@@ -1171,13 +1200,39 @@ class App(tk.Tk):
     def _refresh_suicide_cancel_key_label(self):
         self._set_key_label("lbl_suicide_cancel_key", self._suicide_cancel_key_text())
 
+    def _refresh_chase_key_labels(self):
+        self._set_key_label("lbl_chase_cw_key", self._chase_key_text("cw"))
+        self._set_key_label("lbl_chase_ccw_key", self._chase_key_text("ccw"))
+
+    def _chase_key_conflict(self, key) -> str | None:
+        """緊急停止・マクロ開始のキーがチェイスのキーと重なるか（DV2）。チェイスを使わないなら
+        F1・F2 などはほかのキーに使ってよい（DT）"""
+        if not SharedState.get_chase_enabled():
+            return None
+        for direction in ("cw", "ccw"):
+            other = self._chase_key_var(direction).get()
+            if other and key == other:
+                return "チェイス"
+        return None
+
+    def _chase_target_conflict(self, direction: str, key) -> str | None:
+        """チェイスのキーにしようとしたキーと重なるほかのキーの名前（DV2）"""
+        other_dir = "ccw" if direction == "cw" else "cw"
+        for name, other in (("緊急停止", self.v_emergency_key.get()),
+                            ("マクロ開始", self.v_start_key.get()),
+                            ("自爆キャンセル", self.v_suicide_cancel_key.get()),
+                            ("チェイスのもう一方", self._chase_key_var(other_dir).get())):
+            if other and key == other:
+                return name
+        return None
+
     def _suicide_cancel_key_conflict(self, key) -> str | None:
         """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
         for name, other in (("緊急停止", self.v_emergency_key.get()),
                             ("マクロ開始", self.v_start_key.get()),
                             # チェイスを使わないなら F1・F2 はほかのキーに使ってよい（DT）
-                            ("チェイス", config.CHASE_CW_KEY if SharedState.get_chase_enabled() else ""),
-                            ("チェイス", config.CHASE_CCW_KEY if SharedState.get_chase_enabled() else "")):
+                            ("チェイス", self.v_chase_cw_key.get() if SharedState.get_chase_enabled() else ""),
+                            ("チェイス", self.v_chase_ccw_key.get() if SharedState.get_chase_enabled() else "")):
             if other and key == other:
                 return name
         return None
@@ -1206,41 +1261,81 @@ class App(tk.Tk):
         grid = ttk.Frame(body)
         grid.pack(fill="x")
 
-        def row(r, label_attr, buttons, note=""):
+        def row(r, target, label_attr, note):
             label = ttk.Label(grid, text="", foreground=config.GUI_ORG)
             label.grid(row=r, column=0, sticky="w", pady=2)
             setattr(self, label_attr, label)
-            for c, (attr, text, command) in enumerate(buttons, start=1):
+            for c, (kind, text, command) in enumerate(
+                    (("capture", "変更", lambda: self._begin_capture_key(target)),
+                     ("clear", "解除", lambda: self._clear_key(target))), start=1):
                 button = ttk.Button(grid, text=text, width=8, command=command)
                 button.grid(row=r, column=c, padx=(6, 0), pady=2)
-                setattr(self, attr, button)
-            if note:
-                ttk.Label(grid, text=note).grid(row=r, column=3, sticky="w", padx=(10, 0))
+                setattr(self, self.KEY_BUTTONS[target][kind], button)
+            ttk.Label(grid, text=note).grid(row=r, column=3, sticky="w", padx=(10, 0))
 
-        # マクロ開始が先・緊急停止が後（依頼者の決定）。自爆キャンセルは最後
-        row(0, "lbl_start_key",
-            [("btn_capture_start_key", "変更", lambda: self._begin_capture_key("start")),
-             ("btn_clear_start_key", "解除", self._clear_start_key)],
-            "開始だけ（動いているときに押しても何もしません）")
-        row(1, "lbl_emergency", [("btn_capture_key", "変更", self._begin_capture_key)],
-            "止める")
-        row(2, "lbl_suicide_cancel_key",
-            [("btn_capture_cancel_key", "変更", lambda: self._begin_capture_key("cancel"))],
-            "そのラウンドは全窓とも自爆しない")
-        # チェイスのキーは変えられない（表示だけ）。使う・使わないのチェックはここ
-        chase = ttk.LabelFrame(body, text="チェイス", padding=6)
-        chase.pack(fill="x", pady=(8, 0))
-        self.lbl_chase_keys = ttk.Label(
-            chase, text=f"時計回り: {HotKey.display(config.CHASE_CW_KEY)}キー・"
-                        f"反時計回り: {HotKey.display(config.CHASE_CCW_KEY)}キー（変えられません）")
-        self.lbl_chase_keys.pack(anchor="w")
-        ttk.Checkbutton(chase, text="チェイス（F1・F2）を使う",
+        # マクロ開始が先・緊急停止が後（依頼者の決定）。自爆キャンセル、チェイスの2つ
+        row(0, "start", "lbl_start_key", "開始だけ（動いているときに押しても何もしません）")
+        row(1, "stop", "lbl_emergency", "止める")
+        row(2, "cancel", "lbl_suicide_cancel_key", "そのラウンドは全窓とも自爆しない")
+        row(3, "cw", "lbl_chase_cw_key", "前面の窓が回り続ける（もう一度押すと止まる）")
+        row(4, "ccw", "lbl_chase_ccw_key", "")
+        # 使う・使わないのチェック（キーの表示はキーの行に任せる。DV2）
+        ttk.Checkbutton(body, text="チェイスを使う",
                         variable=self.v_chase_enabled,
-                        command=self._on_chase_enabled_changed).pack(anchor="w", pady=(4, 0))
+                        command=self._on_chase_enabled_changed).pack(anchor="w", pady=(8, 0))
         ttk.Button(body, text="閉じる", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
         self._refresh_start_key_label()
         self._refresh_emergency_key_label()
         self._refresh_suicide_cancel_key_label()
+        self._refresh_chase_key_labels()
+
+    # キーバインドの画面のボタン（変更・解除）の名前
+    KEY_BUTTONS = {
+        "start": {"capture": "btn_capture_start_key", "clear": "btn_clear_start_key"},
+        "stop": {"capture": "btn_capture_key", "clear": "btn_clear_key"},
+        "cancel": {"capture": "btn_capture_cancel_key", "clear": "btn_clear_cancel_key"},
+        "cw": {"capture": "btn_capture_cw_key", "clear": "btn_clear_cw_key"},
+        "ccw": {"capture": "btn_capture_ccw_key", "clear": "btn_clear_ccw_key"},
+    }
+
+    def _clear_key(self, target: str):
+        """キーバインドの画面の「解除」（DV2）。解除したキーは押しても何もしない"""
+        if target == "start":
+            self._clear_start_key()
+            return
+        if target == "stop":
+            if not self.v_emergency_key.get():
+                self._log("[緊急停止] すでに未設定です")
+                return
+            # 止める手段がボタンだけになる。確かめてから
+            if not messagebox.askyesno(
+                    "緊急停止のキーの解除",
+                    "緊急停止のキーが無くなります。止めるのは「■ 停止」のボタンだけになります。"
+                    "よろしいですか？",
+                    parent=getattr(self, "_keybind_dialog", None) or self):
+                return
+            self.v_emergency_key.set("")
+            self._emergency_stop_key_pressed = False
+            self._refresh_emergency_key_label()
+            self._log("[緊急停止] 解除しました（止めるのは「■ 停止」のボタンだけです）")
+            return
+        if target == "cancel":
+            if not self.v_suicide_cancel_key.get():
+                self._log("[自爆キャンセル] すでに未設定です")
+                return
+            self.v_suicide_cancel_key.set("")
+            self._refresh_suicide_cancel_key_label()
+            self._hook_suicide_cancel_key()
+            self._log("[自爆キャンセル] 解除しました")
+            return
+        var = self._chase_key_var(target)
+        if not var.get():
+            self._log("[チェイス] すでに未設定です")
+            return
+        var.set("")
+        self._refresh_chase_key_labels()
+        self._hook_chase_keys()
+        self._log(f"[チェイス] {self._chase_name(target)}のキーを解除しました")
 
     def _clear_start_key(self):
         """マクロ開始のキーを消して無効に戻す"""
@@ -1253,9 +1348,7 @@ class App(tk.Tk):
         self._log("[マクロ開始] 解除しました")
 
     def _capture_button(self, target: str):
-        if target == "cancel":
-            return self.btn_capture_cancel_key
-        return self.btn_capture_start_key if target == "start" else self.btn_capture_key
+        return getattr(self, self.KEY_BUTTONS[target]["capture"])
 
     def _begin_capture_key(self, target: str = "stop"):
         """キーバインドの画面の「変更」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる。
@@ -1296,6 +1389,9 @@ class App(tk.Tk):
         if target == "cancel":
             self._finish_capture_cancel_key(key)
             return
+        if target in ("cw", "ccw"):
+            self._finish_capture_chase_key(key, target)
+            return
         if key is None:
             self._log("[緊急停止] ⚠ キーを取れませんでした。設定は変えていません")
             return
@@ -1313,6 +1409,9 @@ class App(tk.Tk):
         if key == self.v_suicide_cancel_key.get():
             self._log("[緊急停止] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
                       "設定は変えていません")
+            return
+        if self._chase_key_conflict(key):
+            self._log("[緊急停止] ⚠ チェイスのキーと同じキーは使えません。設定は変えていません")
             return
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
@@ -1339,6 +1438,9 @@ class App(tk.Tk):
             self._log("[マクロ開始] ⚠ 自爆キャンセルのキーと同じキーは使えません。"
                       "設定は変えていません")
             return
+        if self._chase_key_conflict(key):
+            self._log("[マクロ開始] ⚠ チェイスのキーと同じキーは使えません。設定は変えていません")
+            return
         self.v_start_key.set(key)
         self._start_key_pressed = False
         self._refresh_start_key_label()
@@ -1361,6 +1463,25 @@ class App(tk.Tk):
         self._refresh_suicide_cancel_key_label()
         self._hook_suicide_cancel_key()
         self._log(f"[自爆キャンセル] {HotKey.display(key)}キーに変更しました")
+
+    def _finish_capture_chase_key(self, key, direction: str):
+        """チェイスのキーを設定する（DV2）。取れない・不正・ほかのキーと同じなら今のまま。
+        変えたらフックし直す"""
+        name = self._chase_name(direction)
+        if key is None:
+            self._log(f"[チェイス] ⚠ {name}のキーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[チェイス] ⚠ {key!r} は使えないキーです。設定は変えていません")
+            return
+        other = self._chase_target_conflict(direction, key)
+        if other:
+            self._log(f"[チェイス] ⚠ {other}のキーと同じキーは使えません。設定は変えていません")
+            return
+        self._chase_key_var(direction).set(key)
+        self._refresh_chase_key_labels()
+        self._hook_chase_keys()
+        self._log(f"[チェイス] {name}を{HotKey.display(key)}キーに変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -1591,17 +1712,19 @@ class App(tk.Tk):
         fc = ttk.Frame(self)
         fc.pack(pady=6)
         # 開始と停止は1つのボタン（DV）。キーは別々のまま（マクロ開始のキーは開始だけ）
+        # 大きく（DV2）。幅は字数で決めるので、止まっている／動いているで大きさは変わらない
         self.btn_start_stop = tk.Button(
-            fc, text="", width=14, font=(UIFont.UI, 10, "bold"), relief="raised",
-            disabledforeground="#6c7086", command=self._on_start_stop_button)
+            fc, text="", width=13, font=(UIFont.UI, 13, "bold"), relief="raised",
+            padx=10, pady=6, disabledforeground="#6c7086", command=self._on_start_stop_button)
         self.btn_start_stop.pack(side="left", padx=6)
         self._refresh_start_stop_button()
-        ttk.Button(fc, text="⌨ キーバインド",
-                   command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
+        # 並び: マクロ開始 → オーバーレイ → 統計 → キーバインド → 報告（DV2）
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
+        ttk.Button(fc, text="⌨ キーバインド",
+                   command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="報告",
                    command=self._open_report, width=8).pack(side="left", padx=6)
 
@@ -1654,7 +1777,7 @@ class App(tk.Tk):
         self.freeze_frame.pack(pady=(0, 4))
         fpre = ttk.Frame(self.freeze_frame)
         fpre.pack(anchor="w")
-        ttk.Label(fpre, text="先読み（速度検知）:").pack(side="left")
+        ttk.Label(fpre, text="速度検知:").pack(side="left")
         self.v_freeze_8pages = tk.BooleanVar(value=False)
         self.v_freeze_punish = tk.BooleanVar(value=False)
         ttk.Checkbutton(fpre, text="8 Pages", variable=self.v_freeze_8pages,
@@ -1671,32 +1794,33 @@ class App(tk.Tk):
             ttk.Checkbutton(ffr, text=name, variable=var,
                             command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
 
-        ffz = ttk.Frame(self)
-        ffz.pack(pady=(0, 4))
-        # 霧看破の許可（ツール全体で1つ。既定は切る）
-        self.v_fog_early_read = tk.BooleanVar(value=False)
-        ttk.Checkbutton(ffz, text="霧を即時判定する（Friends・Invite+・Invite のみ）",
-                        variable=self.v_fog_early_read,
-                        command=self._on_fog_early_read_changed).pack(side="left")
-
-        # 続行ラウンドの後（全窓共通・保存・既定 ON）
+        # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
         fcr = ttk.Frame(self)
         fcr.pack(pady=(0, 4))
+        # 続行ラウンドの後（全窓共通・保存・既定 ON）
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="続行ラウンドの後にアイテムを落とす",
+        ttk.Label(fcr, text="続行ラウンドの後:").pack(side="left")
+        ttk.Checkbutton(fcr, text="アイテムを落とす",
                         variable=self.v_continue_drop_item,
-                        command=self._on_continue_after_changed).pack(side="left")
-        ttk.Checkbutton(fcr, text="続行ラウンドの後に窓を元の位置に戻す",
+                        command=self._on_continue_after_changed).pack(side="left", padx=(6, 0))
+        ttk.Checkbutton(fcr, text="窓を戻す",
                         variable=self.v_continue_restore_window,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
-        # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）
+                        command=self._on_continue_after_changed).pack(side="left", padx=(8, 0))
+        # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
+        # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
         self.v_run_respawn = tk.BooleanVar(value=True)
-        # チェイス（F1・F2）を使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
-        self.v_chase_enabled = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="Run でリスポーンして正面を向く",
+        ttk.Label(fcr, text="Run:").pack(side="left", padx=(18, 0))
+        ttk.Checkbutton(fcr, text="リスポーンする",
                         variable=self.v_run_respawn,
-                        command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
+                        command=self._on_run_respawn_changed).pack(side="left", padx=(6, 0))
+        # 霧看破の許可（ツール全体で1つ。既定は切る）。使えるインスタンスは README に
+        self.v_fog_early_read = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fcr, text="霧の即時判定",
+                        variable=self.v_fog_early_read,
+                        command=self._on_fog_early_read_changed).pack(side="left", padx=(18, 0))
+        # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
+        self.v_chase_enabled = tk.BooleanVar(value=True)
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
@@ -2250,7 +2374,7 @@ class App(tk.Tk):
         # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
         # 不正なキーのままだと緊急停止が黙って効かなくなる
         key = data.get("emergency_stop_key", config.EMERGENCY_STOP_KEY)
-        if not HotKey.is_valid(key):
+        if key != "" and not HotKey.is_valid(key):     # "" は解除した（DV2）
             key = config.EMERGENCY_STOP_KEY
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
@@ -2261,9 +2385,26 @@ class App(tk.Tk):
             start_key = ""
         self.v_start_key.set(start_key)
         self._refresh_start_key_label()
+        # チェイスのキー（DV2）。無ければ F1・F2、"" は解除した。不正なら既定、
+        # ほかのキーと重なれば未設定（どちらか一方しか働かないため）
+        # 見比べるのは、この読み込みで決めたキー（緊急停止・マクロ開始・先に決めたチェイス）だけ。
+        # 自爆キャンセルはこの後で読み、チェイスと重なれば向こうを既定へ倒す
+        taken = {key, start_key}
+        for direction, name, default in (("cw", "chase_cw_key", config.CHASE_CW_KEY),
+                                         ("ccw", "chase_ccw_key", config.CHASE_CCW_KEY)):
+            chase_key = data.get(name, default)
+            if chase_key != "" and not HotKey.is_valid(chase_key):
+                chase_key = default
+            if chase_key in taken:
+                chase_key = ""
+            taken.add(chase_key)
+            self._chase_key_var(direction).set(chase_key)
+        self._refresh_chase_key_labels()
         # 自爆キャンセルのキー。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
         cancel_key = data.get("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
-        if not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
+        if cancel_key == "":
+            pass                                        # 解除した（DV2）
+        elif not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
             cancel_key = config.SUICIDE_CANCEL_KEY
             if self._suicide_cancel_key_conflict(cancel_key):
                 cancel_key = ""
@@ -3248,6 +3389,8 @@ class App(tk.Tk):
             "continue_restore_window": SharedState.get_continue_restore_window(),
             "run_respawn":             SharedState.get_run_respawn(),
             "chase_enabled":           SharedState.get_chase_enabled(),
+            "chase_cw_key":            self.v_chase_cw_key.get(),
+            "chase_ccw_key":           self.v_chase_ccw_key.get(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が

@@ -881,10 +881,21 @@ class _CancelKeyVar:
         self._v = value
 
 
+def _with_chase_keys(app):
+    """偽の App にチェイスのキー（DV2: 変えられる・既定 F1・F2）を足す。表示は何もしない"""
+    app.v_chase_cw_key = _CancelKeyVar(config.CHASE_CW_KEY)
+    app.v_chase_ccw_key = _CancelKeyVar(config.CHASE_CCW_KEY)
+    app._chase_key_var = lambda d: mainGUI.App._chase_key_var(app, d)
+    app._chase_target_conflict = lambda d, k: mainGUI.App._chase_target_conflict(app, d, k)
+    app._refresh_chase_key_labels = lambda: None
+    return app
+
+
 def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     """偽の App に自爆キャンセルのキーの設定を足す（重なりの判定は本物）。
     アイテム自動取得のボタン・続行ラウンドの後のチェックの表示もここで足す"""
     app.v_suicide_cancel_key = _CancelKeyVar(key)
+    _with_chase_keys(app)
     app._refresh_item_fetch_button = lambda: None
     app._refresh_continue_after_checks = lambda: None
     app._refresh_run_respawn_check = lambda: None

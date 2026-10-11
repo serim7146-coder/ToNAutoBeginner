@@ -1,4 +1,4 @@
-"""画面の整理（DV）: 開始・停止を1つのボタン／キーの設定を「⌨ キーバインド」の画面へ／フリーズを1つの枠へ。
+"""画面の整理（DV・DV2）: 開始・停止を1つのボタン／キーの設定を「⌨ キーバインド」の画面へ／フリーズを1つの枠へ。
 本物の Tk で App を1つ立てて見る（本物のキー・フック・窓には触らない）"""
 from tests.support import *  # noqa: F401,F403
 
@@ -27,6 +27,8 @@ class _AppCase(unittest.TestCase):
         self.app.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
         self.app.v_start_key.set("")
         self.app.v_suicide_cancel_key.set(config.SUICIDE_CANCEL_KEY)
+        self.app.v_chase_cw_key.set(config.CHASE_CW_KEY)
+        self.app.v_chase_ccw_key.set(config.CHASE_CCW_KEY)
         self.app.logs = []
         p = patch.object(mainGUI.App, "_log", lambda _s, m: self.app.logs.append(m))
         p.start()
@@ -228,7 +230,7 @@ class TestKeybindDialog(_AppCase):
         self.app.v_emergency_key.set("ctrl+p")
         self.app._refresh_emergency_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "緊急停止: Ctrl+Pキー・自爆キャンセル: ^キー・マクロ開始: 未設定")
+                         "緊急停止: Ctrl+Pキー・自爆キャンセル: ^キー・マクロ開始: 未設定・チェイス: F1/F2")
 
     def test_the_button_opens_the_dialog_once(self):
         button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
@@ -241,17 +243,20 @@ class TestKeybindDialog(_AppCase):
         self.assertIs(self.app._keybind_dialog, dialog, "開いていれば同じ画面")
 
     def test_the_rows(self):
+        """5つのキー。どれも「変更」と「解除」がある（DV2）"""
         self._dialog()
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"),
                          f"緊急停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー")
         self.assertEqual(self.app.lbl_suicide_cancel_key.cget("text"), "自爆キャンセル: ^キー")
-        for name in ("btn_capture_start_key", "btn_capture_key", "btn_capture_cancel_key"):
-            self.assertEqual(getattr(self.app, name).cget("text"), "変更", name)
-        self.assertEqual(self.app.btn_clear_start_key.cget("text"), "解除")
-        clears = [w for w in _all_widgets(self.app._keybind_dialog)
-                  if isinstance(w, ttk.Button) and w.cget("text") == "解除"]
-        self.assertEqual(clears, [self.app.btn_clear_start_key], "解除はマクロ開始だけ")
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1キー")
+        self.assertEqual(self.app.lbl_chase_ccw_key.cget("text"), "チェイス（反時計回り）: F2キー")
+        for row, target in enumerate(("start", "stop", "cancel", "cw", "ccw")):
+            names = mainGUI.App.KEY_BUTTONS[target]
+            capture, clear = getattr(self.app, names["capture"]), getattr(self.app, names["clear"])
+            self.assertEqual((capture.cget("text"), clear.cget("text")), ("変更", "解除"), target)
+            self.assertEqual((int(capture.grid_info()["row"]), int(clear.grid_info()["row"])),
+                             (row, row), target)
 
     def test_change_and_clear_the_start_key(self):
         self._dialog()
@@ -274,7 +279,7 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
         self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "緊急停止: F8キー・自爆キャンセル: F7キー・マクロ開始: 未設定")
+                         "緊急停止: F8キー・自爆キャンセル: F7キー・マクロ開始: 未設定・チェイス: F1/F2")
 
     def test_the_overlap_check_is_the_same(self):
         self._dialog()
@@ -302,20 +307,16 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.v_start_key.get(), "f9")
         self.assertIn("マクロ開始: F9キー", self.app.lbl_keys.cget("text"))
 
-    def test_chase_is_shown_and_its_check_moved_here(self):
+    def test_the_chase_check_is_here(self):
+        """「チェイスを使う」のチェックはキーバインドの画面だけ（DV2 で名前を短く）"""
         self._dialog()
-        self.assertIn("F1", self.app.lbl_chase_keys.cget("text"))
-        self.assertIn("F2", self.app.lbl_chase_keys.cget("text"))
         checks = [w for w in _all_widgets(self.app._keybind_dialog)
-                  if isinstance(w, ttk.Checkbutton) and w.cget("text") == "チェイス（F1・F2）を使う"]
+                  if isinstance(w, ttk.Checkbutton) and w.cget("text") == "チェイスを使う"]
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0].winfo_manager(), "pack", "画面に置かれている")
-        main =[w for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
-                and w.winfo_toplevel() is self.app and w.cget("text") == "チェイス（F1・F2）を使う"]
-        self.assertEqual(main, [], "メインの画面からはなくす")
-        changes = [w for w in _all_widgets(self.app._keybind_dialog) if isinstance(w, ttk.Button)
-                   and w.cget("text") == "変更" and w.grid_info().get("row") not in (0, 1, 2)]
-        self.assertEqual(changes, [], "チェイスのキーは変えられない")
+        main = [w for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
+                and w.winfo_toplevel() is self.app and "チェイス" in w.cget("text")]
+        self.assertEqual(main, [], "メインの画面には無い")
         with patch.object(self.app, "_hook_chase_keys"), patch.object(self.app, "_unhook_chase_keys"):
             checks[0].invoke()                       # 切る
             self.assertFalse(SharedState.get_chase_enabled())
@@ -348,7 +349,7 @@ class TestFreezeFrame(_AppCase):
 
     def test_two_rows(self):
         rows = self._rows()
-        self.assertEqual([title for title, _ in rows], ["先読み（速度検知）:", "ラウンド突入:"])
+        self.assertEqual([title for title, _ in rows], ["速度検知:", "ラウンド突入:"])
         pre, entry = rows[0][1], rows[1][1]
         self.assertEqual([w.cget("text") for w in pre], ["8 Pages", "Punished"])
         self.assertEqual([str(w.cget("variable")) for w in pre],
@@ -396,3 +397,216 @@ class TestFreezeFrame(_AppCase):
         self.assertEqual((stored["freeze_8pages"], stored["freeze_punish"], stored["freeze_rounds"],
                           stored["start_key"], stored["chase_enabled"]),
                          (True, False, ["Fog", "Ghost"], "f9", False))
+
+
+# ── DV2（依頼者が DV の画面を見て頼んだ手直し）──────────────────────
+class TestDv2MainScreen(_AppCase):
+    def _row(self):
+        return self.app.btn_start_stop.master.pack_slaves()
+
+    def test_the_button_order(self):
+        self.assertEqual([w.cget("text") for w in self._row()],
+                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⌨ キーバインド", "報告"])
+
+    def test_the_start_button_is_the_biggest_and_keeps_its_size(self):
+        self.app.update_idletasks()
+        start = self.app.btn_start_stop
+        size = (start.winfo_reqwidth(), start.winfo_reqheight())
+        for other in self._row()[1:]:
+            self.assertGreater(size[0], other.winfo_reqwidth(), other.cget("text"))
+            self.assertGreater(size[1], other.winfo_reqheight(), other.cget("text"))
+        self.app._running = True
+        self.app._refresh_start_stop_button()
+        self.app.update_idletasks()
+        self.assertEqual((start.winfo_reqwidth(), start.winfo_reqheight()), size,
+                         "止まっている／動いているで大きさが変わらない")
+
+    def test_the_short_check_names_with_headings(self):
+        row = next(w for w in self.app.pack_slaves()
+                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
+                          for c in w.winfo_children()))
+        items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
+        self.assertEqual(items, [("Label", "続行ラウンドの後:"), ("Checkbutton", "アイテムを落とす"),
+                                 ("Checkbutton", "窓を戻す"), ("Label", "Run:"),
+                                 ("Checkbutton", "リスポーンする"), ("Checkbutton", "霧の即時判定")])
+        variables = [str(w.cget("variable")) for w in row.pack_slaves()
+                     if isinstance(w, ttk.Checkbutton)]
+        self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
+                                                      self.app.v_continue_restore_window,
+                                                      self.app.v_run_respawn,
+                                                      self.app.v_fog_early_read)])
+
+    def test_the_freeze_row_is_called_speed_detect(self):
+        row = self.app.freeze_frame.pack_slaves()[0]
+        self.assertEqual(row.pack_slaves()[0].cget("text"), "速度検知:")
+
+
+class TestDv2Keys(_AppCase):
+    def setUp(self):
+        super().setUp()
+        for target, kwargs in ((mainGUI.threading, {"Thread": RunNow}),
+                               (self.app, {"after": lambda _ms, fn, *a: fn(*a)})):
+            for name, value in kwargs.items():
+                p = patch.object(target, name, value)
+                p.start()
+                self.addCleanup(p.stop)
+        p = patch.object(self.app, "_hook_suicide_cancel_key")
+        self.hook_cancel = p.start()
+        self.addCleanup(p.stop)
+        p = patch.object(self.app, "_hook_chase_keys")
+        self.hook_chase = p.start()
+        self.addCleanup(p.stop)
+        self._dialog()
+
+    def _capture(self, target, key):
+        with patch.object(HotKey, "capture", return_value=key):
+            getattr(self.app, mainGUI.App.KEY_BUTTONS[target]["capture"]).invoke()
+
+    def _clear(self, target):
+        getattr(self.app, mainGUI.App.KEY_BUTTONS[target]["clear"]).invoke()
+
+    def _hooked_chase_keys(self):
+        """本物の _hook_chase_keys が登録するキー（keyboard は偽物）"""
+        keyboard = MagicMock()
+        with patch.object(mainGUI, "keyboard", keyboard), \
+             patch.object(self.app, "_chase_hooks", []), \
+             patch.object(self.app, "_unhook_chase_keys"):
+            mainGUI.App._hook_chase_keys(self.app)
+        return [c.args[0] for c in keyboard.hook_key.call_args_list]
+
+    # ── チェイスのキーを変える ────────────────────
+    def test_the_chase_keys_can_be_changed_and_are_rehooked(self):
+        self._capture("cw", "f6")
+        self._capture("ccw", "f5")
+        self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
+                         ("f6", "f5"))
+        self.assertEqual(self.hook_chase.call_count, 2, "変えるたびにフックし直す")
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F6キー")
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F6/F5"),
+                        self.app.lbl_keys.cget("text"))
+        self.assertEqual(self._hooked_chase_keys(), ["f6", "f5"])
+
+    def test_the_chase_key_overlap_is_checked(self):
+        for key, other in ((config.EMERGENCY_STOP_KEY, "緊急停止"),
+                           (config.SUICIDE_CANCEL_KEY, "自爆キャンセル"),
+                           (config.CHASE_CCW_KEY, "チェイスのもう一方")):
+            self.app.logs.clear()
+            self._capture("cw", key)
+            self.assertEqual(self.app.v_chase_cw_key.get(), config.CHASE_CW_KEY, key)
+            self.assertTrue(any(f"{other}のキーと同じ" in m for m in self.app.logs), self.app.logs)
+        self.app.v_start_key.set("f9")
+        self._capture("ccw", "f9")
+        self.assertEqual(self.app.v_chase_ccw_key.get(), config.CHASE_CCW_KEY, "マクロ開始とも")
+        self.hook_chase.assert_not_called()
+
+    def test_other_keys_cannot_take_a_chase_key_while_chase_is_used(self):
+        self._capture("stop", config.CHASE_CW_KEY)
+        self._capture("start", config.CHASE_CCW_KEY)
+        self._capture("cancel", config.CHASE_CW_KEY)
+        self.assertEqual((self.app.v_emergency_key.get(), self.app.v_start_key.get(),
+                          self.app.v_suicide_cancel_key.get()),
+                         (config.EMERGENCY_STOP_KEY, "", config.SUICIDE_CANCEL_KEY))
+        SharedState.set_chase_enabled(False)              # 使わないなら空いている（DT）
+        self._capture("start", config.CHASE_CCW_KEY)
+        self.assertEqual(self.app.v_start_key.get(), config.CHASE_CCW_KEY)
+
+    # ── 解除 ──────────────────────────────
+    def test_every_key_can_be_cleared(self):
+        self.app.v_start_key.set("f9")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=True):
+            for target in ("start", "stop", "cancel", "cw", "ccw"):
+                self._clear(target)
+        self.assertEqual([v.get() for v in (self.app.v_start_key, self.app.v_emergency_key,
+                                            self.app.v_suicide_cancel_key, self.app.v_chase_cw_key,
+                                            self.app.v_chase_ccw_key)], [""] * 5)
+        self.assertEqual(self.app.lbl_keys.cget("text"),
+                         "緊急停止: 未設定・自爆キャンセル: 未設定・マクロ開始: 未設定・チェイス: 未設定")
+        self.assertEqual(self.app.lbl_emergency.cget("text"), "緊急停止: 未設定")
+        self.hook_cancel.assert_called_once_with()
+        self.assertEqual(self.hook_chase.call_count, 2, "チェイスは解除のたびにフックし直す")
+        self.assertEqual(self._hooked_chase_keys(), [], "両方解除したら何も拾わない")
+
+    def test_clearing_the_emergency_key_asks_first(self):
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=False) as ask:
+            self._clear("stop")
+        ask.assert_called_once()
+        self.assertIn("緊急停止のキーが無くなります", ask.call_args.args[1])
+        self.assertEqual(self.app.v_emergency_key.get(), config.EMERGENCY_STOP_KEY,
+                         "いいえなら解除しない")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=True):
+            self._clear("stop")
+        self.assertEqual(self.app.v_emergency_key.get(), "")
+
+    def test_the_other_keys_are_cleared_without_asking(self):
+        with patch.object(mainGUI.messagebox, "askyesno") as ask:
+            for target in ("cancel", "cw"):
+                self._clear(target)
+        ask.assert_not_called()
+
+    def test_a_cleared_emergency_key_does_nothing_and_is_not_defaulted(self):
+        self.app.v_emergency_key.set("")
+        with patch.object(mainGUI, "keyboard") as keyboard, \
+             patch.object(self.app, "_stop") as stop:
+            keyboard.is_pressed.return_value = True
+            mainGUI.App._on_stop_start_key_event(self.app)
+        self.assertNotIn("", [c.args[0] for c in keyboard.is_pressed.call_args_list])
+        stop.assert_not_called()
+        self.assertEqual(self.app.v_emergency_key.get(), "", "既定値へ戻さない")
+
+    def test_a_cleared_chase_key_is_not_hooked(self):
+        self._clear("cw")
+        self.assertEqual(self._hooked_chase_keys(), [config.CHASE_CCW_KEY])
+
+    # ── 保存・読み込み ────────────────────────
+    def _load(self, data):
+        """壊れたキーを見分けるのは本物の keyboard（キーを送らない・フックしない）"""
+        real = _real_keyboard()
+        if real is None:
+            self.skipTest("keyboard が入っていない")
+        with patch.object(HotKey, "keyboard", real),              patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def _saved(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def test_the_chase_keys_are_saved_and_loaded(self):
+        self._capture("cw", "f6")
+        stored = self._saved()
+        self.assertEqual((stored["chase_cw_key"], stored["chase_ccw_key"]),
+                         ("f6", config.CHASE_CCW_KEY))
+        self._load({"chase_cw_key": "f6", "chase_ccw_key": "f5"})
+        self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
+                         ("f6", "f5"))
+
+    def test_an_old_file_gives_f1_and_f2(self):
+        self.app.v_chase_cw_key.set("f6")
+        self._load({})
+        self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
+                         ("f1", "f2"))
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1キー")
+
+    def test_broken_cleared_and_overlapping_values(self):
+        self._load({"chase_cw_key": "zzz", "chase_ccw_key": ""})
+        self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
+                         ("f1", ""), "壊れた値は既定・空は解除のまま")
+        self._load({"emergency_stop_key": "f1"})
+        self.assertEqual((self.app.v_emergency_key.get(), self.app.v_chase_cw_key.get()),
+                         ("f1", ""), "緊急停止と重なるチェイスのキーは未設定（緊急停止はそのまま）")
+        self._load({"chase_cw_key": "f2"})
+        self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
+                         ("f2", ""), "2つが重なれば後の方を未設定")
+
+    def test_cleared_keys_stay_cleared_after_loading(self):
+        self._load({"emergency_stop_key": "", "suicide_cancel_key": "", "chase_cw_key": "",
+                    "chase_ccw_key": ""})
+        self.assertEqual([v.get() for v in (self.app.v_emergency_key, self.app.v_suicide_cancel_key,
+                                            self.app.v_chase_cw_key, self.app.v_chase_ccw_key)],
+                         [""] * 4)
+        self._load({"emergency_stop_key": "zzz", "suicide_cancel_key": "zzz"})
+        self.assertEqual((self.app.v_emergency_key.get(), self.app.v_suicide_cancel_key.get()),
+                         (config.EMERGENCY_STOP_KEY, config.SUICIDE_CANCEL_KEY),
+                         "壊れた値は今までどおり既定")
