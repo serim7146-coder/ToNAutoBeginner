@@ -1614,6 +1614,7 @@ class LogMonitor:
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
             st.round_type = event.round_type
         st.utils_anchor_seq = st.round_seq          # Utils の判断を待ち始めてよい（EB）
+        st.utils_anchor_time = st.log_now or time.time()
         self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
 
     def _on_you_died(self, event):
@@ -1797,6 +1798,7 @@ class LogMonitor:
         st.fog_reading = False
         st.fog_no_object_deadline = 0.0
         st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判断する（EB）
+        st.utils_anchor_time = st.log_now or time.time()
         self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
         # 答え合わせは公開の後（食い違いの警告はもう出してよい）
         self._check_early_read(event.terror_ids or [], event.round_type)
@@ -2217,29 +2219,33 @@ class LogMonitor:
         st.utils_wait_seq = st.round_seq
         self._log(f"判定: {format_terror_ids(st.terror_ids)} / {round_type}"
                   f"（このツールの判定: {self._outcome(plan)}）→ Utils の判断を待ちます")
-        watch.refresh()                 # 前のラウンドの行を読み終えてから数え始める
-        since = time.monotonic()
-        self._start_daemon(self._wait_utils, round_type, plan, st.round_seq, source, since)
+        # 数えるのは Utils の時刻が「起点の行の時刻 − UTILS_EARLY_SEC」以後の行（すでにファイルにある行も。EB2）
+        anchor = st.utils_anchor_time or time.time()
+        self._start_daemon(self._wait_utils, round_type, plan, st.round_seq, source,
+                           anchor, time.monotonic())
         return True
 
-    def _wait_utils(self, round_type: str, plan: tuple, round_seq: int, source: str, since: float):
-        """起点から UTILS_WAIT_SEC、その窓の press・hold を待つ。press → スキップ（このツールは押さない）。
+    def _wait_utils(self, round_type: str, plan: tuple, round_seq: int, source: str,
+                    anchor: float, started: float):
+        """その窓の press・hold を待つ（上限は壁時計で UTILS_WAIT_SEC。数えるのは Utils の時刻が起点の
+        行の時刻 − UTILS_EARLY_SEC 以後の行）。press → スキップ（このツールは押さない）。
         hold → このツールが今までどおり判定・自爆。何も無い → 続行（【プレイ】の流れ）。
         ラウンドが終わったら何もしない"""
         watch = UtilsWatch.shared()
-        deadline = since + config.UTILS_WAIT_SEC
+        deadline = started + config.UTILS_WAIT_SEC
+        since = anchor - config.UTILS_EARLY_SEC
         while True:
             if not self._round_still_active(round_seq):
                 return
             watch.refresh()
-            action = watch.action_since(source, since)
+            action, at = watch.action_since(source, since)
             if action or time.monotonic() >= deadline:
                 break
             time.sleep(config.UTILS_POLL_SEC)
         if not self._round_still_active(round_seq):
             return
         DebugLog.write(f"[Utils] 窓{self.window_idx} Utils: "
-                       + (f"{action} {time.monotonic() - since:.1f} 秒" if action
+                       + (f"{action} {at - anchor:.1f} 秒" if action
                           else f"無し（{config.UTILS_WAIT_SEC:.0f} 秒）"))
         if action == "press":
             self._clear_stale_continue_round()

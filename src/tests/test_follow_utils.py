@@ -1,5 +1,6 @@
 """ToN Utils の続行の判断に従う（EB）。本物の Utils のログ・sqlite・入力は使わない（偽物の行・一時ファイル）"""
 from tests.support import *  # noqa: F401,F403
+import datetime
 import UtilsWatch
 
 SOURCE = "0123456789abcdef0123456789abcdef"
@@ -21,7 +22,7 @@ class _FakeWatch:
 
     def action_since(self, source, since):
         assert source == SOURCE
-        return self.action
+        return (self.action, since + 2.6) if self.action else (None, None)
 
 
 class _Case(unittest.TestCase):
@@ -93,7 +94,6 @@ class TestTheDecision(_Case):
         self.assertEqual(self.names(), ["_wait_utils"], "起点では自爆しない")
         self.assertTrue(any("Utils の判断を待ちます" in m and "skip" in m for m in monitor.logs),
                         "このツールの判定も残す")
-        self.assertGreaterEqual(self.watch.refreshed, 1, "待つ前に前のラウンドの行を読み終える")
 
     def test_press_skips_without_this_tool_pressing(self):
         self.watch.action = "press"
@@ -139,7 +139,7 @@ class TestTheDecision(_Case):
 
         def answer(source, since):
             monitor.st.in_round = False
-            return "hold"
+            return "hold", since
         self.watch.action_since = answer
         self._wait(monitor)
         self.assertEqual(self.names(), ["_wait_utils"], "hold でも自爆しない")
@@ -217,15 +217,26 @@ class TestWhenUtilsCannotDecide(_Case):
 
 
 # ── UtilsWatch（一時ファイル・偽のプロセス）──────────────────────
+def _utc(epoch: float) -> str:
+    """epoch 秒 → Utils のログの行の頭の時刻（UTC）"""
+    d = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+    return d.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def _eval_line(action, at, source=SOURCE):
+    return (f"{_utc(at)}  INFO ton_gui_core::room_action: auto self-destruct evaluated "
+            f"source={source} diag=x action=\"{action}\"")
+
+
 class TestTheLog(unittest.TestCase):
+    T0 = datetime.datetime(2026, 10, 1, 9, 0, 0, tzinfo=datetime.timezone.utc).timestamp()
+
     def setUp(self):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)
         self.dir = Path(d.name)
         self.log = self.dir / "ton-utils.log"
-        self.now = [100.0]
-        self.watch = UtilsWatch.UtilsWatch(self.log, self.dir / "none.sqlite", running_names=lambda: set(),
-                                           clock=lambda: self.now[0])
+        self.watch = UtilsWatch.UtilsWatch(self.log, self.dir / "none.sqlite", running_names=lambda: set())
 
     def _write(self, *lines, mode="a"):
         with open(self.log, mode, encoding="utf-8") as f:
@@ -234,20 +245,19 @@ class TestTheLog(unittest.TestCase):
 
     @staticmethod
     def _eval(action, source=SOURCE):
-        return (f"2026-10-12T01:00:00.000000Z  INFO ton_gui_core::room_action: auto self-destruct evaluated "
-                f"source={source} diag=x action=\"{action}\"")
+        return _eval_line(action, TestTheLog.T0, source)
 
-    def test_old_lines_are_not_actions_but_count_as_seen(self):
-        self._write(self._eval("press"))
+    def test_lines_already_in_the_file_count_by_their_time(self):
+        """最初に読んだ行も、Utils の時刻で数える（EB2: 読むのが遅れても取りこぼさない）"""
+        self._write(_eval_line("press", self.T0 + 0.6))
         self.watch.refresh()
         self.assertIn(SOURCE, self.watch.seen)
-        self.assertIsNone(self.watch.action_since(SOURCE, 0.0), "最初に読んだ昔の行は動きに数えない")
-        self.now[0] = 200.0
-        self._write(self._eval("hold"))
+        self.assertEqual(self.watch.action_since(SOURCE, self.T0 - 2), ("press", self.T0 + 0.6))
+        self.assertEqual(self.watch.action_since(SOURCE, self.T0 + 1), (None, None), "それより前の行は数えない")
+        self.assertEqual(self.watch.action_since("ffff", 0.0), (None, None), "ほかの窓の行は数えない")
+        self._write(_eval_line("hold", self.T0 + 30))
         self.watch.refresh()
-        self.assertEqual(self.watch.action_since(SOURCE, 150.0), "hold")
-        self.assertIsNone(self.watch.action_since(SOURCE, 250.0), "待ち始めより前の行は数えない")
-        self.assertIsNone(self.watch.action_since("ffff", 0.0), "ほかの窓の行は数えない")
+        self.assertEqual(self.watch.action_since(SOURCE, self.T0 + 28), ("hold", self.T0 + 30))
 
     def test_a_utils_start_forgets_what_was_seen(self):
         self._write(self._eval("press"), "2026-10-12T02:00:00Z  INFO ton_gui: started log=x version=\"0.1.0\"")
@@ -265,25 +275,118 @@ class TestTheLog(unittest.TestCase):
     def test_a_shrunk_file_is_read_from_the_start(self):
         self._write(*[self._eval("hold", "aaaa")] * 20)
         self.watch.refresh()
-        self._write(self._eval("press"), mode="w")          # 小さくなった
-        self.now[0] = 300.0
+        self._write(_eval_line("press", self.T0 + 100), mode="w")          # 小さくなった
         self.watch.refresh()
-        self.assertEqual(self.watch.action_since(SOURCE, 250.0), "press")
+        self.assertEqual(self.watch.action_since(SOURCE, self.T0 + 99)[0], "press")
         self.assertNotIn("aaaa", self.watch.seen, "前の分は忘れる")
 
     def test_a_half_written_line_waits(self):
-        self.watch.refresh()                                  # 空のファイルが無い（読めない）→ 何もしない
+        self.watch.refresh()                                  # ファイルが無い → 何もしない
         self._write()
         self.watch.refresh()
-        self.now[0] = 400.0
+        line = self._eval("press")
         with open(self.log, "a", encoding="utf-8") as f:
-            f.write(self._eval("press")[:60])
+            f.write(line[:60])
         self.watch.refresh()
-        self.assertIsNone(self.watch.action_since(SOURCE, 0.0))
+        self.assertEqual(self.watch.action_since(SOURCE, 0.0), (None, None))
         with open(self.log, "a", encoding="utf-8") as f:
-            f.write(self._eval("press")[60:] + "\n")
+            f.write(line[60:] + "\n")
         self.watch.refresh()
-        self.assertEqual(self.watch.action_since(SOURCE, 0.0), "press")
+        self.assertEqual(self.watch.action_since(SOURCE, 0.0)[0], "press")
+
+    def test_utc_to_epoch_across_the_date_in_jst(self):
+        """Utils は UTC、VRChat のログはローカル時刻。JST の 0 時すぎ ＝ UTC の前の日の 15 時すぎ"""
+        jst = datetime.timezone(datetime.timedelta(hours=9))
+        want = datetime.datetime(2026, 10, 12, 0, 0, 1, 500000, tzinfo=jst).timestamp()
+        self.assertEqual(UtilsWatch.utc_epoch("2026-10-11T15:00:01.5Z  INFO x"), want)
+        self.assertEqual(UtilsWatch.utc_epoch("2026-10-11T15:00:01.500000Z  INFO x"), want)
+        self.assertEqual(UtilsWatch.utc_epoch("2026-10-11T15:00:01Z  INFO x"), want - 0.5)
+        self.assertIsNone(UtilsWatch.utc_epoch("no time here"))
+        # VRChat のログの行（ローカル時刻）と同じ時点になる
+        local = datetime.datetime.fromtimestamp(want - 0.5).strftime("%Y.%m.%d %H:%M:%S")
+        self.assertEqual(LogParser.log_time(local + " Debug      -  x"), want - 0.5)
+
+
+# ── EB2: 起点の行の時刻と Utils の時刻で数える（本物の UtilsWatch・一時ファイル）─────
+class TestTheTiming(_Case):
+    ANCHOR_LOCAL = "2026.10.01 18:30:00"            # 起点の Killers have been set（ローカル時刻・秒まで）
+
+    def setUp(self):
+        super().setUp()
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        self.log = Path(d.name) / "ton-utils.log"
+        self.real = UtilsWatch.UtilsWatch(self.log, Path(d.name) / "none.sqlite",
+                                          running_names=lambda: {"ton-utils.exe"})
+        self.real.source_for = lambda _p: SOURCE
+        UtilsWatch.shared.return_value = self.real
+        self.anchor = LogParser.log_time(self.ANCHOR_LOCAL + " Debug      -  x")
+
+    def _write(self, *lines):
+        with open(self.log, "a", encoding="utf-8") as f:
+            for line in lines:
+                f.write(line + "\n")
+
+    def _round(self, *utils_lines):
+        """Utils が前に窓を見ている → 起点の行を処理（その前に utils_lines がもうファイルにある）→ 待つ"""
+        self._write(_eval_line("hold", self.anchor - 3600))            # 前に見た（この起動の後）
+        self._write(*utils_lines)
+        monitor = self._monitor()
+        line = (f"{self.ANCHOR_LOCAL} Debug      -  Killers have been set - 99 0 0 // Round type is Classic")
+        monitor.st.log_now = LogParser.log_time(line)
+        monitor._on_killers_set(LogParser.parse(LogParser.strip_prefix(line)))
+        self._wait(monitor)
+        return monitor
+
+    def test_a_press_already_in_the_file_skips(self):
+        """読むのが遅れて、起点を処理した時にはもう press がある → スキップ（続行にしない）"""
+        monitor = self._round(_eval_line("press", self.anchor + 0.6))
+        self.assertIn("[窓2] Utils: 自爆（スキップ）", monitor.logs)
+        self.assertFalse(monitor.st.continue_freeze_held)
+
+    def test_a_press_just_before_the_second_counts(self):
+        """VRChat のログは秒で切り捨て。起点の行の時刻より少し前の Utils の時刻も数える（−2 秒まで）"""
+        monitor = self._round(_eval_line("press", self.anchor - 1.5))
+        self.assertIn("[窓2] Utils: 自爆（スキップ）", monitor.logs)
+
+    def test_a_press_of_the_previous_round_does_not_count(self):
+        monitor = self._round(_eval_line("press", self.anchor - 2.5), _eval_line("press", self.anchor - 40))
+        self.assertIn("[窓2] Utils: 続行", monitor.logs, "前のラウンドの press は数えない")
+        self.assertTrue(monitor.st.continue_freeze_held)
+
+    def test_a_hold_after_the_anchor(self):
+        monitor = self._round(_eval_line("hold", self.anchor + 0.4))
+        self.assertIn("[窓2] Utils: 許可されていないため、このツールで判定", monitor.logs)
+        self.assertIn("do_skip", self.names())
+
+    def test_nothing_continues_after_the_wall_clock_wait(self):
+        started = time.monotonic()
+        monitor = self._round()
+        self.assertIn("[窓2] Utils: 続行", monitor.logs)
+        self.assertGreaterEqual(time.monotonic() - started, config.UTILS_WAIT_SEC, "上限は壁時計で待つ")
+
+    def test_the_debug_line_is_the_gap_from_the_anchor(self):
+        with patch.object(DebugLog, "write") as write:
+            self._round(_eval_line("press", self.anchor + 0.6))
+        self.assertIn("[Utils] 窓2 Utils: press 0.6 秒", [c.args[0] for c in write.call_args_list])
+
+    def test_a_press_written_while_waiting(self):
+        self._write(_eval_line("hold", self.anchor - 3600))
+        monitor = self._monitor()
+        monitor.st.log_now = self.anchor
+        monitor._on_killers_set(LogParser.parse(LogParser.strip_prefix(
+            f"{self.ANCHOR_LOCAL} Debug      -  Killers have been set - 99 0 0 // Round type is Classic")))
+        real_refresh = self.real.refresh
+        calls = [0]
+
+        def refresh():
+            calls[0] += 1
+            if calls[0] == 2:
+                self._write(_eval_line("press", self.anchor + 1.2))   # 待っている間に書かれた
+            real_refresh()
+        self.real.refresh = refresh
+        self._wait(monitor)
+        self.assertIn("[窓2] Utils: 自爆（スキップ）", monitor.logs)
 
 
 class TestTheProcess(unittest.TestCase):

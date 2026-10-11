@@ -11,8 +11,11 @@
   だけを読む**（ほかの表にほかのプレイヤーの名前・セーブコードがある。写しも取らない）
 - Utils が動いているか: プロセス名の英数字だけを見て `tonutils` を含むか（実機は `ToN-Utils.exe`。2026-10-12）
 
-ログの行の時刻（UTC）は使わない。比べるのはこのツールが行を受け取った時刻（time.monotonic）
+press・hold は、Utils のログの行の頭の時刻（UTC）で持つ。起点（VRChat のログの killers_set・killers_revealed
+の行の時刻）と比べる（EB2）。このツールが行を読んだ時刻では比べない——読むのが遅れると、起点を処理した
+時にはもう press がファイルにあり、それを「前の行」として捨ててスキップを続行と取り違えたため
 """
+import datetime
 import os
 import re
 import sqlite3
@@ -33,11 +36,25 @@ DB_RETRY_SEC = 5.0
 RE_EVALUATED = re.compile(r"auto self-destruct evaluated source=([0-9a-f]+).*?action=\"(\w+)\"")
 RE_PERMISSION = re.compile(r"self-destruct permission changed source=([0-9a-f]+).*?allowed=(\w+)")
 RE_STARTED = re.compile(r"\bton_gui: started\b")
+RE_UTC = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z")
 RE_LOG_NAME = re.compile(r"output_log_(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})")
 
 REASON_NOT_RUNNING = "ToN Utils が動いていない"
 REASON_NO_SOURCE = "この窓のセーブの記録が見つからない"
 REASON_NOT_SEEN = "この Utils の起動の後に、この窓の行を見ていない"
+
+
+def utc_epoch(line: str) -> float | None:
+    """Utils のログの行の頭の時刻（UTC。`2026-10-10T00:00:27.900141Z`）を epoch 秒で。無ければ None"""
+    m = RE_UTC.match(line or "")
+    if not m:
+        return None
+    try:
+        whole = datetime.datetime(*map(int, m.groups()[:6]), tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:
+        return None
+    fraction = m.group(7)
+    return whole + (int(fraction) / 10 ** len(fraction) if fraction else 0.0)
 
 
 def normalize_process(name: str) -> str:
@@ -65,7 +82,7 @@ class UtilsWatch:
         self._offset = None             # None: まだ読んでいない（最初の読み込みは昔の行。動きとしては数えない）
         self._rest = b""
         self.seen = set()               # この Utils の起動の後に press・hold・allowed=true を見た source
-        self.events = []                # (受け取った時刻, source, action)。最初の読み込みの分は入れない
+        self.events = []                # (Utils の時刻 epoch, source, action)。最初の読み込みの分も入れる
         self._sources = {}              # started の形 → source
         self._db_tried = None
         self._proc = (None, False)      # (見た時刻, 動いているか)
@@ -94,11 +111,10 @@ class UtilsWatch:
             self._offset += len(data)
             lines = (self._rest + data).split(b"\n")
             self._rest = lines.pop()
-            now = self._clock()
             for raw in lines:
-                self._take(raw.decode("utf-8", "replace"), None if first else now)
+                self._take(raw.decode("utf-8", "replace"))
 
-    def _take(self, line: str, received):
+    def _take(self, line: str):
         if RE_STARTED.search(line):
             self.seen.clear()           # Utils の起動。前の起動で見た窓は数えない
             return
@@ -106,21 +122,23 @@ class UtilsWatch:
         if m:
             source, action = m.group(1), m.group(2)
             self.seen.add(source)
-            if received is not None:
-                self.events.append((received, source, action))
-                del self.events[:-200]
+            at = utc_epoch(line)
+            if at is not None:
+                self.events.append((at, source, action))
+                del self.events[:-500]
             return
         m = RE_PERMISSION.search(line)
         if m and m.group(2) == "true":
             self.seen.add(m.group(1))
 
-    def action_since(self, source: str, since: float) -> str | None:
-        """since（受け取った時刻）より後の、その source の最初の press・hold。無ければ None"""
+    def action_since(self, source: str, since: float) -> tuple:
+        """Utils の時刻が since（epoch 秒）以後の、その source の最初の press・hold を (action, 時刻) で。
+        無ければ (None, None)。すでにファイルにあった行も数える"""
         with self._lock:
-            for received, src, action in self.events:
-                if received >= since and src == source and action in ("press", "hold"):
-                    return action
-        return None
+            for at, src, action in self.events:
+                if at >= since and src == source and action in ("press", "hold"):
+                    return action, at
+        return None, None
 
     # ── プロセス ──
     def running(self) -> bool:

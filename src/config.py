@@ -511,6 +511,9 @@ PLUSH_VERIFIED_POLL_SEC  = 0.25
 # ToN Utils の続行の判断に従う（EB）。起点（killers_set／killers_revealed）から Utils の press・hold を待つ上限。
 # 実測の press は判定から 0.2〜1.58 秒（110 回）。何も来なければ続行
 UTILS_WAIT_SEC           = 3.0
+# Utils の press・hold は、Utils のログの時刻が「起点の行の時刻 − この秒数」以後のものを数える（EB2）。
+# VRChat のログの時刻は秒で切り捨て。前のラウンドの press は 30 秒以上前なので混ざらない
+UTILS_EARLY_SEC          = 2.0
 UTILS_POLL_SEC           = 0.1
 
 TON_ENTRY_PANEL_TIMEOUT  = 180.0  # パネル出現を待つ上限（読み込みが重い）
