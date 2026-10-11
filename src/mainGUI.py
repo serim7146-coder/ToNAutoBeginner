@@ -1807,7 +1807,7 @@ class App(tk.Tk):
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
         # 名前は短く、詳しくは README（DV3）
-        ttk.Checkbutton(fcr, text="アイテムドロップ",
+        ttk.Checkbutton(fcr, text="アイテムを落とす",
                         variable=self.v_continue_drop_item,
                         command=self._on_continue_after_changed).pack(side="left")
         ttk.Checkbutton(fcr, text="窓位置リセット",

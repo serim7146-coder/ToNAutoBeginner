@@ -410,7 +410,7 @@ class TestTheSettings(unittest.TestCase):
         self.assertIn("self.v_continue_drop_item = tk.BooleanVar(value=True)", gui)
         self.assertIn("self.v_continue_restore_window = tk.BooleanVar(value=True)", gui)
         # DV3: 見出しを無くして短い名前（詳しくは README）
-        self.assertIn('text="アイテムドロップ"', gui)
+        self.assertIn('text="アイテムを落とす"', gui)
         self.assertIn('text="窓位置リセット"', gui)
 
     def test_the_checks_change_the_setting(self):
@@ -447,7 +447,7 @@ class TestTheSettings(unittest.TestCase):
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("アイテムドロップ・窓位置リセット", readme)
+        self.assertIn("アイテムを落とす・窓位置リセット", readme)
         self.assertIn("どのラウンドでも、終わったら", readme)          # DW
 
 

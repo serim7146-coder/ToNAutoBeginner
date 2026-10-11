@@ -424,10 +424,10 @@ class TestDv2MainScreen(_AppCase):
     def test_the_short_check_names(self):
         """DV3: 見出しを無くして短い名前だけ（詳しくは README）"""
         row = next(w for w in self.app.pack_slaves()
-                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムドロップ"
+                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
                           for c in w.winfo_children()))
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
-        self.assertEqual(items, [("Checkbutton", "アイテムドロップ"), ("Checkbutton", "窓位置リセット"),
+        self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定")])
         variables = [str(w.cget("variable")) for w in row.pack_slaves()
                      if isinstance(w, ttk.Checkbutton)]
