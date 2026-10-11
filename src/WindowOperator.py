@@ -758,6 +758,63 @@ def move_window(hwnd: int, left: int, top: int) -> bool:
     return True
 
 
+# ── 窓を整列する（DX）──────────────────
+DWMWA_EXTENDED_FRAME_BOUNDS = 9
+
+
+def work_area(hwnd: int) -> tuple:
+    """その窓があるモニターの作業領域（タスクバーを除く。左, 上, 右, 下）。窓が無ければ主モニター"""
+    try:
+        if hwnd and win32gui.IsWindow(hwnd):
+            monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+        else:
+            monitor = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
+        return tuple(int(v) for v in win32api.GetMonitorInfo(monitor)["Work"])
+    except Exception:
+        DebugLog.exception("WindowOperator.work_area")
+        return None
+
+
+def frame_margins(hwnd: int) -> tuple:
+    """見えない縁（GetWindowRect と DWMWA_EXTENDED_FRAME_BOUNDS の差。左・上・右・下）。
+    取れなければ 0（縁を引かずに並べる）"""
+    try:
+        outer = win32gui.GetWindowRect(hwnd)
+        frame = wintypes.RECT()
+        result = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(frame), ctypes.sizeof(frame))
+        if result != 0:
+            return (0, 0, 0, 0)
+        return (frame.left - outer[0], frame.top - outer[1], outer[2] - frame.right, outer[3] - frame.bottom)
+    except Exception:
+        DebugLog.exception("WindowOperator.frame_margins")
+        return (0, 0, 0, 0)
+
+
+def set_window_rect(hwnd: int, rect: tuple) -> bool:
+    """窓の位置と大きさを rect（左, 上, 右, 下）にする。前面・重なり順は変えない（SWP_NOACTIVATE）"""
+    left, top, right, bottom = (int(v) for v in rect)
+    try:
+        win32gui.SetWindowPos(hwnd, 0, left, top, right - left, bottom - top,
+                              win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+    except Exception:
+        DebugLog.exception("WindowOperator.set_window_rect")
+        return False
+    DebugLog.write(f"[操作] 窓の位置と大きさ hwnd={int(hwnd):#x} → {(left, top, right, bottom)}")
+    return True
+
+
+def rect_on_screen(rect: tuple) -> bool:
+    """矩形の中心がどれかのモニターの上にあるか（モニターを外したなど、画面の外へは動かさない）"""
+    left, top, right, bottom = rect
+    try:
+        return bool(win32api.MonitorFromPoint(((left + right) // 2, (top + bottom) // 2),
+                                              win32con.MONITOR_DEFAULTTONULL))
+    except Exception:
+        DebugLog.exception("WindowOperator.rect_on_screen")
+        return False
+
+
 def restore_without_activating(hwnd: int) -> bool:
     """最大化を元の矩形に戻す。前面は奪わない（SetWindowPlacement に SW_SHOWNOACTIVATE。
     ShowWindow(SW_RESTORE) は前面にした: 2026-10-10 の実機）。それでも前面になったら、前の窓へ返す"""

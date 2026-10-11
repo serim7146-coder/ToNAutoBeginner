@@ -36,6 +36,7 @@ import SecretStore
 import FogEarlyRead
 import BugReport
 import WindowVolume
+import WindowArrange
 from StatisticsGUI import StatisticsWindow
 
 try:
@@ -75,6 +76,26 @@ def freeze_round_vars(make_var) -> dict:
     （ユーザーがこのリストの順序を編集して表示順を変えられるようにするため）。
     """
     return {name: make_var() for name in config.ROUND_FREEZE_SELECTABLE}
+
+
+def _as_window_layout(value) -> dict:
+    """保存した配置 {"1": [x, y, w, h], …} を {"1": (左, 上, 右, 下)} に。壊れた窓は捨てる"""
+    layout = {}
+    if not isinstance(value, dict):
+        return layout
+    for key, rect in value.items():
+        if not (isinstance(key, str) and key.isdigit() and isinstance(rect, list) and len(rect) == 4
+                and all(isinstance(v, int) and not isinstance(v, bool) for v in rect)):
+            continue
+        x, y, w, h = rect
+        if w > 0 and h > 0:
+            layout[key] = (x, y, x + w, y + h)
+    return layout
+
+
+def window_layout_setting(layout) -> dict:
+    """覚えた配置 {"1": (左, 上, 右, 下)} を保存の形 {"1": [x, y, w, h]} に"""
+    return {k: [r[0], r[1], r[2] - r[0], r[3] - r[1]] for k, r in (layout or {}).items()}
 
 
 def _as_flag(value) -> bool:
@@ -1558,6 +1579,13 @@ class App(tk.Tk):
         self.btn_stop_entry.pack(side="left", padx=(10, 0))
         self.lbl_launch = ttk.Label(lf1, text="", foreground=config.GUI_GRN)
         self.lbl_launch.pack(side="left", padx=(10, 0))
+        # 窓を整列する（DX）。覚えた配置があればそれに戻す。✕ で覚えた配置を消して自動に戻す
+        ttk.Button(lf1, text="窓を整列", command=self._arrange_windows).pack(side="left", padx=(10, 0))
+        ttk.Button(lf1, text="配置を覚える",
+                   command=self._remember_window_layout).pack(side="left", padx=(6, 0))
+        self.btn_forget_layout = ttk.Button(lf1, text="✕", width=3, command=self._forget_window_layout,
+                                            state="disabled")
+        self.btn_forget_layout.pack(side="left", padx=(2, 0))
 
         # 詳細はボタンの下へ畳む。毎回触るものではないので既定は畳んだ状態
         f2_launch = CollapsibleFrame(f2, text="VRChat起動の詳細設定", collapsed=True)
@@ -1890,6 +1918,103 @@ class App(tk.Tk):
         self._win_count_pref = n
         self._schedule_settings_save()   # 変えた直後に落ちても残るように
         self._rebuild_tabs(n)
+
+    # ── 窓を整列する（DX）────────────────────
+    def _arrange_targets(self) -> list:
+        """割り当てた窓 [(窓の番号, hwnd)]（番号の順。hwnd がある窓だけ）"""
+        targets = []
+        for tab in getattr(self, "tabs", []):
+            hwnd = tab._get_selected_hwnd()
+            if hwnd:
+                targets.append((tab.idx + 1, hwnd))
+        return targets
+
+    def _arrange_windows(self):
+        """「窓を整列」: 覚えた配置の窓はその矩形へ、ほかは窓1 のモニターの作業領域を等分した升へ。
+        前面は奪わない。最大化は戻してから、フルスクリーン・最小化・無い窓は飛ばす"""
+        targets = self._arrange_targets()
+        movable = []
+        for number, hwnd in targets:
+            state = WindowOperator.window_state(hwnd)
+            if state is None:
+                self._log(f"[整列] 窓{number}: 窓が見つからないため整列しません")
+            elif state in ("fullscreen", "minimized"):
+                reason = "フルスクリーン" if state == "fullscreen" else "最小化"
+                self._log(f"[整列] 窓{number}: {reason}のため整列しません")
+            else:
+                movable.append((number, hwnd, state))
+        if not movable:
+            self._log("[整列] 並べる窓がありません")
+            return
+        first = next((hwnd for number, hwnd in targets if number == 1), 0)
+        area = WindowOperator.work_area(first)
+        if area is None:
+            self._log("[整列] ⚠ 画面の大きさを取れませんでした。整列しません")
+            return
+        layout = getattr(self, "_window_layout", {}) or {}
+        remembered, auto = {}, []
+        for number, hwnd, state in movable:
+            rect = layout.get(str(number))
+            if rect and WindowOperator.rect_on_screen(rect):
+                remembered[number] = rect
+            else:
+                auto.append(number)
+        cells = dict(zip(auto, WindowArrange.cells(area, len(auto))))
+        DebugLog.write(f"[整列] 作業領域={area} 自動={auto} 覚えた配置={remembered}")
+        for number, hwnd, state in movable:
+            if state == "maximized":
+                WindowOperator.restore_without_activating(hwnd)
+            if number in remembered:
+                rect = remembered[number]
+            else:
+                rect = WindowArrange.outer_rect(cells[number], WindowOperator.frame_margins(hwnd))
+            WindowOperator.set_window_rect(hwnd, rect)
+        parts = []
+        if auto:
+            parts.append(f"{len(auto)}窓・{WindowArrange.size_text(len(auto))}")
+        if remembered:
+            parts.append("覚えた配置: " + "・".join(f"窓{n}" for n in sorted(remembered)))
+        self._log(f"[整列] 窓を整列しました（{'、'.join(parts)}）")
+
+    def _remember_window_layout(self):
+        """「配置を覚える」: 今の各窓の矩形を窓の番号ごとに覚える（最大化は元の矩形）。
+        フルスクリーン・最小化・無い窓は覚えない。覚える窓が無ければ今の覚えた配置はそのまま"""
+        layout, skipped = {}, []
+        for number, hwnd in self._arrange_targets():
+            state = WindowOperator.window_state(hwnd)
+            rect = (WindowOperator.window_rect(hwnd) if state == "normal"
+                    else WindowOperator.normal_rect(hwnd) if state == "maximized" else None)
+            if rect is None:
+                skipped.append(number)
+                continue
+            left, top, right, bottom = (int(v) for v in rect)
+            layout[str(number)] = [left, top, right - left, bottom - top]
+        if skipped:
+            self._log("[整列] " + "・".join(f"窓{n}" for n in skipped)
+                      + " はフルスクリーン・最小化・見つからないため覚えません")
+        if not layout:
+            self._log("[整列] 覚える窓がありません")
+            return
+        self._window_layout = {k: [v[0], v[1], v[0] + v[2], v[1] + v[3]] for k, v in layout.items()}
+        self._refresh_forget_layout_button()
+        self._schedule_settings_save()
+        self._log("[整列] 配置を覚えました（" + "・".join(f"窓{n}" for n in sorted(map(int, layout))) + "）")
+
+    def _forget_window_layout(self):
+        """✕: 覚えた配置を消す（次の「窓を整列」から自動の並べ方）"""
+        if not getattr(self, "_window_layout", None):
+            return
+        self._window_layout = {}
+        self._refresh_forget_layout_button()
+        self._schedule_settings_save()
+        self._log("[整列] 覚えた配置を消しました（自動で並べます）")
+
+    def _refresh_forget_layout_button(self):
+        try:
+            self.btn_forget_layout.config(
+                state="normal" if getattr(self, "_window_layout", None) else "disabled")
+        except (tk.TclError, AttributeError):
+            pass
 
     def _sync_launch_count(self):
         """起動する窓数を「窓数 − 既に開いているVRChat窓数」に合わせる。
@@ -2451,6 +2576,8 @@ class App(tk.Tk):
         self._refresh_run_respawn_check()
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_chase_check()
+        self._window_layout = _as_window_layout(data.get("window_layout"))   # 壊れた値は捨てる（DX）
+        App._refresh_forget_layout_button(self)
         self._apply_saved_window_settings()
         tnl_path = data.get("tnl_path", "")
         if not tnl_path:
@@ -3393,6 +3520,7 @@ class App(tk.Tk):
             "continue_drop_item":      SharedState.get_continue_drop_item(),
             "continue_restore_window": SharedState.get_continue_restore_window(),
             "run_respawn":             SharedState.get_run_respawn(),
+            "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
