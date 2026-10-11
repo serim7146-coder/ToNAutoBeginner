@@ -1148,7 +1148,8 @@ class App(tk.Tk):
 
     def _emergency_key_text(self) -> str:
         key = self.v_emergency_key.get()
-        return "緊急停止: 未設定" if not key else f"緊急停止: {HotKey.display(key)}キー"
+        # 画面では「停止」（DV3）。ログの [緊急停止] は今のまま
+        return "停止: 未設定" if not key else f"停止: {HotKey.display(key)}キー"
 
     @staticmethod
     def _chase_name(direction: str) -> str:
@@ -1160,10 +1161,13 @@ class App(tk.Tk):
         return f"{name}: 未設定" if not key else f"{name}: {HotKey.display(key)}キー"
 
     def _chase_keys_summary(self) -> str:
+        """「チェイス: F1/F2キー」。ほかのキーと同じく「キー」を付ける（DV3）"""
         keys = [self._chase_key_var(d).get() for d in ("cw", "ccw")]
         if not any(keys):
             return "チェイス: 未設定"
-        return "チェイス: " + "/".join(HotKey.display(k) if k else "未設定" for k in keys)
+        if all(keys):
+            return "チェイス: " + "/".join(HotKey.display(k) for k in keys) + "キー"
+        return "チェイス: " + "/".join(f"{HotKey.display(k)}キー" if k else "未設定" for k in keys)
 
     def _chase_key_var(self, direction: str):
         return self.v_chase_cw_key if direction == "cw" else self.v_chase_ccw_key
@@ -1187,9 +1191,10 @@ class App(tk.Tk):
     def _refresh_key_summary(self):
         """メインの画面の1行（表示だけ。変えるのは「⌨ キーバインド」の画面）"""
         try:
-            self.lbl_keys.config(text="・".join((self._emergency_key_text(),
+            # 並びはマクロ開始 → 停止 → 自爆キャンセル → チェイス（DV3）
+            self.lbl_keys.config(text="・".join((self._start_key_text(),
+                                                 self._emergency_key_text(),
                                                  self._suicide_cancel_key_text(),
-                                                 self._start_key_text(),
                                                  self._chase_keys_summary())))
         except (tk.TclError, AttributeError):
             pass
@@ -1261,7 +1266,7 @@ class App(tk.Tk):
         grid = ttk.Frame(body)
         grid.pack(fill="x")
 
-        def row(r, target, label_attr, note):
+        def row(r, target, label_attr):
             label = ttk.Label(grid, text="", foreground=config.GUI_ORG)
             label.grid(row=r, column=0, sticky="w", pady=2)
             setattr(self, label_attr, label)
@@ -1271,14 +1276,14 @@ class App(tk.Tk):
                 button = ttk.Button(grid, text=text, width=8, command=command)
                 button.grid(row=r, column=c, padx=(6, 0), pady=2)
                 setattr(self, self.KEY_BUTTONS[target][kind], button)
-            ttk.Label(grid, text=note).grid(row=r, column=3, sticky="w", padx=(10, 0))
 
-        # マクロ開始が先・緊急停止が後（依頼者の決定）。自爆キャンセル、チェイスの2つ
-        row(0, "start", "lbl_start_key", "開始だけ（動いているときに押しても何もしません）")
-        row(1, "stop", "lbl_emergency", "止める")
-        row(2, "cancel", "lbl_suicide_cancel_key", "そのラウンドは全窓とも自爆しない")
-        row(3, "cw", "lbl_chase_cw_key", "前面の窓が回り続ける（もう一度押すと止まる）")
-        row(4, "ccw", "lbl_chase_ccw_key", "")
+        # マクロ開始 → 停止 → 自爆キャンセル → チェイスの2つ（依頼者の決定）。
+        # 右の説明文は置かない（詳しくは README。DV3）
+        row(0, "start", "lbl_start_key")
+        row(1, "stop", "lbl_emergency")
+        row(2, "cancel", "lbl_suicide_cancel_key")
+        row(3, "cw", "lbl_chase_cw_key")
+        row(4, "ccw", "lbl_chase_ccw_key")
         # 使う・使わないのチェック（キーの表示はキーの行に任せる。DV2）
         ttk.Checkbutton(body, text="チェイスを使う",
                         variable=self.v_chase_enabled,
@@ -1309,8 +1314,8 @@ class App(tk.Tk):
                 return
             # 止める手段がボタンだけになる。確かめてから
             if not messagebox.askyesno(
-                    "緊急停止のキーの解除",
-                    "緊急停止のキーが無くなります。止めるのは「■ 停止」のボタンだけになります。"
+                    "停止のキーの解除",
+                    "停止のキーが無くなります。止めるのは「■ 停止」のボタンだけになります。"
                     "よろしいですか？",
                     parent=getattr(self, "_keybind_dialog", None) or self):
                 return
@@ -1801,26 +1806,24 @@ class App(tk.Tk):
         # 窓を戻すのは続行ラウンドの後だけ（全窓共通・保存・既定 ON）
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
-        ttk.Label(fcr, text="ラウンドの後:").pack(side="left")
-        ttk.Checkbutton(fcr, text="アイテムを落とす",
+        # 名前は短く、詳しくは README（DV3）
+        ttk.Checkbutton(fcr, text="アイテムドロップ",
                         variable=self.v_continue_drop_item,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(6, 0))
-        ttk.Label(fcr, text="続行ラウンドの後:").pack(side="left", padx=(18, 0))
-        ttk.Checkbutton(fcr, text="窓を戻す",
+                        command=self._on_continue_after_changed).pack(side="left")
+        ttk.Checkbutton(fcr, text="窓位置リセット",
                         variable=self.v_continue_restore_window,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(6, 0))
+                        command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
         # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
         self.v_run_respawn = tk.BooleanVar(value=True)
-        ttk.Label(fcr, text="Run:").pack(side="left", padx=(18, 0))
-        ttk.Checkbutton(fcr, text="リスポーンする",
+        ttk.Checkbutton(fcr, text="Runリスポーン",
                         variable=self.v_run_respawn,
-                        command=self._on_run_respawn_changed).pack(side="left", padx=(6, 0))
+                        command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
         # 霧看破の許可（ツール全体で1つ。既定は切る）。使えるインスタンスは README に
         self.v_fog_early_read = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="霧の即時判定",
+        ttk.Checkbutton(fcr, text="霧即時判定",
                         variable=self.v_fog_early_read,
-                        command=self._on_fog_early_read_changed).pack(side="left", padx=(18, 0))
+                        command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
 

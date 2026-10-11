@@ -495,8 +495,7 @@ class TestTheSetting(unittest.TestCase):
         self.assertIn("_RUN_RESPAWN = _Setting(True, bool)", src)
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_run_respawn = tk.BooleanVar(value=True)", gui)
-        self.assertIn('text="Run:"', gui)                   # DV2: 見出し＋短い名前
-        self.assertIn('text="リスポーンする"', gui)
+        self.assertIn('text="Runリスポーン"', gui)          # DV3: 見出しを無くして短い名前
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("Run のラウンドに入ったら、リスポーンして", readme)
 

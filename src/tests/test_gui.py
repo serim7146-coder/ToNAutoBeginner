@@ -1269,7 +1269,7 @@ class TestSettingsLive(unittest.TestCase):
         self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
         self.assertNotIn("突入で全窓停止", src)
         self.assertNotIn("ラウンドごとの扱い", src)
-        self.assertIn('text="霧の即時判定"', src)            # DV2 で短く
+        self.assertIn('text="霧即時判定"', src)              # DV3 で短く
 
     # ── 窓ごとの設定を動作中も反映 ─────────────────────
     def _live_app(self, running=True):
@@ -1360,7 +1360,7 @@ class TestGuiTweaks(unittest.TestCase):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('text="③ サウンド設定"', src)
         self.assertNotIn("音声アナウンス設定", src)
-        self.assertIn('text="霧の即時判定"', src)            # DV2 で短く
+        self.assertIn('text="霧即時判定"', src)              # DV3 で短く
         self.assertNotIn("霧看破を使う", src)
 
     # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────

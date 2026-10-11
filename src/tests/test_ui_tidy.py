@@ -230,7 +230,7 @@ class TestKeybindDialog(_AppCase):
         self.app.v_emergency_key.set("ctrl+p")
         self.app._refresh_emergency_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "緊急停止: Ctrl+Pキー・自爆キャンセル: ^キー・マクロ開始: 未設定・チェイス: F1/F2")
+                         "マクロ開始: 未設定・停止: Ctrl+Pキー・自爆キャンセル: ^キー・チェイス: F1/F2キー")
 
     def test_the_button_opens_the_dialog_once(self):
         button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
@@ -247,7 +247,7 @@ class TestKeybindDialog(_AppCase):
         self._dialog()
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"),
-                         f"緊急停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー")
+                         f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー")
         self.assertEqual(self.app.lbl_suicide_cancel_key.cget("text"), "自爆キャンセル: ^キー")
         self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1キー")
         self.assertEqual(self.app.lbl_chase_ccw_key.cget("text"), "チェイス（反時計回り）: F2キー")
@@ -279,7 +279,7 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
         self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "緊急停止: F8キー・自爆キャンセル: F7キー・マクロ開始: 未設定・チェイス: F1/F2")
+                         "マクロ開始: 未設定・停止: F8キー・自爆キャンセル: F7キー・チェイス: F1/F2キー")
 
     def test_the_overlap_check_is_the_same(self):
         self._dialog()
@@ -421,15 +421,14 @@ class TestDv2MainScreen(_AppCase):
         self.assertEqual((start.winfo_reqwidth(), start.winfo_reqheight()), size,
                          "止まっている／動いているで大きさが変わらない")
 
-    def test_the_short_check_names_with_headings(self):
+    def test_the_short_check_names(self):
+        """DV3: 見出しを無くして短い名前だけ（詳しくは README）"""
         row = next(w for w in self.app.pack_slaves()
-                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
+                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムドロップ"
                           for c in w.winfo_children()))
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
-        self.assertEqual(items, [("Label", "ラウンドの後:"), ("Checkbutton", "アイテムを落とす"),
-                                 ("Label", "続行ラウンドの後:"),             # DW で分けた
-                                 ("Checkbutton", "窓を戻す"), ("Label", "Run:"),
-                                 ("Checkbutton", "リスポーンする"), ("Checkbutton", "霧の即時判定")])
+        self.assertEqual(items, [("Checkbutton", "アイテムドロップ"), ("Checkbutton", "窓位置リセット"),
+                                 ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定")])
         variables = [str(w.cget("variable")) for w in row.pack_slaves()
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
@@ -483,7 +482,7 @@ class TestDv2Keys(_AppCase):
                          ("f6", "f5"))
         self.assertEqual(self.hook_chase.call_count, 2, "変えるたびにフックし直す")
         self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F6キー")
-        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F6/F5"),
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F6/F5キー"),
                         self.app.lbl_keys.cget("text"))
         self.assertEqual(self._hooked_chase_keys(), ["f6", "f5"])
 
@@ -521,8 +520,8 @@ class TestDv2Keys(_AppCase):
                                             self.app.v_suicide_cancel_key, self.app.v_chase_cw_key,
                                             self.app.v_chase_ccw_key)], [""] * 5)
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "緊急停止: 未設定・自爆キャンセル: 未設定・マクロ開始: 未設定・チェイス: 未設定")
-        self.assertEqual(self.app.lbl_emergency.cget("text"), "緊急停止: 未設定")
+                         "マクロ開始: 未設定・停止: 未設定・自爆キャンセル: 未設定・チェイス: 未設定")
+        self.assertEqual(self.app.lbl_emergency.cget("text"), "停止: 未設定")
         self.hook_cancel.assert_called_once_with()
         self.assertEqual(self.hook_chase.call_count, 2, "チェイスは解除のたびにフックし直す")
         self.assertEqual(self._hooked_chase_keys(), [], "両方解除したら何も拾わない")
@@ -531,7 +530,9 @@ class TestDv2Keys(_AppCase):
         with patch.object(mainGUI.messagebox, "askyesno", return_value=False) as ask:
             self._clear("stop")
         ask.assert_called_once()
-        self.assertIn("緊急停止のキーが無くなります", ask.call_args.args[1])
+        self.assertEqual(ask.call_args.args[0], "停止のキーの解除")          # DV3:「停止」
+        self.assertIn("停止のキーが無くなります", ask.call_args.args[1])
+        self.assertNotIn("緊急", ask.call_args.args[1])
         self.assertEqual(self.app.v_emergency_key.get(), config.EMERGENCY_STOP_KEY,
                          "いいえなら解除しない")
         with patch.object(mainGUI.messagebox, "askyesno", return_value=True):
@@ -611,3 +612,47 @@ class TestDv2Keys(_AppCase):
         self.assertEqual((self.app.v_emergency_key.get(), self.app.v_suicide_cancel_key.get()),
                          (config.EMERGENCY_STOP_KEY, config.SUICIDE_CANCEL_KEY),
                          "壊れた値は今までどおり既定")
+
+
+# ── DV3（言葉を短く・キーの並びと名前）──────────────────────
+class TestDv3(_AppCase):
+    def test_the_dialog_rows_have_no_notes(self):
+        """キーバインドの画面: マクロ開始 → 停止 → 自爆キャンセル → チェイス2つ。右の説明文は無い"""
+        self._dialog()
+        grid = self.app.lbl_start_key.master
+        labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
+                        for w in grid.grid_slaves() if isinstance(w, ttk.Label))
+        self.assertEqual(labels, [((0, 0), "マクロ開始: 未設定"),
+                                  ((1, 0), f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー"),
+                                  ((2, 0), "自爆キャンセル: ^キー"),
+                                  ((3, 0), "チェイス（時計回り）: F1キー"),
+                                  ((4, 0), "チェイス（反時計回り）: F2キー")])
+        texts = [w.cget("text") for w in _all_widgets(self.app._keybind_dialog)
+                 if isinstance(w, ttk.Label)]
+        self.assertFalse(any("緊急" in t for t in texts), texts)
+
+    def test_the_main_line_order_and_keys(self):
+        self.app.v_start_key.set("f9")
+        self.app._refresh_start_key_label()
+        self.assertEqual(self.app.lbl_keys.cget("text"),
+                         f"マクロ開始: F9キー・停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー"
+                         "・自爆キャンセル: ^キー・チェイス: F1/F2キー")
+        self.app.v_chase_ccw_key.set("")
+        self.app._refresh_chase_key_labels()
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F1キー/未設定"),
+                        self.app.lbl_keys.cget("text"))
+
+    def test_no_emergency_word_on_the_screens(self):
+        self._dialog()
+        for top in (self.app, self.app._keybind_dialog):
+            texts = [w.cget("text") for w in _all_widgets(top)
+                     if isinstance(w, (ttk.Label, ttk.Checkbutton, ttk.Button, tk.Button))]
+            self.assertFalse(any("緊急停止" in t for t in texts), texts)
+
+    def test_the_log_words_and_saved_names_stay(self):
+        """ログの [緊急停止] と保存の名前は変えない"""
+        gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn('self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")', gui)
+        for name in ("emergency_stop_key", "continue_drop_item", "continue_restore_window",
+                     "run_respawn", "fog_early_read_enabled"):
+            self.assertIn(f'"{name}"', gui, name)

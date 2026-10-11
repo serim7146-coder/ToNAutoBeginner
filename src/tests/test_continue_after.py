@@ -409,11 +409,9 @@ class TestTheSettings(unittest.TestCase):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_continue_drop_item = tk.BooleanVar(value=True)", gui)
         self.assertIn("self.v_continue_restore_window = tk.BooleanVar(value=True)", gui)
-        # DV2: 行の頭に見出し、チェックは短く。DW: 落とすのは「ラウンドの後:」
-        self.assertIn('text="ラウンドの後:"', gui)
-        self.assertIn('text="続行ラウンドの後:"', gui)
-        self.assertIn('text="アイテムを落とす"', gui)
-        self.assertIn('text="窓を戻す"', gui)
+        # DV3: 見出しを無くして短い名前（詳しくは README）
+        self.assertIn('text="アイテムドロップ"', gui)
+        self.assertIn('text="窓位置リセット"', gui)
 
     def test_the_checks_change_the_setting(self):
         app = type("FakeApp", (), {})()
@@ -449,7 +447,7 @@ class TestTheSettings(unittest.TestCase):
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("ラウンドの後にアイテムを落とす・続行ラウンドの後に窓を元の位置に戻す", readme)
+        self.assertIn("アイテムドロップ・窓位置リセット", readme)
         self.assertIn("どのラウンドでも、終わったら", readme)          # DW
 
 
