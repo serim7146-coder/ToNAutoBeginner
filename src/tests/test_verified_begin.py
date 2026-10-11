@@ -3795,7 +3795,7 @@ class TestBeginMiss(unittest.TestCase):
         self.assertEqual(files["begin_miss/窓2_1.png"],
                          (self.dir / "begin_miss" / "窓2_1.png").read_bytes(), "そのまま入れる")
         report = files["report.txt"].decode("utf-8")
-        self.assertIn("- Begin の撮影（見つからなかったとき）: begin_miss/窓2_1.png, begin_miss/窓2_2.png", report)
+        self.assertIn("- 撮影（Begin・Run の向きで見つからなかったとき）: begin_miss/窓2_1.png, begin_miss/窓2_2.png", report)
 
     def test_no_window_means_every_window(self):
         self._three_windows()
@@ -3808,13 +3808,13 @@ class TestBeginMiss(unittest.TestCase):
         include[BugReport.BEGIN_MISS] = False
         files = self._report(2, include)
         self.assertFalse([n for n in files if n.startswith("begin_miss/")])
-        self.assertIn("- Begin の撮影（見つからなかったとき）: 入れていません（未選択）",
+        self.assertIn("- 撮影（Begin・Run の向きで見つからなかったとき）: 入れていません（未選択）",
                       files["report.txt"].decode("utf-8"))
 
     def test_none_says_none(self):
         self._save(1, 1)
         files = self._report(4)
-        self.assertIn("- Begin の撮影（見つからなかったとき）: 無し", files["report.txt"].decode("utf-8"))
+        self.assertIn("- 撮影（Begin・Run の向きで見つからなかったとき）: 無し", files["report.txt"].decode("utf-8"))
 
     def test_too_big_drops_pictures_with_a_note(self):
         import numpy as np
@@ -3827,11 +3827,11 @@ class TestBeginMiss(unittest.TestCase):
         files = self._report(0, limit=one + 3000)
         pictures = [n for n in files if n.startswith("begin_miss/")]
         self.assertEqual(pictures, ["begin_miss/窓1_1.png"], "新しい方から外す")
-        self.assertIn("- Begin の撮影 begin_miss/窓2_1.png: 入れていません（大きすぎて収まらない）",
+        self.assertIn("- 撮影 begin_miss/窓2_1.png: 入れていません（大きすぎて収まらない）",
                       files["report.txt"].decode("utf-8"))
 
     def test_the_checkbox_and_the_note(self):
-        self.assertIn((BugReport.BEGIN_MISS, "Begin の撮影（見つからなかったとき）"), BugReport.ATTACHMENTS)
+        self.assertIn((BugReport.BEGIN_MISS, "撮影（Begin・Run の向きで見つからなかったとき）"), BugReport.ATTACHMENTS)
         self.assertIn("画面の撮影には一緒にいた人の名前が写ることがあります", mainGUI.ReportDialog.REPORT_NOTE)
 
 

@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 import BeginMiss
+import RunFace
 import config
 import ConnectDB            # .env を読み込む（同じ候補）。値は debug.log に書かないよう覚えている
 import DebugLog
@@ -36,7 +37,7 @@ SETTINGS = "settings"
 BEGIN_MISS = "begin_miss"       # Begin の位置合わせで見つからなかった撮影
 ATTACHMENTS = ((GUI_LOG, "画面のログ出力"), (DEBUG_LOG, "debug.log"),
                (VRCHAT_LOG, "選んだ窓の VRChat のログ"), (SETTINGS, "設定"),
-               (BEGIN_MISS, "Begin の撮影（見つからなかったとき）"))
+               (BEGIN_MISS, "撮影（Begin・Run の向きで見つからなかったとき）"))
 
 
 def webhook_url() -> str:
@@ -151,14 +152,15 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
     add(SETTINGS, "設定", "settings.json",
         json.dumps(settings_for_report(settings), ensure_ascii=False, indent=2, sort_keys=True), "")
 
-    # Begin の撮影（窓を選べばその窓の2枚、窓なしなら全部の窓の分）。PNG なのでそのまま入れる
+    # 撮影（Begin は窓を選べばその窓の2枚、Run の向きはその窓の分。窓なしなら全部の窓の分）。そのまま入れる
     images: dict[str, bytes] = {}
     if not include.get(BEGIN_MISS, False):
-        notes.append("- Begin の撮影（見つからなかったとき）: 入れていません（未選択）")
+        notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 入れていません（未選択）")
     else:
-        images = BeginMiss.files_for(window)
+        # Run の向きの撮影（DQ）も同じチェックで入れる（ほかのプレイヤーの名前が写りうる）
+        images = {**BeginMiss.files_for(window), **RunFace.files_for(window)}
         if not images:
-            notes.append("- Begin の撮影（見つからなかったとき）: 無し")
+            notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 無し")
     dropped: list[str] = []
 
     vrchat_name = f"vrchat_log_window{window}.txt" if window else ""
@@ -182,8 +184,8 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
                 vr_files[vrchat_name] = _clean(data.decode("utf-8", errors="replace")).encode("utf-8")
                 cut = "（末尾）" if _size(vrchat_log_path) > limit else ""
                 vr_notes.append(f"- 選んだ窓の VRChat のログ: {vrchat_name}{cut}")
-        image_notes = ([f"- Begin の撮影（見つからなかったとき）: {', '.join(images)}"] if images else [])
-        image_notes += [f"- Begin の撮影 {name}: 入れていません（大きすぎて収まらない）" for name in dropped]
+        image_notes = ([f"- 撮影（Begin・Run の向きで見つからなかったとき）: {', '.join(images)}"] if images else [])
+        image_notes += [f"- 撮影 {name}: 入れていません（大きすぎて収まらない）" for name in dropped]
         report = _report_txt(requirement, window, now, version, notes + image_notes + vr_notes)
         data = _zip({"report.txt": report.encode("utf-8"), **files, **images, **vr_files})
         if len(data) <= config.REPORT_MAX_BYTES:

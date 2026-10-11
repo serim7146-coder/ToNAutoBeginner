@@ -1607,37 +1607,62 @@ class ActionExecutor:
             self._run_respawn_idle.set()
 
     def _face_the_stairs(self, round_seq: int) -> int:
-        """撮影で階段の上の赤い光を探し、真ん中からずれていれば短く回して直す（背面・OSC。前面は借りない。
-        ほかの窓のフリーズ中でもよい）。光が左（回し足りない）→ LookLeft、右 → LookRight を
-        |ずれ| / (RUN_FACE_RATE × 幅) 秒（下限 RUN_FACE_MIN_SEC）。RUN_FACE_TRIES 回まで。直した回数を返す"""
-        head = f"[操作] [窓{self._st.window_idx}] Run: 向き"
+        """撮影で階段の上の構造の絵（RunFace）を探し、真ん中からずれていれば短く回して直す（背面・OSC。
+        前面は借りない。ほかの窓のフリーズ中でもよい）。目印が左（回し足りない）→ LookLeft、右 → LookRight を
+        min(RUN_FACE_MAX_SEC, max(RUN_FACE_MIN_SEC, |ずれ| / (RUN_FACE_RATE × 幅))) 秒。押した後に撮り直して、
+        ずれが大きくなった・目印が消えた → 直前の分を逆向きに同じ秒数押して戻し、止める（悪い向きのまま
+        手放さない。依頼者）。許しの中 → 止める。縮んだ → 続ける（RUN_FACE_TRIES 回まで）。
+        最初から目印が見つからない → 押さない。直した（残した）回数を返す"""
+        idx = self._st.window_idx
+        head = f"[操作] [窓{idx}] Run: 向き"
+        if not self._run_after_respawn(round_seq):
+            return 0
+        shot, mark = self._measure_face()
+        if mark is None:
+            DebugLog.write(f"{head}: 目印が見つからない → 今の向きのまま")
+            RunFace.save_shot(shot, idx, "notfound")
+            return 0
         fixed = 0
         while True:
-            if not self._run_after_respawn(round_seq):
-                return fixed
-            time.sleep(config.RUN_FACE_SETTLE_SEC)      # 回し終えてから撮る
-            shot = self._capture_bgr()
-            light = RunFace.find_light(shot) if shot is not None else None
-            if light is None:
-                DebugLog.write(f"{head}: 階段の光が見つからない → 今の向きのまま（直した {fixed} 回）")
-                return fixed
             width = shot.shape[1]
-            dx = light[0] - width / 2
+            dx = mark[0] - width / 2
+            DebugLog.write(f"{head}: 目印 x {mark[0]:.1f}（幅 {width}・一致 {mark[1]:.3f}・倍率 {mark[2]:.2f}）"
+                           f"・ずれ {dx:+.1f}")
             if abs(dx) <= width * config.RUN_FACE_TOL:
-                DebugLog.write(f"{head}: 光 x {light[0]:.1f}（幅 {width}）・ずれ {dx:+.1f} → 正面（直した {fixed} 回）")
+                DebugLog.write(f"{head}: 正面（直した {fixed} 回）")
                 return fixed
             if fixed >= config.RUN_FACE_TRIES:
                 DebugLog.write(f"{head}: {fixed} 回直しても ずれ {dx:+.1f} → やめる")
+                RunFace.save_shot(shot, idx, "tries")
                 return fixed
             if not self._run_after_respawn(round_seq):
                 return fixed
             address = "/input/LookLeft" if dx < 0 else "/input/LookRight"
-            sec = max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width))
-            DebugLog.write(f"{head}: 光 x {light[0]:.1f}（幅 {width}・塊 {light[1]}）・ずれ {dx:+.1f} → "
-                           f"{address} {sec:.3f}秒")
+            sec = min(config.RUN_FACE_MAX_SEC,
+                      max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width)))
+            DebugLog.write(f"{head}: {address} {sec:.3f}秒")
             self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
             self._osc.stop_all(repeat=1)
             fixed += 1
+            if not self._run_after_respawn(round_seq):
+                return fixed
+            new_shot, new_mark = self._measure_face()
+            if new_mark is None or abs(new_mark[0] - new_shot.shape[1] / 2) > abs(dx):
+                back = "/input/LookRight" if address == "/input/LookLeft" else "/input/LookLeft"
+                why = ("目印が消えた" if new_mark is None
+                       else f"ずれが大きくなった（{new_mark[0] - new_shot.shape[1] / 2:+.1f}）")
+                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める（ずれ {dx:+.1f} の向き）")
+                self._osc.press(back, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                self._osc.stop_all(repeat=1)
+                RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "reverted")
+                return fixed - 1
+            shot, mark = new_shot, new_mark
+
+    def _measure_face(self):
+        """回し終えるのを待って撮り、目印を探す。(撮影 or None, 目印 or None)"""
+        time.sleep(config.RUN_FACE_SETTLE_SEC)
+        shot = self._capture_bgr()
+        return shot, (RunFace.find_mark(shot) if shot is not None else None)
 
     def _respawn_when_free(self, round_seq: int) -> str | None:
         """ほかの窓のフリーズが無いときに、前面を借りてリスポーンする。できたら None、だめなら理由。
@@ -1735,20 +1760,35 @@ class ActionExecutor:
                 if stop:
                     return stop
                 seen = st.respawn_seen_seq
-                DebugLog.write(f"{head} リスポーンのボタンを押す {point}")
-                WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
-                deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
-                while st.respawn_seen_seq == seen:
-                    if time.time() >= deadline:
-                        DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
-                        return "リスポーンの行が来ない"
+                for presses in (1, 2):
+                    DebugLog.write(f"{head} リスポーンのボタンを押す {point}（{presses} 回目）")
+                    WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
+                    deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
+                    while st.respawn_seen_seq == seen and time.time() < deadline:
+                        stop = self._respawn_stop(round_seq)
+                        if stop:
+                            return stop
+                        time.sleep(config.RUN_RESPAWN_POLL_SEC)
+                    if st.respawn_seen_seq != seen:
+                        menu = False            # 押せた（メニューは閉じている）
+                        DebugLog.write(f"{head} 「Player respawned」を受けた")
+                        return None
+                    DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
+                    if presses == 2:
+                        break
+                    # 押し損ねたかもしれない（重い窓）。ボタンがまだ写っていれば、もう1回だけ押す
+                    shot = self._capture_bgr()
+                    again = RespawnButton.find(shot) if shot is not None else None
+                    if again is None:
+                        DebugLog.write(f"{head} ボタンがもう写っていない → 押し直さない")
+                        break
+                    point = (int(round(again[0] + origin[0])), int(round(again[1] + origin[1])))
+                    if not self._place_cursor(point, head):
+                        return "カーソルを置けない"
                     stop = self._respawn_stop(round_seq)
                     if stop:
                         return stop
-                    time.sleep(config.RUN_RESPAWN_POLL_SEC)
-                menu = False                    # 押せた（メニューは閉じている）
-                DebugLog.write(f"{head} 「Player respawned」を受けた")
-                return None
+                return "リスポーンの行が来ない"
             finally:
                 try:
                     if menu and WindowOperator.foreground_hwnd() == hwnd:

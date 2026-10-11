@@ -300,17 +300,19 @@ CONTINUE_WINDOWED_POLL_SEC = 0.1
 RESPAWN_MENU_WAIT_SEC = 1.0       # Esc を押してからメニューを撮るまで
 RESPAWN_FIND_TRIES    = 3         # ボタンを探す撮影の回数（見つからなければ撮り直す）
 RESPAWN_FIND_RETRY_SEC = 0.3
-RESPAWN_CLICK_SEC     = 0.08      # リスポーンのボタンを押している長さ
+RESPAWN_CLICK_SEC     = 0.15      # リスポーンのボタンを押している長さ（0.08 は FPS 17〜18 の窓で取りこぼした）
 RESPAWN_LOG_WAIT_SEC  = 2.0       # 押してから「Player respawned」の行を待つ上限
 RUN_RESPAWN_BACK_SEC  = 2.85      # リスポーンの後、後ろへ下がる長さ（赤い膜を後ろ向きに通る）
 RUN_RESPAWN_TURN_SEC  = 0.9       # その後、左へ回る長さ（真後ろ → 正面。0.8 は足りない・1.0 は回しすぎ）
 RUN_RESPAWN_POLL_SEC  = 0.1       # ほかの窓のフリーズが解けるのを待つ・行を待つ間隔
-# 左へ回した後、撮影で階段の上の赤い光（RunFace）を探して真正面に直す（DO。依頼者 2026-10-11）
-RUN_FACE_TOL         = 0.03       # 光が真ん中から撮影の幅のこの割合以内なら終わり
-RUN_FACE_RATE        = 1.27       # 回す速さ（撮影の幅 / 秒）。0.05 秒で 867 幅の ±55 px（実機）
+# 左へ回した後、撮影で階段の上の構造の絵（RunFace）を探して真正面に直す（DO・DQ。依頼者 2026-10-11）
+RUN_FACE_TOL         = 0.03       # 目印が真ん中から撮影の幅のこの割合以内なら終わり
+RUN_FACE_RATE        = 1.22       # 回す速さ（撮影の幅 / 秒）。0.15 秒までは比例（窓1 の実測）
 RUN_FACE_MIN_SEC     = 0.02       # 押す長さの下限
+RUN_FACE_MAX_SEC     = 0.10       # 押す長さの上限（0.15 秒を超えると急に回りすぎる。0.2 秒で 310 px）
 RUN_FACE_SETTLE_SEC  = 0.35       # 回してから撮るまで
-RUN_FACE_TRIES       = 4          # 直す回数の上限
+RUN_FACE_TRIES       = 6          # 直す回数の上限
+RUN_FACE_MATCH_MIN   = 0.8        # 目印の絵の一致がこれ未満なら見つからない
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、
 # クリックの「押す→0.1秒→離す」の間で足りているので待たない（依頼者が後で調整する）

@@ -124,7 +124,7 @@ class _Case(unittest.TestCase):
         self.ex.do_run_respawn(self.st.round_seq)
 
     POINT = (int(BUTTON[0] + ORIGIN[0]), int(BUTTON[1] + ORIGIN[1]))
-    WHOLE = ["borrow", ("keys", "esc"), "find", ("cursor", POINT), ("click", 0.08), "return",
+    WHOLE = ["borrow", ("keys", "esc"), "find", ("cursor", POINT), ("click", 0.15), "return",
              ("cursor", (11, 22)),
              ("osc", "/input/MoveBackward", 2.85), "release", ("osc", "/input/LookLeft", 0.9), "release"]
 
@@ -140,18 +140,18 @@ class TestTheWholeRun(_Case):
     def test_the_values(self):
         self.assertEqual((config.RUN_RESPAWN_BACK_SEC, config.RUN_RESPAWN_TURN_SEC, config.RESPAWN_MENU_WAIT_SEC,
                           config.RESPAWN_CLICK_SEC, config.RESPAWN_LOG_WAIT_SEC, RespawnButton.MATCH_MIN),
-                         (2.85, 0.9, 1.0, 0.08, 2.0, 0.8))
+                         (2.85, 0.9, 1.0, 0.15, 2.0, 0.8))
 
     def test_the_cursor_is_placed_again_when_it_moved(self):
         self.w.reads = [(1280, 719)]
         self._run()
         self.assertEqual(self.w.events.count(("cursor", self.POINT)), 2)
-        self.assertIn(("click", 0.08), self.w.events)
+        self.assertIn(("click", 0.15), self.w.events)
 
     def test_a_cursor_that_cannot_be_placed_does_not_click(self):
         self.w.reads = [(1280, 719)] * 3
         self._run()
-        self.assertNotIn(("click", 0.08), self.w.events)
+        self.assertNotIn(("click", 0.15), self.w.events)
         self.assertEqual(self.w.events[-3:], [("keys", "esc"), "return", ("cursor", (11, 22))])
         self.assertFalse([e for e in self.w.events if e[0] == "osc"])
 
@@ -162,13 +162,40 @@ class TestTheWholeRun(_Case):
                                          "return", ("cursor", (11, 22))])
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンのボタンが見つからない）"])
 
-    def test_no_respawn_line_closes_the_menu_and_does_not_move(self):
+    def test_no_respawn_line_presses_once_more_then_closes_the_menu(self):
+        """行が来ない → ボタンがまだ写っているのを確かめて、もう1回だけ押す → それでも来なければ Esc（DQ）"""
         self.w.respawns = False
         self._run()
-        self.assertEqual(self.w.events, ["borrow", ("keys", "esc"), "find", ("cursor", self.POINT), ("click", 0.08),
+        self.assertEqual(self.w.events, ["borrow", ("keys", "esc"), "find", ("cursor", self.POINT), ("click", 0.15),
+                                         "find", ("cursor", self.POINT), ("click", 0.15),
                                          ("keys", "esc"), "return", ("cursor", (11, 22))])
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンの行が来ない）"])
-        self.assertLess(self.w.now[0], config.RESPAWN_MENU_WAIT_SEC + config.RESPAWN_LOG_WAIT_SEC + 0.5)
+        self.assertLess(self.w.now[0], config.RESPAWN_MENU_WAIT_SEC + 2 * config.RESPAWN_LOG_WAIT_SEC + 0.5)
+
+    def test_the_second_press_goes_through(self):
+        """1回目を取りこぼした（重い窓）→ 2回目で行が来る → 続ける"""
+        clicks = {"n": 0}
+        real = WindowOperator.mouse_click.side_effect
+
+        def click(sec, pause=False):
+            clicks["n"] += 1
+            self.w.respawns = clicks["n"] >= 2
+            real(sec, pause)
+        with patch.object(WindowOperator, "mouse_click", side_effect=click):
+            self._run()
+        self.assertEqual(clicks["n"], 2)
+        self.assertEqual(self.w.events.count(("click", 0.15)), 2)
+        self.assertIn(("osc", "/input/MoveBackward", 2.85), self.w.events)
+        self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
+
+    def test_no_second_press_when_the_button_is_gone(self):
+        self.w.respawns = False
+        found = iter([(BUTTON[0], BUTTON[1], 0.99, 1.0), None])
+        self.w.found = None
+        with patch.object(RespawnButton, "find", side_effect=lambda _s: self.w.events.append("find") or next(found)):
+            self._run()
+        self.assertEqual(self.w.events.count(("click", 0.15)), 1, "押し直さない")
+        self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンの行が来ない）"])
 
     def test_not_private_no_osc_or_off_does_nothing(self):
         for setup in (lambda: setattr(self.st, "instance_type", config.INSTANCE_PUBLIC),
@@ -216,7 +243,7 @@ class TestTheWholeRun(_Case):
     def test_stopped_while_the_menu_is_open_closes_it(self):
         self.w.on_find = lambda: self.running.update(on=False)
         self._run()
-        self.assertNotIn(("click", 0.08), self.w.events)
+        self.assertNotIn(("click", 0.15), self.w.events)
         self.assertEqual(self.w.events[-3:], [("keys", "esc"), "return", ("cursor", (11, 22))])
 
 
@@ -277,7 +304,7 @@ class TestTheFreezes(_Case):
         first = self.w.events.index("return")
         self.assertEqual(self.w.events[:first + 2], ["borrow", ("keys", "esc"), "find", ("cursor", self.POINT),
                                                      ("keys", "esc"), "return", ("cursor", (11, 22))])
-        self.assertNotIn(("click", 0.08), self.w.events[:first])
+        self.assertNotIn(("click", 0.15), self.w.events[:first])
         self.assertEqual(self.w.events[first + 2:], self.WHOLE, "解けたらやり直す")
         self.assertTrue(all(self.w.locked))
 
@@ -287,7 +314,7 @@ class TestTheFreezes(_Case):
         clicked = {"n": 0}
 
         def on_sleep():
-            if ("click", 0.08) in self.w.events and not clicked["n"]:
+            if ("click", 0.15) in self.w.events and not clicked["n"]:
                 clicked["n"] = 1
                 SharedState.continue_round_start(other)
             elif clicked["n"] and "return" in self.w.events:
@@ -530,10 +557,10 @@ class TestRoundOverRightAfterTheRespawn(_Case):
 
     def test_the_facing_fix_goes_on_after_the_round_over(self):
         self._round_over_while_backing()
-        lights = iter([(433.5 - 120, 500), (433.5, 500)])
+        lights = iter([(433.5 - 120, 0.9, 1.0), (433.5, 0.9, 1.0)])
         frame = __import__("numpy").zeros((702, 867, 3), "uint8")
         with patch.object(self.ex, "_capture_bgr", return_value=frame), \
-             patch.object(ActionExecutor.RunFace, "find_light", side_effect=lambda _s: next(lights)):
+             patch.object(ActionExecutor.RunFace, "find_mark", side_effect=lambda _s: next(lights)):
             self._run()
         self.assertEqual([e for e in self.w.events if e[0] == "osc"][-1][1], "/input/LookLeft")
         self.assertEqual(len([e for e in self.w.events if e[0] == "osc"]), 3, "後ろ・左 0.9・直し 1 回")
@@ -593,5 +620,5 @@ class TestRoundOverRightAfterTheRespawn(_Case):
         """リスポーンする前（メニュー・ボタン）は今どおり in_round も見る"""
         self.w.on_find = lambda: setattr(self.st, "in_round", False)
         self._run()
-        self.assertNotIn(("click", 0.08), self.w.events)
+        self.assertNotIn(("click", 0.15), self.w.events)
         self.assertFalse([e for e in self.w.events if e[0] == "osc"])
