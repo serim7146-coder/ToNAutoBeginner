@@ -645,7 +645,7 @@ class TestBugReportDialog(unittest.TestCase):
         return dialog
 
     def test_the_button_is_last_on_the_row(self):
-        last = self.app.btn_start.master.pack_slaves()[-1]
+        last = self.app.btn_start_stop.master.pack_slaves()[-1]
         self.assertEqual(last.cget("text"), "報告")
 
     def test_the_window_defaults_to_the_selected_tab(self):

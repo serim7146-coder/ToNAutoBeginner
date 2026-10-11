@@ -791,6 +791,7 @@ class App(tk.Tk):
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._running = False
+        self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
         self._log_line_count = 0
         self._emergency_stop_key_pressed = False
@@ -948,7 +949,7 @@ class App(tk.Tk):
         self._stop()
 
     def _on_start_key(self, key: str):
-        if self._start_button_disabled():
+        if self._cannot_start_now():
             # 黙って無視すると「キーが効かない」と見える。押された瞬間だけ
             # 出すので、押し続けても増えない
             self._log("[マクロ開始] いま押せません（動作中か起動中）")
@@ -1082,16 +1083,49 @@ class App(tk.Tk):
                 monitor.on_chase_key(direction, HotKey.display(key))
                 return
 
-    def _start_button_disabled(self) -> bool:
-        """「▶ マクロ開始」が押せない状態か（動作中・起動中など）。
+    def _cannot_start_now(self) -> bool:
+        """マクロ開始のキーで開始してはいけない状態か（動作中・開始や停止の途中）。
 
-        走っているかを自前で持たず、ボタンの状態で見る。押せない場面は
-        ボタンを disabled にすることで表しているため
+        開始と停止は1つのボタンで、動いているときも「■ 停止」として押せる。だから
+        ボタンの状態ではなく、走っているかで見る（DV。キーは開始だけ）
         """
+        return bool(getattr(self, "_running", False) or getattr(self, "_start_stop_busy", False))
+
+    # ── 開始・停止のボタン（1つ。DV）──────────────────
+    def _refresh_start_stop_button(self):
+        """止まっているときは「▶ マクロ開始」（緑）、動いているときは「■ 停止」（赤）。
+        開始・停止の途中は押せない"""
+        running = bool(getattr(self, "_running", False))
         try:
-            return str(self.btn_start.cget("state")) == "disabled"
+            self.btn_start_stop.config(
+                text="■ 停止" if running else "▶ マクロ開始",
+                bg="#3a1a24" if running else "#1a3a2a",
+                activebackground="#4a2430" if running else "#24503a",
+                fg=config.GUI_RED if running else config.GUI_GRN,
+                activeforeground=config.GUI_RED if running else config.GUI_GRN,
+                state="disabled" if getattr(self, "_start_stop_busy", False) else "normal")
         except (tk.TclError, AttributeError):
-            return True
+            pass
+
+    def _on_start_stop_button(self):
+        """押したときの動きは今までの2つのボタンと同じ（止まっていれば開始、動いていれば停止）。
+        途中は押せないようにし、少し待ってから押せるように戻す——途中に積まれたクリックで
+        開始・停止が続けて走らないため"""
+        if self._start_stop_busy:
+            return
+        self._start_stop_busy = True
+        self._refresh_start_stop_button()
+        try:
+            if self._running:
+                self._stop()
+            else:
+                self._start()
+        finally:
+            self.after(config.START_STOP_REARM_MS, self._rearm_start_stop_button)
+
+    def _rearm_start_stop_button(self):
+        self._start_stop_busy = False
+        self._refresh_start_stop_button()
 
     def _fall_back_to_default_key(self, reason: str):
         """不正なキーは既定値へ倒す。効かない緊急停止を抱えたままにしない"""
@@ -1103,21 +1137,39 @@ class App(tk.Tk):
         self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
                   "キーに戻しました")
 
-    def _refresh_emergency_key_label(self):
+    def _emergency_key_text(self) -> str:
+        return f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー"
+
+    def _suicide_cancel_key_text(self) -> str:
+        key = self.v_suicide_cancel_key.get()
+        return "自爆キャンセル: 未設定" if not key else f"自爆キャンセル: {HotKey.display(key)}キー"
+
+    def _start_key_text(self) -> str:
+        key = self.v_start_key.get()
+        return "マクロ開始: 未設定" if not key else f"マクロ開始: {HotKey.display(key)}キー"
+
+    def _set_key_label(self, name: str, text: str):
+        """キーバインドの画面の行（開いていれば）と、メインの画面の1行を今のキーに合わせる"""
         try:
-            self.lbl_emergency.config(
-                text=f"緊急停止: {HotKey.display(self.v_emergency_key.get())}キー")
+            getattr(self, name).config(text=text)
+        except (tk.TclError, AttributeError):
+            pass                    # キーバインドの画面を開いていない・閉じた
+        self._refresh_key_summary()
+
+    def _refresh_key_summary(self):
+        """メインの画面の1行（表示だけ。変えるのは「⌨ キーバインド」の画面）"""
+        try:
+            self.lbl_keys.config(text="・".join((self._emergency_key_text(),
+                                                 self._suicide_cancel_key_text(),
+                                                 self._start_key_text())))
         except (tk.TclError, AttributeError):
             pass
 
+    def _refresh_emergency_key_label(self):
+        self._set_key_label("lbl_emergency", self._emergency_key_text())
+
     def _refresh_suicide_cancel_key_label(self):
-        key = self.v_suicide_cancel_key.get()
-        text = ("自爆キャンセル: 未設定" if not key
-                else f"自爆キャンセル: {HotKey.display(key)}キー")
-        try:
-            self.lbl_suicide_cancel_key.config(text=text)
-        except (tk.TclError, AttributeError):
-            pass
+        self._set_key_label("lbl_suicide_cancel_key", self._suicide_cancel_key_text())
 
     def _suicide_cancel_key_conflict(self, key) -> str | None:
         """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
@@ -1131,13 +1183,64 @@ class App(tk.Tk):
         return None
 
     def _refresh_start_key_label(self):
-        key = self.v_start_key.get()
-        text = ("マクロ開始: 未設定" if not key
-                else f"マクロ開始: {HotKey.display(key)}キー")
+        self._set_key_label("lbl_start_key", self._start_key_text())
+
+    # ── キーバインドの画面（DV）──────────────────────
+    def _open_keybind_dialog(self):
+        """キーの変更・解除をまとめた画面。変更のやり方・重なりの確認・保存は今までのまま。
+        開いていれば前に出すだけ"""
+        dialog = getattr(self, "_keybind_dialog", None)
         try:
-            self.lbl_start_key.config(text=text)
-        except (tk.TclError, AttributeError):
+            if dialog is not None and dialog.winfo_exists():
+                dialog.lift()
+                return
+        except tk.TclError:
             pass
+        dialog = tk.Toplevel(self)
+        self._keybind_dialog = dialog
+        dialog.title("キーバインド")
+        dialog.configure(bg=config.GUI_BG)
+        dialog.resizable(False, False)
+        body = ttk.Frame(dialog, padding=10)
+        body.pack(fill="both", expand=True)
+        grid = ttk.Frame(body)
+        grid.pack(fill="x")
+
+        def row(r, label_attr, buttons, note=""):
+            label = ttk.Label(grid, text="", foreground=config.GUI_ORG)
+            label.grid(row=r, column=0, sticky="w", pady=2)
+            setattr(self, label_attr, label)
+            for c, (attr, text, command) in enumerate(buttons, start=1):
+                button = ttk.Button(grid, text=text, width=8, command=command)
+                button.grid(row=r, column=c, padx=(6, 0), pady=2)
+                setattr(self, attr, button)
+            if note:
+                ttk.Label(grid, text=note).grid(row=r, column=3, sticky="w", padx=(10, 0))
+
+        # マクロ開始が先・緊急停止が後（依頼者の決定）。自爆キャンセルは最後
+        row(0, "lbl_start_key",
+            [("btn_capture_start_key", "変更", lambda: self._begin_capture_key("start")),
+             ("btn_clear_start_key", "解除", self._clear_start_key)],
+            "開始だけ（動いているときに押しても何もしません）")
+        row(1, "lbl_emergency", [("btn_capture_key", "変更", self._begin_capture_key)],
+            "止める")
+        row(2, "lbl_suicide_cancel_key",
+            [("btn_capture_cancel_key", "変更", lambda: self._begin_capture_key("cancel"))],
+            "そのラウンドは全窓とも自爆しない")
+        # チェイスのキーは変えられない（表示だけ）。使う・使わないのチェックはここ
+        chase = ttk.LabelFrame(body, text="チェイス", padding=6)
+        chase.pack(fill="x", pady=(8, 0))
+        self.lbl_chase_keys = ttk.Label(
+            chase, text=f"時計回り: {HotKey.display(config.CHASE_CW_KEY)}キー・"
+                        f"反時計回り: {HotKey.display(config.CHASE_CCW_KEY)}キー（変えられません）")
+        self.lbl_chase_keys.pack(anchor="w")
+        ttk.Checkbutton(chase, text="チェイス（F1・F2）を使う",
+                        variable=self.v_chase_enabled,
+                        command=self._on_chase_enabled_changed).pack(anchor="w", pady=(4, 0))
+        ttk.Button(body, text="閉じる", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
+        self._refresh_start_key_label()
+        self._refresh_emergency_key_label()
+        self._refresh_suicide_cancel_key_label()
 
     def _clear_start_key(self):
         """マクロ開始のキーを消して無効に戻す"""
@@ -1155,7 +1258,7 @@ class App(tk.Tk):
         return self.btn_capture_start_key if target == "start" else self.btn_capture_key
 
     def _begin_capture_key(self, target: str = "stop"):
-        """「キーを押して設定」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる。
+        """キーバインドの画面の「変更」。捕捉は別スレッド——read_hotkey は待つのでGUIが固まる。
 
         target は "stop"（緊急停止）か "start"（マクロ開始）。捕捉中は
         _capturing_key で両方の検知を止める（設定しようとした打鍵で
@@ -1184,8 +1287,7 @@ class App(tk.Tk):
         self._emergency_stop_key_pressed = False
         self._start_key_pressed = False
         try:
-            self._capture_button(target).config(text="キーを押して設定",
-                                                state="normal")
+            self._capture_button(target).config(text="変更", state="normal")
         except (tk.TclError, AttributeError):
             pass
         if target == "start":
@@ -1488,12 +1590,14 @@ class App(tk.Tk):
         # コントロール
         fc = ttk.Frame(self)
         fc.pack(pady=6)
-        self.btn_start = ttk.Button(fc, text="▶ マクロ開始",
-                                    command=self._start, width=16)
-        self.btn_start.pack(side="left", padx=6)
-        self.btn_stop  = ttk.Button(fc, text="■ 停止",
-                                    command=self._stop, state="disabled", width=12)
-        self.btn_stop.pack(side="left", padx=6)
+        # 開始と停止は1つのボタン（DV）。キーは別々のまま（マクロ開始のキーは開始だけ）
+        self.btn_start_stop = tk.Button(
+            fc, text="", width=14, font=(UIFont.UI, 10, "bold"), relief="raised",
+            disabledforeground="#6c7086", command=self._on_start_stop_button)
+        self.btn_start_stop.pack(side="left", padx=6)
+        self._refresh_start_stop_button()
+        ttk.Button(fc, text="⌨ キーバインド",
+                   command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
@@ -1501,35 +1605,14 @@ class App(tk.Tk):
         ttk.Button(fc, text="報告",
                    command=self._open_report, width=8).pack(side="left", padx=6)
 
-        # キー設定の行: マクロ開始のキー、続けて緊急停止のキー（依頼者の決定）。
+        # 今のキーを1行で表示だけ（変えるのは「⌨ キーバインド」の画面。DV）。
         # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
         fsk = ttk.Frame(self)
         fsk.pack(pady=(0, 4))
-        self.lbl_start_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
-        self.lbl_start_key.pack(side="left")
-        self.btn_capture_start_key = ttk.Button(
-            fsk, text="キーを押して設定", width=16,
-            command=lambda: self._begin_capture_key("start"))
-        self.btn_capture_start_key.pack(side="left", padx=(6, 0))
-        self.btn_clear_start_key = ttk.Button(fsk, text="解除", width=6,
-                                              command=self._clear_start_key)
-        self.btn_clear_start_key.pack(side="left", padx=(4, 0))
-        self._refresh_start_key_label()
-        self.lbl_emergency = ttk.Label(fsk, text="",
-                                       foreground=config.GUI_ORG)
-        self.lbl_emergency.pack(side="left", padx=(16, 0))
-        self.btn_capture_key = ttk.Button(fsk, text="キーを押して設定", width=16,
-                                          command=self._begin_capture_key)
-        self.btn_capture_key.pack(side="left", padx=(6, 0))
-        self._refresh_emergency_key_label()
-        # 自爆キャンセルのキーは行の最後
-        self.lbl_suicide_cancel_key = ttk.Label(fsk, text="", foreground=config.GUI_ORG)
-        self.lbl_suicide_cancel_key.pack(side="left", padx=(16, 0))
-        self.btn_capture_cancel_key = ttk.Button(
-            fsk, text="キーを押して設定", width=16,
-            command=lambda: self._begin_capture_key("cancel"))
-        self.btn_capture_cancel_key.pack(side="left", padx=(6, 0))
-        self._refresh_suicide_cancel_key_label()
+        self.lbl_keys = ttk.Label(fsk, text="", foreground=config.GUI_ORG,
+                                  font=(UIFont.UI, 9))
+        self.lbl_keys.pack(side="left")
+        self._refresh_key_summary()
 
         # 完全放置モード（全窓共通）
         fhf = ttk.Frame(self)
@@ -1565,22 +1648,36 @@ class App(tk.Tk):
         self.btn_item_fetch.pack(side="left", padx=(8, 0))
         self._refresh_item_fetch_button()
 
-        # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない
-        ffz = ttk.Frame(self)
-        ffz.pack(pady=(0, 4))
+        # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない。
+        # 先読み（速度検知）とラウンド突入を1つの枠に（DV）。速度検知のボタンのすぐ下
+        self.freeze_frame = ttk.LabelFrame(self, text="フリーズ", padding=(8, 2))
+        self.freeze_frame.pack(pady=(0, 4))
+        fpre = ttk.Frame(self.freeze_frame)
+        fpre.pack(anchor="w")
+        ttk.Label(fpre, text="先読み（速度検知）:").pack(side="left")
         self.v_freeze_8pages = tk.BooleanVar(value=False)
         self.v_freeze_punish = tk.BooleanVar(value=False)
-        ttk.Checkbutton(ffz, text="8 Pages検知でフリーズ", variable=self.v_freeze_8pages,
+        ttk.Checkbutton(fpre, text="8 Pages", variable=self.v_freeze_8pages,
                         command=lambda: self._on_speed_freeze_changed("8 Pages")
-                        ).pack(side="left")
-        ttk.Checkbutton(ffz, text="Punished検知でフリーズ", variable=self.v_freeze_punish,
+                        ).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(fpre, text="Punished", variable=self.v_freeze_punish,
                         command=lambda: self._on_speed_freeze_changed("Punished")
-                        ).pack(side="left", padx=(12, 0))
+                        ).pack(side="left", padx=(8, 0))
+        ffr = ttk.Frame(self.freeze_frame)
+        ffr.pack(anchor="w")
+        ttk.Label(ffr, text="ラウンド突入:").pack(side="left")
+        self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
+        for name, var in self.v_freeze_rounds.items():
+            ttk.Checkbutton(ffr, text=name, variable=var,
+                            command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
+
+        ffz = ttk.Frame(self)
+        ffz.pack(pady=(0, 4))
         # 霧看破の許可（ツール全体で1つ。既定は切る）
         self.v_fog_early_read = tk.BooleanVar(value=False)
         ttk.Checkbutton(ffz, text="霧を即時判定する（Friends・Invite+・Invite のみ）",
                         variable=self.v_fog_early_read,
-                        command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
+                        command=self._on_fog_early_read_changed).pack(side="left")
 
         # 続行ラウンドの後（全窓共通・保存・既定 ON）
         fcr = ttk.Frame(self)
@@ -1595,22 +1692,11 @@ class App(tk.Tk):
                         command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）
         self.v_run_respawn = tk.BooleanVar(value=True)
-        # チェイス（F1・F2）を使う（全窓共通・保存・既定 ON）
+        # チェイス（F1・F2）を使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="チェイス（F1・F2）を使う",
-                        variable=self.v_chase_enabled,
-                        command=self._on_chase_enabled_changed).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(fcr, text="Run でリスポーンして正面を向く",
                         variable=self.v_run_respawn,
                         command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
-
-        ffr = ttk.Frame(self)
-        ffr.pack(pady=(0, 4))
-        ttk.Label(ffr, text="ラウンド突入でフリーズ:").pack(side="left")
-        self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
-        for name, var in self.v_freeze_rounds.items():
-            ttk.Checkbutton(ffr, text=name, variable=var,
-                            command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
@@ -2514,8 +2600,7 @@ class App(tk.Tk):
 
         self._start_window_volume()
         self._running = True
-        self.btn_start.config(state="disabled")
-        self.btn_stop.config(state="normal")
+        self._refresh_start_stop_button()
         self.lbl_win_warn.config(
             text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
@@ -2610,8 +2695,7 @@ class App(tk.Tk):
         self.monitors.clear()
         self._show_own_windows_again()
         self._running = False
-        self.btn_start.config(state="normal")
-        self.btn_stop.config(state="disabled")
+        self._refresh_start_stop_button()
         self.lbl_win_warn.config(
             text="※ 窓数はマクロ起動前に設定してください", foreground=config.GUI_YLW)
         self._log("[停止] マクロを停止しました")

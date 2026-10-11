@@ -1265,7 +1265,7 @@ class TestSettingsLive(unittest.TestCase):
     # ── 表示の名前 ─────────────────────────────
     def test_the_two_renamed_labels(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertIn('text="ラウンド突入でフリーズ:"', src)
+        self.assertIn('text="ラウンド突入:"', src)          # フリーズの枠の中（DV）
         self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
         self.assertNotIn("突入で全窓停止", src)
         self.assertNotIn("ラウンドごとの扱い", src)
@@ -1365,15 +1365,16 @@ class TestGuiTweaks(unittest.TestCase):
 
     # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────
     def _speed_check(self, text):
-        for row in self.app.winfo_children():
-            for child in row.winfo_children():
-                if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
-                    return child
+        """フリーズの枠の「先読み（速度検知）」の行（DV）"""
+        row = self.app.freeze_frame.pack_slaves()[0]
+        for child in row.winfo_children():
+            if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
+                return child
         self.fail(text)
 
     def test_checking_a_speed_freeze_checks_the_same_round_entry_freeze(self):
-        for text, name, other in (("8 Pages検知でフリーズ", "8 Pages", "Punished"),
-                                  ("Punished検知でフリーズ", "Punished", "8 Pages")):
+        for text, name, other in (("8 Pages", "8 Pages", "Punished"),
+                                  ("Punished", "Punished", "8 Pages")):
             for var in self.app.v_freeze_rounds.values():
                 var.set(False)
             self.saved.reset_mock()
@@ -1389,7 +1390,7 @@ class TestGuiTweaks(unittest.TestCase):
 
     def test_unchecking_does_not_check_the_round_entry_side(self):
         self.app.v_freeze_8pages.set(True)          # 読み込みなどで入っていた
-        self._speed_check("8 Pages検知でフリーズ").invoke()      # 外す
+        self._speed_check("8 Pages").invoke()      # 外す
         self.assertFalse(self.app.v_freeze_8pages.get())
         self.assertFalse(self.app.v_freeze_rounds["8 Pages"].get(), "外すときは連動しない")
 
@@ -1523,13 +1524,11 @@ class TestGuiTweaks(unittest.TestCase):
         self.assertFalse(frame.collapsed)
         self.assertEqual(self._state("assign"), [True] * len(self.app.tabs))
 
-    # ── 8. 緊急停止のキーの行 ───────────────────────
-    def test_the_emergency_key_moved_to_the_start_key_row(self):
-        row = self.app.lbl_start_key.master
-        self.assertEqual(row.pack_slaves()[:5],          # マクロ開始が先・緊急停止が後
-                         [self.app.lbl_start_key, self.app.btn_capture_start_key,
-                          self.app.btn_clear_start_key, self.app.lbl_emergency, self.app.btn_capture_key])
-        self.assertNotIn(self.app.lbl_emergency, self.app.btn_start.master.pack_slaves())
+    # ── 8. キーの行（DV: 表示だけの1行）───────────────────
+    def test_the_keys_row_only_shows_the_keys(self):
+        row = self.app.lbl_keys.master
+        self.assertEqual(row.pack_slaves(), [self.app.lbl_keys], "表示だけ（ボタンは無い）")
+        self.assertNotIn(self.app.lbl_keys, self.app.btn_start_stop.master.pack_slaves())
 
 
 
@@ -1550,8 +1549,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
             m.stop.side_effect = lambda h=h: app.order.append(("stop", h))
             app.monitors.append(m)
         app._entry_stop = threading.Event()
-        app.btn_start = MagicMock()
-        app.btn_stop = MagicMock()
+        app._refresh_start_stop_button = lambda: None
         app.lbl_win_warn = MagicMock()
         app.logs = []
         app._log = app.logs.append
@@ -1745,8 +1743,7 @@ class TestStartWithoutTnl(unittest.TestCase):
         app.logs = []
         app._log = app.logs.append
         app._running = False
-        app.btn_start = MagicMock()
-        app.btn_stop = MagicMock()
+        app._refresh_start_stop_button = lambda: None
         app.lbl_win_warn = MagicMock()
         for name in ("v_voice_continue", "v_voice_fog", "v_voice_item_lost",
                      "v_voice_intermission", "v_voice_foxy"):
@@ -1992,12 +1989,14 @@ class TestAnnounceFold(unittest.TestCase):
 
 
 class TestEmergencyKeyGui(unittest.TestCase):
-    """GUI 側。App を1つ立てて確かめる"""
+    """GUI 側。App を1つ立てて確かめる（キーの行はキーバインドの画面。DV）"""
 
     @classmethod
     def setUpClass(cls):
         cls.app = mainGUI.App()
         cls.app.withdraw()
+        cls.app._open_keybind_dialog()
+        cls.app._keybind_dialog.withdraw()
 
     @classmethod
     def tearDownClass(cls):
@@ -2303,6 +2302,8 @@ class TestStartKeyGui(unittest.TestCase):
     def setUpClass(cls):
         cls.app = mainGUI.App()
         cls.app.withdraw()
+        cls.app._open_keybind_dialog()
+        cls.app._keybind_dialog.withdraw()
 
     @classmethod
     def tearDownClass(cls):
@@ -2320,7 +2321,8 @@ class TestStartKeyGui(unittest.TestCase):
         self.app._capturing_key = False
         self.app._emergency_stop_key_pressed = False
         self.app._start_key_pressed = False
-        self.app.btn_start.config(state="normal")
+        self.app._running = False
+        self.app._start_stop_busy = False
         self.app.logs = []
         self._log = patch.object(mainGUI.App, "_log",
                                  lambda _s, m: self.app.logs.append(m))
@@ -2378,11 +2380,17 @@ class TestStartKeyGui(unittest.TestCase):
 
         self.assertNotIn(self.app._start, started, "押し続けても1回だけ")
 
-    def test_it_does_nothing_while_the_button_is_disabled(self):
-        """動作中・起動中は「▶ マクロ開始」が disabled になっている"""
+    def _running(self):
+        self.app._running = True
+        self.addCleanup(setattr, self.app, "_running", False)
+
+    def test_it_does_nothing_while_running(self):
+        """マクロ開始のキーは開始だけ。動いているときに押しても止めない（DV。ボタンは「■ 停止」で押せる）"""
         self.app.v_start_key.set("f9")
-        self.app.btn_start.config(state="disabled")
-        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+        self._running()
+        self.app._refresh_start_stop_button()
+        self.addCleanup(self.app._refresh_start_stop_button)
+        self.assertEqual(str(self.app.btn_start_stop.cget("state")), "normal", "ボタンは押せる")
 
         _called, started = self._poll()
 
@@ -2391,8 +2399,7 @@ class TestStartKeyGui(unittest.TestCase):
     def test_it_says_why_nothing_happened(self):
         """黙って無視すると「キーが効かない」と見える"""
         self.app.v_start_key.set("f9")
-        self.app.btn_start.config(state="disabled")
-        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+        self._running()
 
         _called, started = self._poll()
 
@@ -2403,8 +2410,7 @@ class TestStartKeyGui(unittest.TestCase):
 
     def test_holding_it_says_so_only_once(self):
         self.app.v_start_key.set("f9")
-        self.app.btn_start.config(state="disabled")
-        self.addCleanup(lambda: self.app.btn_start.config(state="normal"))
+        self._running()
 
         for _ in range(3):
             self._poll()
@@ -2530,18 +2536,17 @@ class TestStartKeyGui(unittest.TestCase):
         self.assertEqual(self.app.v_start_key.get(), "")
 
     # ── 窓の幅 ────────────────────────────────
-    def test_the_emergency_key_is_on_the_start_key_row(self):
-        """緊急停止のキー設定はマクロ開始キーと同じ行の先頭。ボタンの行には置かない
-        （別のPCで崩れた件 47aefa4 / 73e577c があるので、ボタンの行は広げない）"""
-        row = self.app.lbl_start_key.master
-        self.assertIs(self.app.lbl_emergency.master, row)
-        self.assertIs(self.app.btn_capture_key.master, row)
-        self.assertIsNot(self.app.btn_start.master, row)
-        order = row.pack_slaves()
-        # マクロ開始が先、緊急停止が後
-        self.assertEqual(order[:5], [self.app.lbl_start_key, self.app.btn_capture_start_key,
-                                     self.app.btn_clear_start_key, self.app.lbl_emergency,
-                                     self.app.btn_capture_key])
+    def test_the_keys_are_in_the_keybind_dialog(self):
+        """キーの設定はキーバインドの画面だけ。メインの画面には置かない（DV）。
+        並びはマクロ開始が先・緊急停止・自爆キャンセル"""
+        grid = self.app.lbl_start_key.master
+        self.assertIs(grid.winfo_toplevel(), self.app._keybind_dialog)
+        self.assertIs(self.app.lbl_emergency.master, grid)
+        rows = [(int(w.grid_info()["row"]), int(w.grid_info()["column"])) for w in
+                (self.app.lbl_start_key, self.app.btn_capture_start_key, self.app.btn_clear_start_key,
+                 self.app.lbl_emergency, self.app.btn_capture_key,
+                 self.app.lbl_suicide_cancel_key, self.app.btn_capture_cancel_key)]
+        self.assertEqual(rows, [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (2, 0), (2, 1)])
 
 
 
