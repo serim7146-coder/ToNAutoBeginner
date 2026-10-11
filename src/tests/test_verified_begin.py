@@ -3222,7 +3222,8 @@ class TestBeginNeverDropsTheItem(unittest.TestCase):
 
     def test_the_source_sends_no_drop_for_begin(self):
         """Begin のために落とす処理がコードから無くなっていること。DropRight を送るのは
-        続行ラウンドの後（依頼者 2026-10-10・_drop_item_after_continue）の1か所だけ"""
+        ラウンドの後（依頼者 2026-10-10 続行ラウンド・2026-10-12 DW どのラウンドでも）の
+        _press_drop の1か所だけ"""
         here = Path(ActionExecutor.__file__).parent
         for name in ("ActionExecutor.py", "LogMonitor.py", "WindowOperator.py",
                      "config.py", "State.py", "SharedState.py"):
@@ -3232,7 +3233,7 @@ class TestBeginNeverDropsTheItem(unittest.TestCase):
                 self.assertNotIn("DropRight", src, name)
         src = (here / "ActionExecutor.py").read_text(encoding="utf-8")
         self.assertEqual(src.count('"/input/DropRight"'), 1)
-        body = src[src.index("    def _drop_item_after_continue("):]
+        body = src[src.index("    def _press_drop("):]
         body = body[:body.index("\n    def ", 1)]
         self.assertIn('"/input/DropRight"', body)
 

@@ -134,6 +134,7 @@ class LogMonitor:
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
         始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりはアイテムを落として窓を戻す（待つので別スレッド）"""
         if started:
+            self.st.continue_freeze_round = self.st.round_seq
             self._action.remember_continue_window()
         elif self._running:
             self._start_daemon(self._action.after_continue_round)
@@ -1701,11 +1702,18 @@ class LogMonitor:
             # このモードでは自動取得を動かさない（item_fetch_target が None）
             self._action._attend_to_item_loss()
             self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
+        # どのラウンドの後でもアイテムを落とす（DW）。続行フリーズを張ったラウンドは
+        # 続行の終わり（after_continue_round）で落とすので、ここでは落とさない（二重にしない）。
+        # 落とすのは Begin 前の移動・アイテム自動取得より前（do_after_round の頭で）
+        st.drop_after_round_seq = (st.round_seq if st.continue_freeze_round != st.round_seq
+                                   else -1)
         # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
         # Verified Round End を待ってから行う（RoundOver時点だと
         # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
         if self.cfg.auto_begin:
             self._start_daemon(self._action.do_after_round)
+        elif st.drop_after_round_seq >= 0:
+            self._start_daemon(self._action.drop_after_round)
 
     def _on_verified_end(self, event):
         """Verified Round End（Begin を押せる）"""

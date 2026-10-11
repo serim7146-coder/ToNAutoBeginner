@@ -1797,16 +1797,18 @@ class App(tk.Tk):
         # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
         fcr = ttk.Frame(self)
         fcr.pack(pady=(0, 4))
-        # 続行ラウンドの後（全窓共通・保存・既定 ON）
+        # アイテムを落とすのはどのラウンドの後でも（DW。保存の名前 continue_drop_item はそのまま）。
+        # 窓を戻すのは続行ラウンドの後だけ（全窓共通・保存・既定 ON）
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
-        ttk.Label(fcr, text="続行ラウンドの後:").pack(side="left")
+        ttk.Label(fcr, text="ラウンドの後:").pack(side="left")
         ttk.Checkbutton(fcr, text="アイテムを落とす",
                         variable=self.v_continue_drop_item,
                         command=self._on_continue_after_changed).pack(side="left", padx=(6, 0))
+        ttk.Label(fcr, text="続行ラウンドの後:").pack(side="left", padx=(18, 0))
         ttk.Checkbutton(fcr, text="窓を戻す",
                         variable=self.v_continue_restore_window,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(8, 0))
+                        command=self._on_continue_after_changed).pack(side="left", padx=(6, 0))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
         # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
         self.v_run_respawn = tk.BooleanVar(value=True)

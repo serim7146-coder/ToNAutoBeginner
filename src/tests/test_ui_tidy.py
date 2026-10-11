@@ -426,7 +426,8 @@ class TestDv2MainScreen(_AppCase):
                    if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
                           for c in w.winfo_children()))
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
-        self.assertEqual(items, [("Label", "続行ラウンドの後:"), ("Checkbutton", "アイテムを落とす"),
+        self.assertEqual(items, [("Label", "ラウンドの後:"), ("Checkbutton", "アイテムを落とす"),
+                                 ("Label", "続行ラウンドの後:"),             # DW で分けた
                                  ("Checkbutton", "窓を戻す"), ("Label", "Run:"),
                                  ("Checkbutton", "リスポーンする"), ("Checkbutton", "霧の即時判定")])
         variables = [str(w.cget("variable")) for w in row.pack_slaves()

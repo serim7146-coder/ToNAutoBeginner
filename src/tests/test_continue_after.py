@@ -409,7 +409,8 @@ class TestTheSettings(unittest.TestCase):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_continue_drop_item = tk.BooleanVar(value=True)", gui)
         self.assertIn("self.v_continue_restore_window = tk.BooleanVar(value=True)", gui)
-        # DV2: 行の頭に見出し、チェックは短く
+        # DV2: 行の頭に見出し、チェックは短く。DW: 落とすのは「ラウンドの後:」
+        self.assertIn('text="ラウンドの後:"', gui)
         self.assertIn('text="続行ラウンドの後:"', gui)
         self.assertIn('text="アイテムを落とす"', gui)
         self.assertIn('text="窓を戻す"', gui)
@@ -448,7 +449,8 @@ class TestTheSettings(unittest.TestCase):
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("続行ラウンドの後にアイテムを落とす・窓を元の位置に戻す", readme)
+        self.assertIn("ラウンドの後にアイテムを落とす・続行ラウンドの後に窓を元の位置に戻す", readme)
+        self.assertIn("どのラウンドでも、終わったら", readme)          # DW
 
 
 class TestTheDropIsNotALoss(unittest.TestCase):

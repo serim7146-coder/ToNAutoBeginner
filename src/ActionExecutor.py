@@ -1301,6 +1301,8 @@ class ActionExecutor:
         clicked = False
         if not self._wait_run_respawn():
             return
+        # アイテムを落とすのは、Run のリスポーンが終わった後・Begin 前の移動より前（DW）
+        self.drop_after_round()
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
@@ -1859,13 +1861,37 @@ class ActionExecutor:
             self._restore_continue_window(rect)
 
     def _drop_item_after_continue(self):
-        head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
+        self._press_drop(f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:",
+                         "続行ラウンドが終わったので、アイテムを落としました")
+
+    def drop_after_round(self):
+        """どのラウンドの後でも（DW）: RoundOver の後に1回アイテムを落とす。続行フリーズを張った
+        ラウンドは after_continue_round が落とすので、ここでは落とさない（LogMonitor が決める）。
+        Run のリスポーンが走っていれば終わってから（同時に送らない）。Begin 前の移動・アイテム
+        自動取得は、自動 Begin の窓なら do_after_round でこの後に続く（同じスレッドで順に）"""
+        st = self._st
+        seq, st.drop_after_round_seq = st.drop_after_round_seq, -1
+        if seq < 0 or seq == st.dropped_round_seq:
+            return                  # 落とすラウンドでない・もう落とした
+        if not self._wait_run_respawn():
+            return
+        head = f"[操作] [窓{st.window_idx}] ラウンドの終わり:"
+        if st.in_round or st.round_seq != seq:
+            DebugLog.write(f"{head} アイテムを落としません（次のラウンドが始まった）")
+            return
+        st.dropped_round_seq = seq
+        if not SharedState.get_continue_drop_item():
+            return
+        self._press_drop(head, "ラウンドが終わったので、アイテムを落としました")
+
+    def _press_drop(self, head: str, message: str):
+        """/input/DropRight を押して離す。OSC の窓・private のときだけ。持っているかは見ない"""
         if self._osc is None or not self.can_operate():
             DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でない'}）")
             return
         self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._move_stopped)
         DebugLog.write(f"{head} /input/DropRight を押して離した")
-        self._log("続行ラウンドが終わったので、アイテムを落としました")
+        self._log(message)
 
     def _restore_continue_window(self, rect):
         """窓を rect（始まりの矩形）の位置へ戻す。フルスクリーンなら前面を借りて Alt+Enter で窓に

@@ -96,6 +96,12 @@ class WindowState:
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、
     # DTM/Waldo の窓は is_continue_round=True でもこちらは False（他窓を止めない）
     continue_freeze_held: bool = False
+    # 続行フリーズを張ったラウンドの round_seq。そのラウンドのアイテムは続行の終わり
+    # （after_continue_round）で落とすので、RoundOver では落とさない（DW: 二重にしない）
+    continue_freeze_round: int = -1
+    # RoundOver で落とすと決めたラウンドの round_seq（-1 = 無し）と、落としたラウンドの round_seq
+    drop_after_round_seq: int = -1
+    dropped_round_seq: int = -1
     # 続行フリーズを張った・外した瞬間に呼ぶ（引数 True / False。LogMonitor が入れる）
     continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0
