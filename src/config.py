@@ -505,6 +505,9 @@ SAVELOAD_BOX_POLL_SEC    = 0.2
 SAVELOAD_PASTE_ENTER_SEC = 0.3    # Ctrl+V から Enter まで
 SAVELOAD_LOG_WAIT_SEC    = 8.0    # Enter の後、ログに「Loaded Data Successfully」が出るのを待つ上限
 SAVELOAD_LOG_POLL_SEC    = 0.25
+# 入室の Begin の後に Guidance Plush を取りに行く（DZ）。押した後の最初の Verified を待つ上限
+PLUSH_VERIFIED_WAIT_SEC  = 60.0
+PLUSH_VERIFIED_POLL_SEC  = 0.25
 
 TON_ENTRY_PANEL_TIMEOUT  = 180.0  # パネル出現を待つ上限（読み込みが重い）
 TON_ENTRY_POLL_SEC       = 2.0    # パネル確認の間隔

@@ -1416,15 +1416,21 @@ class ActionExecutor:
             return None
         return shop, item_id
 
-    def _fetch_stopped(self, round_seq: int, deadline: float) -> str | None:
+    def _fetch_stopped(self, round_seq: int, deadline: float, want: int | None = None,
+                       extra_stop=None) -> str | None:
+        """want: Guidance Plush を取りに行くとき（DZ）の番号。そのときは、ほかのアイテムを持っていても
+        続け、Guidance Plush を持ったら equipped。extra_stop: 入室操作の中止など（True で stopped）"""
         st = self._st
-        if not self._is_running():
+        if not self._is_running() or (extra_stop is not None and extra_stop()):
             return "stopped"
         if not self.can_operate():
             return "not_private"
         if st.in_round or st.round_seq != round_seq:
             return "round"
-        if st.item_id and not st.waiting_for_equip:
+        if want is not None:
+            if st.item_id == want:
+                return "equipped"
+        elif st.item_id and not st.waiting_for_equip:
             return "equipped"               # 手で装備した
         _eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
         if not (con_ok and spd_ok and rnd_ok):
@@ -1435,13 +1441,19 @@ class ActionExecutor:
             return "timeout"
         return None
 
-    def _fetch_item(self, round_seq: int, shop: str, item_id: int) -> str:
+    def _fetch_item(self, round_seq: int, shop: str, item_id: int, plush: bool = False,
+                    extra_stop=None) -> str:
         """Begin が通った後に店へ取りに行く。"ok"・"failed"・"timeout"・"round"・"stopped"・"equipped"。
-        移動は OSC（ロック外）。照準とクリックは前面化が要るので排他の中で行い、終わったら前面を返す"""
+        移動は OSC（ロック外）。照準とクリックは前面化が要るので排他の中で行い、終わったら前面を返す。
+        plush: Guidance Plush の取り方（DZ。Event → スクロール → Have Plush → Equip）"""
         st = self._st
         head = f"[操作] [窓{st.window_idx}]"
         deadline = time.time() + config.ITEM_FETCH_LIMIT_SEC
         receiver = self._receiver
+        want = item_id if plush else None
+
+        def stopped():
+            return self._fetch_stopped(round_seq, deadline, want, extra_stop)
 
         def grounded():
             return receiver.grounded_or_none if receiver is not None else None
@@ -1457,10 +1469,9 @@ class ActionExecutor:
 
         fetcher = ItemFetch.Fetcher(
             osc=self._osc, grounded=grounded, capture=capture,
-            mouse=_FrontOnlyMouse(self._cfg.hwnd, lambda: self._fetch_stopped(round_seq, deadline),
-                                  allowed=self.can_operate),
+            mouse=_FrontOnlyMouse(self._cfg.hwnd, stopped, allowed=self.can_operate),
             equip_seen=lambda: (st.equip_seen_seq, st.equip_seen_id),
-            stopped=lambda: self._fetch_stopped(round_seq, deadline),
+            stopped=stopped,
             log=lambda m: DebugLog.write(f"{head} {m}"),
             saved_gain=self._saved_fetch_gain(),
             client_height=lambda: WindowOperator.client_height(self._cfg.hwnd))
@@ -1470,7 +1481,7 @@ class ActionExecutor:
         outcome = "failed"
         try:
             if fetcher.move_to_shop():
-                outcome = self._fetch_in_front(fetcher, shop, item_id)
+                outcome = self._fetch_in_front(fetcher, shop, item_id, plush)
         except ItemFetch.Stopped as e:
             outcome = e.args[0]
         except Exception:
@@ -1494,6 +1505,21 @@ class ActionExecutor:
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
 
+    def fetch_guidance_plush(self, extra_stop=None) -> str:
+        """入室の Begin が受理された後に Guidance Plush を取りに行く（DZ）。マクロの監視中で、この窓の
+        速さの受信（接地を見る）があるときだけ。"skipped"（行かない）か _fetch_item の結果"""
+        st = self._st
+        plush = RoundDecision.guidance_plush_id()
+        why = ("Guidance Plush の番号が分からない" if not plush
+               else "OSC が使えない窓" if self._osc is None
+               else "プライベートのインスタンスでない" if not self.can_operate()
+               else "受信が無い" if self._receiver is None
+               else "店の見本が使えない" if not ItemFetch.available() else None)
+        if why:
+            self._log(f"Guidance Plush を取りに行きません（{why}）")
+            return "skipped"
+        return self._fetch_item(st.round_seq, "Event", plush, plush=True, extra_stop=extra_stop)
+
     @staticmethod
     def _saved_fetch_gain():
         """保存した感度 (横, 縦)。今の送る間隔で保存したものだけ（間隔が違えば測る）"""
@@ -1502,7 +1528,7 @@ class ActionExecutor:
             return saved[:2]
         return None
 
-    def _fetch_in_front(self, fetcher, shop: str, item_id: int) -> str:
+    def _fetch_in_front(self, fetcher, shop: str, item_id: int, plush: bool = False) -> str:
         with SharedState._GLOBAL_ACTION_LOCK:
             fetcher._check()                # ロックを待つ間にラウンドが始まったら押さない
             cursor = WindowOperator.cursor_position()   # 前面を借りる前の Windows のカーソル
@@ -1511,7 +1537,8 @@ class ActionExecutor:
                 return "failed"
             try:
                 fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
-                if not fetcher.buy(shop, item_id):
+                bought = fetcher.buy_plush(item_id) if plush else fetcher.buy(shop, item_id)
+                if not bought:
                     return "failed"
                 if fetcher.measured_gain is not None:
                     # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ）
@@ -2362,6 +2389,30 @@ class _FrontOnlyMouse(_FetchMouse):
 
     def tab_up(self):
         WindowOperator.release_tab()
+
+    def drag(self, start, end, steps: int, step_sec: float) -> bool:
+        """（Tab を押したまま）撮影の start へカーソルを置いて左ボタンを押し、steps 段で end まで
+        動かして離す（DZ: 店の一覧のスクロールバー）。左ボタンは何があっても離す。前面でなくなれば
+        front_lost（離してから）"""
+        self._check_front()
+        origin = WindowOperator.window_origin(self._hwnd)
+        if origin is None:
+            raise ItemFetch.Stopped("front_lost")
+        sx, sy = start[0] + origin[0], start[1] + origin[1]
+        ex, ey = end[0] + origin[0], end[1] + origin[1]
+        WindowOperator.set_cursor_position((int(round(sx)), int(round(sy))))
+        time.sleep(config.FETCH_CURSOR_SETTLE_SEC)
+        self._check_front()
+        WindowOperator.mouse_down()
+        try:
+            for i in range(1, steps + 1):
+                self._check_front()
+                t = i / steps
+                WindowOperator.set_cursor_position((int(round(sx + (ex - sx) * t)), int(round(sy + (ey - sy) * t))))
+                time.sleep(step_sec)
+        finally:
+            WindowOperator.mouse_up()
+        return True
 
     def click_at(self, x: float, y: float) -> bool:
         """（Tab を押したまま）撮影の (x, y)（＋窓の左上 ＝ 画面の点）へカーソルを置き、

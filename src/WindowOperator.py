@@ -979,6 +979,15 @@ def release_tab():
     keyboard.release(config.CLICK_TAB_KEY)
 
 
+def mouse_down(pause: bool = False):
+    """前面の窓で左ボタンを押す（離すまで押したまま。店の一覧のスクロールバーのドラッグ。DZ）"""
+    pydirectinput.mouseDown(_pause=pause)
+
+
+def mouse_up(pause: bool = False):
+    pydirectinput.mouseUp(_pause=pause)
+
+
 def mouse_click(hold_sec: float, pause: bool = False):
     """前面の窓の今のカーソルの位置を左クリックする（Tab は呼び出し側が押している）"""
     pydirectinput.mouseDown(_pause=pause)

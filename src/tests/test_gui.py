@@ -3145,6 +3145,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "window_layout",                                     # DX で足した
+            "ton_entry_plush",                                   # DZ で足した
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")

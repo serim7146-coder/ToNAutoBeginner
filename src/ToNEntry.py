@@ -19,11 +19,44 @@ import win32gui
 
 import config
 import DebugLog
+import LogParser
 import OSCClient
 import SaveLoad
 import ScreenCapture
 import SharedState
 import WindowOperator
+
+
+def wait_verified(path: str, offset: int, timeout: float, is_running=None,
+                  sleep=time.sleep, clock=time.time) -> str:
+    """VRChat のログの offset バイト目から後を見て、Begin を押した後の最初の Verified を待つ（DZ）。
+    "verified"・"round"（ラウンドが始まった）・"timeout"・"stopped"。
+    入室直後は定期の Verified と見分けにくい（依頼者も承知）。今は「押した後の最初の Verified」"""
+    is_running = is_running or (lambda: True)
+    deadline = clock() + timeout
+    rest = b""
+    while is_running():
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                data = f.read()
+        except OSError:
+            data = b""
+        offset += len(data)
+        lines = (rest + data).split(b"\n")
+        rest = lines.pop()              # 書きかけの行は次に
+        for raw in lines:
+            event = LogParser.parse(LogParser.strip_prefix(raw.decode("utf-8", "replace").strip()))
+            if event is None:
+                continue
+            if event.kind == LogParser.EVENT_VERIFIED:
+                return "verified"
+            if event.kind == LogParser.EVENT_ROUND_START:
+                return "round"
+        if clock() >= deadline:
+            return "timeout"
+        sleep(config.PLUSH_VERIFIED_POLL_SEC)
+    return "stopped"
 
 
 class ToNEntry:

@@ -1622,8 +1622,14 @@ class App(tk.Tk):
         ttk.Checkbutton(lf25, text="入室後の選択画面を自動突破",
                         variable=self.v_ton_entry).pack(side="left")
         self.v_ton_begin = tk.BooleanVar(value=config.TON_ENTRY_BEGIN)
-        ttk.Checkbutton(lf25, text="続けてBeginまで押す",
-                        variable=self.v_ton_begin).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(lf25, text="続けてBeginまで押す", variable=self.v_ton_begin,
+                        command=self._refresh_plush_check).pack(side="left", padx=(12, 0))
+        # Begin が受理された後に Guidance Plush を取りに行く（DZ・既定 OFF）。続けて Begin が ON のときだけ
+        self.v_ton_entry_plush = tk.BooleanVar(value=False)
+        self.chk_ton_entry_plush = ttk.Checkbutton(lf25, text="Guidance Plush",
+                                                   variable=self.v_ton_entry_plush)
+        self.chk_ton_entry_plush.pack(side="left", padx=(12, 0))
+        self._refresh_plush_check()
         ttk.Label(lf25, text="※ 警告同意→Casual→BGMあり→LET ME PLAY の順に押します",
                   foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
@@ -2552,6 +2558,9 @@ class App(tk.Tk):
         self.v_ton_entry.set(bool(data.get("ton_entry", config.TON_ENTRY_ENABLED)))
         self.v_join_world.set(bool(data.get("join_world", False)))
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
+        if hasattr(self, "v_ton_entry_plush"):
+            self.v_ton_entry_plush.set(data.get("ton_entry_plush") is True)    # 無い・壊れた値は OFF
+            App._refresh_plush_check(self)
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
@@ -3473,6 +3482,7 @@ class App(tk.Tk):
             self._log("[入室操作] 対象の窓がありません")
             return
         press_begin = self.v_ton_begin.get()
+        plush = press_begin and bool(getattr(self, "v_ton_entry_plush", None) and self.v_ton_entry_plush.get())
         # セーブコードは最初に 1 回だけ読み、全窓に同じものを貼る（DY。中身はどこにも書かない）
         save_code = SaveLoad.read_clipboard() if press_begin else ""
         self._entry_stop.clear()
@@ -3500,7 +3510,12 @@ class App(tk.Tk):
                             # Begin へ動く前（入室直後の位置でしか見えない）。読み込めなくても Begin は押す
                             entry.load_code(save_code, log_path)
                             if not self._entry_stop.is_set():
-                                entry.press_begin()
+                                offset = SaveLoad.log_size(log_path)
+                                if entry.press_begin() and plush:
+                                    # 次の窓の入室を待たせない（窓ごとに別のスレッドで Verified を待つ）
+                                    threading.Thread(target=self._plush_after_entry,
+                                                     args=(window_no, hwnd, log_path, offset),
+                                                     daemon=True).start()
                     except Exception as e:
                         DebugLog.exception("mainGUI.worker")
                         self._log("[窓%d] 入室操作でエラー: %s" % (window_no, e))
@@ -3514,6 +3529,38 @@ class App(tk.Tk):
                     pass
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_plush_check(self):
+        """□Guidance Plush は「続けてBeginまで押す」が ON のときだけ押せる（DZ）"""
+        try:
+            self.chk_ton_entry_plush.config(state="normal" if self.v_ton_begin.get() else "disabled")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _plush_after_entry(self, window_no: int, hwnd: int, log_path: str, offset: int):
+        """入室の Begin を押した窓: 押した後の Verified を待って、Guidance Plush を取りに行く（DZ）。
+        監視中でその窓の受信があるときだけ（無ければ飛ばす）"""
+        def log(m):
+            self._log(f"[窓{window_no}] {m}")
+        try:
+            result = ToNEntry.wait_verified(log_path, offset, config.PLUSH_VERIFIED_WAIT_SEC,
+                                            is_running=lambda: not self._entry_stop.is_set())
+            if result == "round":
+                log("ラウンドが始まったため Guidance Plush を取りに行きません")
+                return
+            if result != "verified":
+                if result == "timeout":
+                    log("⚠ Begin の受理を確認できないため Guidance Plush を取りに行きません")
+                return
+            monitor = next((m for m in list(getattr(self, "monitors", []) or [])
+                            if m.cfg.hwnd == hwnd), None) if self._running else None
+            action = getattr(monitor, "_action", None)
+            if action is None or getattr(action, "_receiver", None) is None:
+                log("マクロが動いていないため Guidance Plush を取りに行きません")
+                return
+            action.fetch_guidance_plush(extra_stop=self._entry_stop.is_set)
+        except Exception:
+            DebugLog.exception("mainGUI._plush_after_entry")
 
     def _on_launch_error(self, msg: str):
         self.btn_launch.config(state="normal")
@@ -3563,6 +3610,7 @@ class App(tk.Tk):
             "use_osc":       self.v_use_osc.get(),
             "ton_entry":     self.v_ton_entry.get(),
             "ton_begin":     self.v_ton_begin.get(),
+            "ton_entry_plush": bool(getattr(self, "v_ton_entry_plush", None) and self.v_ton_entry_plush.get()),
             "join_world":    self.v_join_world.get(),
             "ton_instance_access": self.v_ton_access.get(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],

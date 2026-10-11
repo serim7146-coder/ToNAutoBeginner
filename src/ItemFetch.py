@@ -82,6 +82,20 @@ EQUIP_WAIT_SEC = 0.8        # Equipping <id> を待つ
 EQUIP_POLL_SEC = 0.02
 SHOP_OPEN_WAIT_SEC = 0.5    # 店のボタンを押してから、Equip の緑の文字が出るのを待つ上限（1回目だけ）
 
+# ── Guidance Plush（DZ。入室の Begin の後）──────────────
+# 点はすべて、Event を押す前の最初の画面の位置合わせ（ホモグラフィ）から写す（Event Shop の画面では
+# 小さい窓で位置合わせが効かない。2026-10-12 の実機）。座標は見本（shop_main）の px
+PLUSH_KNOB_TOP = (114, 89)          # 一覧のスクロールバーのつまみの真ん中（一番上）
+PLUSH_KNOB_TARGET = (114, 132)      # Have Plush が見えるつまみの真ん中
+PLUSH_ROW = (73, 96)                # Have Plush の行（緑の文字。Paradise Lost は赤・Joyous Orb は黄）
+PLUSH_ROW_WINDOW = (25, 5)          # 行の緑を探す範囲（横 ±25・縦 ±5）
+PLUSH_SHIFTS = (0, 8, -8)           # 行に緑が無ければドラッグ先をずらす（見本の px。最大 3 回）
+PLUSH_ROUNDS = 2                    # Equipping が来ない・違う番号なら、行を選ぶところから 1 回やり直す
+PLUSH_OPEN_WAIT_SEC = 0.5           # Event を押してから一覧が出るまで
+DRAG_STEPS = 20                     # つまみのドラッグ（Tab＋左ボタンを押したまま 20 段）
+DRAG_STEP_SEC = 0.03
+DRAG_SETTLE_SEC = 0.2               # ドラッグを離してから撮るまで
+
 
 def shop_for(item_id, items) -> str | None:
     """取りに行く店。Others・表に無い・番号が分からない → None（取らない）"""
@@ -175,8 +189,9 @@ GREEN_WINDOW = (30, 15)             # 押す点から 横 ±30・縦 ±15（見�
 GREEN_MIN_AREA = 3.0                # 緑の画素がこれ未満（見本の px² に直して）なら見つからない
 
 
-def green_center(bgr, pos, scale):
-    """pos（画面の点）の周りの窓の緑の画素の重心 (x, y)。少なければ・撮影が無ければ None"""
+def green_center(bgr, pos, scale, window=GREEN_WINDOW):
+    """pos（画面の点）の周りの窓（見本の px で 横 ±window[0]・縦 ±window[1]）の緑の画素の重心 (x, y)。
+    少なければ・撮影が無ければ None"""
     try:
         import cv2
         import numpy as np
@@ -184,10 +199,10 @@ def green_center(bgr, pos, scale):
             return None
         sx, sy = scale
         h, w = bgr.shape[:2]
-        x0 = max(0, int(round(pos[0] - GREEN_WINDOW[0] * sx)))
-        x1 = min(w, int(round(pos[0] + GREEN_WINDOW[0] * sx)) + 1)
-        y0 = max(0, int(round(pos[1] - GREEN_WINDOW[1] * sy)))
-        y1 = min(h, int(round(pos[1] + GREEN_WINDOW[1] * sy)) + 1)
+        x0 = max(0, int(round(pos[0] - window[0] * sx)))
+        x1 = min(w, int(round(pos[0] + window[0] * sx)) + 1)
+        y0 = max(0, int(round(pos[1] - window[1] * sy)))
+        y1 = min(h, int(round(pos[1] + window[1] * sy)) + 1)
         if x1 <= x0 or y1 <= y0:
             return None
         hsv = cv2.cvtColor(np.ascontiguousarray(bgr[y0:y1, x0:x1]), cv2.COLOR_BGR2HSV)
@@ -258,6 +273,11 @@ class CountingMouse:
         """（Tab を押したまま）撮影の (x, y) へカーソルを置いてクリックする。押したら True。
         視点は回らない（数えない）"""
         return self.inner.click_at(x, y)
+
+    def drag(self, start, end, steps: int, step_sec: float) -> bool:
+        """（Tab を押したまま）撮影の start で左ボタンを押し、steps 段で end まで動かして離す。
+        カーソルで動かすので視点は回らない（数えない）"""
+        return self.inner.drag(start, end, steps, step_sec)
 
 
 class Stopped(Exception):
@@ -555,9 +575,8 @@ class Fetcher:
         self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
         return True
 
-    def buy(self, shop: str, target_id: int) -> bool:
-        """店の前で、窓が前に出ている状態から。全体を映す → 店のボタン → Equip。
-        保存した感度で視点を動かして映せなければ、測り直して1回やり直す"""
+    def _frame(self, shop: str):
+        """全体を映す。保存した感度で映せなければ、測り直して1回やり直す"""
         framed = self.frame_panel(shop)
         if framed is None and self.gain_from_saved:
             self.log("アイテム取得: 感度 測り直し（保存した値で店の画面が入りきらない）")
@@ -565,6 +584,12 @@ class Fetcher:
             self.gain = None
             self.gain_from_saved = False
             framed = self.frame_panel(shop)
+        return framed
+
+    def buy(self, shop: str, target_id: int) -> bool:
+        """店の前で、窓が前に出ている状態から。全体を映す → 店のボタン → Equip。
+        保存した感度で視点を動かして映せなければ、測り直して1回やり直す"""
+        framed = self._frame(shop)
         if framed is None:
             return False
         # Tab は店の操作の間に1回だけ押したまま（依頼者「タブ→クリック→クリック→タブ離す」）。
@@ -575,3 +600,77 @@ class Fetcher:
             return self.press_shop(shop, framed) and self.equip(target_id)
         finally:
             self.mouse.tab_up()
+
+    # ── Guidance Plush（DZ）─────────────────────
+    def buy_plush(self, target_id: int) -> bool:
+        """店の前で、窓が前に出ている状態から。全体を映す → Event → つまみをドラッグして Have Plush の
+        行を出す → 行（緑の文字）を押す → Equip。点はすべて最初の画面の位置合わせから写す（Event の
+        後に撮り直して位置合わせはしない）。Equipping target_id が来ない・違う番号なら、行を選ぶ
+        ところから 1 回やり直す"""
+        framed = self._frame("Event")
+        if framed is None:
+            return False
+        project = framed[2][5]
+        self.knob_at = None             # 店を開くと、つまみは一番上（全画面・小さい窓とも）
+        self.mouse.tab_down()
+        try:
+            self._wait(config.FETCH_TAB_SETTLE_SEC)
+            if not self.press_shop("Event", framed):
+                return False
+            self._wait(PLUSH_OPEN_WAIT_SEC)
+            for attempt in range(1, PLUSH_ROUNDS + 1):
+                row = self._show_plush_row(project)
+                if row is None:
+                    self.log("アイテム取得: Have Plush の行が見つかりません")
+                    return False
+                self._check()
+                if not self.mouse.click_at(*row):
+                    return False
+                self.log(f"アイテム取得: Have Plush の行を押した ({row[0]:.1f}, {row[1]:.1f})")
+                if self._equip_once(target_id, first=attempt == 1):
+                    return True
+                self.log(f"アイテム取得: Have Plush の装備を確かめられません（{attempt}/{PLUSH_ROUNDS}回目）")
+            return False
+        finally:
+            self.mouse.tab_up()
+
+    def _show_plush_row(self, project):
+        """つまみを一番上から PLUSH_KNOB_TARGET（＋ずらし）へドラッグして、Have Plush の行の緑の重心を返す。
+        緑が無ければ、一番上へ戻してから、ずらした先へもう一度（最大 len(PLUSH_SHIFTS) 回）。無ければ None"""
+        top = project(PLUSH_KNOB_TOP)[:2]
+        for shift in PLUSH_SHIFTS:
+            target = project((PLUSH_KNOB_TARGET[0], PLUSH_KNOB_TARGET[1] + shift))[:2]
+            if self.knob_at is not None:
+                self._drag(self.knob_at, top, "一番上へ戻す")
+                self.knob_at = None
+            self._drag(top, target, f"ずらし {shift:+d}")
+            self.knob_at = target
+            self._wait(DRAG_SETTLE_SEC)
+            shot = self.capture()
+            rx, ry, sx, sy = project(PLUSH_ROW)
+            center = (green_center(shot[0], (rx, ry), (sx, sy), PLUSH_ROW_WINDOW)
+                      if shot is not None else None)
+            self.log(f"アイテム取得: Have Plush の行 ({rx:.1f}, {ry:.1f}): "
+                     + ("緑なし" if center is None else f"緑 ({center[0]:.1f}, {center[1]:.1f})"))
+            if center is not None:
+                return center
+        return None
+
+    def _drag(self, start, end, what: str):
+        self._check()
+        if not self.mouse.drag(start, end, DRAG_STEPS, DRAG_STEP_SEC):
+            raise Stopped("front_lost")
+        self.log(f"アイテム取得: つまみをドラッグ（{what}） ({start[0]:.1f}, {start[1]:.1f}) → "
+                 f"({end[0]:.1f}, {end[1]:.1f})")
+
+    def _equip_once(self, target_id: int, first: bool) -> bool:
+        """Equip を 1 回押して、Equipping target_id を確かめる"""
+        seq_before = self.equip_seen()[0]
+        (x, y), how = self._equip_target(first=first)
+        self._check()
+        if not self.mouse.click_at(x, y):
+            return False
+        got = self._wait_equip(seq_before)
+        self.log(f"アイテム取得: Equip: 点 ({x:.1f}, {y:.1f})（{how}）→ "
+                 + ("来ない" if got is None else f"Equipping {got}"))
+        return got == target_id
