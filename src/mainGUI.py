@@ -2897,6 +2897,7 @@ class App(tk.Tk):
         self._log(f"[自動割り当て] {min(len(windows), len(self.tabs))}窓に割り当てました")
 
     def _start(self):
+        """self._start_quiet（入室操作の前の自動開始。ED）なら、窓が無いときに止まる画面（エラーの窓）を出さずにログだけ"""
         if not self.keepOn_set:
             # tnl無しでも開始できる。続行リストが空＝tnlからの続行は0件として動く
             # （霧ラウンドや3クラ解放など、tnl以外を根拠にした続行はそのまま効く）
@@ -2959,7 +2960,10 @@ class App(tk.Tk):
             mon.start()
 
         if not self.monitors:
-            messagebox.showerror("エラー", "有効な窓/ログが見つかりません")
+            if getattr(self, "_start_quiet", False):
+                self._log("[起動] ⚠ 有効な窓/ログが見つかりません")
+            else:
+                messagebox.showerror("エラー", "有効な窓/ログが見つかりません")
             return
 
         self._start_window_volume()
@@ -3449,16 +3453,44 @@ class App(tk.Tk):
             self._log("[起動] ログ生成を確認（%.1f秒）" % waited)
             self._assign_logs()
             self._report_join_status()
+            self._auto_start_before_entry()
             self._run_ton_entry()
             return
         if waited >= config.LAUNCH_LOG_TIMEOUT:
             self._log("[起動] ログ生成待ちがタイムアウト（%d/%d）" % (ready, expected))
             self._assign_logs()
             self._report_join_status()
+            self._auto_start_before_entry()
             self._run_ton_entry()
             return
         self.after(int(config.LAUNCH_LOG_POLL_SEC * 1000),
                    lambda: self._wait_logs_then_assign(expected, waited + config.LAUNCH_LOG_POLL_SEC))
+
+    def _auto_start_before_entry(self):
+        """「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方 ON で、マクロが止まっていれば、
+        入室操作の前にマクロを始める（ED。Guidance Plush の移動にマクロの受信が要るため）。
+        開始ボタンと同じく、押した直後は押せない表示にする。始められなくても入室操作は今どおり"""
+        if not (self.v_ton_entry.get() and self.v_ton_begin.get()) or self._running:
+            return
+        if getattr(self, "_start_stop_busy", False):
+            self._log("[起動] マクロの開始・停止の途中のため、自動では開始しません")
+            return
+        self._start_stop_busy = True
+        self._refresh_start_stop_button()
+        self._start_quiet = True
+        try:
+            self._start()
+        except Exception as e:
+            DebugLog.exception("mainGUI._auto_start_before_entry")
+            self._log(f"[起動] ⚠ マクロを自動で開始できませんでした（{e}）→ 入室操作だけ行います")
+            return
+        finally:
+            self._start_quiet = False
+            self.after(config.START_STOP_REARM_MS, self._rearm_start_stop_button)
+        if self._running:
+            self._log("[起動] 入室操作の前にマクロを自動で開始しました")
+        else:
+            self._log("[起動] ⚠ マクロを自動で開始できませんでした → 入室操作だけ行います")
 
     def _report_join_status(self):
         """どの窓がToNに入れたかをログに出す。
