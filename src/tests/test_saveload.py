@@ -12,8 +12,13 @@ FOUND = (500.0, 300.0, 0.99, 1.0)
 class _World:
     """偽の窓・前面・カーソル・キー・時計・VRChat のログ。起きたことは events に順に残す"""
 
-    def __init__(self, test, box_after=1, log_line=True, stop_at=None, front_lost_at=None):
+    def __init__(self, test, box_after=1, log_line=True, stop_at=None, front_lost_at=None,
+                 loads_on_enter=1, closes_on_enter=1):
         self.test = test
+        # EC: 何回目の Enter でログに「Loaded Data Successfully」が出るか・入力欄が閉じるか（None は出ない・閉じない）
+        self.loads_on_enter = loads_on_enter
+        self.closes_on_enter = closes_on_enter
+        self.enters = 0
         self.events = []
         self.written = []
         self.front = 0x900
@@ -60,13 +65,17 @@ class _World:
 
         def keys(k):
             event(("keys", k))
-            if k == "enter" and w.log_line:
+            if k == "enter":
+                w.enters += 1
+            if k == "enter" and w.log_line and w.enters == w.loads_on_enter:
                 with open(w.log_path, "a", encoding="utf-8") as f:
                     f.write("2026.10.12 10:00:01 Debug      -  Loaded Data Successfully!\\n")
 
         def box_shown(bgr, width, height):
             w.box_sizes.append((width, height))
             w.box_polls += 1
+            if ("keys", "ctrl+v") in w.events:      # 貼った後: Enter で閉じたか（EC）
+                return w.closes_on_enter is None or w.enters < w.closes_on_enter
             return w.box_after is not None and w.box_polls >= w.box_after
 
         def capture():
@@ -170,6 +179,8 @@ class TestTheSequence(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertIn("⚠ コードの読み込みを確認できませんでした", world.logs)
         self.assertGreaterEqual(world.now[0], config.SAVELOAD_LOG_WAIT_SEC)
+        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs,
+                         "Enter で閉じていれば言わない")
 
     def test_the_old_loaded_line_does_not_count(self):
         """前からログにある行では成功にしない（Enter の後に出た行だけ）"""
@@ -430,3 +441,155 @@ class TestTheBuild(unittest.TestCase):
         self.assertIn('send_keys("ctrl+v")', src)
         self.assertEqual(len(re.findall(r"\bcode\b", src)), 2,
                          "コードを使うのはクリップボードへ入れ直すところだけ（＋引数）")
+
+
+# ── EC: Enter が効かなかったら、入力欄が開いたままか見て押し直す ───────────────
+class TestEnterAgain(unittest.TestCase):
+    def setUp(self):
+        import cv2
+        import numpy as np
+        from PIL import Image
+        # 撮った画像を書き出す関数は呼ばれないこと
+        for target, name in ((cv2, "imwrite"), (cv2, "imencode"), (Image.Image, "save"), (np, "save")):
+            p = patch.object(target, name, side_effect=AssertionError(f"{name} を呼んだ"))
+            p.start()
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def _enters(world):
+        return world.events.count(("keys", "enter"))
+
+    def test_paste_then_one_second_then_enter(self):
+        self.assertEqual(config.SAVELOAD_PASTE_ENTER_SEC, 1.0)
+        world = _World(self)
+        times = []
+        keys = WindowOperator.send_keys.side_effect
+        WindowOperator.send_keys.side_effect = lambda k: times.append((k, world.now[0])) or keys(k)
+        world.entry().load_code(CODE, world.log_path)
+        self.assertEqual([k for k, _t in times], ["ctrl+v", "enter"])
+        self.assertAlmostEqual(times[1][1] - times[0][1], 1.0, places=6)
+        self.assertEqual(self._enters(world), 1, "読み込めれば押し直さない")
+
+    def test_open_box_gets_enter_again_and_loads(self):
+        world = _World(self, loads_on_enter=2, closes_on_enter=2)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "loaded")
+        self.assertEqual(self._enters(world), 2)
+        self.assertIn("Enter を押し直しました（1 回目）", world.logs)
+        self.assertIn("✅ コードを読み込みました", world.logs)
+
+    def test_it_waits_three_seconds_before_looking(self):
+        world = _World(self, loads_on_enter=2, closes_on_enter=2)
+        looked, enters = [], []
+        shown = SaveLoad.input_box_shown.side_effect
+        keys = WindowOperator.send_keys.side_effect
+        SaveLoad.input_box_shown.side_effect = \
+            lambda *a: looked.append((("keys", "ctrl+v") in world.events, world.now[0])) or shown(*a)
+        WindowOperator.send_keys.side_effect = \
+            lambda k: (k == "enter" and enters.append(world.now[0])) or keys(k)
+        world.entry().load_code(CODE, world.log_path)
+        after_paste = [t for pasted, t in looked if pasted]
+        self.assertTrue(after_paste)
+        self.assertGreaterEqual(after_paste[0] - enters[0], config.SAVELOAD_RETRY_WAIT_SEC,
+                                "Enter の後 3 秒はログだけを待つ")
+        self.assertLess(after_paste[0] - enters[0], config.SAVELOAD_LOG_WAIT_SEC)
+
+    def test_at_most_two_retries_then_left_open(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(self._enters(world), 3, "最初の 1 回と押し直し 2 回まで")
+        self.assertIn("Enter を押し直しました（2 回目）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertNotIn(("keys", "esc"), world.events, "Esc は押さない（貼ったコードが消える）")
+        self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼り直さない")
+
+    def test_a_closed_box_is_not_pressed_again(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=1)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(self._enters(world), 1)
+        self.assertGreaterEqual(world.now[0], config.SAVELOAD_LOG_WAIT_SEC, "残りの時間（8 秒まで）ログを待つ")
+        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+
+    def test_a_late_load_after_the_box_closed_counts(self):
+        """入力欄は閉じた（Enter は効いた）が、ログが 3 秒より遅れて出た"""
+        world = _World(self, loads_on_enter=None, closes_on_enter=1)
+        entry = world.entry()
+        mark = {}
+        keys = WindowOperator.send_keys.side_effect
+
+        def note(k):
+            if k == "enter":
+                mark["enter"] = world.now[0]
+            return keys(k)
+        WindowOperator.send_keys.side_effect = note
+        with patch.object(SaveLoad, "log_has_loaded_line",
+                          side_effect=lambda p, o: "enter" in mark and world.now[0] >= mark["enter"] + 5.0):
+            self.assertEqual(entry.load_code(CODE, world.log_path), "loaded")
+        self.assertEqual(self._enters(world), 1)
+
+    def test_retry_borrows_the_front_inside_the_lock_and_gives_it_back(self):
+        world = _World(self, loads_on_enter=2, closes_on_enter=2)
+        held = []
+        borrow = WindowOperator.borrow_front.side_effect
+        WindowOperator.borrow_front.side_effect = \
+            lambda h: held.append(SharedState._GLOBAL_ACTION_LOCK.locked()) or borrow(h)
+        world.entry().load_code(CODE, world.log_path)
+        self.assertEqual(held, [True, True], "貼るときと押し直すときの 2 回とも鍵の中")
+        self.assertEqual(world.kinds().count("borrow"), world.kinds().count("return"))
+
+    def test_lost_front_does_not_press(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        entry = world.entry()
+        borrow = WindowOperator.borrow_front.side_effect
+        calls = [0]
+
+        def second_fails(h):
+            calls[0] += 1
+            return (False, None) if calls[0] >= 2 else borrow(h)
+        WindowOperator.borrow_front.side_effect = second_fails
+        self.assertEqual(entry.load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(self._enters(world), 1, "前面にできなければ押さない")
+        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+
+    def test_another_window_in_front_does_not_get_enter(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        entry = world.entry()
+        borrow = WindowOperator.borrow_front.side_effect
+        calls = [0]
+
+        def borrowed_but_lost(h):
+            calls[0] += 1
+            ok, loan = borrow(h)
+            if calls[0] >= 2:
+                world.front = 0x900              # 借りたが、すぐ別の窓が前に出た
+            return ok, loan
+        WindowOperator.borrow_front.side_effect = borrowed_but_lost
+        entry.load_code(CODE, world.log_path)
+        self.assertEqual(self._enters(world), 1)
+
+    def test_a_stop_while_waiting_does_not_press(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        entry = world.entry()
+        shown = SaveLoad.input_box_shown.side_effect
+
+        def stop_then_look(*a):
+            if ("keys", "ctrl+v") in world.events:
+                world.running = False
+            return shown(*a)
+        SaveLoad.input_box_shown.side_effect = stop_then_look
+        entry.load_code(CODE, world.log_path)
+        self.assertEqual(self._enters(world), 1)
+
+    def test_no_capture_is_written_and_the_code_is_not_logged(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        world.entry().load_code(CODE, world.log_path)
+        self.assertGreater(world.captures_after_paste, 0, "貼った後に撮るのは矢印を見るときだけ")
+        text = "\n".join(map(str, world.logs + world.written + world.events))
+        self.assertNotIn(CODE, text)
+
+    def test_only_the_arrow_check_captures_after_the_paste(self):
+        src = inspect.getsource(ToNEntry.ToNEntry._paste_code)
+        after = src[src.index('send_keys("ctrl+v")'):]
+        self.assertNotIn("_capture_bgr", after, "貼る流れの中では撮らない")
+        src = inspect.getsource(ToNEntry.ToNEntry._input_box_open)
+        self.assertIn("SaveLoad.input_box_shown", src)
+        self.assertIn("del bgr", src)

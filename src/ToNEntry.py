@@ -262,16 +262,82 @@ class ToNEntry:
         if result != "pasted":
             self._log(f"⚠ コードを読み込めませんでした（{result}）")
             return "skipped"
+        # Enter が効かなかった窓がある（EC）。3 秒で出なければ、入力欄が開いたままか見て押し直す（最大 2 回）
         deadline = time.time() + config.SAVELOAD_LOG_WAIT_SEC
-        while self._is_running():
-            if log_path and SaveLoad.log_has_loaded_line(log_path, offset):
+        retries = 0
+        left_open = False
+        while True:
+            if self._wait_loaded(log_path, offset, min(deadline, time.time() + config.SAVELOAD_RETRY_WAIT_SEC)):
                 self._log("✅ コードを読み込みました")
                 return "loaded"
-            if time.time() >= deadline:
+            if not self._is_running():
                 break
-            time.sleep(config.SAVELOAD_LOG_POLL_SEC)
+            if retries >= config.SAVELOAD_ENTER_RETRIES:
+                left_open = self._input_box_open()
+                break
+            state = self._press_enter_again()
+            if state == "pressed":
+                retries += 1
+                self._log(f"Enter を押し直しました（{retries} 回目）")
+                deadline = max(deadline, time.time() + config.SAVELOAD_RETRY_WAIT_SEC)
+                continue
+            if state == "closed":
+                # 入力欄は閉じた（Enter は効いた）。残りの時間ログを待つ
+                if self._wait_loaded(log_path, offset, deadline):
+                    self._log("✅ コードを読み込みました")
+                    return "loaded"
+            else:
+                left_open = state == "open"
+            break
         self._log("⚠ コードの読み込みを確認できませんでした")
+        if left_open:
+            # Esc は押さない（閉じると貼ったコードが消えて、手で確定できなくなる）
+            self._log("⚠ 入力欄が開いたままです（手で Enter を押してください）")
         return "unconfirmed"
+
+    def _wait_loaded(self, log_path: str, offset: int, until: float) -> bool:
+        """until（time.time）までに、ログの offset より後に「Loaded Data Successfully」が出たか"""
+        while self._is_running():
+            if log_path and SaveLoad.log_has_loaded_line(log_path, offset):
+                return True
+            if time.time() >= until:
+                return False
+            time.sleep(config.SAVELOAD_LOG_POLL_SEC)
+        return False
+
+    def _input_box_open(self) -> bool:
+        """入力欄（送信の矢印）が開いたままか。撮影はメモリの中だけ（書き出さない・文字は読まない）。
+        Ctrl+V の後に撮るのは、ここだけ（依頼者の了承。EC）"""
+        bgr = self._capture_bgr()
+        width, height = WindowOperator.client_size(self._hwnd) or (0, 0)
+        shown = bgr is not None and SaveLoad.input_box_shown(bgr, width, height)
+        del bgr                         # すぐ捨てる
+        return shown
+
+    def _press_enter_again(self) -> str:
+        """入力欄が開いたままなら、鍵の中で前面を借りて Enter をもう 1 回。"pressed"・"closed"（閉じていた）・
+        "open"（開いたままだが押せなかった：前面にできない・中止）"""
+        if not self._input_box_open():
+            return "closed"
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._is_running() or not self._can_operate():
+                return "open"
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(self._hwnd)
+            if not ok:
+                return "open"
+            try:
+                if not self._still_ours():
+                    return "open"
+                WindowOperator.send_keys("enter")
+                DebugLog.write("[コードの読み込み] 入力欄が開いたまま → Enter を押し直した")
+                return "pressed"
+            finally:
+                try:
+                    WindowOperator.return_front(loan)
+                finally:
+                    if cursor is not None:
+                        WindowOperator.set_cursor_position(cursor)
 
     def _capture_bgr(self):
         bits, w, h = self.capture()
@@ -319,7 +385,8 @@ class ToNEntry:
                     return "中止" if not self._is_running() else "前面でなくなった"
                 if not SaveLoad.write_clipboard(code):
                     return "クリップボードに入れられない"
-                # ここから後は撮らない（入力欄にコードが写る）
+                # ここから後は撮らない（入力欄にコードが写る）。例外は Enter が効いたかを見る
+                # _input_box_open だけ（メモリの中だけで矢印の形を見る。EC）
                 WindowOperator.send_keys("ctrl+v")
                 time.sleep(config.SAVELOAD_PASTE_ENTER_SEC)
                 if not self._still_ours():

@@ -502,8 +502,11 @@ TON_ENTRY_BEGIN_LEFT_SEC    = 0.12
 SAVELOAD_CLICK_SEC       = 0.15   # コード欄を押している長さ
 SAVELOAD_BOX_WAIT_SEC    = 3.0    # 入力欄（送信の矢印）が出るのを待つ上限
 SAVELOAD_BOX_POLL_SEC    = 0.2
-SAVELOAD_PASTE_ENTER_SEC = 0.3    # Ctrl+V から Enter まで
+# Ctrl+V から Enter まで。コードは約 1 万 5 千文字で、0.3 秒では貼り終わる前に Enter が届いて効かない窓があった（EC）
+SAVELOAD_PASTE_ENTER_SEC = 1.0
 SAVELOAD_LOG_WAIT_SEC    = 8.0    # Enter の後、ログに「Loaded Data Successfully」が出るのを待つ上限
+SAVELOAD_RETRY_WAIT_SEC  = 3.0    # これで出なければ、入力欄が開いたままか見て Enter を押し直す（EC）
+SAVELOAD_ENTER_RETRIES   = 2      # 押し直しの上限
 SAVELOAD_LOG_POLL_SEC    = 0.25
 # 入室の Begin の後に Guidance Plush を取りに行く（DZ）。押した後の最初の Verified を待つ上限
 PLUSH_VERIFIED_WAIT_SEC  = 60.0
