@@ -217,6 +217,8 @@ BEGIN_LEFT_SEC_LATER  = 0.16   # パニッシュ後
 # 離すのは 押し始め ＋ 秒数 ＋ 延び。延び ＝ 動き出しまで − BEGIN_USUAL_START_SEC（0〜BEGIN_EXTEND_MAX_SEC）。
 # BEGIN_START_WAIT_SEC たっても動き出さなければ延ばさない（受信が無い窓は今どおり）
 BEGIN_USUAL_START_SEC = 0.08
+# 停止で、音量の見張りが元の音量に戻し終えるのを待つ上限（EG）。その後の COM の片付けは待たない
+WINDOW_VOLUME_STOP_WAIT_SEC = 1.0
 BEGIN_EXTEND_MAX_SEC  = 0.5
 BEGIN_START_WAIT_SEC  = 0.6
 BEGIN_START_POLL_SEC  = 0.01

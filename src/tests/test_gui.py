@@ -1151,7 +1151,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
 
 
 class TestWindowVolumeInTheApp(unittest.TestCase):
-    """開始で見張りを作り、停止の頭（監視を止める前）で止めて元に戻す"""
+    """開始で見張りを作り、停止で（監視を止めた後に）止めて元に戻す（EG）"""
 
     def test_start_watches_every_monitor(self):
         app = type("FakeApp", (), {})()
@@ -1176,7 +1176,8 @@ class TestWindowVolumeInTheApp(unittest.TestCase):
         self.assertLess(body.index("if not self.monitors:"),
                         body.index("self._start_window_volume()"))
 
-    def test_stop_restores_before_the_monitors_stop(self):
+    def test_stop_restores_after_the_monitors_stop(self):
+        """EG: 監視を先に止める（音量を待つ間に、止めたはずの窓が Begin の移動を始めていた）"""
         order = []
         app = TestSuicideKeysReleasedByTheApp._app(self)
         controller = MagicMock()
@@ -1187,7 +1188,7 @@ class TestWindowVolumeInTheApp(unittest.TestCase):
             m.stop.side_effect = lambda: order.append("monitor")
         with patch.object(mainGUI.WindowOperator, "release_key_background", return_value=True):
             mainGUI.App._stop(app)
-        self.assertEqual(order[0], "volume")
+        self.assertEqual(order, ["monitor", "monitor", "volume"])
         self.assertIsNone(app._window_volume)
 
 

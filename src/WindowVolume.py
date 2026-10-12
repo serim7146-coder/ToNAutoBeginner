@@ -11,6 +11,7 @@ VRChat の窓はプロセスごとに別々の音声セッションを持つの�
 import ctypes
 import sys
 import threading
+import time
 from ctypes import POINTER, byref, c_float, c_int, c_long, c_uint, c_ulong, c_void_p, wintypes
 
 import config
@@ -279,6 +280,7 @@ class VolumeController:
         self._original: dict = {}    # pid → 初めて設定する直前の音量（0.0〜1.0）
         self._warned = False         # 使えないことを告げたか
         self._stop_event = threading.Event()
+        self._restored = threading.Event()   # 元の音量に戻し終えた（EG: stop はこれだけを待つ）
         self._thread = None
 
     # ── GUI から ──
@@ -294,15 +296,20 @@ class VolumeController:
 
     def start(self):
         self._stop_event.clear()
+        self._restored.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def stop(self, timeout: float = 3.0):
-        """見張りを止め、元の音量に戻す（戻すのは見張りのスレッド。COM を同じ所で使う）"""
+    def stop(self, timeout: float | None = None):
+        """見張りを止め、元の音量に戻す（戻すのは見張りのスレッド。COM を同じ所で使う）。
+        待つのは「戻し終えた」まで（最大 WINDOW_VOLUME_STOP_WAIT_SEC）。スレッドの終わり（COM の片付け）は
+        待たない——前はスレッドを join(3.0) で待ち、片付けで止まって停止が毎回 3 秒かかっていた（EG）"""
+        timeout = config.WINDOW_VOLUME_STOP_WAIT_SEC if timeout is None else timeout
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout)
-            self._thread = None
+            if not self._restored.wait(timeout):
+                DebugLog.write(f"[音量] 元に戻すのを {timeout:.1f} 秒待ちました（続きは見張りのスレッドで）")
+            self._thread = None         # daemon のまま後ろで終わる
 
     # ── 裏のスレッド ──
     def _run(self):
@@ -312,9 +319,13 @@ class VolumeController:
                 self._stop_event.wait(config.WINDOW_VOLUME_POLL_SEC)
             self._restore_safely("[停止] ")
         finally:
+            self._restored.set()
             release = getattr(self._audio, "release_com", None)
             if release is not None:
+                started = time.monotonic()
                 release()
+                # 片付け（CoUninitialize）で止まっていないかを確かめられるように（EG）
+                DebugLog.write(f"[音量] COM を片付けた（{time.monotonic() - started:.2f} 秒）")
 
     def _tick_safely(self):
         try:

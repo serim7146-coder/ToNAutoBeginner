@@ -2197,7 +2197,7 @@ class App(tk.Tk):
         self._window_volume.start()
 
     def _stop_window_volume(self):
-        """見張りを止めて元の音量に戻す（止めるのは監視より先）"""
+        """見張りを止めて元の音量に戻す（監視を止めた後。EG）"""
         controller, self._window_volume = getattr(self, "_window_volume", None), None
         if controller is not None:
             controller.stop()
@@ -3045,14 +3045,15 @@ class App(tk.Tk):
     def _stop(self):
         reason, self._stop_reason = (getattr(self, "_stop_reason", None) or "ボタン"), None
         DebugLog.write(f"[環境] 停止（理由: {reason}）")
-        self._stop_window_volume()               # 元の音量に戻す（監視を止める前に）
         self._entry_stop.set()                   # 入室時自動操作も中断する
         SharedState.clear_window_hwnds()         # 掴んでいる窓の記録も消す
         # 先に監視を止めてからフリーズを解く。逆だと、ほかの窓のフリーズが解けるのを待っていた
         # 窓（アイテムロストの装備待ちなど）が、止まる前に起きて自分のフリーズを張り、
-        # それが次の開始まで残って全窓が止まったままになっていた
+        # それが次の開始まで残って全窓が止まったままになっていた。
+        # 監視は音量より先に止める（EG: 音量を待つ間に、止めたはずの窓が Begin の移動を始めていた）
         for m in self.monitors:
             m.stop()
+        self._stop_window_volume()               # 元の音量に戻す（戻し終えるまで。最大 1 秒）
         SharedState.begin_run()                  # フリーズを全部解く（前の回の窓はもう張れない）
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
