@@ -17,6 +17,10 @@ __pycache__/
 *.zip
 build/
 dist/
+nuitka-crash-report.xml
+
+# Inno Setup のアンインストーラー（インストール先にしたことがあるフォルダに残る）
+unins000.*
 
 # Local logs and temporary files
 *.log
