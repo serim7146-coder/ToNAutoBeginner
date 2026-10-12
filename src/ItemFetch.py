@@ -20,7 +20,7 @@ import time
 
 import config
 
-TEMPLATE_FILE = "shop_templates/shop_main.png"   # 店の最初の画面（1920x1080 の x760〜1140・y245〜505）
+TEMPLATE_FILE = "assets/templates/shop/shop_main.png"   # 店の最初の画面（1920x1080 の x760〜1140・y245〜505）
 TEMPLATE_SIZE = (380, 260)  # 見本の幅・高さ（四隅を写すのに使う）
 # 見本の中のボタンの位置（切り出しの左上が 0,0）。Equip は店を開いた後の画面にあるが、
 # 見本のタイトル・枠・色見本の帯で位置が決まる（実機で3店とも1回で合った）

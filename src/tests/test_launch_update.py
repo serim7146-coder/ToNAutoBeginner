@@ -1304,3 +1304,42 @@ class TestMigrationInTheApp(unittest.TestCase):
             mainGUI.App._cleanup_migrated_exe(app)
         remove.assert_not_called()
         self.assertIn(Migration.SETTINGS_KEY, mainGUI.load_settings())
+
+
+class TestTheAssetsFolder(unittest.TestCase):
+    """EK: 同梱するデータは assets/ にまとめ、exe の中も同じ形。コードの名前・build.py・main.py の参考の行が合っている"""
+
+    ROOT = Path(__file__).resolve().parent.parent.parent
+
+    def test_every_bundled_file_is_found_through_resource_path(self):
+        import BeginDetect, ItemFetch, RespawnButton, RunFace, SaveLoad, Statistics
+        names = [*BeginDetect.TEMPLATE_FILES, ItemFetch.TEMPLATE_FILE, RespawnButton.TEMPLATE_FILE,
+                 RunFace.TEMPLATE_FILE, SaveLoad.CODEBOX_FILE, SaveLoad.ARROW_FILE, Statistics.MAPS_FILENAME,
+                 "assets/data/terrors.json", "assets/data/item.json", "assets/ToNAutoBeginnerIcon.ico"]
+        for name in names:
+            self.assertTrue(name.startswith("assets/"), name)
+            self.assertTrue(config.resource_path(name).is_file(), name)
+        voices = [v for k, v in vars(config).items() if k.startswith("VOICE_") and isinstance(v, str) and v]
+        self.assertGreaterEqual(len(voices), 12)
+        for v in voices:
+            self.assertTrue(Path(v).is_file(), v)
+            self.assertEqual(Path(v).parent, self.ROOT / "assets" / "voice", v)
+
+    def test_nothing_is_left_in_the_old_places(self):
+        for old in ("terrors.json", "maps.json", "item.json", "voice", "begin_templates", "shop_templates",
+                    "ToNAutoBeginnerIcon.ico", "src/respawn_templates", "src/run_templates",
+                    "src/saveload_templates"):
+            self.assertFalse((self.ROOT / old).exists(), old)
+
+    def test_the_build_puts_them_at_the_same_paths(self):
+        build = (self.ROOT / "build.py").read_text(encoding="utf-8")
+        for arg in ("--include-data-files=assets/ToNAutoBeginnerIcon.ico=assets/ToNAutoBeginnerIcon.ico",
+                    "--include-data-files=assets/data/maps.json=assets/data/maps.json",
+                    "--include-data-files=assets/data/terrors.json=assets/data/terrors.json",
+                    "--include-data-files=assets/data/item.json=assets/data/item.json",
+                    "--include-data-dir=assets/voice=assets/voice",
+                    "--include-data-dir=assets/templates=assets/templates",
+                    "--windows-icon-from-ico=assets/ToNAutoBeginnerIcon.ico"):
+            self.assertIn(f'"{arg}"', build, arg)
+        iss = (self.ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8")
+        self.assertIn(r"SetupIconFile=..\assets\ToNAutoBeginnerIcon.ico", iss)

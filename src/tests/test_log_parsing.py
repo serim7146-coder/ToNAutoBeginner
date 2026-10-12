@@ -181,7 +181,7 @@ class TestTerrorsJsonFormat(unittest.TestCase):
         build = Path("main.py").read_text(encoding="utf-8")
 
         self.assertNotIn("terror_aliases.json", build)
-        self.assertIn("--include-data-files=terrors.json=terrors.json", build)
+        self.assertIn("--include-data-files=assets/data/terrors.json=assets/data/terrors.json", build)
 
     def test_junk_resolves_to_nothing(self):
         for name in ("", None, 123):

@@ -54,7 +54,7 @@ DARK_MIN = 0.65             # 受け入れる周りの黒さ（真っ黒に近�
 SCORE_STRONG = 0.75         # これ以上の近さなら黒さを見ない（BEGIN でないものの最高 0.640）
 # 見本（高さ H0 にそろえた画面から切り出した「[ BEGIN ]」の文字。元は利用者が
 # Begin 前に置いた位置の撮影）。1枚目は粗い段でも使う
-TEMPLATE_FILES = ("begin_templates/begin_1.png", "begin_templates/begin_2.png")
+TEMPLATE_FILES = ("assets/templates/begin/begin_1.png", "assets/templates/begin/begin_2.png")
 
 _lock = threading.Lock()    # 見本の読み込みを1回にする
 # 探すのは一度に1窓だけ（1回あたり平均0.9〜1.9秒・最大3.8秒ほど CPU を使い切る。6窓が同時に探すと、

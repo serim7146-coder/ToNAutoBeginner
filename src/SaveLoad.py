@@ -18,8 +18,8 @@ import threading
 import config
 import DebugLog
 
-CODEBOX_FILE = "saveload_templates/codebox_left.png"
-ARROW_FILE = "saveload_templates/send_arrow.png"
+CODEBOX_FILE = "assets/templates/saveload/codebox_left.png"
+ARROW_FILE = "assets/templates/saveload/send_arrow.png"
 CODEBOX_BASE_HEIGHT = 1440          # コード欄の見本を作った窓の高さ
 ARROW_BASE_WIDTH = 1280             # 矢印の見本を作った撮影の幅・高さ
 ARROW_BASE_HEIGHT = 720

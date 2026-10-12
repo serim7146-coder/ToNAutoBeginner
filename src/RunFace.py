@@ -1,6 +1,6 @@
 """Run のリスポーンの後、真正面を向いているかを撮影で測る目印（DQ。依頼者 2026-10-11）。
 
-目印は階段の上の構造の絵（run_templates/stairs.png。140×90。窓1 867×702 で正面を向いた撮影の
+目印は階段の上の構造の絵（assets/templates/run/stairs.png。140×90。窓1 867×702 で正面を向いた撮影の
 x 368〜508・y 128〜218）。撮影の高さ 8〜45% の帯をグレーにして、絵を 撮影の高さ/702 ×
 （0.85〜1.15）に縮めて照合し、いちばん合う所の中心を目印の x とする。
 前の「赤い塊」（DO）は、画面右上の自分のアバターの小さな画像（赤い服）を拾って向きを振らせたので
@@ -18,7 +18,7 @@ from pathlib import Path
 import config
 import DebugLog
 
-TEMPLATE_FILE = "run_templates/stairs.png"
+TEMPLATE_FILE = "assets/templates/run/stairs.png"
 BAND = (0.08, 0.45)                 # 探す帯（撮影の高さの割合）
 BASE_HEIGHT = 702                   # 絵を切り出した撮影の高さ
 SCALES = (0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15)

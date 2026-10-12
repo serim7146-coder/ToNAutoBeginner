@@ -31,7 +31,7 @@ class TestItemCatalog(unittest.TestCase):
 
     def test_the_real_file_reads_and_is_bundled(self):
         ItemCatalog.take_load_problem()
-        items = ItemCatalog.load_items(REPO_ROOT / "item.json")
+        items = ItemCatalog.load_items(REPO_ROOT / "assets" / "data" / "item.json")
         self.assertIsNone(ItemCatalog.take_load_problem())
         self.assertTrue(items)
         self.assertEqual(ItemCatalog.item_id_by_name(config.GUIDANCE_PLUSH_NAME, items), 70,
@@ -39,7 +39,7 @@ class TestItemCatalog(unittest.TestCase):
         names = [item.name for item in items.values()]
         self.assertEqual(len(names), len(set(names)), "同じ名前が2つあると名前で引けない")
         build =(REPO_ROOT / "build.py").read_text(encoding="utf-8")
-        self.assertIn("--include-data-files=item.json=item.json", build,
+        self.assertIn("--include-data-files=assets/data/item.json=assets/data/item.json", build,
                       "exe に入れないと空の表で動く")
 
     def test_a_missing_file_is_an_empty_table(self):
@@ -61,7 +61,7 @@ class TestItemCatalog(unittest.TestCase):
 
     def test_config_reads_it_once_like_terrors(self):
         src = Path(config.__file__).read_text(encoding="utf-8")
-        self.assertIn('ITEMS = ItemCatalog.load_items(resource_path("item.json"))', src)
+        self.assertIn('ITEMS = ItemCatalog.load_items(resource_path("assets/data/item.json"))', src)
 
 
 
@@ -1186,7 +1186,7 @@ class TestItemFetch(unittest.TestCase):
 
     def test_the_template_is_built_into_the_exe(self):
         build = _load_build_script()
-        self.assertIn("--include-data-dir=shop_templates=shop_templates", build.BASE_ARGS)
+        self.assertIn("--include-data-dir=assets/templates=assets/templates", build.BASE_ARGS)
         self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_FILE))).is_file())
 
 

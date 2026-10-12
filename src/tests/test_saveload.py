@@ -426,11 +426,11 @@ class TestTheEntryFlow(unittest.TestCase):
 
 class TestTheBuild(unittest.TestCase):
     def test_the_templates_are_bundled(self):
-        root = Path(SaveLoad.__file__).parent
+        root = Path(SaveLoad.__file__).parent.parent
         self.assertTrue((root / SaveLoad.CODEBOX_FILE).is_file())
         self.assertTrue((root / SaveLoad.ARROW_FILE).is_file())
-        build = (root.parent / "build.py").read_text(encoding="utf-8")
-        self.assertIn('"--include-data-dir=src/saveload_templates=saveload_templates"', build)
+        build = (root / "build.py").read_text(encoding="utf-8")
+        self.assertIn('"--include-data-dir=assets/templates=assets/templates"', build)
         self.assertIn('"--include-module=win32clipboard"', build)
 
     def test_only_paste_is_used_to_type_the_code(self):

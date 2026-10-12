@@ -1,6 +1,6 @@
 """Esc のメニュー（Launch Pad）の「リスポーン」のボタンを、撮影から絵で探す（DL）。
 
-絵は 1294×1399 の窓の画像から切り出したもの（respawn_templates/btn_respawn.png・128×50）。
+絵は 1294×1399 の窓の画像から切り出したもの（assets/templates/respawn/btn_respawn.png・128×50）。
 窓の大きさでメニューの大きさも位置も変わるので、位置は決め打ちにせず、倍率を振って探す
 （2026-10-10 の実機の窓2: 4 回とも一致 0.995 以上・メニューの無い画面は 0.46）。
 """
@@ -8,7 +8,7 @@ import threading
 
 import config
 
-TEMPLATE_FILE = "respawn_templates/btn_respawn.png"
+TEMPLATE_FILE = "assets/templates/respawn/btn_respawn.png"
 MATCH_MIN = 0.8             # これ未満は「無い」
 MATCH_GOOD = 0.95           # これ以上が出たら、残りの倍率は試さない（1 枚 1〜2 秒かかるため）
 SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 2.0, 0.05

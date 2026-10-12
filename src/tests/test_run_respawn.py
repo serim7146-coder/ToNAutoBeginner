@@ -457,12 +457,13 @@ class TestTheButtonPicture(unittest.TestCase):
         img[y0:y0 + th, x0:x0 + tw] = t
         return img, (x0 + tw / 2, y0 + th / 2)
 
-    def test_the_picture_is_in_src_and_built_in(self):
+    def test_the_picture_is_in_assets_and_built_in(self):
         self.assertTrue(Path(config.resource_path(RespawnButton.TEMPLATE_FILE)).is_file())
-        self.assertTrue((Path(RespawnButton.__file__).parent / RespawnButton.TEMPLATE_FILE).is_file(), "src の中")
+        self.assertTrue((Path(RespawnButton.__file__).parent.parent / RespawnButton.TEMPLATE_FILE).is_file(),
+                        "assets の中（EK）")
         self.assertTrue(RespawnButton.available())
         build = _load_build_script()
-        self.assertIn("--include-data-dir=src/respawn_templates=respawn_templates", build.BASE_ARGS)
+        self.assertIn("--include-data-dir=assets/templates=assets/templates", build.BASE_ARGS)
 
     def test_found_at_other_window_sizes(self):
         for scale in (1.0, 0.6, 1.5):

@@ -144,7 +144,7 @@ class TestEarlyReadNames(unittest.TestCase):
         event = LogParser.parse("2026.09.21 16:38:23 Debug      -  "
                                 "[NetworkProcessing] Transferred ownership of monsterDetectionBox to 9")
         self.assertEqual(event.player_name, "monsterDetectionBox")
-        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        data = ReadJson.load_terrors(config.resource_path("assets/data/terrors.json"))
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("monsterDetectionBox", data))
 
     def test_normalization(self):
@@ -203,7 +203,7 @@ class TestEarlyReadNames(unittest.TestCase):
 
     def test_the_real_terrors_json_has_no_name_for_two_ids(self):
         """ガード: 本物の terrors.json の classic / alternate の objects に、2つ以上の ID に当たる名前が無い"""
-        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        data = ReadJson.load_terrors(config.resource_path("assets/data/terrors.json"))
         objects = data[ReadJson.OBJECTS_KEY]
         owners: dict = {}
         for category in ReadJson.FOG_CATEGORIES:
@@ -2010,13 +2010,13 @@ class TestWaldoBareName(unittest.TestCase):
             self.assertEqual(self._name(rest), "", rest)
 
     def test_waldo_is_in_the_real_objects(self):
-        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        data = ReadJson.load_terrors(config.resource_path("assets/data/terrors.json"))
         self.assertEqual(ReadJson.fog_terror_id_by_object_name("Waldo", data), 131)
         self.assertEqual(ReadJson.fog_terror_id_by_object_name("Waldo", config.TERRORS), 131)
 
     def test_a_bare_waldo_line_reads_the_fog_early(self):
         """本物の行で: 霧のラウンド中に番号なしの Waldo → 看破で 131（本物の terrors.json）"""
-        data = ReadJson.load_terrors(config.resource_path("terrors.json"))
+        data = ReadJson.load_terrors(config.resource_path("assets/data/terrors.json"))
         for p in (patch.object(config, "TERRORS", data),
                   patch.object(config, "FOG_EARLY_READ_ENABLED", True),
                   patch.object(LogMonitor.threading, "Thread"),

@@ -785,7 +785,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        icon_path = resource_path("ToNAutoBeginnerIcon.ico")
+        icon_path = resource_path("assets/ToNAutoBeginnerIcon.ico")
         if icon_path.exists():
             self.iconbitmap(default=str(icon_path))
 

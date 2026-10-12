@@ -94,8 +94,8 @@ class TestTheMarkOnRealShots(unittest.TestCase):
 
     def test_the_picture_and_the_values(self):
         self.assertTrue(Path(config.resource_path(RunFace.TEMPLATE_FILE)).is_file())
-        self.assertTrue((Path(RunFace.__file__).parent / RunFace.TEMPLATE_FILE).is_file(), "src の中")
-        self.assertIn("--include-data-dir=src/run_templates=run_templates", _load_build_script().BASE_ARGS)
+        self.assertTrue((Path(RunFace.__file__).parent.parent / RunFace.TEMPLATE_FILE).is_file(), "assets の中（EK）")
+        self.assertIn("--include-data-dir=assets/templates=assets/templates", _load_build_script().BASE_ARGS)
         self.assertEqual((RunFace.BAND, RunFace.BASE_HEIGHT, RunFace.SCALES[0], RunFace.SCALES[-1]),
                          ((0.08, 0.45), 702, 0.85, 1.15))
         self.assertEqual(config.RUN_FACE_MATCH_MIN, 0.8)

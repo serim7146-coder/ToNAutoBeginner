@@ -13,7 +13,7 @@ SIGNIFICANCE_LEVELS = (
     (0.05, "出やすい"),
 )
 
-MAPS_FILENAME = "maps.json"
+MAPS_FILENAME = "assets/data/maps.json"
 # ラウンド → maps.json の印。ほかのラウンドは "normal"
 MAP_FLAG_BY_ROUND = {"Run": "run", "8 Pages": "8pages"}
 

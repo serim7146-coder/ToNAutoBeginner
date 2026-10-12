@@ -117,11 +117,11 @@ def resource_path(filename: str) -> Path:
     return candidates[0]
 
 # ── テラーIDとテラー名の対応表.json ──
-TERRORS = ReadJson.load_terrors(resource_path("terrors.json"))
+TERRORS = ReadJson.load_terrors(resource_path("assets/data/terrors.json"))
 
 # ── アイテムIDと名前・8 Pages に持ち込めるか（item.json）──
 # 無い・読めないときは空の表（所持アイテムは id だけで覚え、ページ取得でなくさない）
-ITEMS = ItemCatalog.load_items(resource_path("item.json"))
+ITEMS = ItemCatalog.load_items(resource_path("assets/data/item.json"))
 
 # Enrage に出る個体名は terrors.json の "terrors" に入っている
 # （以前の terror_aliases.json は廃止した）
@@ -678,21 +678,21 @@ DEFAULT_WINDOW_VOLUME_FREEZE    = 100
 DEFAULT_WINDOW_VOLUME_OTHER     = 0
 
 # ── 音声アナウンスファイルパス ──
-VOICE_CONTINUE     = str(resource_path("voice/Continue.mp3"))
+VOICE_CONTINUE     = str(resource_path("assets/voice/Continue.mp3"))
 # 主催リストが取れなくなったときのアナウンス。欄を空にすれば鳴らない
-VOICE_LIST_LOST    = str(resource_path("voice/StopAutoSuicide.mp3"))
-VOICE_FOG          = str(resource_path("voice/Fog.mp3"))
-VOICE_ITEM_LOST    = str(resource_path("voice/ItemLost.mp3"))
-VOICE_INTERMISSION = str(resource_path("voice/intermission.mp3"))
-VOICE_FOXY         = str(resource_path("voice/SpawnFoxy.mp3"))
+VOICE_LIST_LOST    = str(resource_path("assets/voice/StopAutoSuicide.mp3"))
+VOICE_FOG          = str(resource_path("assets/voice/Fog.mp3"))
+VOICE_ITEM_LOST    = str(resource_path("assets/voice/ItemLost.mp3"))
+VOICE_INTERMISSION = str(resource_path("assets/voice/intermission.mp3"))
+VOICE_FOXY         = str(resource_path("assets/voice/SpawnFoxy.mp3"))
 # 速度からの先読み用
-VOICE_8PAGES       = str(resource_path("voice/8Pages.mp3"))
-VOICE_PUNISH       = str(resource_path("voice/Punished.mp3"))
+VOICE_8PAGES       = str(resource_path("assets/voice/8Pages.mp3"))
+VOICE_PUNISH       = str(resource_path("assets/voice/Punished.mp3"))
 # ラウンド突入でフリーズを選んだラウンドに入ったときの音声（霧は VOICE_FOG を使う）
-VOICE_UNBOUND      = str(resource_path("voice/Unbound.mp3"))
-VOICE_MIDNIGHT     = str(resource_path("voice/Midnight.mp3"))
-VOICE_ALTERNATE    = str(resource_path("voice/Alternate.mp3"))
-VOICE_GHOST        = str(resource_path("voice/Ghost.mp3"))
+VOICE_UNBOUND      = str(resource_path("assets/voice/Unbound.mp3"))
+VOICE_MIDNIGHT     = str(resource_path("assets/voice/Midnight.mp3"))
+VOICE_ALTERNATE    = str(resource_path("assets/voice/Alternate.mp3"))
+VOICE_GHOST        = str(resource_path("assets/voice/Ghost.mp3"))
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05
