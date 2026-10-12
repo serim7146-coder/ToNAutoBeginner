@@ -350,10 +350,8 @@ class TestToNEntryOnlyInPrivate(unittest.TestCase):
             for name, line in joined.items():
                 Path(d, name).write_text(LINE + line + "\n", encoding="utf-8")
             src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-            m = re.search(r"can_operate=(lambda p=log_path: .*?\)\)),\n", src, re.S)
-            self.assertIsNotNone(m, "入室操作に can_operate を渡す")
-            check = eval(m.group(1), {"ActionExecutor": ActionExecutor, "LogMonitor": LogMonitor,
-                                      "log_path": ""})
+            self.assertIn("can_operate=entry_can_operate(log_path),", src, "入室操作に can_operate を渡す")
+            check = lambda path: mainGUI.entry_can_operate(path)()
             self.assertTrue(check(str(Path(d, "x.txt"))))
             self.assertFalse(check(str(Path(d, "y.txt"))))
             self.assertFalse(check(""))

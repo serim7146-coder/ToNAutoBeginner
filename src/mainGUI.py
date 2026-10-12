@@ -169,6 +169,28 @@ def with_obs_password(data: dict, password: str) -> dict:
     return out
 
 
+def entry_can_operate(log_path: str, detect=None):
+    """入室操作（ToNEntry）の「この窓で移動・クリックしてよいか」。ログの最後の入室の行で見る。
+
+    入室の行は、窓がまだ読み込み中なら無い（detect が None）。その間は毎回ログを見直し、
+    一度分かったらその答えを覚える（移動とクリックのたびにログを末尾から遡らない）。
+    ログが無ければ分からない → しない
+    """
+    detect = detect or LogMonitor.LogMonitor.detect_instance_type_from_log
+    known = {}
+
+    def can_operate() -> bool:
+        if not log_path:
+            return False
+        if "type" not in known:
+            itype = detect(log_path)
+            if itype is None:
+                return False            # まだ入室の行が無い（次に呼ばれたらまた見る）
+            known["type"] = itype
+        return ActionExecutor.can_operate_in(known["type"])
+    return can_operate
+
+
 def launch_window_count(win_count: int, already_open: int) -> int:
     """新しく起動する窓数の既定値。
 
@@ -312,7 +334,8 @@ class WindowTab(ttk.Frame):
         self.cb_hwnd = ttk.Combobox(hf, textvariable=self.v_hwnd_sel,
                                      state="readonly", width=36)
         self.cb_hwnd.pack(side="left", padx=(0, 4))
-        ttk.Button(hf, text="🔄 更新", command=lambda: self._refresh_hwnds(1)).pack(side="left") # refresh_hwndsに1を入力することで、最新でアクティブになった窓を選択する
+        # 全部の窓を一覧にして、最前面の VRChat の窓を選ぶ（_refresh_hwnds）
+        ttk.Button(hf, text="🔄 更新", command=self._refresh_hwnds).pack(side="left")
 
         # ── ログファイル ──
         section("■ ログファイル")
@@ -381,12 +404,22 @@ class WindowTab(ttk.Frame):
                    sticky="w", padx=(0, 12), pady=1)
 
 
-    # 最新のアクティブになったデータから取得し、VRChatウィンドウを古い順にhwndが入った配列で返す
-    def _refresh_hwnds(self, hwnd_count: int):
-        hwnds = VRChatDiscovery.get_vrchat_windows(hwnd_count)
-        self.set_hwnd_choices(hwnds)
+    def _refresh_hwnds(self, discover=None, foreground=None):
+        """「🔄 更新」: 今ある VRChat の窓を全部一覧にし（起動の古い順）、最前面の VRChat の窓を選ぶ。
+        最前面が VRChat でなければ今の選択のまま（一覧から消えていれば先頭）。一覧は 1 件に絞らない
+        （絞ると、押した後にこのタブで他の窓を選べなくなる）"""
+        discover = discover or (lambda: [h for h, _t in VRChatDiscovery.get_vrchat_windows_by_start_time(
+            config.MAX_WINDOWS)])
+        foreground = foreground or WindowOperator.foreground_hwnd
+        hwnds = list(discover())
+        front = foreground()
+        self.set_hwnd_choices(hwnds, selected_hwnd=front if front in hwnds else None)
 
     def set_hwnd_choices(self, hwnds: list[int], selected_hwnd: int | None = None):
+        """一覧を hwnds に置き換える。selected_hwnd があればそれを選ぶ。無ければ今の選択を保つ
+        （同じ hwnd が一覧にあればその行。無ければ先頭、一覧が空なら「未選択」）。
+        表示の文字だけ残して対応表から消えると、見た目は選べているのに開始時に HWND が 0 になる"""
+        current = self._get_selected_hwnd()
         self._hwnd_map = {}
         choices = []
         for i, h in enumerate(hwnds):
@@ -394,12 +427,9 @@ class WindowTab(ttk.Frame):
             self._hwnd_map[label] = h
             choices.append(label)
         self.cb_hwnd["values"] = choices
-        if selected_hwnd is not None:
-            label = next((k for k, v in self._hwnd_map.items() if v == selected_hwnd), None)
-            if label:
-                self.v_hwnd_sel.set(label)
-        elif choices and self.v_hwnd_sel.get() == "未選択":
-            self.v_hwnd_sel.set(choices[0])
+        wanted = selected_hwnd if selected_hwnd is not None else current
+        label = next((k for k, v in self._hwnd_map.items() if v == wanted), None)
+        self.v_hwnd_sel.set(label or (choices[0] if choices else "未選択"))
 
     def _get_selected_hwnd(self) -> int:
         return self._hwnd_map.get(self.v_hwnd_sel.get(), 0)
@@ -3555,8 +3585,7 @@ class App(tk.Tk):
                         log=lambda m, n=window_no: self._log("[窓%d] %s" % (n, m)),
                         is_running=lambda: not self._entry_stop.is_set(),
                         # 移動・クリックは private だけ（ログの最後の入室で見る。分からなければしない）
-                        can_operate=lambda p=log_path: bool(p) and ActionExecutor.can_operate_in(
-                            LogMonitor.LogMonitor.detect_instance_type_from_log(p)),
+                        can_operate=entry_can_operate(log_path),
                     )
                     try:
                         if entry.run() and press_begin and not self._entry_stop.is_set():

@@ -1888,7 +1888,6 @@ class TestCursorGiveUpReasons(unittest.TestCase):
             enter(patch.object(WindowOperator, "window_at_point",
                                return_value=at_point if at_point is not None
                                else self.HWND))
-            enter(patch.object(WindowOperator, "window_title", return_value=title))
             enter(patch.object(WindowOperator.time, "sleep"))
             with WindowOperator.cursor_over_window(self.HWND,
                                                    reasons.append) as over:

@@ -177,14 +177,12 @@ SPECIAL_ROUND = {
     "Special",
 }
 
+# ラウンド開始でアイテムをロストと扱うラウンド（ロストの判定 st.item_id）。
+# 所持の記録（st.held_item_id）は別で、8 Pages はページを取ったときに表（item.json）の 0 だけなくす
 ROUND_START_ITEM_LOSS_ROUNDS = {
     "Punished",
     "8 Pages",
 }
-
-# Wiki note: 8 Pages keeps items below 100 Eph. Fill this with item IDs once
-# the app has an item-id to price table.
-EIGHT_PAGES_KEEP_ITEM_IDS = set()
 
 LATE_ROUND = {
     "Punished",

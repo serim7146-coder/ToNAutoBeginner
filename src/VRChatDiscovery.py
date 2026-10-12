@@ -20,28 +20,6 @@ LOG_NAME_SUFFIX = ".txt"
 LOG_NAME_TIME_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
 
-def get_vrchat_windows(hwnd_count: int) -> list[int]:
-    hwnds = []
-    found_hwnd = 0
-
-    def cb(h, _):
-        nonlocal found_hwnd
-        if found_hwnd >= hwnd_count:
-            return
-        if not win32gui.IsWindowVisible(h):
-            return
-        if "VRChat" not in win32gui.GetWindowText(h):
-            return
-        if win32gui.GetClassName(h) == config.VRCHAT_WINDOW_CLASS:
-            hwnds.insert(0, h)
-            found_hwnd += 1
-
-    if found_hwnd >= hwnd_count:
-        return hwnds
-    win32gui.EnumWindows(cb, None)
-    return hwnds
-
-
 # ═══════════════════════════════════════════════
 #  起動時刻によるウィンドウ↔ログ対応付け
 #  EnumWindowsの順序はZオーダー（前面にある順）で、窓を切り替えるだけで

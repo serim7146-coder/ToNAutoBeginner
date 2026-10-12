@@ -181,7 +181,7 @@ class TestVRChatDiscovery(unittest.TestCase):
             ],
         )
 
-    def test_get_vrchat_windows_filters_by_title_and_class(self):
+    def test_get_vrchat_windows_by_start_time_filters_by_title_and_class(self):
         def enum_windows(callback, arg):
             for hwnd in (1, 2, 3):
                 callback(hwnd, arg)
@@ -189,10 +189,11 @@ class TestVRChatDiscovery(unittest.TestCase):
         with patch.object(VRChatDiscovery.win32gui, "EnumWindows", side_effect=enum_windows), \
              patch.object(VRChatDiscovery.win32gui, "IsWindowVisible", side_effect=lambda hwnd: hwnd != 1), \
              patch.object(VRChatDiscovery.win32gui, "GetWindowText", side_effect=lambda hwnd: "VRChat" if hwnd != 2 else "Other"), \
-             patch.object(VRChatDiscovery.win32gui, "GetClassName", side_effect=lambda hwnd: config.VRCHAT_WINDOW_CLASS):
-            hwnds = VRChatDiscovery.get_vrchat_windows(4)
+             patch.object(VRChatDiscovery.win32gui, "GetClassName", side_effect=lambda hwnd: config.VRCHAT_WINDOW_CLASS), \
+             patch.object(VRChatDiscovery, "get_process_start_time", return_value=None):
+            windows = VRChatDiscovery.get_vrchat_windows_by_start_time(4)
 
-        self.assertEqual(hwnds, [3])
+        self.assertEqual(windows, [(3, None)])
 
 
 
@@ -798,8 +799,9 @@ class TestBuildScript(unittest.TestCase):
             self.assertEqual(self.build.find_iscc({}), Path("/bin/ISCC"))
         with tempfile.TemporaryDirectory() as d, \
              patch.object(self.build.shutil, "which", return_value=None):
-            self.assertIsNone(self.build.find_iscc({"LOCALAPPDATA": d}))
+            # Program Files は空のフォルダを指す（本物の PC に Inno Setup が入っていても見ない）
             env = {"LOCALAPPDATA": d, "ProgramFiles": d, "ProgramFiles(x86)": d}
+            self.assertIsNone(self.build.find_iscc(dict(env)))
             six = Path(d) / "Programs" / "Inno Setup 6" / "ISCC.exe"
             six.parent.mkdir(parents=True)
             six.write_text("", encoding="utf-8")
@@ -1135,12 +1137,17 @@ class TestMigrationRules(unittest.TestCase):
         with patch.dict(sys.modules, {"winreg": fake}):
             self.assertIsNone(Migration.installed_dir())
 
+    @staticmethod
+    def _quoted(*paths) -> str:
+        """PowerShell の '…' に入れた形（Path の文字列化は Windows では \\ なので、期待値もそれで作る）"""
+        return ", ".join(Migration._quote(p) for p in paths)
+
     def test_the_script_waits_for_the_app_then_runs_setup_silently(self):
         setup = Path("C:/Users/O'Neil/AppData/Local/Temp/ToNAutoBeginner-Setup.exe")
         script = Migration.setup_script(setup)
         self.assertIn(f"TryOpenExisting('{config.APP_MUTEX_NAME}'", script)
-        self.assertIn("'C:/Users/O''Neil/AppData/Local/Temp/ToNAutoBeginner-Setup.exe'", script,
-                      "' は2つ重ねる")
+        self.assertIn(self._quoted(setup), script, "' は2つ重ねる")
+        self.assertIn("O''Neil", script)
         self.assertIn("'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/launch=1'", script)
         self.assertLess(script.index("TryOpenExisting"), script.index("Start-Process"))
         self.assertNotIn("ExitCode", script, "古い exe を渡さなければ消さない")
@@ -1154,15 +1161,16 @@ class TestMigrationRules(unittest.TestCase):
         removal = script.index("if ($p.ExitCode -eq 0)")
         self.assertLess(script.index("Start-Process"), removal, "Setup が終わってから")
         self.assertIn("-Wait -PassThru", script)
-        self.assertIn("'D:/tools/ToNAutoBeginner.exe', 'D:/tools/ToNAutoBeginner.exe.old'",
-                      script[removal:])
+        old = Path("D:/tools/ToNAutoBeginner.exe")
+        self.assertIn(self._quoted(old, old.with_name(old.name + ".old")), script[removal:])
 
     def test_setup_installs_into_the_old_exes_folder(self):
         setup = Path("C:/Temp/ToNAutoBeginner-Setup.exe")
-        script = Migration.setup_script(setup, Path("D:/my tools/x.exe"), Path("D:/my tools"))
-        self.assertIn("""'/launch=1','/DIR="D:/my tools"'""", script, "空白があっても1つの引数")
+        folder = Path("D:/my tools")
+        script = Migration.setup_script(setup, folder / "x.exe", folder)
+        self.assertIn(f"""'/launch=1','/DIR="{folder}"'""", script, "空白があっても1つの引数")
         removal = script[script.index("if ($p.ExitCode -eq 0)"):]
-        self.assertIn("'D:/my tools/x.exe', 'D:/my tools/x.exe.old'", removal,
+        self.assertIn(self._quoted(folder / "x.exe", folder / "x.exe.old"), removal,
                       "名前が違う古い exe は消す")
         self.assertNotIn("/DIR=", Migration.setup_script(setup, Path("D:/my tools/x.exe")))
 
@@ -1343,3 +1351,33 @@ class TestTheAssetsFolder(unittest.TestCase):
             self.assertIn(f'"{arg}"', build, arg)
         iss = (self.ROOT / "installer" / "ToNAutoBeginner.iss").read_text(encoding="utf-8")
         self.assertIn(r"SetupIconFile=..\assets\ToNAutoBeginnerIcon.ico", iss)
+
+
+class TestEntryCanOperate(unittest.TestCase):
+    """入室操作の「この窓で移動・クリックしてよいか」は、入室の行が分かるまでは毎回ログを見て、
+    分かったら覚える（移動とクリックのたびにログを末尾から遡らない）"""
+
+    def test_the_answer_is_remembered_once_the_join_line_is_known(self):
+        answers = [None, None, config.INSTANCE_PRIVATE]
+        calls = []
+
+        def detect(path):
+            calls.append(path)
+            return answers.pop(0) if answers else config.INSTANCE_PRIVATE
+
+        can = mainGUI.entry_can_operate("C:/log.txt", detect)
+        self.assertFalse(can(), "まだ入室の行が無い → しない")
+        self.assertFalse(can())
+        self.assertTrue(can(), "入室の行が分かった")
+        self.assertTrue(can())
+        self.assertTrue(can())
+        self.assertEqual(len(calls), 3, "分かった後はログを見ない")
+
+    def test_a_public_instance_is_remembered_as_no(self):
+        can = mainGUI.entry_can_operate("C:/log.txt", lambda _p: config.INSTANCE_PUBLIC)
+        self.assertFalse(can())
+        self.assertFalse(can())
+
+    def test_no_log_means_no(self):
+        can = mainGUI.entry_can_operate("", lambda _p: self.fail("ログが無ければ見ない"))
+        self.assertFalse(can())

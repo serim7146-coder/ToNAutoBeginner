@@ -1628,7 +1628,7 @@ class TestEquipQueue(unittest.TestCase):
         SharedState.equip_freeze_start(yst)
         SharedState.equip_freeze_start(xst)
 
-        self.assertEqual([w is xst for w in SharedState._EQUIP_QUEUE], [True, False],
+        self.assertEqual([w is xst for w in SharedState._EQUIP.queue], [True, False],
                          "列に2回入らない")
         SharedState.equip_freeze_end(xst)
 
@@ -3354,15 +3354,15 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
         self.assertEqual(monitor.st.item_id, 0)
         self.assertTrue(monitor.st.item_lost_this_round)
 
-    def test_eight_pages_kept_item_does_not_mark_item_lost(self):
+    def test_eight_pages_start_marks_item_lost(self):
+        """8 Pages の開始はロスト扱い（持ち込めるかの表は所持の記録 held_item_id の側で見る）"""
         monitor = self._monitor(auto_begin=False)
         monitor.st.item_id = 10
 
-        with patch.object(config, "EIGHT_PAGES_KEEP_ITEM_IDS", {10}):
-            monitor._process("This round is taking place at Warehouse (0) and the round type is 8 Pages")
+        monitor._process("This round is taking place at Warehouse (0) and the round type is 8 Pages")
 
-        self.assertEqual(monitor.st.item_id, 10)
-        self.assertFalse(monitor.st.item_lost_this_round)
+        self.assertEqual(monitor.st.item_id, 0)
+        self.assertTrue(monitor.st.item_lost_this_round)
 
     def test_respawn_marks_item_lost(self):
         monitor = self._monitor(auto_begin=False)

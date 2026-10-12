@@ -423,9 +423,6 @@ def cursor_in_client(hwnd: int) -> bool:
     return left <= point[0] < left + cw and top <= point[1] < top + ch
 
 
-GA_ROOT = 2
-
-
 def window_at_point(point: tuple) -> int:
     """その点にある窓（トップレベル）の hwnd。取れなければ 0。
 
@@ -446,14 +443,6 @@ def window_at_point(point: tuple) -> int:
     except Exception:
         DebugLog.exception("WindowOperator.window_at_point")
         return 0
-
-
-def window_title(hwnd: int) -> str:
-    try:
-        return win32gui.GetWindowText(hwnd) or ""
-    except Exception:
-        DebugLog.exception("WindowOperator.window_title")
-        return ""
 
 
 def window_rect(hwnd: int) -> tuple | None:

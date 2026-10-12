@@ -118,15 +118,22 @@ def joined_ton(log_path) -> bool:
 
 
 def latest_user_id(log_dir) -> Optional[str]:
-    """直近のログから自分のユーザーIDを取り出す（インスタンス生成に使う）"""
+    """直近のログから自分のユーザーIDを取り出す（インスタンス生成に使う）。
+    ログは数百 MB になるので丸読みせず、末尾から遡って最初のログインの行で止める
+    （Tk のスレッドから呼ばれる）"""
     try:
+        import LogMonitor
+        import LogParser
         import VRChatDiscovery
         logs = VRChatDiscovery.find_latest_logs(Path(log_dir), 3)
         for path in logs:               # 新しい順
-            text = Path(path).read_text(encoding="utf-8", errors="replace")
-            m = RE_USER_AUTH.search(text)
-            if m:
-                return m.group(1)
+            for line in LogMonitor.LogMonitor._iter_log_lines_reversed(
+                    Path(path), config.LOG_START_SCAN_CHUNK_BYTES):
+                if LogParser.USER_AUTH_MARK not in line:
+                    continue            # 前絞り（正規表現は重い）
+                m = RE_USER_AUTH.search(line)
+                if m:
+                    return m.group(1)
     except Exception:
         DebugLog.exception("VRChatLauncher.latest_user_id")
         pass

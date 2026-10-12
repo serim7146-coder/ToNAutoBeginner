@@ -962,12 +962,7 @@ class LogMonitor:
             self._log(message)
 
     def _round_start_loses_item(self) -> bool:
-        st = self.st
-        if st.round_type not in config.ROUND_START_ITEM_LOSS_ROUNDS:
-            return False
-        if st.round_type == "8 Pages" and st.item_id in config.EIGHT_PAGES_KEEP_ITEM_IDS:
-            return False
-        return True
+        return self.st.round_type in config.ROUND_START_ITEM_LOSS_ROUNDS
 
     def _round_lost_item(self) -> bool:
         st = self.st

@@ -292,7 +292,6 @@ class _EquipFreeze(_Freeze):
 # （利用者が一度に操作できるのは1窓なので、1窓ずつ案内する）
 _EQUIP = _EquipFreeze("装備待ち", "equip_freeze_held", keep_order=True)
 EQUIP_WAIT_EVENT = _EQUIP.event
-_EQUIP_QUEUE = _EQUIP.queue
 equip_freeze_start, equip_freeze_end = _EQUIP.start, _EQUIP.end
 equip_freeze_reset, get_equip_freeze_count = _EQUIP.reset, _EQUIP.get_count
 

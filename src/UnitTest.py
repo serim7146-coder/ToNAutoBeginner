@@ -16,6 +16,12 @@ def main(argv) -> int:
     os.chdir(HERE)                  # ソースを読むテストは src からの相対パスで開く
     if str(HERE) not in sys.path:
         sys.path.insert(0, str(HERE))
+    # テスト名・メッセージは日本語。コンソールが cp932 のままだと化けるので UTF-8 で出す
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     loader = unittest.defaultTestLoader
     if argv:
         suite = unittest.TestSuite(loader.loadTestsFromName(f"tests.{name.removesuffix('.py')}")

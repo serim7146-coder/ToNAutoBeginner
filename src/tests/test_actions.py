@@ -274,27 +274,6 @@ class TestOscBranching(unittest.TestCase):
 
 
 
-class TestOscAvailability(unittest.TestCase):
-    """OSC可否の判定（起動時に1回だけ確定させる）"""
-
-    def test_available_when_process_holds_expected_port(self):
-        with patch.object(OSCClient, "udp_ports_of_process", return_value={9010, 5353}), \
-             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
-            self.assertTrue(OSCClient.osc_available_for(0x1234, 1))
-
-    def test_unavailable_when_port_missing(self):
-        """手動起動の2窓目はポート競合でOSCが無効"""
-        with patch.object(OSCClient, "udp_ports_of_process", return_value={5353}), \
-             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
-            self.assertFalse(OSCClient.osc_available_for(0x1234, 1))
-
-    def test_unavailable_when_pid_unknown(self):
-        with patch("win32process.GetWindowThreadProcessId", return_value=(0, 0)):
-            self.assertFalse(OSCClient.osc_available_for(0x1234, 0))
-
-
-
-
 class TestUdpPortsByPid(unittest.TestCase):
     """UDPの待ち受け表は netstat 1回で全PIDぶん取る"""
 
@@ -332,41 +311,6 @@ class TestUdpPortsByPid(unittest.TestCase):
         """「失敗」と「成功したがポート無し」を区別する"""
         with patch.object(OSCClient.subprocess, "run", side_effect=OSError("boom")):
             self.assertIsNone(OSCClient.udp_ports_by_pid())
-
-    def test_of_process_delegates(self):
-        with patch.object(OSCClient, "udp_ports_by_pid",
-                          return_value={4321: {9000}}):
-            self.assertEqual(OSCClient.udp_ports_of_process(4321), {9000})
-            self.assertEqual(OSCClient.udp_ports_of_process(9999), set())
-
-    def test_of_process_survives_a_failure(self):
-        with patch.object(OSCClient, "udp_ports_by_pid", return_value=None):
-            self.assertEqual(OSCClient.udp_ports_of_process(4321), set())
-
-    def test_passing_the_table_does_not_run_netstat(self):
-        table = {4321: {9010}}
-        with patch.object(OSCClient.subprocess, "run") as mock_run, \
-             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
-            self.assertTrue(OSCClient.osc_available_for(0x1234, 1, table))
-
-        mock_run.assert_not_called()
-
-    def test_missing_pid_in_the_table_is_unavailable_without_falling_back(self):
-        """辞書にPIDが無いのは「ポートを持っていない」＝利用不可。撃ち直さない"""
-        with patch.object(OSCClient.subprocess, "run") as mock_run, \
-             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
-            self.assertFalse(OSCClient.osc_available_for(0x1234, 1, {999: {9010}}))
-
-        mock_run.assert_not_called()
-
-    def test_none_table_falls_back_per_window(self):
-        """netstat失敗時は窓ごとの個別取得へ落ちる（全窓を巻き添えにしない）"""
-        with patch.object(OSCClient, "udp_ports_of_process",
-                          return_value={9010}) as mock_ports, \
-             patch("win32process.GetWindowThreadProcessId", return_value=(0, 4321)):
-            self.assertTrue(OSCClient.osc_available_for(0x1234, 1, None))
-
-        mock_ports.assert_called_once_with(4321)
 
 
 

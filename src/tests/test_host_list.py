@@ -23,13 +23,63 @@ class TestWindowTabHwndChoices(unittest.TestCase):
         tab._hwnd_map = {}
         tab.cb_hwnd = FakeCombo()
         tab.v_hwnd_sel = FakeVar()
+        tab._get_selected_hwnd = lambda: mainGUI.WindowTab._get_selected_hwnd(tab)
 
-        with patch.object(VRChatDiscovery, "get_vrchat_windows") as mock_discover:
+        with patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time") as mock_discover:
             mainGUI.WindowTab.set_hwnd_choices(tab, [0x1111, 0x2222], selected_hwnd=0x2222)
 
         mock_discover.assert_not_called()
         self.assertEqual(tab.cb_hwnd["values"], ["[1] HWND=0x00001111", "[2] HWND=0x00002222"])
         self.assertEqual(tab.v_hwnd_sel.get(), "[2] HWND=0x00002222")
+
+    @staticmethod
+    def _tab(selected_label="未選択", hwnd_map=None):
+        class FakeVar:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+            def set(self, value):
+                self.value = value
+
+        tab = type("FakeTab", (), {})()
+        tab._hwnd_map = dict(hwnd_map or {})
+        tab.cb_hwnd = {}
+        tab.v_hwnd_sel = FakeVar(selected_label)
+        tab._get_selected_hwnd = lambda: mainGUI.WindowTab._get_selected_hwnd(tab)
+        tab.set_hwnd_choices = lambda hwnds, selected_hwnd=None: mainGUI.WindowTab.set_hwnd_choices(
+            tab, hwnds, selected_hwnd)
+        return tab
+
+    def test_the_current_window_is_kept_when_the_list_is_replaced(self):
+        """一覧を置き換えても、選んでいた窓が一覧にあればその行のまま（番号が変わっても）。
+        前は表示の文字だけ残って対応表から消え、開始時に HWND が 0 になっていた"""
+        tab = self._tab("[3] HWND=0x00003333", {"[3] HWND=0x00003333": 0x3333})
+        tab.set_hwnd_choices([0x1111, 0x3333])
+        self.assertEqual(tab.v_hwnd_sel.get(), "[2] HWND=0x00003333")
+        self.assertEqual(tab._get_selected_hwnd(), 0x3333)
+
+    def test_a_window_that_is_gone_falls_to_the_first_then_to_none(self):
+        tab = self._tab("[3] HWND=0x00003333", {"[3] HWND=0x00003333": 0x3333})
+        tab.set_hwnd_choices([0x1111])
+        self.assertEqual((tab.v_hwnd_sel.get(), tab._get_selected_hwnd()), ("[1] HWND=0x00001111", 0x1111))
+        tab.set_hwnd_choices([])
+        self.assertEqual((tab.v_hwnd_sel.get(), tab._get_selected_hwnd()), ("未選択", 0))
+
+    def test_refresh_lists_every_window_and_selects_the_front_one(self):
+        """🔄 更新: 全部の窓を一覧にして、最前面の VRChat の窓を選ぶ（1 件に絞らない）"""
+        tab = self._tab()
+        mainGUI.WindowTab._refresh_hwnds(tab, discover=lambda: [0x1111, 0x2222, 0x3333], foreground=lambda: 0x2222)
+        self.assertEqual(tab.cb_hwnd["values"], ["[1] HWND=0x00001111", "[2] HWND=0x00002222", "[3] HWND=0x00003333"])
+        self.assertEqual(tab._get_selected_hwnd(), 0x2222)
+
+    def test_refresh_keeps_the_choice_when_the_front_is_not_vrchat(self):
+        tab = self._tab("[1] HWND=0x00003333", {"[1] HWND=0x00003333": 0x3333})
+        mainGUI.WindowTab._refresh_hwnds(tab, discover=lambda: [0x1111, 0x3333], foreground=lambda: 0x9999)
+        self.assertEqual(tab._get_selected_hwnd(), 0x3333)
+        self.assertEqual(len(tab.cb_hwnd["values"]), 2, "他の窓も選べる")
 
 
 

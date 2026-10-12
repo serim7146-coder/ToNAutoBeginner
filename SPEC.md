@@ -250,7 +250,7 @@ LogMonitor._process(line)
 
 - 送る: ラウンドごとに1回、`rpc/register_round`（開始の時刻・ラウンドの番号・マップ・テラー3体まで・transformed_uid・インスタンスの番号）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
 - transformed_uid: `rpc/get_transformed_uid` で VRChat uid から int2 の番号をもらう（無ければ DB が割り当てる）。`Users` の表は直接読まない（`supabase/get_transformed_uid.sql`）。
-- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。自分が送った行は送ったときに手元にも書く。
+- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。
 
 ## 11. 置き場所
 
@@ -280,7 +280,7 @@ LogMonitor._process(line)
 - exe 単体からの移行（`Migration.py`）: exe 単体（Inno Setup のアンインストール情報 `InstallLocation` の外）で起動したら、最新リリースの `ToNAutoBeginner-Setup.exe` を落とし、元の exe の場所を settings.json（`migrated_from`）に書いて、PowerShell の係を裏で起こしてツールを終える。係は起動中の目印が消えるのを待ち（最大60秒）、Setup を `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /launch=1` で動かす。入れる場所は元の exe のフォルダ（`/DIR="…"`。まだインストールしていない人だけ）。Program Files などの管理者権限が要る場所（Setup の NextButtonClick と同じ判定）・書き込めない場所・ドライブの直下なら `/DIR` を付けず Setup の既定へ（`Migration.target_dir`）。Setup は終わるとツールを起動する。Setup が成功したら（終了コード 0）係が元の exe（と `.old`）を消す。同じフォルダに同じ名前（`ToNAutoBeginner.exe`）で入れたときは Setup が上書きしたので、exe は消さず `.old` だけ消す。消せなかったときはインストール版が最初の起動で消す。失敗したらその回は今のまま動き、次の起動でやり直す。移行するときは更新の確認はしない。
 - リリース: `ToNAutoBeginner.exe`（自動更新が探すのはこの名前）と `ToNAutoBeginner-Setup.exe`（移行が探す）の両方を、`APP_VERSION` と同じタグのリリースに置く。
 - テスト: `src` で `python UnitTest.py`（全部）／`python UnitTest.py test_freezes`（1ファイル）。本体は `src/tests/test_*.py`、共通の準備は `src/tests/support.py`（Windows 専用モジュールの差し替え・本物の OSC / 設定 / DB / クリップボードに触らない安全装置）。テストは本物の OSC・キー・マウス・カーソル・窓・ポート、Utils のログ・sqlite を使わない。
-  手元の環境で落ちる既知のもの: `test_launch_update` の4件（Inno Setup 7 が入っている PC・パスの書き方）と `TestSuicideCancel` の1件（子プロセスから config を import できない）。
+  全部通る状態を保つ（落ちたままのテストを「既知」として残さない。退行に気づけなくなる）。
 
 ## 13. 理由がほかに残っていない決めごと
 

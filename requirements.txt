@@ -1,8 +1,10 @@
-# requirements.txt
-pywin32
-pydirectinput
-keyboard
-python-dotenv
-numpy
-opencv-python-headless
-zeroconf            # OSCQuery の mDNS の広告（速さの受信。DN）
+# requirements.txt（開発・ビルドで確かめた版に固定。上げるときはテストとビルドを通してから）
+pywin32==306
+pydirectinput==1.0.4
+keyboard==0.13.5
+python-dotenv==1.2.2
+numpy==2.2.6
+opencv-python-headless==5.0.0.93
+zeroconf==0.151.5           # OSCQuery の mDNS の広告（速さの受信。DN）
+ifaddr==0.2.0               # zeroconf が使う。build.py で --include-package に入れている
+nuitka==4.1                 # ビルド（python build.py）にだけ要る

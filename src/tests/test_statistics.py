@@ -154,6 +154,28 @@ class TestNullTerrorRounds(unittest.TestCase):
             [row] = store.rows()
             self.assertEqual(row[1:6], (101, 12, None, None, None))
 
+    def test_a_row_the_db_did_not_take_is_not_kept_locally(self):
+        """送れなかった行は手元にも貯めない（手元と DB をずらさない）。送れたら貯める"""
+        with tempfile.TemporaryDirectory() as d:
+            store = RoundStore.RoundStore(Path(d) / "r.sqlite")
+            ok = MagicMock()
+            ok.__enter__ = MagicMock(return_value=ok)
+            ok.__exit__ = MagicMock(return_value=False)
+            ok.status = 204
+            patch.stopall()                 # setUp の register_round の偽物を外す（本物を通す）
+            with patch.object(ConnectDB, "_configured", return_value=True), \
+                 patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+                 patch.object(ConnectDB, "_headers", return_value={}), \
+                 patch.object(ConnectDB.threading, "Thread", TestDbV1.RunNow), \
+                 patch.object(RoundStore, "default_store", return_value=store), \
+                 patch("builtins.print"):
+                with patch.object(ConnectDB.urllib.request, "urlopen", side_effect=OSError("offline")):
+                    ConnectDB.register_round("Fog", [101], 12, -13, round_time=1767225610)
+                self.assertEqual(store.rows(), [], "送れなかった行は貯めない")
+                with patch.object(ConnectDB.urllib.request, "urlopen", return_value=ok):
+                    ConnectDB.register_round("Fog", [101], 12, -13, round_time=1767225610)
+                self.assertEqual(len(store.rows()), 1, "送れた行は貯める")
+
 
 
 
@@ -793,7 +815,6 @@ class TestDbV1(unittest.TestCase):
         self.assertEqual(row, {"created_at": "2026-01-01T00:00:10Z", "round": "Sabotage",
                                "terror_ids": [7, 9], "map_id": 12, "transformed_uid": -13})
         self.assertEqual(ConnectDB.round_row({"time": 0, "round": 999})["round"], "999")
-        self.assertEqual(Statistics.row_datetime(row).year, 2026)
 
 
 
@@ -1295,21 +1316,9 @@ class TestStatistics(unittest.TestCase):
         direct = sum(Statistics.binomial_pmf(n, i, p) for i in range(k, n + 1))
         self.assertAlmostEqual(Statistics.binomial_pmf_upper(n, k, p), direct, places=12)
 
-    def test_round_filtering_and_summary_strip_round_names(self):
-        rows = [
-            {"date": 20260526, "time": 100000, "round": " Fog ", "terror_ids": [1, 2], "map_id": 12},
-            {"date": 20260526, "time": 110000, "round": "Unbound", "terror_ids": [201], "map_id": 49},
-            {"date": 20260527, "time": 100000, "round": "Fog", "terror_ids": [3], "map_id": 13},
-        ]
-        filtered = Statistics.filter_rows(
-            rows,
-            datetime(2026, 5, 26, 0, 0, 0),
-            datetime(2026, 5, 26, 23, 59, 59),
-            {"Fog"},
-        )
-        self.assertEqual(len(filtered), 1)
-        self.assertEqual(Statistics.available_rounds(rows), ["Fog", "Unbound"])
-        self.assertEqual(Statistics.round_summary(filtered), [("Fog", 1, 2)])
+    def test_round_summary_from_counts_strips_names_and_sorts(self):
+        rows = Statistics.round_summary_from_counts([(" Fog ", 1, 2), ("Unbound", 1, 1), ("Fog", 2, 3)])
+        self.assertEqual(rows, [("Fog", 3, 5), ("Unbound", 1, 1)])
 
     def test_map_name_for_id_uses_round_to_resolve_duplicate_ids(self):
         self.assertEqual(Statistics.map_name_for_id(1, "Run"), "Dring King's Citadel")
@@ -1334,14 +1343,9 @@ class TestStatistics(unittest.TestCase):
             "Pizzeria", "Experimentation", "Forest", "SlashCo HQ", "Dust", "The Wall", "Park",
             "Tunnels", "The Fishbowl", "Hotel", "Space Colony"}, "8 Pages で選ばれる 19 マップ")
 
-    def test_map_counts_for_terror_uses_map_names(self):
-        rows = [
-            {"round": "Run", "terror_ids": [1], "map_id": 1},
-            {"round": "Classic", "terror_ids": [1, 1], "map_id": 1},
-            {"round": "Classic", "terror_ids": [2], "map_id": 12},
-        ]
+    def test_map_counts_from_entries_uses_map_names(self):
         self.assertEqual(
-            Statistics.map_counts_for_terror(rows, 1),
+            Statistics.map_counts_from_entries([(1, "Run", 1), (1, "Classic", 2)]),
             [("Sewers", 2), ("Dring King's Citadel", 1)],
         )
 
@@ -1512,31 +1516,25 @@ class TestRoundStoreAggregation(unittest.TestCase):
         ]
         self.store.sync(lambda _since, _mine: list(self.rows))
 
-    def _dicts(self):
-        """今の画面が使っていた形（ConnectDB.round_row）"""
-        return [ConnectDB.round_row({"time": t, "round": r, "map_id": m, "terror1": a,
-                                     "terror2": b, "terror3": c, "transformed_uid": u,
-                                     "other_uids": uids_list(o)})
-                for t, r, m, a, b, c, u, o, _origin in self.store.rows()]
-
-    def test_the_round_summary_matches_the_old_counting(self):
-        new = Statistics.round_summary_from_counts(
+    def test_the_round_summary_counts_rounds_and_slots(self):
+        rows = Statistics.round_summary_from_counts(
             (StatisticsGUI._round_name(rid), n, s) for rid, n, s in self.store.round_summary(RoundStore.Filter()))
-        self.assertEqual(new, Statistics.round_summary(self._dicts()))
+        self.assertEqual(rows, [("Bloodbath", 2, 5), ("Classic", 1, 1), ("Fog", 1, 1), ("Unbound", 1, 1)])
 
-    def test_the_terror_statistics_match_the_old_counting(self):
-        for category in ("classic", "alternate", "unbound"):
-            ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
-            new = Statistics.analyze_terror_counts(self.store.terror_counts(RoundStore.Filter()),
-                                                   config.TERRORS, ids)
-            self.assertEqual(new, Statistics.analyze_terrors(self._dicts(), config.TERRORS, ids), category)
+    def test_the_terror_statistics_count_every_slot(self):
+        ids = Statistics.candidate_ids_for_category("classic", config.TERRORS)
+        total, candidates, stats = Statistics.analyze_terror_counts(
+            self.store.terror_counts(RoundStore.Filter()), config.TERRORS, ids)
+        self.assertEqual(candidates, len(ids))
+        by_id = {s.terror_id: s.count for s in stats}
+        self.assertEqual((by_id[5], by_id[6], by_id[7]), (3, 2, 1))
+        self.assertEqual(total, sum(by_id.values()))
 
-    def test_the_map_counts_match_the_old_counting(self):
-        for tid in (5, 6, 201):
-            new = Statistics.map_counts_from_entries(
-                (m, StatisticsGUI._round_name(r), h)
-                for m, r, h in self.store.map_counts_for_terror(RoundStore.Filter(), tid))
-            self.assertEqual(new, Statistics.map_counts_for_terror(self._dicts(), tid), tid)
+    def test_the_map_counts_use_map_names(self):
+        rows = Statistics.map_counts_from_entries(
+            (m, StatisticsGUI._round_name(r), h)
+            for m, r, h in self.store.map_counts_for_terror(RoundStore.Filter(), 5))
+        self.assertEqual(rows, [("Sea Base", 2), ("Sewers", 1)], "Bloodbath の map 1 は Sewers（Run でない）")
 
     def test_mine_is_first_player_or_in_other_uids(self):
         mine = RoundStore.Filter(mine=True)
@@ -1688,6 +1686,9 @@ class TestGetTransformedUid(unittest.TestCase):
             p = patch.object(ConnectDB, name, value)
             p.start()
             self.addCleanup(p.stop)
+        quiet = patch("builtins.print")             # 結果の案内をテストの出力に混ぜない
+        quiet.start()
+        self.addCleanup(quiet.stop)
 
     def test_send_Users_asks_the_db_function(self):
         """Users は直接読まない。関数 get_transformed_uid に uid を渡して番号をもらう"""
@@ -1708,55 +1709,22 @@ class TestGetTransformedUid(unittest.TestCase):
         with patch('urllib.request.urlopen', return_value=self._res(None)):
             self.assertIsNone(ConnectDB.send_Users("usr_new"))
 
-    def test_a_db_without_the_function_falls_back_to_the_old_way(self):
-        """関数がまだ DB に無い（404）間だけ前のやり方"""
+    def test_a_db_without_the_function_gives_no_uid(self):
+        """関数が DB に無い（404）→ None（Users を直接読む前のやり方はもう無い）"""
         self._configured()
         missing = urllib.error.HTTPError("u", 404, "not found", {}, None)
-        with patch('urllib.request.urlopen', side_effect=missing), \
-             patch.object(ConnectDB, "_send_Users_direct", return_value=7) as old:
-            self.assertEqual(ConnectDB.send_Users("usr_new"), 7)
-        old.assert_called_once_with("usr_new")
+        with patch('urllib.request.urlopen', side_effect=missing) as mock_urlopen:
+            self.assertIsNone(ConnectDB.send_Users("usr_new"))
+        mock_urlopen.assert_called_once()
+        self.assertFalse(hasattr(ConnectDB, "_send_Users_direct"))
 
-    def test_other_http_errors_do_not_fall_back(self):
+    def test_other_http_errors_are_raised(self):
+        """ほかの失敗は呼び出し側（LogMonitor._fetch_transformed_uid）が握って None にする"""
         self._configured()
         denied = urllib.error.HTTPError("u", 401, "denied", {}, None)
-        with patch('urllib.request.urlopen', side_effect=denied), \
-             patch.object(ConnectDB, "_send_Users_direct") as old:
+        with patch('urllib.request.urlopen', side_effect=denied):
             with self.assertRaises(urllib.error.HTTPError):
                 ConnectDB.send_Users("usr_new")
-        old.assert_not_called()
-
-    def test_the_old_way_registers_a_new_user(self):
-        """前のやり方: 存在確認 → 既存の番号の一覧 → POST 登録"""
-        responses = [self._res([]), self._res([{"transformed_uid": 123}]), self._res(None, 201)]
-        with patch('urllib.request.urlopen', side_effect=responses):
-            result = ConnectDB._send_Users_direct("usr_new")
-        self.assertNotEqual(result, 123)
-        self.assertIsNotNone(result)
-
-    def test_the_old_way_returns_an_existing_user(self):
-        res = self._res([{"VRChat_uid": "usr-existing", "transformed_uid": 123}])
-        with patch('urllib.request.urlopen', return_value=res):
-            self.assertEqual(ConnectDB._send_Users_direct("usr-existing"), 123)
-
-    def test_the_old_way_when_full(self):
-        """ユーザー登録限界"""
-        existing = [{"VRChat_uid": "usr-existing", "transformed_uid": i} for i in range(-32768, 32767)]
-        with patch('urllib.request.urlopen', side_effect=[self._res([]), self._res(existing)]):
-            self.assertIsNone(ConnectDB._send_Users_direct("usr_new"))
-
-    def test_get_transformed_uid_is_send_users(self):
-        self._configured()
-        with patch.object(ConnectDB, 'send_Users', return_value=123) as mock_send:
-            self.assertEqual(ConnectDB.get_transformed_uid("usr_new"), 123)
-        mock_send.assert_called_once_with("usr_new")
-
-    def test_error_returns_none(self):
-        """エラー時はNoneを返す"""
-        self._configured()
-        with patch('urllib.request.urlopen', side_effect=Exception("network error")):
-            result = ConnectDB.get_transformed_uid("usr_abc123")
-            self.assertIsNone(result)
 
     def test_round_row_is_one_row_even_with_other_uids(self):
         """"ToNRounds" の1行を今の形に直す。other_uids（同じラウンドを見たほかの人）があっても1件"""

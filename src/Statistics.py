@@ -1,10 +1,10 @@
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
+
+import config
 
 
 SIGNIFICANCE_LEVELS = (
@@ -111,73 +111,15 @@ def significance_label(p_value: float) -> str:
     return ""
 
 
-def parse_datetime(text: str) -> datetime | None:
-    text = text.strip()
-    if not text:
-        return None
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d %H:%M:%S"):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            pass
-    raise ValueError("日時は YYYY-MM-DD HH:MM 形式で入力してください。")
-
-
-def row_datetime(row: dict[str, Any]) -> datetime | None:
-    created_at = row.get("created_at")
-    if created_at:
-        text = str(created_at).replace("Z", "+00:00")
-        try:
-            dt = datetime.fromisoformat(text)
-            if dt.tzinfo is not None:
-                dt = dt.astimezone().replace(tzinfo=None)
-            return dt
-        except ValueError:
-            pass
-
-    if row.get("date") is None:
-        return None
-    try:
-        date = int(row.get("date"))
-        time = int(row.get("time") or 0)
-        return datetime(
-            date // 10000,
-            (date // 100) % 100,
-            date % 100,
-            time // 10000,
-            (time // 100) % 100,
-            time % 100,
-        )
-    except (TypeError, ValueError):
-        return None
-
-
-def format_datetime(dt: datetime | None) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M") if dt else ""
-
-
-def _resource_candidates(filename: str) -> list[Path]:
-    here = Path(__file__).resolve().parent
-    candidates = [here / filename, here.parent / filename]
-    compiled = globals().get("__compiled__")
-    if compiled is not None:
-        candidates.append(Path(compiled.containing_dir) / filename)
-    return candidates
-
-
 @lru_cache(maxsize=1)
 def map_entries() -> list[dict[str, Any]]:
-    for path in _resource_candidates(MAPS_FILENAME):
-        if not path.exists():
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        maps = data.get("maps")
-        if isinstance(maps, list):
-            return [entry for entry in maps if isinstance(entry, dict)]
-    return []
+    """maps.json の maps（同梱データ。置き場所は config.resource_path と同じ）"""
+    try:
+        data = json.loads(config.resource_path(MAPS_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    maps = data.get("maps") if isinstance(data, dict) else None
+    return [entry for entry in maps if isinstance(entry, dict)] if isinstance(maps, list) else []
 
 
 @lru_cache(maxsize=1)
@@ -212,48 +154,9 @@ def map_name_for_id(map_id: Any, round_name: str = "") -> str:
     return str(entry.get("name") or f"Map {normalized_id}")
 
 
-def available_rounds(rows: list[dict[str, Any]]) -> list[str]:
-    return sorted({str(row.get("round") or "").strip() for row in rows if str(row.get("round") or "").strip()})
-
-
-def filter_rows(
-    rows: list[dict[str, Any]],
-    start_at: datetime | None,
-    end_at: datetime | None,
-    rounds: set[str],
-) -> list[dict[str, Any]]:
-    result = []
-    for row in rows:
-        round_name = str(row.get("round") or "").strip()
-        if rounds and round_name not in rounds:
-            continue
-        dt = row_datetime(row)
-        if start_at and (dt is None or dt < start_at):
-            continue
-        if end_at and (dt is None or dt > end_at):
-            continue
-        result.append(row)
-    return result
-
-
-def round_summary(rows: list[dict[str, Any]]) -> list[tuple[str, int, int]]:
-    counts: dict[str, int] = {}
-    slots: dict[str, int] = {}
-    for row in rows:
-        round_name = str(row.get("round") or "Unknown").strip() or "Unknown"
-        counts[round_name] = counts.get(round_name, 0) + 1
-        terror_ids = row.get("terror_ids")
-        if isinstance(terror_ids, list):
-            slots[round_name] = slots.get(round_name, 0) + len(terror_ids)
-        else:
-            slots[round_name] = slots.get(round_name, 0)
-    return round_summary_from_counts(
-        (round_name, counts[round_name], slots.get(round_name, 0)) for round_name in counts)
-
-
 def round_summary_from_counts(entries) -> list[tuple[str, int, int]]:
     """集計済みの [(ラウンド名, ラウンド数, 枠数)] をまとめて並べる（統計画面 v1 は
-    手元の SQLite の GROUP BY から渡す。数え方は round_summary と同じ）"""
+    手元の SQLite の GROUP BY から渡す）。多い順、同数なら名前の順"""
     counts: dict[str, int] = {}
     slots: dict[str, int] = {}
     for round_name, count, slot in entries:
@@ -305,32 +208,13 @@ def terror_name(terror_id: int, terror_data: dict[str, dict[str, str]]) -> str:
     return f"ID:{terror_id}"
 
 
-def analyze_terrors(
-    rows: list[dict[str, Any]],
-    terror_data: dict[str, dict[str, str]],
-    candidate_ids: set[int],
-) -> tuple[int, int, list[TerrorStatistic]]:
-    counts: dict[int, int] = {}
-    for row in rows:
-        terror_ids = row.get("terror_ids")
-        if not isinstance(terror_ids, list):
-            continue
-        for terror_id in terror_ids:
-            try:
-                tid = int(terror_id)
-            except (TypeError, ValueError):
-                continue
-            counts[tid] = counts.get(tid, 0) + 1
-    return analyze_terror_counts(counts, terror_data, candidate_ids)
-
-
 def analyze_terror_counts(
     all_counts: dict[int, int],
     terror_data: dict[str, dict[str, str]],
     candidate_ids: set[int],
 ) -> tuple[int, int, list[TerrorStatistic]]:
-    """{テラー: 出た枠数} から、候補ごとの出現回数と二項検定（数え方は analyze_terrors と
-    同じ。統計画面 v1 は手元の SQLite の GROUP BY から渡す）"""
+    """{テラー: 出た枠数} から、候補ごとの出現回数と二項検定（統計画面 v1 は手元の
+    SQLite の GROUP BY から渡す）。(枠の合計, 候補の数, p 値の小さい順の一覧)"""
     counts = {terror_id: int(all_counts.get(terror_id, 0) or 0) for terror_id in candidate_ids}
     total_slots = sum(counts.values())
 
@@ -355,28 +239,8 @@ def analyze_terror_counts(
     return total_slots, candidate_count, stats
 
 
-def map_counts_for_terror(rows: list[dict[str, Any]], terror_id: int) -> list[tuple[str, int]]:
-    entries = []
-    for row in rows:
-        terror_ids = row.get("terror_ids")
-        if not isinstance(terror_ids, list):
-            continue
-        hits = 0
-        for tid in terror_ids:
-            try:
-                if int(tid) == terror_id:
-                    hits += 1
-            except (TypeError, ValueError):
-                pass
-        if hits == 0:
-            continue
-        entries.append((row.get("map_id"), str(row.get("round") or "").strip(), hits))
-    return map_counts_from_entries(entries)
-
-
 def map_counts_from_entries(entries) -> list[tuple[str, int]]:
-    """[(map_id, ラウンド名, 回数)] をマップ名ごとにまとめて多い順に（数え方は
-    map_counts_for_terror と同じ）"""
+    """[(map_id, ラウンド名, 回数)] をマップ名ごとにまとめて多い順に（同数なら名前の順）"""
     counts: dict[str, int] = {}
     for map_id, round_name, hits in entries:
         map_name = map_name_for_id(map_id, str(round_name or "").strip())

@@ -4,11 +4,9 @@ import json
 import hashlib
 import time
 from datetime import datetime, timezone
-import random
 import threading
 import urllib.request
 import urllib.error
-import urllib.parse
 from pathlib import Path
 
 import config
@@ -108,8 +106,8 @@ def send_Users(VRChat_uid: str) -> int | None:
     """VRChat の uid → transformed_uid（int2。DB を軽くするための番号）。無ければ DB 側で割り当てる。
 
     DB の関数 get_transformed_uid を呼ぶ。Users の表は直接読まない——読めると、鍵（exe から
-    取り出せる）を持つ誰でも全員の uid と番号の対応を引けてしまう。関数がまだ DB に無い
-    （404）ときだけ前のやり方へ落ちる。割り当てられないときは None
+    取り出せる）を持つ誰でも全員の uid と番号の対応を引けてしまう。関数が DB に無い（404）・
+    割り当てられないときは None。ほかの失敗は例外（呼び出し側が握る）
     """
     if not _configured():
         _say_user("Supabase設定がないためユーザー登録をスキップします。")
@@ -125,71 +123,12 @@ def send_Users(VRChat_uid: str) -> int | None:
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-        _say_user("DB に get_transformed_uid がありません → 前のやり方で登録します")
-        return _send_Users_direct(VRChat_uid)
+        _say_user("DB に get_transformed_uid がありません → transformed_uid なしで動きます")
+        return None
     if value is None:
         _say_user("transformed_uid を割り当てられませんでした")
         return None
     return int(value)
-
-
-def get_transformed_uid(VRChat_uid: str) -> int | None:
-    """send_Users() と同じ（無ければ割り当てる）。失敗は None"""
-    if not _configured():
-        _say_user("Supabase設定がないためtransformed_uid取得をスキップします。")
-        return None
-    try:
-        return send_Users(VRChat_uid)
-    except Exception as e:
-        _say_user(f"transformed_uid取得エラー: {e}")
-        return None
-
-
-def _send_Users_direct(VRChat_uid: str) -> int | None:
-    """前のやり方（Users を直接読んで、空いている番号を選んで書く）。DB に関数
-    get_transformed_uid がまだ無いときだけ使う。関数を入れて Users を閉じたら消す"""
-    uid = urllib.parse.quote(VRChat_uid, safe="")
-    # VRChat_uidが既に存在するか確認
-    req = urllib.request.Request(
-        _url(f"Users?VRChat_uid=eq.{uid}&select=transformed_uid"),
-        headers=_headers(accept=True)
-    )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        existing_user = json.loads(res.read())
-    if existing_user:
-        _say_user("既に登録されています。")
-        return existing_user[0]["transformed_uid"]
-    
-    req = urllib.request.Request(
-        _url("Users?select=transformed_uid"),
-        headers=_headers(accept=True)
-    )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        existing = {row["transformed_uid"] for row in json.loads(res.read())} # 既存のtransformed_uidを取得
-    if len(existing) >= 65534:
-        _say_user("これ以上transformed_uidを追加できません。")
-        return
-    while True:
-        transformed_uid = random.randint(-32768, 32767)
-        if transformed_uid not in existing:
-            break
-        
-    Users_data = json.dumps({
-        "VRChat_uid": VRChat_uid, 
-        "transformed_uid": transformed_uid, 
-    }).encode()
-    req = urllib.request.Request(
-        _url("Users"),
-        data=Users_data,
-        headers={
-            "Content-Type": "application/json",
-            **_headers(),
-        },
-        method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
-        _say_user(f"ユーザー登録: {res.status}")
-        return transformed_uid
 
 
 def round_type_id(round_name: str) -> int:
@@ -238,9 +177,6 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     }
 
     def _send():
-        # 手元にも「自分の行」として貯める（統計画面は自分の行を DB から取りに行かない）
-        RoundStore.default_store().add_own(
-            payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid)
         try:
             req = urllib.request.Request(
                 _url("rpc/register_round"),
@@ -251,8 +187,14 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
                 say(f"Supabase登録: {res.status}")
         except urllib.error.HTTPError as e:
             say(f"HTTPエラー: {e.code} {e.read()}")
+            return
         except Exception as e:
             say(f"送信エラー: {e}")
+            return
+        # DB が受け取ってから、手元にも「自分の行」として貯める（統計画面は自分の行を DB から
+        # 取りに行かない）。送れなかった行は貯めない（手元と DB をずらさない）
+        RoundStore.default_store().add_own(
+            payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid)
 
     threading.Thread(target=_send, daemon=True).start()
 

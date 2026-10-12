@@ -1712,7 +1712,7 @@ class TestSuicideCancel(unittest.TestCase):
         # 子は結果を出してから os._exit で終わり、終了コードではなく出力で判定する）
         with tempfile.TemporaryDirectory() as tmp:
             r = subprocess.run([sys.executable, "-c", self._REAL_HOOK_CHILD, tmp],
-                               cwd=os.path.dirname(os.path.abspath(__file__)),
+                               cwd=str(SRC_DIR),           # 子が config を import できる場所
                                capture_output=True, text=True, timeout=60,
                                stdin=subprocess.DEVNULL)
         lines = [l for l in r.stdout.splitlines() if l.startswith("RESULT ")]
