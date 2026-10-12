@@ -3108,6 +3108,7 @@ class App(tk.Tk):
         # 監視は音量より先に止める（EG: 音量を待つ間に、止めたはずの窓が Begin の移動を始めていた）
         for m in self.monitors:
             m.stop()
+        PlaySound.stop_all()                     # 鳴り止まない声も止める（EM。閉じるときもここを通る）
         self._stop_window_volume()               # 元の音量に戻す（戻し終えるまで。最大 1 秒）
         SharedState.begin_run()                  # フリーズを全部解く（前の回の窓はもう張れない）
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に

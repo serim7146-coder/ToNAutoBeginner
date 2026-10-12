@@ -959,6 +959,7 @@ class TestPlaySound(unittest.TestCase):
         if not keep_warned:
             PlaySound._warned.clear()   # 「1回だけ出す」警告をテスト間で持ち越さない
         with patch.object(PlaySound, "_mci", side_effect=fake_mci), \
+             patch.object(PlaySound, "_mci_mode", return_value="stopped"), \
              patch.object(PlaySound, "_mci_error_text", return_value="MCIのエラー"), \
              patch.object(PlaySound.threading, "Thread", self._SyncThread), \
              patch("pathlib.Path.exists", return_value=exists), \
@@ -976,7 +977,7 @@ class TestPlaySound(unittest.TestCase):
         self.assertIn(str(Path("voice/continue.mp3").absolute()), commands[0])
         self.assertIn("type mpegvideo", commands[0])
         self.assertEqual(commands[1], f"setaudio {alias} volume to 1000")
-        self.assertEqual(commands[2], f"play {alias} wait")
+        self.assertEqual(commands[2], f"play {alias}", "wait は付けない（ほかのスレッドから止められない。EM）")
         self.assertEqual(commands[3], f"close {alias}")
 
     def test_wav_uses_waveaudio_and_unknown_extension_omits_type(self):
@@ -1026,6 +1027,7 @@ class TestPlaySound(unittest.TestCase):
 
         PlaySound._warned.clear()
         with patch.object(PlaySound, "_mci", side_effect=fake_mci), \
+             patch.object(PlaySound, "_mci_mode", return_value="stopped"), \
              patch.object(PlaySound, "_short_path", return_value=short), \
              patch.object(PlaySound.threading, "Thread", self._SyncThread), \
              patch("pathlib.Path.exists", return_value=True), \

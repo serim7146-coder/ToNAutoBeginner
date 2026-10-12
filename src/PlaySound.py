@@ -11,6 +11,13 @@ PowerShell + MediaPlayer をプロセス起動する方式から置き換えた�
 
 MCIは例外を投げず、戻り値(MCIERROR、非ゼロが失敗)でエラーを返す。
 戻り値を見ないと無音の失敗が完全に不可視になるため、必ず確認する。
+
+止める（EM）: 重いときに1回の再生が終わらず、声の切れ端が鳴り続けた（停止でも止まらず、閉じるまで
+鳴っていた）。`stop_all()` で鳴っているものを全部止める（マクロの停止で呼ぶ。閉じるときも停止を通る）。
+MCI のエイリアスは開いたスレッドに縛られる（2026-10-13 の実測: ほかのスレッドから stop・close を送ると
+MCIERROR 263（開いていない）で、`play … wait` は最後まで止まらなかった）。なので `play` は wait なしで送り、
+開いたスレッドが `status … mode` を見て待つ。`stop_all` はそのスレッドへ止める合図を出すだけで、stop・close は
+そのスレッドが送る。
 """
 import ctypes
 import threading
@@ -34,6 +41,12 @@ _MCI_TYPES = {
 }
 
 _MCI_BUF_CHARS = 256
+
+# 鳴っているもの: エイリアス → 止める合図。開いたら足し、閉じたら外す（EM）
+_ACTIVE_LOCK = threading.Lock()
+_active: dict = {}
+POLL_SEC = 0.05             # 鳴り終わったか・止める合図が来たかを見る間隔
+_PLAYING_MODES = ("playing", "seeking", "not ready")
 
 
 def get_sound_volume() -> float:
@@ -61,6 +74,25 @@ def _mci(command: str) -> int:
     """
     buf = ctypes.create_unicode_buffer(_MCI_BUF_CHARS)
     return ctypes.windll.winmm.mciSendStringW(command, buf, _MCI_BUF_CHARS - 1, 0)
+
+
+def _mci_mode(alias: str):
+    """`status <alias> mode`（"playing"・"stopped" など。小文字）。聞けなければ None"""
+    buf = ctypes.create_unicode_buffer(_MCI_BUF_CHARS)
+    code = ctypes.windll.winmm.mciSendStringW(f"status {alias} mode", buf, _MCI_BUF_CHARS - 1, 0)
+    return None if code else buf.value.strip().lower()
+
+
+def stop_all() -> int:
+    """鳴っているものを全部止める（それぞれの再生のスレッドへ合図を出す。stop・close はそのスレッドが送る）。
+    止めた数を返し、1 つ以上なら debug.log に 1 行"""
+    with _ACTIVE_LOCK:
+        stops = list(_active.values())
+    for stop in stops:
+        stop.set()
+    if stops:
+        DebugLog.write(f"[音声] 鳴っている {len(stops)} 個を止めました")
+    return len(stops)
 
 
 def _mci_error_text(code: int) -> str:
@@ -159,6 +191,9 @@ def play_sound(path: str):
             alias = _next_alias()
             if not _open_device(p, alias):
                 return
+            stop = threading.Event()
+            with _ACTIVE_LOCK:
+                _active[alias] = stop
             try:
                 # waveaudio は setaudio 非対応。音量が効かないだけで再生はできるので、
                 # 再生自体は続ける。毎回出すとうるさいので警告は拡張子ごとに1回。
@@ -168,9 +203,18 @@ def play_sound(path: str):
                         f"volume{p.suffix.lower()}",
                         f"音声再生エラー: 音量を設定できません（{_mci_error_text(code)}）"
                         f" → {p.suffix} はシステム音量で再生します")
-                # wait を付けて再生完了までブロックする（このスレッドだけが止まる）
-                _mci_run(f"play {alias} wait")
+                # wait は付けない（付けるとほかのスレッドから止められない）。このスレッドが鳴り終わるか
+                # 止める合図が来るまで待つ（このスレッドだけが止まる）
+                if _mci_run(f"play {alias}"):
+                    while True:
+                        if stop.wait(POLL_SEC):
+                            _mci(f"stop {alias}")
+                            break
+                        if _mci_mode(alias) not in _PLAYING_MODES:
+                            break
             finally:
+                with _ACTIVE_LOCK:
+                    _active.pop(alias, None)
                 # 閉じ忘れるとデバイスが解放されず、いずれ再生できなくなる
                 _mci_run(f"close {alias}")
         except Exception as e:
