@@ -249,6 +249,12 @@ class TestRepress(unittest.TestCase):
 
 
 class TestDepthFromStart(unittest.TestCase):
+    def setUp(self):
+        # 前後の直しは EJ で止めた。動くときの振る舞いは資料として残す（スイッチを True にして確かめる）
+        p = patch.object(config, "RUN_DEPTH_ENABLED", True)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_a_press_is_counted_from_the_start(self):
         """0.2 秒は動き出してから 0.2 秒（動き出し 0.3 秒 → 0.5 秒で離す）"""
         w = _World(self, lag=0.3)

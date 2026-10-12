@@ -123,6 +123,12 @@ class _World:
 
 
 class TestFixDepth(unittest.TestCase):
+    def setUp(self):
+        # 前後の直しは EJ で止めた。動くときの振る舞いは資料として残す（スイッチを True にして確かめる）
+        p = patch.object(config, "RUN_DEPTH_ENABLED", True)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_far_moves_forward_and_learns_the_rate(self):
         w = _World(self, f=0.85, rate=0.5)
         got = w.ex._fix_depth(1)
@@ -274,3 +280,60 @@ class TestTheRespawnFlow(unittest.TestCase):
 
     def test_the_backward_and_left_values_stay(self):
         self.assertEqual((config.RUN_RESPAWN_BACK_SEC, config.RUN_RESPAWN_TURN_SEC), (2.85, 0.9))
+
+
+class TestDepthIsOff(unittest.TestCase):
+    """EJ: 目印の大きさは距離を表していなかった（13:53 窓1: 正しい位置で 1.12 → 後ろへ直して数 m ずれた）。
+    倍率は測って debug.log に書くだけで、前後には動かさない"""
+
+    def test_the_switch_is_off(self):
+        self.assertIs(config.RUN_DEPTH_ENABLED, False)
+
+    def test_no_move_for_any_factor(self):
+        for f in (1.12, 0.86, 0.5, 1.5):
+            w = _World(self, f=f)
+            self.assertIsNone(w.ex._fix_depth(1), f)
+            self.assertEqual(w.presses, [], f)
+            self.assertEqual(w.measures, 0, "撮り直さない")
+            self.assertEqual(w.saved, [], "前後の撮影は残さない（向きの撮影は今どおり）")
+            self.assertIn(f"[操作] [窓2] Run: 前後: 倍率 {f:.3f}（一致 0.900）（記録だけ・動かさない）", w.written)
+
+    def test_no_mark_is_as_before(self):
+        w = _World(self, f=1.12)
+        w.ex._last_face = (_IMG, None)
+        self.assertIsNone(w.ex._fix_depth(1))
+        self.assertIn("[操作] [窓2] Run: 前後: 目印が見つからない → 直さない", w.written)
+
+    def test_the_switch_on_moves_like_before(self):
+        w = _World(self, f=1.12)
+        with patch.object(config, "RUN_DEPTH_ENABLED", True):
+            self.assertEqual(w.ex._fix_depth(1), "近い → 後ろへ 0.2 秒")
+        self.assertEqual(w.presses, [("/input/MoveBackward", 0.2)])
+
+    def test_the_respawn_flow_faces_once_and_does_not_move(self):
+        """向きの直しは今どおり（1 周）。前後は動かないので、向きをもう 1 周しない。後ろへ 2.85・左へ 0.9 は今どおり"""
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, window_idx=1)
+        logs = []
+        ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x30, osc_port=9000), st, lambda: True, logs.append)
+        ex._osc = MagicMock()
+        ex._receiver = None
+        ex._respawn_when_free = lambda seq: None
+        ex._run_after_respawn = lambda seq: True
+        faced = []
+
+        def face(seq):
+            faced.append(1)
+            ex._last_face = (_IMG, (433.0, 0.9, 1.12))
+            return 1
+        ex._face_the_stairs = face
+        written = []
+        with patch.object(DebugLog, "write", written.append), \
+             patch.object(SharedState, "get_run_respawn", lambda: True), \
+             patch.object(RunFace, "factor", lambda mark, h: mark[2]):
+            ex.do_run_respawn(1)
+        self.assertEqual(len(faced), 1)
+        self.assertEqual([c.args[:2] for c in ex._osc.press.call_args_list],
+                         [("/input/MoveBackward", 2.85), ("/input/LookLeft", 0.9)])
+        self.assertFalse(any("位置を直しました" in m for m in logs))
+        self.assertIn("Run: リスポーンして正面を向きました（向きを 1 回直しました）", logs)
+        self.assertIn("[操作] [窓1] Run: 前後: 倍率 1.120（一致 0.900）（記録だけ・動かさない）", written)

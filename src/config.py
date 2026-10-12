@@ -333,6 +333,9 @@ RUN_FACE_SETTLE_SEC  = 0.35       # 回してから撮るまで
 RUN_FACE_TRIES       = 6          # 直す回数の上限
 RUN_FACE_MATCH_MIN   = 0.8        # 目印の絵の一致がこれ未満なら見つからない
 # 向きを直した後、前後の位置を目印の大きさ（倍率 f。いつもの位置で 1.0）で直す（EE）
+# EJ: 止めた（False）。目印が遠く、数 m の違いが大きさにほとんど出ない（13:53 窓1: 正しい位置で 1.12 → 直して
+# 後ろへずれた。円が数 m 先の撮影でも 0.98）。倍率は debug.log に書くだけ。True で前の動き（RUN_DEPTH_* は残す）
+RUN_DEPTH_ENABLED    = False
 RUN_DEPTH_TOL        = 0.05       # f が 1.0 からこれ以内なら直さない（0.95〜1.05）
 RUN_DEPTH_FIRST_SEC  = 0.2        # 最初に押す長さ（その後は秒あたりの f の変化から決める）
 RUN_DEPTH_MIN_SEC    = 0.05

@@ -1824,7 +1824,8 @@ class ActionExecutor:
         目印が消えた → 同じ長さだけ逆へ戻して止める。RUN_DEPTH_TRIES 回まで。背面・OSC（前面は借りない）。
         速さを受け取れる窓は、押す長さを動き出しから数え、動き出さなかった押しでは遠のいた・近づいたを判断しない
         （戻さない・撮り直さない。同じ長さでもう一度押す）。遠のいたと見るのは RUN_DEPTH_WORSE 以上のとき（EH）。
-        動かした（戻した分を除いて残した）なら画面のログ用の説明、動かさなければ None"""
+        動かした（戻した分を除いて残した）なら画面のログ用の説明、動かさなければ None。
+        config.RUN_DEPTH_ENABLED が False（EJ。今の既定）なら倍率を debug.log に書くだけで動かさない"""
         idx = self._st.window_idx
         head = f"[操作] [窓{idx}] Run: 前後"
         # 向きを直し終えた撮影を使う（撮り直さない。向きは動かしていない）。止めた・ラウンドが変わったかは
@@ -1835,6 +1836,10 @@ class ActionExecutor:
             DebugLog.write(f"{head}: 目印が見つからない → 直さない")
             return None
         f = RunFace.factor(mark, shot.shape[0])
+        if not config.RUN_DEPTH_ENABLED:
+            # EJ: 目印の大きさは距離を表していなかった。測って書くだけで動かさない
+            DebugLog.write(f"{head}: 倍率 {f:.3f}（一致 {mark[1]:.3f}）（記録だけ・動かさない）")
+            return None
         rate = None                     # 秒あたりの f の変化
         kept = []                       # 残した (向き, 秒)
         tries = 0
