@@ -222,6 +222,10 @@ WINDOW_VOLUME_STOP_WAIT_SEC = 1.0
 BEGIN_EXTEND_MAX_SEC  = 0.5
 BEGIN_START_WAIT_SEC  = 0.6
 BEGIN_START_POLL_SEC  = 0.01
+# 速さを受け取れているのに BEGIN_START_WAIT_SEC 動き出さなければ、いったん離して MOVE_REPRESS_GAP_SEC 後に
+# 押し直す（MOVE_REPRESS_MAX 回まで）。Begin 前の移動・Run の後ろへ・Run の前後の直しの 3 つ（EH）
+MOVE_REPRESS_MAX      = 2
+MOVE_REPRESS_GAP_SEC  = 0.1
 
 # `Verified` は Begin の受理のほかに、定期シグナルでも出る（VerifiedTracker）。
 # 手元のログ全部で調べた規則（2026-09-30）: 定期は前回の定期から300秒後。その時点が
@@ -334,6 +338,9 @@ RUN_DEPTH_FIRST_SEC  = 0.2        # 最初に押す長さ（その後は秒あ�
 RUN_DEPTH_MIN_SEC    = 0.05
 RUN_DEPTH_MAX_SEC    = 0.6
 RUN_DEPTH_TRIES      = 4          # 前後に動かす回数の上限
+# Run の後ろへ・前後の直しも「動き出し」から数える（EH）。延びの上限（12:09 窓3 の動き出し 0.75 秒が入るように）
+RUN_EXTEND_MAX_SEC   = 1.0
+RUN_DEPTH_WORSE      = 0.02       # 実際に動いて f が 1.0 からこれ以上遠のいたら戻す（0.01 ほどは測りのぶれ）
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、
 # クリックの「押す→0.1秒→離す」の間で足りているので待たない（依頼者が後で調整する）

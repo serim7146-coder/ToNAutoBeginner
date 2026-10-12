@@ -282,12 +282,16 @@ class ActionExecutor:
 
         OSCが使えない窓は背面へのキー送信になるため同時押しができない。
         その場合は従来どおり逐次で動かす（前進 → 左）。
+        self._move_since ＝ (行の名前, time.time()) があれば、その行から押し始めるまでの遅れを debug.log の行に
+        足す（EH。_begin_move が置く。1 回使ったら消す）
         """
+        since, self._move_since = getattr(self, "_move_since", None), None
         if not self.can_operate():
             self._trace("[操作] 前進＋左 しない（private でない）")
             return False
+        delay = f"・「{since[0]}」の行から {time.time() - since[1]:.2f} 秒" if since is not None else ""
         self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
-                    f"（{'OSC' if self._osc is not None else 'キー'}）")
+                    f"（{'OSC' if self._osc is not None else 'キー'}）{delay}")
         self._move_extension = None
         if self._osc is not None:
             if self._receiver is not None:
@@ -303,36 +307,71 @@ class ActionExecutor:
     def _press_from_movement_start(self, forward_sec: float, left_sec: float) -> bool:
         """前と左を同時に押し、押している時間を「動き出し」から数える（EF）。動き出しが遅れた（重い）
         ときに、遅れた分だけ距離が足りなくなっていた（10:22 窓4: 動き出し 0.34 秒・距離 10.58）。
-        延び ＝ 動き出しまで − BEGIN_USUAL_START_SEC（0 未満にはしない＝今より早くは離さない・
-        BEGIN_EXTEND_MAX_SEC まで）。動き出すまで左は押したまま。速さを受け取れていない間は延ばさない
-        （左は今どおり left_sec で離す）。BEGIN_START_WAIT_SEC たっても動き出さなければ延ばさない。
-        結果は self._move_extension = (延び, どう決めたか)"""
+        延びの上限は BEGIN_EXTEND_MAX_SEC。動き出すまで左は押したまま。結果は
+        self._move_extension = (延び, どう決めたか, 押し直した回数)"""
+        ok, extension, how, repressed = self._press_counted_from_start(
+            [("/input/MoveForward", forward_sec), ("/input/MoveLeft", left_sec)], self._move_stopped,
+            config.BEGIN_USUAL_START_SEC, config.BEGIN_EXTEND_MAX_SEC,
+            lambda m: DebugLog.write(f"[操作] [窓{self._st.window_idx}] Begin前の移動: {m}"))
+        self._move_extension = (extension, how, repressed)
+        return ok
+
+    def _press_counted_from_start(self, holds, stop, usual_start: float, extend_max: float, write):
+        """holds（[(アドレス, 秒)]）を同時に押し、押している時間を「動き出し」（受信の速さが MOTION_START_SPEED を
+        超えた時）から数える（EF・EH）。離すのは 最初の押し始め ＋ 秒 ＋ 延び。延び ＝ 動き出しまで（最初の押し始め
+        から）− usual_start（0 未満にはしない＝今より早くは離さない）。上限は extend_max ＋ 押し直しで失った時間
+        （上限は 1 回の押しの中の遅れにかける。押し直す前の押しは動かなかったので、その分は足す）。決まるまでは押したまま。
+        速さを受け取れているのに BEGIN_START_WAIT_SEC 動き出さなければ、いったん離して（0 を送る）
+        MOVE_REPRESS_GAP_SEC 後に押し直す（MOVE_REPRESS_MAX 回まで。EH: 12:23 窓4 は押した 2.08 秒の間 0 m）。
+        それでも動かなければ延ばさない（最初の押し始めから数えた時間で離す）。速さを受け取れていない間は延ばさず、
+        押し直さない（今どおり）。stop() が真なら離して止める。
+        (送れた, 延び, どう決めたか, 押し直した回数) を返す。どう決めたか: "動き出し"・"動き出さない"・
+        "受信なし"（一度も速さを受け取れなかった）・"止めた" """
         osc = self._osc
-        holds = [("/input/MoveForward", forward_sec), ("/input/MoveLeft", left_sec)]
         ok = True
         for address, _sec in holds:
             ok = osc.send(address, 0) and ok        # 0→1 の変化で反応する入力があるため
         for address, _sec in holds:
             ok = osc.send(address, 1) and ok
         started = time.time()
+        pressed_at = started        # 今の押し（押し直したらその時）の始め
         extension = None            # 決まった延び
         how = ""
+        repressed = 0
+        received = False
         released = set()
         try:
             while len(released) < len(holds):
-                if self._move_stopped():
-                    return False
-                elapsed = time.time() - started
+                if stop():
+                    how = "止めた"
+                    return False, 0.0, how, repressed
+                now = time.time()
+                elapsed = now - started
                 speed = self._receiver_speed()
-                if extension is None:
-                    if speed is not None and speed > MOTION_START_SPEED:
-                        extension = min(config.BEGIN_EXTEND_MAX_SEC,
-                                        max(0.0, elapsed - config.BEGIN_USUAL_START_SEC))
+                received = received or speed is not None
+                cap = extend_max + (pressed_at - started)
+                if extension is None and speed is not None:
+                    if speed > MOTION_START_SPEED:
+                        extension = min(cap, max(0.0, elapsed - usual_start))
                         how = "動き出し"
-                    elif elapsed >= config.BEGIN_START_WAIT_SEC:
+                    elif now - pressed_at >= config.BEGIN_START_WAIT_SEC:
+                        if repressed < config.MOVE_REPRESS_MAX:
+                            held = [a for a, _sec in holds if a not in released]
+                            for address in held:
+                                ok = osc.send(address, 0) and ok
+                            time.sleep(config.MOVE_REPRESS_GAP_SEC)
+                            if stop():
+                                how = "止めた"
+                                return False, 0.0, how, repressed
+                            for address in held:
+                                ok = osc.send(address, 1) and ok
+                            repressed += 1
+                            pressed_at = time.time()
+                            continue
                         extension, how = 0.0, "動き出さない"
+                        write(f"動き出さないので押し直した（{repressed} 回）・それでも動かない")
                 # 決まるまでは、速さを受け取れていれば「今 動き出した」とみなして押し続ける
-                pending = (min(config.BEGIN_EXTEND_MAX_SEC, max(0.0, elapsed - config.BEGIN_USUAL_START_SEC))
+                pending = (min(cap, max(0.0, elapsed - usual_start))
                            if extension is None and speed is not None else 0.0)
                 hold_more = extension if extension is not None else pending
                 for address, sec in holds:
@@ -344,8 +383,9 @@ class ActionExecutor:
             for address, _sec in holds:
                 if address not in released:
                     osc.send(address, 0)
-            self._move_extension = (extension if extension is not None else 0.0, how or "受信なし")
-        return ok
+        if extension is None:
+            extension, how = 0.0, ("動き出さない" if received else "受信なし")
+        return ok, extension, how, repressed
 
     def _receiver_speed(self):
         try:
@@ -1296,8 +1336,9 @@ class ActionExecutor:
         forward = config.BEGIN_FORWARD_SEC_LATER if late else config.BEGIN_FORWARD_SEC
         left = config.BEGIN_LEFT_SEC_LATER if late else config.BEGIN_LEFT_SEC
         head = f"[操作] [窓{st.window_idx}] Begin前の移動"
-        DebugLog.write(f"{head}: {'Punished後' if late else '通常'} 前進{forward}秒・左{left}秒"
-                       f"（round_type={st.round_type}）")
+        label = 'Punished後' if late else '通常'
+        DebugLog.write(f"{head}: {label} 前進{forward}秒・左{left}秒（round_type={st.round_type}）")
+        self._move_since = (label, time.time())  # この行から押し始めるまでの遅れを測る（EH: 12:23 窓4 は 7.3 秒）
         # 実際に動いた量を debug.log へ（記録だけ。離してから少し後まで別スレッドで読む）
         sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head}: {m}"))
         sampler.start()
@@ -1307,10 +1348,10 @@ class ActionExecutor:
             DebugLog.write(f"{head}: 途中で止めた（{type(e).__name__}）")
             raise
         finally:
+            self._move_since = None             # 使われなかった（止めた・偽物）ときも次へ持ち越さない
             extension = getattr(self, "_move_extension", None)
             if extension is not None:
-                sampler.suffix = (f"・動き出しから数えた（+{extension[0]:.2f} 秒）" if extension[1] == "動き出し"
-                                  else f"・押し始めから数えた（{extension[1]}）")
+                sampler.suffix = counted_note(*extension)
             sampler.release()
         if ok is False:
             DebugLog.write(f"{head}: 途中で止めた（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
@@ -1693,7 +1734,15 @@ class ActionExecutor:
                     sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
                     sampler.start()
                 try:
-                    self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                    if sampler is not None:
+                        # 動き出しから数える（EH: 12:09 窓3 は動き出し 0.75 秒で下がり足りなかった）
+                        _ok, extension, how, repressed = self._press_counted_from_start(
+                            [(address, sec)], lambda: not self._run_after_respawn(round_seq),
+                            config.BEGIN_USUAL_START_SEC, config.RUN_EXTEND_MAX_SEC,
+                            lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
+                        sampler.suffix = counted_note(extension, how, repressed)
+                    else:
+                        self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
                 finally:
                     if sampler is not None:
                         sampler.release()
@@ -1773,6 +1822,8 @@ class ActionExecutor:
         遠い（f が小さい）→ MoveForward、近い → MoveBackward。最初は RUN_DEPTH_FIRST_SEC、その後は撮り直した
         f の変わり方（秒あたり）で残りを割った長さ（RUN_DEPTH_MIN_SEC〜MAX_SEC）。f が 1.0 から遠のいた・
         目印が消えた → 同じ長さだけ逆へ戻して止める。RUN_DEPTH_TRIES 回まで。背面・OSC（前面は借りない）。
+        速さを受け取れる窓は、押す長さを動き出しから数え、動き出さなかった押しでは遠のいた・近づいたを判断しない
+        （戻さない・撮り直さない。同じ長さでもう一度押す）。遠のいたと見るのは RUN_DEPTH_WORSE 以上のとき（EH）。
         動かした（戻した分を除いて残した）なら画面のログ用の説明、動かさなければ None"""
         idx = self._st.window_idx
         head = f"[操作] [窓{idx}] Run: 前後"
@@ -1801,22 +1852,24 @@ class ActionExecutor:
             sec = (config.RUN_DEPTH_FIRST_SEC if rate is None
                    else min(config.RUN_DEPTH_MAX_SEC, max(config.RUN_DEPTH_MIN_SEC, abs(1.0 - f) / rate)))
             DebugLog.write(f"{head}: {address} {sec:.3f}秒")
-            self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
-            self._osc.stop_all(repeat=1)
+            moved = self._depth_press(address, sec, round_seq, head)
             tries += 1
             if not self._run_after_respawn(round_seq):
                 break
+            if moved is False:
+                DebugLog.write(f"{head}: 動き出さなかった → 遠のいた・近づいたを判断しない（戻さない）")
+                continue
             new_shot, new_mark = self._measure_face()
             new_f = RunFace.factor(new_mark, new_shot.shape[0]) if new_mark is not None else None
-            if new_f is None or abs(new_f - 1.0) > abs(f - 1.0):
+            if new_f is None or abs(new_f - 1.0) - abs(f - 1.0) >= config.RUN_DEPTH_WORSE - 1e-9:
                 back = "/input/MoveBackward" if forward else "/input/MoveForward"
                 why = "目印が消えた" if new_f is None else f"倍率が遠のいた（{new_f:.3f}）"
                 DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める")
-                self._osc.press(back, sec, stop=lambda: not self._run_after_respawn(round_seq))
-                self._osc.stop_all(repeat=1)
+                self._depth_press(back, sec, round_seq, head)
                 RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "depth_reverted")
                 break
-            if abs(new_f - f) > 1e-3:
+            # 近づいたときだけ速さを覚える（RUN_DEPTH_WORSE 未満で遠のいたのは測りのぶれとして残す）
+            if abs(new_f - f) > 1e-3 and abs(new_f - 1.0) < abs(f - 1.0):
                 rate = abs(new_f - f) / sec
             kept.append((forward, sec))
             shot, mark, f = new_shot, new_mark, new_f
@@ -1826,6 +1879,20 @@ class ActionExecutor:
         first = kept[0][0]
         total = sum(sec if fw == first else -sec for fw, sec in kept)
         return f"{'遠い → 前へ' if first else '近い → 後ろへ'} {total:.1f} 秒"
+
+    def _depth_press(self, address: str, sec: float, round_seq: int, head: str):
+        """前後の直しの 1 回の押し。速さを受け取れる窓は動き出しから sec（EH）。動いた True・
+        動き出さなかった False・分からない（受信が無い）None"""
+        stop = lambda: not self._run_after_respawn(round_seq)  # noqa: E731
+        if self._receiver is None:
+            self._osc.press(address, sec, stop=stop)
+            self._osc.stop_all(repeat=1)
+            return None
+        _ok, extension, how, repressed = self._press_counted_from_start(
+            [(address, sec)], stop, 0.0, config.RUN_EXTEND_MAX_SEC, lambda m: DebugLog.write(f"{head}: {m}"))
+        self._osc.stop_all(repeat=1)
+        DebugLog.write(f"{head}: {address}{counted_note(extension, how, repressed)}")
+        return {"動き出し": True, "動き出さない": False}.get(how)
 
     def _measure_face(self):
         """回し終えるのを待って撮り、目印を探す。(撮影 or None, 目印 or None)"""
@@ -2443,6 +2510,13 @@ def summarize_motion(samples, released_at) -> str:
             f"止まり {'、'.join(f'{a:.2f}〜{b:.2f}秒' for a, b in stalls) or 'なし'}・"
             f"接地 {'、'.join(changes) or 'なし'}・"
             f"速さ {series}")
+
+
+def counted_note(extension: float, how: str, repressed: int = 0) -> str:
+    """押している時間をどう数えたか（実測の行の後ろに足す）"""
+    text = (f"・動き出しから数えた（+{extension:.2f} 秒）" if how == "動き出し"
+            else f"・押し始めから数えた（{how}）")
+    return text + (f"・押し直し {repressed} 回" if repressed else "")
 
 
 class MotionSampler:

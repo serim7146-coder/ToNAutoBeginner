@@ -213,7 +213,13 @@ class TestTheRespawnFlow(unittest.TestCase):
         ex._respawn_when_free = lambda seq: None
         ex._run_after_respawn = lambda seq: True
         self.written = []
+        # 後ろへは動き出しから数える（EH）。本物の時計で 2.85 秒待たない
+        now = [0.0]
+        fake_time = type(sys)("time_for_test")
+        fake_time.time = fake_time.monotonic = lambda: now[0]
+        fake_time.sleep = lambda sec: now.__setitem__(0, now[0] + sec)
         for target, name, value in ((DebugLog, "write", self.written.append),
+                                    (ActionExecutor, "time", fake_time),
                                     (SharedState, "get_run_respawn", lambda: True),
                                     (ActionExecutor.MotionSampler, "start", lambda s: self.written.append("start")),
                                     (ActionExecutor.MotionSampler, "release",

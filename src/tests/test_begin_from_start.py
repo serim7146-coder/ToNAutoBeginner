@@ -68,18 +68,21 @@ class TestFromTheStart(unittest.TestCase):
             self.assertAlmostEqual(w.released(L), 0.15, delta=0.011, msg=start)
             self.assertEqual(w.ex._move_extension[0], 0.0, "今より早くは離さない")
 
-    def test_not_moving_for_0_6_counts_from_the_press(self):
+    def test_not_moving_after_two_represses_counts_from_the_press(self):
+        """EH: 0.6 秒ごとに 2 回押し直しても動かなければ、押し始めから数えて離す"""
         w = _World(self, start_at=None)
         w.ex.move_forward_left(2.08, 0.15)
         self.assertAlmostEqual(w.released(F), 2.08, delta=0.011)
-        self.assertEqual(w.ex._move_extension, (0.0, "動き出さない"))
-        self.assertAlmostEqual(w.released(L), config.BEGIN_START_WAIT_SEC, delta=0.011,
-                               msg="左は 0.6 秒まで押したまま（動いていないので寄らない）")
+        self.assertEqual(w.ex._move_extension, (0.0, "動き出さない", 2))
+        self.assertAlmostEqual(w.released(L), 2.0, delta=0.011,
+                               msg="左は諦めるまで押したまま（動いていないので寄らない）")
 
-    def test_a_start_after_0_6_is_not_counted(self):
+    def test_a_start_after_a_repress_is_counted(self):
+        """EH: 0.6 秒で押し直し、1.0 秒で動き出した → 延び 0.92（上限 0.5 ＋ 押し直しで失った 0.7 の中）"""
         w = _World(self, start_at=1.0)
         w.ex.move_forward_left(2.08, 0.15)
-        self.assertAlmostEqual(w.released(F), 2.08, delta=0.011)
+        self.assertAlmostEqual(w.released(F), 2.08 + 0.92, delta=0.011)
+        self.assertEqual(w.ex._move_extension[1:], ("動き出し", 1))
 
     def test_the_extension_is_capped_at_0_5(self):
         w = _World(self, start_at=0.59)
@@ -134,7 +137,9 @@ class TestTheMeasureLine(unittest.TestCase):
 
     def test_the_begin_move_writes_it(self):
         src = inspect.getsource(ActionExecutor.ActionExecutor)
-        self.assertIn('sampler.suffix = (f"・動き出しから数えた（+{extension[0]:.2f} 秒）"', src)
+        self.assertIn("sampler.suffix = counted_note(*extension)", src)
         i = src.index("ok = self.move_forward_left(forward, left)")
-        self.assertLess(i, src.index("sampler.suffix = ("), "移動の後に決めて、release の前に付ける")
-        self.assertLess(src.index("sampler.suffix = ("), src.index("            sampler.release()", i))
+        self.assertLess(i, src.index("sampler.suffix = counted_note(*extension)"), "移動の後に決めて、release の前に付ける")
+        self.assertLess(src.index("sampler.suffix = counted_note(*extension)"), src.index("            sampler.release()", i))
+        self.assertEqual(ActionExecutor.counted_note(0.26, "動き出し"), "・動き出しから数えた（+0.26 秒）")
+        self.assertEqual(ActionExecutor.counted_note(0.0, "受信なし"), "・押し始めから数えた（受信なし）")
