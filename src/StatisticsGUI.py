@@ -6,6 +6,7 @@ from datetime import datetime
 from tkinter import ttk, messagebox
 
 import config
+import DebugLog
 import SharedState
 import UIFont
 import WindowOperator
@@ -321,6 +322,9 @@ class StatisticsWindow(tk.Toplevel):
         self.v_terror_search = tk.StringVar(value="")     # 保存しない
         self.v_terror_rounds_note = tk.StringVar(value="")
         self._selected_terror: int | None = None
+        # 裏のスレッドで集計した結果が、その後に変えた条件・選択のものでないかを見る番号
+        self._analyze_seq = 0
+        self._detail_seq = 0
         self._terror_categories: dict[int, str] = {}     # 一覧の行のテラー → 分類
         self.v_status = tk.StringVar(value="統計データ未読み込み")
         self.v_info = tk.StringVar(value="")
@@ -724,16 +728,53 @@ class StatisticsWindow(tk.Toplevel):
             self._map_counts_cache.clear()
             self._round_kind_cache.clear()
             self._appearance_cache.clear()
-        round_rows = Statistics.round_summary_from_counts(
-            (_round_name(rid), count, slots) for rid, count, slots in self.store.round_summary(flt))
-        self._show_round_stats(round_rows)
+        # 集計（SQLite の GROUP BY）は裏のスレッドで。手元の行が増えても画面を止めない。
+        # 結果を当てるのは、その後に条件が変わっていないときだけ（番号と条件で見る）
+        self._analyze_seq += 1
+        seq = self._analyze_seq
+        active = self.v_terror_category.get()
+        tid = self._selected_terror
+        store = self.store
+        self.v_status.set("集計中…")
 
-        total_slots, candidate_count, _rows = self._terror_stats(self.v_terror_category.get())
-        self._render_terror_list()
-        self._clear_terror_detail()
-        self._render_time(flt)
-        total_rounds = sum(count for _name, count, _slots in round_rows)
-        self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
+        def work():
+            round_rows = Statistics.round_summary_from_counts(
+                (_round_name(rid), count, slots) for rid, count, slots in store.round_summary(flt))
+            counts = store.terror_counts(flt)       # 3 つの分類で同じ数え方（問い合わせは 1 回）
+            stats = {value: Statistics.analyze_terror_counts(
+                         counts, config.TERRORS, Statistics.candidate_ids_for_category(value, config.TERRORS))
+                     for _label, value in TERROR_CATEGORIES}
+            return round_rows, stats, store.time_series(flt, "day", tid), store.time_series(flt, "hour", tid)
+
+        def done(result):
+            if seq != self._analyze_seq or flt != self._filter:
+                return                  # その後に条件が変わった（新しい集計が来る）
+            round_rows, stats, day, hour = result
+            self._terror_stats_cache.update(stats)
+            self._show_round_stats(round_rows)
+            self._render_terror_list()
+            self._clear_terror_detail()
+            self._show_time_rows(day, hour)
+            total_slots, candidate_count, _rows = stats[active]
+            total_rounds = sum(count for _name, count, _slots in round_rows)
+            self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
+
+        self._off_gui(work, done)
+
+    def _off_gui(self, work, done):
+        """重い集計（SQLite）を Tk のスレッドから外す。work() を裏のスレッドで回し、結果を done(result) に
+        Tk のスレッドで渡す（閉じた後なら捨てる）。テストでは同じスレッドで続けて回す（tests/support）"""
+        def run():
+            try:
+                result = work()
+            except Exception:
+                DebugLog.exception("StatisticsGUI._off_gui")
+                return
+            try:
+                self.after(0, done, result)
+            except (tk.TclError, RuntimeError):
+                pass                    # 閉じた後
+        threading.Thread(target=run, daemon=True).start()
 
     def _clear_all(self):
         self._clear_round_stats()
@@ -893,18 +934,45 @@ class StatisticsWindow(tk.Toplevel):
         self._selected_terror = terror_id
         # Unbound のテラーは Unbound のラウンドにしか出ないので、ラウンドタイプは出さない
         self._show_round_type_tab(self._terror_categories.get(terror_id) != "Unbound")
-        self._clear_tree(self.map_tree)
-        rows = self._map_counts_cache.get(terror_id)
-        if rows is None:
-            rows = Statistics.map_counts_from_entries(
-                (map_id, _round_name(rid), hits)
-                for map_id, rid, hits in self.store.map_counts_for_terror(self._filter, terror_id))
-            self._map_counts_cache[terror_id] = rows
-        for map_name, count in rows:
-            self.map_tree.insert("", "end", values=(map_name, count))
-        self._render_terror_rounds(terror_id)
-        if self._filter is not None:
-            self._render_time(self._filter)
+        # 内訳（マップ・ラウンドタイプ・出現ラウンド・時間の流れ）は裏のスレッドで引く。
+        # 条件ごとの覚え（キャッシュ）にあるものは引き直さない
+        flt = self._filter
+        self._detail_seq += 1
+        seq = self._detail_seq
+        store = self.store
+        cached = (self._map_counts_cache.get(terror_id), self._round_kind_cache.get(terror_id),
+                  self._appearance_cache.get(terror_id))
+
+        def work():
+            maps, kinds, appeared = cached
+            if maps is None:
+                maps = Statistics.map_counts_from_entries(
+                    (map_id, _round_name(rid), hits)
+                    for map_id, rid, hits in store.map_counts_for_terror(flt, terror_id))
+            if kinds is None:
+                kinds = round_kind_rows(store.round_counts_for_terror(flt, terror_id))
+            if appeared is None:
+                total, rows = store.rounds_for_terror(flt, terror_id, TERROR_ROUNDS_LIMIT)
+                appeared = (total, appearance_rows(rows, terror_id, store.my_uids(), config.TERRORS))
+            series = ((store.time_series(flt, "day", terror_id), store.time_series(flt, "hour", terror_id))
+                      if flt is not None else None)
+            return maps, kinds, appeared, series
+
+        def done(result):
+            if seq != self._detail_seq or flt != self._filter or self._selected_terror != terror_id:
+                return                  # その後に別のテラーを選んだ・条件が変わった
+            maps, kinds, appeared, series = result
+            self._map_counts_cache[terror_id] = maps
+            self._round_kind_cache[terror_id] = kinds
+            self._appearance_cache[terror_id] = appeared
+            self._clear_tree(self.map_tree)
+            for map_name, count in maps:
+                self.map_tree.insert("", "end", values=(map_name, count))
+            self._render_terror_rounds(terror_id, kinds, appeared)
+            if series is not None:
+                self._show_time_rows(*series)
+
+        self._off_gui(work, done)
 
     def _show_round_type_tab(self, shown: bool):
         """「ラウンドタイプ」のタブを出す／隠す。隠すときに選ばれていたら出現ラウンドへ"""
@@ -916,20 +984,10 @@ class StatisticsWindow(tk.Toplevel):
             tabs.select(self._rounds_tab)
         tabs.hide(self._kind_tab)
 
-    def _render_terror_rounds(self, terror_id: int):
-        """選んだテラーの「ラウンドタイプ」と「出現ラウンド」"""
-        kinds = self._round_kind_cache.get(terror_id)
-        if kinds is None:
-            kinds = round_kind_rows(self.store.round_counts_for_terror(self._filter, terror_id))
-            self._round_kind_cache[terror_id] = kinds
+    def _render_terror_rounds(self, terror_id: int, kinds, appeared):
+        """選んだテラーの「ラウンドタイプ」と「出現ラウンド」（引くのは _on_terror_selected の裏のスレッド）"""
         self._clear_tree(self.round_kind_tree)
         self._insert_round_colored(self.round_kind_tree, kinds, 0)
-
-        appeared = self._appearance_cache.get(terror_id)
-        if appeared is None:
-            total, rows = self.store.rounds_for_terror(self._filter, terror_id, TERROR_ROUNDS_LIMIT)
-            appeared = (total, appearance_rows(rows, terror_id, self.store.my_uids(), config.TERRORS))
-            self._appearance_cache[terror_id] = appeared
         total, rows = appeared
         self._clear_tree(self.terror_rounds_tree)
         self._insert_round_colored(self.terror_rounds_tree, rows, 1)
@@ -937,10 +995,11 @@ class StatisticsWindow(tk.Toplevel):
             f"新しい順に{TERROR_ROUNDS_LIMIT}件を表示（全{total}件）" if total > TERROR_ROUNDS_LIMIT else "")
 
     # ── 時間の流れのタブ ───────────────────────────
-    def _render_time(self, flt: RoundStore.Filter):
+    def _show_time_rows(self, day_rows, hour_rows):
+        """時間の流れのタブに、引いてきた日ごと・時間帯ごとの行を出す（引くのは裏のスレッド）"""
         tid = self._selected_terror
-        self._day_rows = self.store.time_series(flt, "day", tid)
-        self._hour_rows = self.store.time_series(flt, "hour", tid)
+        self._day_rows = day_rows
+        self._hour_rows = hour_rows
         if tid is None:
             self.v_time_note.set("ラウンド数（テラーのタブで選ぶと、そのテラーの出現数と割合）")
         else:

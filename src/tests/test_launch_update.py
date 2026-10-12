@@ -1381,3 +1381,13 @@ class TestEntryCanOperate(unittest.TestCase):
     def test_no_log_means_no(self):
         can = mainGUI.entry_can_operate("", lambda _p: self.fail("ログが無ければ見ない"))
         self.assertFalse(can())
+
+
+class TestOpenBlasThreads(unittest.TestCase):
+    def test_main_caps_openblas_before_anything_imports_numpy(self):
+        """numpy の OpenBLAS は全コアぶんの作業バッファを確保する（24 コアでコミット 757 MB）。
+        main.py が numpy を読む前（import config より前）に 1 スレッドに決める"""
+        src = SRC_DIR.joinpath("main.py").read_text(encoding="utf-8")
+        cap = src.index('os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")')
+        self.assertLess(cap, src.index("import config"))
+        self.assertLess(cap, src.index("import mainGUI"))

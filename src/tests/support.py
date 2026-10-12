@@ -151,6 +151,12 @@ import Migration
 import config
 from State import WindowConfig, WindowState
 
+# ── 統計画面の集計は、テストでは同じスレッドで続けて回す ─────────────
+# 本物は裏のスレッドで集計して after(0) で当てる。mainloop の無いテストではそれが届かないので、
+# 呼んだその場で work → done を回す。本物の入口は残す（スレッドで回ることを確かめるテストが使う）
+REAL_STATS_OFF_GUI = StatisticsGUI.StatisticsWindow._off_gui
+StatisticsGUI.StatisticsWindow._off_gui = lambda self, work, done: done(work())
+
 
 # ── テストから本物の OSC を送らない・本物の受け口を開かない ─────────
 # 127.0.0.1:9000 は依頼者の窓1 の VRChat が待っている。テストが本物のソケットで送ると、窓1 が勝手に

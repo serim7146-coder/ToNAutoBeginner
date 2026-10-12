@@ -510,8 +510,12 @@ class LogMonitor:
         if not self.cfg.log_path or not self.cfg.log_path.exists():
             return
         try:
-            found_user     = False
+            # ログインの行はログの先頭にある。末尾から遡って探すと全部読むことになる（26 MB・27 万行で
+            # 0.8 秒。6 窓同時だと起動時にその分の CPU）。先頭を読めば 1 ms。遡りの途中でもっと後の
+            # ログインの行（入り直し）が見つかれば、そちらで上書きする
+            found_user     = self._user_from_log_head()
             found_instance = False
+            past_learn     = False      # 定期の Verified の位相に使う範囲（VERIFIED_LEARN_BACK_SEC）より前まで遡った
             # 最後の Joining より後の、所持アイテムに関わる行（新しい順に溜まる）
             item_events = []
             # 最後の Joining より後の入退室。逆向きに読むので新しい順に溜まる
@@ -534,12 +538,12 @@ class LogMonitor:
                 if not event:
                     continue
 
-                if event.kind in self._VERIFIED_LEARN_KINDS:
-                    at = LogParser.log_time(line)
-                    if at is not None:
-                        newest = at if newest is None else newest
-                        if newest - at <= config.VERIFIED_LEARN_BACK_SEC:
-                            verified_events.append((at, event.kind))
+                at = LogParser.log_time(line)
+                if at is not None:
+                    newest = at if newest is None else newest
+                    past_learn = newest - at > config.VERIFIED_LEARN_BACK_SEC
+                    if event.kind in self._VERIFIED_LEARN_KINDS and not past_learn:
+                        verified_events.append((at, event.kind))
 
                 if not found_instance and event.kind in (
                         LogParser.EVENT_PLAYER_JOINED,
@@ -552,12 +556,10 @@ class LogMonitor:
                 if not found_instance and event.kind == LogParser.EVENT_ROUND_START:
                     round_types.append(event.round_type)    # 1ラウンド1回
 
-                if not found_user and event.kind == LogParser.EVENT_USER_AUTH:
-                    self._log(f"UserID検出: {event.user_id}")
-                    self.st.local_player_name = event.player_name
-                    self.st.local_user_id = event.user_id
-                    # 統計用の通信（最大10秒）は待たない
-                    self._start_daemon(self._fetch_transformed_uid, event.user_id)
+                if event.kind == LogParser.EVENT_USER_AUTH and (
+                        not found_user or event.user_id != self.st.local_user_id):
+                    # 遡りで最初に見えたログインが最新（先頭から読んだものと違えば入り直している）
+                    self._apply_user_auth(event)
                     found_user = True
 
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
@@ -571,8 +573,8 @@ class LogMonitor:
                     self._restore_players(reversed(player_events))
                     self._restore_three_wins(lived, list(reversed(round_types)))
 
-                if found_user and found_instance:
-                    break
+                if found_user and found_instance and past_learn:
+                    break           # 要るものはそろった（これより前は位相にも使わない）
             self._learn_verified_phase(list(reversed(verified_events)))
             if found_instance:
                 # 名前（Sabotage マーダーの判定）は入室より前の行で分かるので、最後に流す
@@ -586,6 +588,31 @@ class LogMonitor:
                       f"{len(self._other_players())}人")
         else:
             self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
+
+    def _user_from_log_head(self) -> bool:
+        """ログの先頭（LOG_START_SCAN_CHUNK_BYTES）からログインの行を読む。見つけて反映したら True"""
+        try:
+            with open(self.cfg.log_path, "rb") as f:
+                head = f.read(config.LOG_START_SCAN_CHUNK_BYTES)
+        except OSError:
+            return False
+        for raw in head.split(b"\n"):
+            line = raw.decode("utf-8", errors="replace")
+            if LogParser.USER_AUTH_MARK not in line:
+                continue
+            event = LogParser.parse(line)
+            if event and event.kind == LogParser.EVENT_USER_AUTH:
+                self._apply_user_auth(event)
+                return True
+        return False
+
+    def _apply_user_auth(self, event):
+        """ログインの行（自分の名前と usr_ID）を反映し、統計用の番号を取りに行く"""
+        self._log(f"UserID検出: {event.user_id}")
+        self.st.local_player_name = event.player_name
+        self.st.local_user_id = event.user_id
+        # 統計用の通信（最大10秒）は待たない
+        self._start_daemon(self._fetch_transformed_uid, event.user_id)
 
     def _learn_verified_phase(self, events):
         """起動時: 過去の Verified・開始・RoundOver・Verified Round End を古い順に

@@ -496,6 +496,17 @@ class TestTheButtonPicture(unittest.TestCase):
             self.assertAlmostEqual(found[3], scale, delta=0.06, msg=scale)
             self.assertGreaterEqual(found[2], RespawnButton.MATCH_MIN)
 
+    def test_a_full_screen_is_searched_at_a_smaller_size_but_answers_in_its_own(self):
+        """全画面（2560×1440）は高さ 720 に縮めて探す（1 回 7.8 秒 → 1.9 秒）。返す座標・倍率は元の撮影のもの"""
+        img, center = self._scene(1440 / 1399, at=(1800, 1200), size=(2560, 1440))
+        found = RespawnButton.find(img)
+        self.assertIsNotNone(found)
+        self.assertAlmostEqual(found[0], center[0], delta=4)
+        self.assertAlmostEqual(found[1], center[1], delta=4)
+        self.assertAlmostEqual(found[3], 1440 / 1399, delta=0.06, msg="倍率は元の撮影に対するもの")
+        self.assertGreaterEqual(found[2], RespawnButton.MATCH_GOOD)
+        self.assertEqual(RespawnButton.WORK_HEIGHT, 720)
+
     def test_no_button_no_match(self):
         import numpy as np
         img = (np.random.default_rng(2).random((1399, 1294, 3)) * 60).astype(np.uint8)

@@ -162,7 +162,9 @@ class RoundStore:
         初回（または my_uids に新しい uid が増えた）は全件（自分の行も含む）。以降は
         time >= synced_to − 15分 の、1人目が自分でない行か other_uids のある行だけ。
         取った行は上書きで入れ、other_uids に自分がいる行と重なる own の行は消す
-        （DB の行が正。自分は2人目以降だった）。通信の失敗は False（手元はそのまま）
+        （DB の行が正。自分は2人目以降だった）。通信の失敗は False（手元はそのまま）。
+        fetch が返すのはイテレータでもよい（1 ページずつ読みながら書く。読み進めている途中で
+        失敗したら、その回に入れた行は 1 つの取引なので全部戻る）
         """
         mine = self.my_uids()
         synced_uids = set(uids_list(self.get_meta("synced_uids")))

@@ -6,7 +6,13 @@ Build: リポジトリの直下で `python build.py`（exe の後にインスト
 python -m nuitka src/main.py --onefile --windows-console-mode=disable --output-filename=ToNAutoBeginner.exe --include-module=win32gui --include-module=win32con --include-module=win32api --include-module=pydirectinput --include-module=keyboard --include-module=win32ui --include-module=win32process --include-module=win32crypt --include-module=win32clipboard --include-package=cv2 --include-package=zeroconf --include-package=ifaddr --include-data-files=.env=.env --include-data-files=assets/ToNAutoBeginnerIcon.ico=assets/ToNAutoBeginnerIcon.ico --include-data-files=assets/data/maps.json=assets/data/maps.json --include-data-files=assets/data/terrors.json=assets/data/terrors.json --include-data-files=assets/data/item.json=assets/data/item.json --include-data-dir=assets/voice=assets/voice --include-data-dir=assets/templates=assets/templates --enable-plugin=tk-inter --lto=yes --clang --follow-imports --windows-icon-from-ico=assets/ToNAutoBeginnerIcon.ico
 """
 import ctypes
+import os
 import sys
+
+# numpy の OpenBLAS は読み込んだ瞬間に全コアぶんの作業バッファを確保する（24 コアの PC で
+# コミット 757 MB。1 スレッドなら 17 MB）。このツールの行列計算はホモグラフィ程度で 1 スレッドで
+# 足りる。numpy を最初に読む前（どのモジュールより前）に決める
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 if sys.platform == "win32":
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(

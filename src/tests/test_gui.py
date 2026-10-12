@@ -1872,40 +1872,70 @@ class TestHotKey(unittest.TestCase):
             self.assertEqual(HotKey.display(name),
                              HotKey.display(config.EMERGENCY_STOP_KEY), repr(name))
 
+    class _FakeKeyboard:
+        """keyboard の hook / unhook / get_hotkey_name の偽物。掛けた callback に打鍵を流せる"""
+        KEY_UP, KEY_DOWN = "up", "down"
+
+        def __init__(self, pressed=()):
+            self.callbacks = []
+            self.unhooked = []
+            self.suppress = []
+            self._pressed_events = {i: type("E", (), {"name": n})() for i, n in enumerate(pressed)}
+
+        def hook(self, callback, suppress=True):
+            self.callbacks.append(callback)
+            self.suppress.append(suppress)
+            return callback
+
+        def unhook(self, handle):
+            self.unhooked.append(handle)
+
+        @staticmethod
+        def get_hotkey_name(names):
+            return "+".join(names)
+
+        def press(self, name, up=True):
+            event = type("E", (), {"name": name, "event_type": self.KEY_UP if up else self.KEY_DOWN})()
+            for callback in list(self.callbacks):
+                callback(event)
+
     def test_capture_returns_what_was_pressed(self):
+        """離した瞬間に、押されている組み合わせの名前（read_hotkey と同じ形）"""
         self._kb.stop()
         self.addCleanup(self._kb.start)
-        with patch.object(HotKey.keyboard, "read_hotkey", return_value="f9"):
-            self.assertEqual(HotKey.capture(2.0), "f9")
+        fake = self._FakeKeyboard(pressed=("ctrl",))
+        with patch.object(HotKey, "keyboard", fake):
+            threading.Timer(0.05, lambda: (fake.press("f9", up=False), fake.press("f9"))).start()
+            self.assertEqual(HotKey.capture(2.0), "ctrl+f9")
+        self.assertEqual(fake.unhooked, fake.callbacks, "フックは外す")
 
     def test_capture_never_suppresses(self):
-        self._kb.stop()
-        self.addCleanup(self._kb.start)
         """押したキーがVRChatや他のアプリに届かなくなる"""
-        with patch.object(HotKey.keyboard, "read_hotkey",
-                          return_value="p") as mock_read:
-            HotKey.capture(2.0)
-
-        self.assertEqual(mock_read.call_args.kwargs.get("suppress"), False)
-
-    def test_capture_gives_up_on_a_timeout(self):
         self._kb.stop()
         self.addCleanup(self._kb.start)
-        started = threading.Event()
+        fake = self._FakeKeyboard()
+        with patch.object(HotKey, "keyboard", fake):
+            threading.Timer(0.05, lambda: fake.press("p")).start()
+            HotKey.capture(2.0)
+        self.assertEqual(fake.suppress, [False])
 
-        def never(**_kw):
-            started.set()
-            time.sleep(5)
-
-        with patch.object(HotKey.keyboard, "read_hotkey", never):
+    def test_capture_gives_up_on_a_timeout_and_leaves_nothing_behind(self):
+        """時間切れならフックを外して None（前は read_hotkey のスレッドが次の打鍵まで残っていた）"""
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        fake = self._FakeKeyboard()
+        with patch.object(HotKey, "keyboard", fake):
+            before = threading.active_count()
             self.assertIsNone(HotKey.capture(0.2))
-        self.assertTrue(started.wait(2), "読み取りは始まっていること")
+        self.assertEqual(fake.unhooked, fake.callbacks, "フックは外す")
+        self.assertEqual(threading.active_count(), before, "待つスレッドを残さない")
 
     def test_capture_swallows_errors(self):
         self._kb.stop()
         self.addCleanup(self._kb.start)
-        with patch.object(HotKey.keyboard, "read_hotkey",
-                          side_effect=RuntimeError("boom")):
+        fake = self._FakeKeyboard()
+        fake.hook = MagicMock(side_effect=RuntimeError("boom"))
+        with patch.object(HotKey, "keyboard", fake):
             self.assertIsNone(HotKey.capture(2.0))
 
     def test_capture_without_keyboard_is_none(self):

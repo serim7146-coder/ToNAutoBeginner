@@ -47,6 +47,12 @@ def scales() -> list:
     return sorted(values, key=lambda s: (abs(s - 1.0), s))
 
 
+# 照合する撮影の高さ。これより高い撮影は縮めてから照合する（全画面 2560×1440 で、ボタンが無いときの
+# 1 回が 7.8 秒 → 1.9 秒。この探しは前面を借りて鍵を持ったまま行う）。絵の倍率と返す座標は縮めた分を
+# 戻すので、呼ぶ側には同じ（倍率は元の撮影に対するもの）
+WORK_HEIGHT = 720
+
+
 def find(bgr, template=None):
     """撮影（BGR）の中のボタンの (中心 x, 中心 y, 一致, 倍率)。MATCH_MIN 未満なら None"""
     import cv2
@@ -54,9 +60,12 @@ def find(bgr, template=None):
     if template is None or len(template) == 0 or not hasattr(bgr, "shape"):
         return None
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    shrink = min(1.0, WORK_HEIGHT / gray.shape[0])
+    if shrink < 1.0:
+        gray = cv2.resize(gray, None, fx=shrink, fy=shrink, interpolation=cv2.INTER_AREA)
     best = None
     for s in scales():
-        hit = _match(gray, template, s)
+        hit = _match(gray, template, s, shrink)
         if hit is not None and (best is None or hit[2] > best[2]):
             best = hit
         if hit is not None and hit[2] >= MATCH_GOOD:
@@ -69,7 +78,7 @@ def find(bgr, template=None):
             s = round(center + i * FINE_STEP, 2)
             if i == 0 or s <= 0:
                 continue
-            hit = _match(gray, template, s)
+            hit = _match(gray, template, s, shrink)
             if hit is not None and hit[2] > best[2]:
                 best = hit
     if best is None or best[2] < MATCH_MIN:
@@ -77,13 +86,15 @@ def find(bgr, template=None):
     return best
 
 
-def _match(gray, template, s):
-    """倍率 s の絵でいちばん合う所 (中心 x, 中心 y, 一致, 倍率)。絵が小さすぎる・撮影より大きければ None"""
+def _match(gray, template, s, shrink: float = 1.0):
+    """倍率 s の絵でいちばん合う所 (中心 x, 中心 y, 一致, 倍率)。絵が小さすぎる・撮影より大きければ None。
+    gray が shrink 倍に縮めた撮影なら、絵も同じだけ縮めて照合し、座標は元の撮影に戻す"""
     import cv2
-    t = cv2.resize(template, None, fx=s, fy=s,
-                   interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+    f = s * shrink
+    t = cv2.resize(template, None, fx=f, fy=f,
+                   interpolation=cv2.INTER_AREA if f < 1 else cv2.INTER_LINEAR)
     th, tw = t.shape[:2]
     if th < 4 or tw < 4 or th > gray.shape[0] or tw > gray.shape[1]:
         return None
     _lo, score, _lo_at, at = cv2.minMaxLoc(cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED))
-    return at[0] + tw / 2, at[1] + th / 2, float(score), s
+    return (at[0] + tw / 2) / shrink, (at[1] + th / 2) / shrink, float(score), s

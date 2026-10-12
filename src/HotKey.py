@@ -10,7 +10,7 @@
 GUI から切り離して単体テストできるようにしてある。
 """
 
-import threading
+import queue
 
 import config
 import DebugLog
@@ -49,28 +49,43 @@ def display(name) -> str:
 
 
 def capture(timeout_sec: float = 5.0):
-    """押されたキーを1つ返す。押されなければ（または失敗すれば）None。
+    """押されたキーを1つ返す（`keyboard.read_hotkey` と同じ形。離した瞬間に、押されている組み合わせの名前）。
+    押されなければ（または失敗すれば）None。
 
     `suppress=True` にしないこと。設定のために押したキーが VRChat や他の
     アプリに届かなくなる。
 
-    `keyboard.read_hotkey()` はキーが押されるまで戻らないので、待つのは
-    別スレッドにして、時間切れなら諦める。置き去りにしたスレッドは次の
-    打鍵で終わるが、その結果は誰も受け取らない（`suppress=False` なので
-    その打鍵は他のアプリへ普通に届く）。
+    `keyboard.read_hotkey()` はキーが押されるまで戻らず、時間切れで置き去りにしたスレッドが
+    次の打鍵まで残っていた。ここは自分でフックを掛け、時間切れなら外す（残らない）。
+    組み合わせの名前は `read_hotkey` と同じやり方（離したキー＋そのとき押されているキー）
     """
     if keyboard is None:
         return None
-    result = {}
+    found = queue.Queue()
+    up = getattr(keyboard, "KEY_UP", "up")
 
-    def read():
+    def on_event(event):
+        if getattr(event, "event_type", None) != up:
+            return
         try:
-            result["key"] = keyboard.read_hotkey(suppress=False)
+            pressed = getattr(keyboard, "_pressed_events", {})
+            names = [e.name for e in list(pressed.values())] + [event.name]
+            found.put(keyboard.get_hotkey_name(names))
         except Exception:
-            DebugLog.exception("HotKey.read")
-            pass
+            DebugLog.exception("HotKey.capture.on_event")
+            found.put(None)
 
-    worker = threading.Thread(target=read, daemon=True)
-    worker.start()
-    worker.join(timeout_sec)
-    return result.get("key")
+    try:
+        hooked = keyboard.hook(on_event, suppress=False)
+    except Exception:
+        DebugLog.exception("HotKey.capture")
+        return None
+    try:
+        return found.get(timeout=max(0.0, timeout_sec))
+    except queue.Empty:
+        return None
+    finally:
+        try:
+            keyboard.unhook(hooked)
+        except Exception:
+            DebugLog.exception("HotKey.capture.unhook")

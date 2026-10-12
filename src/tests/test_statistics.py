@@ -926,8 +926,20 @@ class TestFetchRounds(unittest.TestCase):
              patch.object(ConnectDB, "_headers", return_value={}), \
              patch.object(ConnectDB.urllib.request, "urlopen",
                           side_effect=self._pages(pages)) as urlopen:
-            rows = ConnectDB.fetch_rounds(since, mine, page_size=page_size)
+            rows = list(ConnectDB.fetch_rounds(since, mine, page_size=page_size))   # 1 ページずつ読む
         return rows, [urllib.parse.unquote(c.args[0].full_url) for c in urlopen.call_args_list]
+
+    def test_pages_are_read_lazily(self):
+        """全ページを一度に持たない（初回の全件取りで DB の行数ぶんのメモリを使わない）"""
+        with patch.object(ConnectDB, "_configured", return_value=True), \
+             patch.object(ConnectDB, "SUPABASE_URL", "https://example.invalid"), \
+             patch.object(ConnectDB, "_headers", return_value={}), \
+             patch.object(ConnectDB.urllib.request, "urlopen",
+                          side_effect=self._pages([[{"time": 1}, {"time": 2}], [{"time": 3}]])) as urlopen:
+            rows = ConnectDB.fetch_rounds(None, set(), page_size=2)
+            self.assertEqual(urlopen.call_count, 0, "呼んだだけでは取りに行かない")
+            self.assertEqual(next(iter(rows))["time"], 1)
+            self.assertEqual(urlopen.call_count, 1, "1 ページ目だけ")
 
     def test_the_first_fetch_takes_everything_in_time_order(self):
         rows, urls = self._fetch([[{"time": 1}, {"time": 2}], [{"time": 3}]], None, set())
@@ -1456,8 +1468,13 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window.map_tree = FakeTree()
         window._filter = None
         window._map_counts_cache = {}
+        window._round_kind_cache = {1: []}              # 内訳のほかのタブ（別のテストで見る）
+        window._appearance_cache = {1: (0, [])}
+        window._detail_seq = 0
+        window._selected_terror = None
+        window._off_gui = lambda work, done: done(work())
         window._clear_tree = MagicMock()
-        window._render_terror_rounds = MagicMock()      # 内訳のほかのタブ（別のテストで見る）
+        window._render_terror_rounds = MagicMock()
         window._terror_categories = {}
         window._show_round_type_tab = MagicMock()       # Unbound ではラウンドタイプを隠す（別のテストで見る）
         window.store = MagicMock()
@@ -1469,6 +1486,39 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window.store.map_counts_for_terror.assert_called_once_with(None, 1)
         self.assertEqual(window._clear_tree.call_count, 2)
         self.assertEqual(len(window.map_tree.inserted), 2)
+
+    def test_a_result_for_an_old_condition_is_dropped(self):
+        """裏のスレッドの集計が返る前に条件が変わったら、その結果は当てない（新しい集計が来る）"""
+        window = type("FakeStatisticsWindow", (), {})()
+        pending = []
+        window._off_gui = lambda work, done: pending.append((work, done))
+        window._filter = RoundStore.Filter(start=0, end=10)
+        window._analyze_seq = 0
+        window._selected_terror = None
+        window.v_status = MagicMock()
+        window.v_terror_category = MagicMock(get=MagicMock(return_value="classic"))
+        window._terror_stats_cache = {}
+        window.store = MagicMock()
+        window.store.round_summary.return_value = []
+        window.store.terror_counts.return_value = {}
+        window.store.time_series.return_value = []
+        for name in ("_picker_datetime", "_selected_rounds", "_make_filter", "_show_round_stats",
+                     "_render_terror_list", "_clear_terror_detail", "_show_time_rows"):
+            setattr(window, name, MagicMock())
+        window._picker_datetime.side_effect = lambda key: datetime(2026, 1, 1, 0 if key == "start" else 1)
+        window._selected_rounds.return_value = {"Fog"}
+        window._make_filter.side_effect = [RoundStore.Filter(start=0, end=10), RoundStore.Filter(start=0, end=20)]
+        window._map_counts_cache = window._round_kind_cache = window._appearance_cache = {}
+
+        StatisticsGUI.StatisticsWindow._analyze(window)         # 1 回目（まだ返らない）
+        StatisticsGUI.StatisticsWindow._analyze(window)         # 条件が変わった 2 回目
+        self.assertEqual(len(pending), 2)
+        first_work, first_done = pending[0]
+        first_done(first_work())                                 # 1 回目の結果が遅れて返った
+        window._show_round_stats.assert_not_called()
+        second_work, second_done = pending[1]
+        second_done(second_work())
+        window._show_round_stats.assert_called_once()
 
     def test_load_rows_async_ignores_duplicate_request_while_loading(self):
         class FakeStatus:
@@ -1656,6 +1706,19 @@ class TestStatisticsWindowV1(unittest.TestCase):
                          StatisticsGUI._local(later).replace(minute=59, second=59))
         self.assertEqual(window._terror_stats("Unbound")[0], 2, "209 も数える")
         self.assertTrue(window.v_status.get().startswith("3ラウンド"), window.v_status.get())
+
+    def test_the_real_aggregation_is_applied_through_after(self):
+        """本物の _off_gui: 集計は threading.Thread で回し、結果は after(0) で Tk のスレッドに当てる
+        （mainloop の無いテストでは別スレッドからの after を Tk が断るので、スレッドはその場で回す）"""
+        import types
+        window = self._open(lambda s, m: [])
+        window._off_gui = types.MethodType(REAL_STATS_OFF_GUI, window)
+        with patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            window._filter = None
+            window._analyze()
+            self.assertEqual(window.v_status.get(), "集計中…", "after で当てるまでは集計中")
+        self.root.update()
+        self.assertTrue(window.v_status.get().startswith("2ラウンド"), window.v_status.get())
 
     def test_an_end_the_user_chose_is_kept(self):
         window = self._open(lambda s, m: [])
