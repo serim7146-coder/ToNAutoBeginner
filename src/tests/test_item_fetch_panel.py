@@ -711,20 +711,20 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
     店の画面の真ん中を照準へ寄せてから押す（DK。2026-10-10 08:17 の窓2）"""
 
     def test_the_range(self):
-        self.assertEqual((ItemFetch.HUD_X, ItemFetch.HUD_Y), ((-0.23, -0.07), (0.05, 0.15)))
+        self.assertEqual((ItemFetch.HUD_X, ItemFetch.HUD_Y), ((-0.27, -0.03), (0.02, 0.21)))    # EI で広げた
         aim = (433.5, 362.5)
         # 6窓の撮影の HUD の明るい画素の範囲（窓1）の四隅は入る
         for x, y in ((295, 407), (371, 407), (295, 450), (371, 450)):
             self.assertTrue(ItemFetch.in_hud((x, y), aim, 663), (x, y))
         # 照準・照準の右・上は入らない
-        for x, y in (aim, (500, 420), (380, 330), (433.5 - 0.05 * 663, 420), (350, 362.5 + 0.17 * 663)):
+        for x, y in (aim, (500, 420), (380, 330), (433.5 - 0.02 * 663, 420), (350, 362.5 + 0.23 * 663)):
             self.assertFalse(ItemFetch.in_hud((x, y), aim, 663), (x, y))
 
     def test_the_range_follows_the_height(self):
         for height in (663, 1440, 331):
             aim = (height, height / 2)
             inside = (aim[0] - 0.13 * height, aim[1] + 0.076 * height)     # 08:17 の Equip の割合
-            outside = (aim[0] - 0.05 * height, aim[1] + 0.076 * height)
+            outside = (aim[0] - 0.02 * height, aim[1] + 0.076 * height)
             self.assertTrue(ItemFetch.in_hud(inside, aim, height), height)
             self.assertFalse(ItemFetch.in_hud(outside, aim, height), height)
 
@@ -760,7 +760,7 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
     def test_the_client_height_not_the_shot_height(self):
         """撮影は窓の画像（タイトルバー込み 702）。割るのはクライアントの高さ（663）。境目の点で違いが出る"""
         panel = _Panel(size=(867, 702))
-        equip = (panel.aim[0] - 0.072 * 663, panel.aim[1] + 0.10 * 663)   # 663 なら中・702 なら外
+        equip = (panel.aim[0] - 0.0315 * 663, panel.aim[1] + 0.10 * 663)  # 663 なら中・702 なら外（右の端 −0.03）
         self.assertTrue(ItemFetch.in_hud(equip, panel.aim, 663))
         self.assertFalse(ItemFetch.in_hud(equip, panel.aim, 702))
         panel.left0, panel.top0 = equip[0] - 180, equip[1] - 177
@@ -783,7 +783,7 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
         self.assertTrue(any("HUD に重なる点 店のボタン" in m for m in self.logs), self.logs)
 
     def test_both_outside_the_hud_do_not_move(self):
-        panel = _Panel(left=640.0, top=380.0)       # 真ん中のずれ 横 -130 でも、点は HUD の外
+        panel = _Panel(left=640.0, top=300.0)       # 真ん中のずれ 横 -130 でも、点も文字の箱も HUD の外（上）
         f = self._fetcher(panel)
         self.assertTrue(f.buy("Survival", 29))
         self.assertEqual(panel.moves, [])
@@ -848,3 +848,90 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
         with patch.object(WindowOperator.win32gui, "GetClientRect", side_effect=OSError), \
              patch.object(DebugLog, "exception"):
             self.assertIsNone(WindowOperator.client_height(0x55))
+
+
+class TestTheTextBoxOnTheHud(_FetchCase):
+    """EI（技術選定の決定 A）: 全画面で HUD が広がる。重なりは 横は押す点・縦は文字の箱（±GREEN_WINDOW の縦 × 倍率）で見る。
+    2026-10-12 12:11 窓1（1920×1080・照準 (960, 540)・Equip (883.8, 583.3)）の数字で確かめる（撮影は資料に入れない）"""
+
+    def _panel_with_equip_at(self, equip, scale=1.0, size=(1920, 1080)):
+        bx, by = ItemFetch.BUTTONS["Equip"]
+        return _Panel(left=equip[0] - bx * scale, top=equip[1] - by * scale, scale=scale, size=size)
+
+    def test_1211_window_1_overlaps_and_is_moved(self):
+        """点は 横 −0.071・縦 +0.040。前の範囲（縦 0.05〜）では重ならないとして掛かったまま押していた"""
+        equip = (883.8, 583.3)
+        aim = (960, 540)
+        self.assertAlmostEqual((equip[0] - aim[0]) / 1080, -0.071, delta=0.001)
+        self.assertAlmostEqual((equip[1] - aim[1]) / 1080, 0.040, delta=0.001)
+        with patch.object(ItemFetch, "HUD_X", (-0.23, -0.07)), patch.object(ItemFetch, "HUD_Y", (0.05, 0.15)):
+            self.assertFalse(ItemFetch.in_hud(equip, aim, 1080), "前の範囲では外だった")
+        self.assertTrue(ItemFetch.in_hud(equip, aim, 1080))
+        panel = self._panel_with_equip_at(equip)
+        self.assertTrue(panel.inside())
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves, "寄せた")
+        self.assertTrue(any("HUD に重なる点 Equip" in m for m in self.logs), self.logs)
+        clicked = panel.clicks[1]
+        self.assertFalse(ItemFetch.in_hud(clicked, panel.aim, 1080), clicked)
+
+    def test_after_centring_it_does_not_overlap_and_is_pressed(self):
+        """寄せた後の並び（横 −0.009・縦 +0.044）は重ならない → 動かさずに押す"""
+        aim = (960, 540)
+        equip = (aim[0] - 0.009 * 1080, aim[1] + 0.044 * 1080)
+        panel = self._panel_with_equip_at(equip)
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertEqual(panel.moves, [])
+        self.assertEqual(len(panel.clicks), 2)
+        self.assertTrue(any("HUD に重なる点 なし" in m for m in self.logs), self.logs)
+
+    def test_only_the_edge_of_the_text_box_overlaps(self):
+        """押す点は HUD の上（縦 +0.010）でも、文字の下の端（＋15 px）が入れば重なる"""
+        aim = (960, 540)
+        equip = (aim[0] - 0.10 * 1080, aim[1] + 0.010 * 1080)
+        self.assertFalse(ItemFetch.in_hud(equip, aim, 1080))
+        box = ItemFetch.button_box(lambda pt: (pt[0], pt[1], 1, 1), equip)
+        self.assertEqual(box, [(equip[0], equip[1] - 15), (equip[0], equip[1] + 15)], "横は押す点のまま")
+        self.assertTrue(ItemFetch.box_in_hud(box, aim, 1080))
+        panel = self._panel_with_equip_at(equip)
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves)
+        self.assertTrue(any("HUD に重なる点 Equip" in m for m in self.logs), self.logs)
+
+    def test_the_shop_button_too(self):
+        """店のボタンも同じ見方（Survival の点は HUD の上、文字の下の端が入る）"""
+        aim = (960, 540)
+        button = (aim[0] - 0.15 * 1080, aim[1] + 0.012 * 1080)
+        panel = _Panel(left=button[0] - 266, top=button[1] - 95)
+        self.assertFalse(ItemFetch.in_hud(button, aim, 1080))
+        f = self._fetcher(panel)
+        self.assertTrue(f.buy("Survival", 29))
+        self.assertTrue(panel.moves)
+        self.assertTrue(any("HUD に重なる点 店のボタン" in m for m in self.logs), self.logs)
+
+    def test_the_box_follows_the_scale(self):
+        box = ItemFetch.button_box(lambda pt: (pt[0] * 0.6, pt[1] * 0.6, 0.6, 0.6), (100, 100))
+        self.assertEqual(box, [(60.0, 51.0), (60.0, 69.0)])
+
+    def test_far_from_the_hud_does_not_overlap(self):
+        aim = (960, 540)
+        for x, y in ((960 + 200, 540 + 100), (960 - 200, 540 - 100), (960 - 400, 540 + 100)):
+            box = ItemFetch.button_box(lambda pt: (pt[0], pt[1], 1, 1), (x, y))
+            self.assertFalse(ItemFetch.box_in_hud(box, aim, 1080), (x, y))
+
+    def test_small_window_still_overlaps(self):
+        """DK の小さい窓（851×663。hud_w1 の範囲の四隅）は今どおり重なる"""
+        aim = (433.5, 362.5)
+        for x, y in ((295, 407), (371, 407), (295, 450), (371, 450)):
+            box = ItemFetch.button_box(lambda pt: (pt[0], pt[1], 0.6, 0.6), (x, y))
+            self.assertTrue(ItemFetch.box_in_hud(box, aim, 663), (x, y))
+
+    def test_the_log_shows_the_box(self):
+        panel = self._panel_with_equip_at((883.8, 583.3))
+        self._fetcher(panel).buy("Survival", 29)
+        line = next(m for m in self.logs if "HUD に重なる点 Equip" in m)
+        self.assertIn("見た箱 店のボタン 横 ", line)
+        self.assertIn("／Equip 横 -0.071〜-0.071・縦 +0.026〜+0.054", line)
