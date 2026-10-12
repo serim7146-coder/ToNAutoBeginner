@@ -319,6 +319,9 @@ RESPAWN_FIND_TRIES    = 3         # ボタンを探す撮影の回数（見つ�
 RESPAWN_FIND_RETRY_SEC = 0.3
 RESPAWN_CLICK_SEC     = 0.15      # リスポーンのボタンを押している長さ（0.08 は FPS 17〜18 の窓で取りこぼした）
 RESPAWN_LOG_WAIT_SEC  = 2.0       # 押してから「Player respawned」の行を待つ上限
+# 押した後、鍵・前面・カーソル（ボタンの上）をそのままにして行を待つ上限（EN: ceed392 で押した直後に返したら
+# 押せなくなった。前の成功 51 回は押してから 0.26〜0.58 秒で行が来ていた）。来なければ返して残りは鍵の外で
+RESPAWN_HOLD_FRONT_SEC = 1.0
 RUN_RESPAWN_BACK_SEC  = 2.85      # リスポーンの後、後ろへ下がる長さ（赤い膜を後ろ向きに通る）
 RUN_RESPAWN_TURN_SEC  = 0.9       # その後、左へ回る長さ（真後ろ → 正面。0.8 は足りない・1.0 は回しすぎ）
 RUN_RESPAWN_POLL_SEC  = 0.1       # ほかの窓のフリーズが解けるのを待つ・行を待つ間隔

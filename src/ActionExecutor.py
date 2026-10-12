@@ -1956,9 +1956,11 @@ class ActionExecutor:
     def _respawn_in_front(self, round_seq: int) -> str | None:
         """前面を借りて Esc のメニューからリスポーンする。None（できた）・"frozen"（ほかの窓のフリーズ）・理由。
 
-        鍵（_GLOBAL_ACTION_LOCK）と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけ
-        （_respawn_press）。押したら前面を返して鍵を離し、「Player respawned」の行は鍵の外で待つ
-        （ほかの窓の Begin のクリックを最大 RESPAWN_LOG_WAIT_SEC × 2 止めない）。来なければもう一度
+        鍵（_GLOBAL_ACTION_LOCK）と前面を持つのは「メニューを開く → ボタンを探す → 押す → 行を最大
+        RESPAWN_HOLD_FRONT_SEC 待つ」の間（_respawn_press）。押した直後に前面とカーソルを返すと、VRChat が
+        クリックを処理する前に前面が移って押せていなかった（EN）。HOLD の間に来なければ前面を返して鍵を離し、
+        残り（押してから RESPAWN_LOG_WAIT_SEC まで）は鍵の外で待つ（ほかの窓の Begin のクリックを
+        最大 RESPAWN_LOG_WAIT_SEC × 2 止めない）。来なければもう一度
         前面を借り、ボタンがまだ写っていれば押し直す（1 回）。それでも来なければメニューを閉じる。
         メニューが開いているか（self._respawn_menu_open）は押しをまたいで覚える——ほかの窓のフリーズで
         やり直すとき、開いたままのメニューに Esc を送って閉じてしまわないため"""
@@ -1966,20 +1968,32 @@ class ActionExecutor:
         head = f"[操作] [窓{st.window_idx}] Run:"
         seen = st.respawn_seen_seq
         for presses in (1, 2):
-            outcome = self._respawn_press(round_seq, presses, head)
+            self._respawn_pressed_at = None
+            self._respawn_came = False
+            outcome = self._respawn_press(round_seq, presses, head, seen)
             if outcome is not None:
                 return outcome
-            if self._wait_respawn_line(seen, round_seq):
+            pressed_at = self._respawn_pressed_at
+            came = self._respawn_came
+            where = "前面のまま"
+            if not came:
+                # 前面は返した。残りを鍵の外で待つ
+                came = self._wait_respawn_line(seen, round_seq, since=pressed_at)
+                where = "前面を返した後"
+            if came:
                 self._respawn_menu_open = False         # 押せた（メニューは閉じている）
-                DebugLog.write(f"{head} 「Player respawned」を受けた")
+                DebugLog.write(f"{head} 「Player respawned」を受けた（押してから "
+                               f"{time.time() - pressed_at:.2f} 秒・{where}）")
                 return None
             DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
         self._respawn_close_menu(head)
         return "リスポーンの行が来ない"
 
-    def _respawn_press(self, round_seq: int, presses: int, head: str) -> str | None:
+    def _respawn_press(self, round_seq: int, presses: int, head: str, seen: int) -> str | None:
         """鍵の中で前面を借りて: （メニューが開いていなければ Esc →）撮る → ボタンを探す → カーソルを置いて
-        読み直す → クリック。押したら None。押せなければ理由（"frozen" を含む）を返し、メニューが開いて
+        読み直す → クリック → 鍵・前面・カーソルをそのままにして「Player respawned」を最大
+        RESPAWN_HOLD_FRONT_SEC 待つ（来たかは self._respawn_came、押し終えた時刻は self._respawn_pressed_at）。
+        押したら None。押せなければ理由（"frozen" を含む）を返し、メニューが開いて
         いれば Esc で閉じる。どの終わり方でも前面を返し、カーソルを戻す。
         2 回目（presses == 2）はボタンがまだ写っているかを 1 回だけ見て、写っていなければ押し直さない
         （メニューは閉じている＝押せていたかもしれない。DQ）"""
@@ -2036,6 +2050,8 @@ class ActionExecutor:
                 DebugLog.write(f"{head} リスポーンのボタンを押す {point}（{presses} 回目）")
                 WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
                 pressed = True
+                self._respawn_pressed_at = time.time()
+                self._respawn_came = self._wait_respawn_line(seen, round_seq, config.RESPAWN_HOLD_FRONT_SEC)
                 return None
             finally:
                 try:
@@ -2054,11 +2070,12 @@ class ActionExecutor:
             self._respawn_menu_open = False
             DebugLog.write(f"{head} メニューを閉じた（Esc）")
 
-    def _wait_respawn_line(self, seen: int, round_seq: int) -> bool:
-        """押した後、「Player respawned」の行を RESPAWN_LOG_WAIT_SEC まで待つ（鍵の外・前面は返してある）。
-        来たら True。止めた・ラウンドが変わった・private でなくなったら False"""
+    def _wait_respawn_line(self, seen: int, round_seq: int, sec: float | None = None,
+                           since: float | None = None) -> bool:
+        """押した後、「Player respawned」の行を待つ。上限は since（押し終えた時刻。無ければ今）から sec
+        （既定 RESPAWN_LOG_WAIT_SEC）。来たら True。止めた・ラウンドが変わった・private でなくなったら False"""
         st = self._st
-        deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
+        deadline = (time.time() if since is None else since) + (config.RESPAWN_LOG_WAIT_SEC if sec is None else sec)
         while st.respawn_seen_seq == seen:
             if time.time() >= deadline or not self._is_running() or st.round_seq != round_seq \
                     or not self.can_operate():

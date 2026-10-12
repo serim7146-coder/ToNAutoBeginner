@@ -655,3 +655,123 @@ class TestRoundOverRightAfterTheRespawn(_Case):
         self._run()
         self.assertNotIn(("click", 0.15), self.w.events)
         self.assertFalse([e for e in self.w.events if e[0] == "osc"])
+
+
+class TestHoldTheFrontAfterThePress(_Case):
+    """EN: 押した後、最大 RESPAWN_HOLD_FRONT_SEC は鍵・前面・カーソルをそのままにして行を待つ（ceed392 で押した
+    直後に返したら、VRChat がクリックを処理する前に前面が移って押せなくなった。前の成功 51 回は 0.26〜0.58 秒）"""
+
+    def setUp(self):
+        super().setUp()
+        self.w.respawns = False
+        self.line_at = None             # 押し終えてから行が来るまで（None なら来ない）
+        self.line_click = 1             # 何回目の押しの後に来るか
+        self.clicked_at = []
+        self.returned_at = []
+        self.free_while_waiting = []
+        w = self.w
+        real_click = WindowOperator.mouse_click.side_effect
+        real_return = WindowOperator.return_front.side_effect
+
+        def click(sec, pause=False):
+            real_click(sec, pause)
+            self.clicked_at.append(w.now[0])
+
+        def give_back(loan):
+            self.returned_at.append(w.now[0])
+            return real_return(loan)
+
+        def on_sleep():
+            if self.line_at is not None and len(self.clicked_at) >= self.line_click \
+                    and self.st.respawn_seen_seq == 0 and w.now[0] - self.clicked_at[-1] >= self.line_at - 1e-9:
+                self.st.respawn_seen_seq += 1
+                w.events.append("line")
+            if self.clicked_at and len(self.returned_at) == len(self.clicked_at):
+                # 返した後（鍵の外）: ほかの窓が鍵を取れるか
+                got = SharedState._GLOBAL_ACTION_LOCK.acquire(blocking=False)
+                if got:
+                    SharedState._GLOBAL_ACTION_LOCK.release()
+                self.free_while_waiting.append(got)
+        w.on_sleep = on_sleep
+        for p in (patch.object(WindowOperator, "mouse_click", side_effect=click),
+                  patch.object(WindowOperator, "return_front", side_effect=give_back)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _written(self):
+        return [c.args[0] for c in DebugLog.write.call_args_list]
+
+    def test_a_line_after_0_4_is_waited_for_in_front(self):
+        self.line_at = 0.4
+        locked = []
+        on_sleep = self.w.on_sleep
+
+        def watch():
+            if self.clicked_at and not self.returned_at:
+                locked.append((SharedState._GLOBAL_ACTION_LOCK.locked(), self.w.front == HWND))
+            on_sleep()
+        self.w.on_sleep = watch
+        self._run()
+        i = self.w.events.index(("click", 0.15))
+        self.assertEqual(self.w.events[i:i + 4], [("click", 0.15), "line", "return", ("cursor", (11, 22))],
+                         "前面とカーソルを返すのは行が来た後")
+        self.assertTrue(locked and all(l == (True, True) for l in locked), "待つ間は鍵と前面を持ったまま")
+        self.assertAlmostEqual(self.returned_at[0] - self.clicked_at[0], 0.4, delta=0.11)
+        self.assertEqual(self.w.events.count(("click", 0.15)), 1)
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 0.40 秒・前面のまま）",
+                      self._written())
+        self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
+
+    def test_no_line_in_1_0_returns_the_front_and_waits_outside_the_lock(self):
+        self.line_at = 1.5
+        self._run()
+        self.assertAlmostEqual(self.returned_at[0] - self.clicked_at[0], config.RESPAWN_HOLD_FRONT_SEC, delta=0.11)
+        self.assertTrue(self.free_while_waiting and all(self.free_while_waiting), "ほかの窓が鍵を取れる")
+        self.assertEqual(self.w.events.count(("click", 0.15)), 1, "2 秒の中で来たので押し直さない")
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 1.50 秒・前面を返した後）",
+                      self._written())
+
+    def test_the_whole_wait_is_still_2_seconds_from_the_press(self):
+        """鍵の外の残りは、押してから RESPAWN_LOG_WAIT_SEC まで（前面で待った 1.0 秒を足さない）"""
+        self._run()
+        self.assertEqual(len(self.clicked_at), 2)
+        self.assertAlmostEqual(self.clicked_at[1] - self.clicked_at[0], config.RESPAWN_LOG_WAIT_SEC,
+                               delta=0.6, msg="押し直しまで（押し直しの前の見直しの分だけ足される）")
+        self.assertLess(self.clicked_at[1] - self.clicked_at[0], config.RESPAWN_LOG_WAIT_SEC + 0.6)
+
+    def test_the_second_press_also_holds_the_front(self):
+        self._run()
+        self.assertEqual(len(self.clicked_at), 2)
+        self.assertAlmostEqual(self.returned_at[1] - self.clicked_at[1], config.RESPAWN_HOLD_FRONT_SEC, delta=0.11)
+        self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンの行が来ない）"])
+
+    def test_the_second_press_line_in_front(self):
+        self.line_at, self.line_click = 0.3, 2
+        self._run()
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 0.30 秒・前面のまま）",
+                      self._written())
+        self.assertEqual(len(self.clicked_at), 2)
+        self.assertAlmostEqual(self.returned_at[1] - self.clicked_at[1], 0.3, delta=0.11)
+
+    def test_stopped_while_holding_gives_back_at_once(self):
+        def stop_soon():
+            if self.clicked_at and self.w.now[0] - self.clicked_at[0] >= 0.2:
+                self.running["on"] = False
+        on_sleep = self.w.on_sleep
+        self.w.on_sleep = lambda: (stop_soon(), on_sleep())
+        self._run()
+        self.assertLess(self.returned_at[0] - self.clicked_at[0], 0.35, "1.0 秒待たずに返す")
+        self.assertEqual(self.w.events.count(("click", 0.15)), 1)
+
+    def test_the_next_round_while_holding_gives_back_at_once(self):
+        def next_round():
+            if self.clicked_at and self.w.now[0] - self.clicked_at[0] >= 0.2:
+                self.st.round_seq += 1
+        on_sleep = self.w.on_sleep
+        self.w.on_sleep = lambda: (next_round(), on_sleep())
+        self._run()
+        self.assertLess(self.returned_at[0] - self.clicked_at[0], 0.35)
+
+    def test_the_value(self):
+        self.assertEqual(config.RESPAWN_HOLD_FRONT_SEC, 1.0)
+        self.assertEqual(config.RESPAWN_CLICK_SEC, 0.15, "押す長さは変えない")
