@@ -163,14 +163,30 @@ class TestTheWholeRun(_Case):
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンのボタンが見つからない）"])
 
     def test_no_respawn_line_presses_once_more_then_closes_the_menu(self):
-        """行が来ない → ボタンがまだ写っているのを確かめて、もう1回だけ押す → それでも来なければ Esc（DQ）"""
+        """行が来ない → ボタンがまだ写っているのを確かめて、もう1回だけ押す → それでも来なければ Esc（DQ）。
+        行を待つ間は前面を返して鍵を離す（ほかの窓の Begin を止めない）。押し直しとメニューを閉じるのは
+        前面を借り直して（メニューは開いたままなので Esc で開き直さない）"""
         self.w.respawns = False
         self._run()
+        back = ("cursor", (11, 22))
         self.assertEqual(self.w.events, ["borrow", ("keys", "esc"), "find", ("cursor", self.POINT), ("click", 0.15),
-                                         "find", ("cursor", self.POINT), ("click", 0.15),
-                                         ("keys", "esc"), "return", ("cursor", (11, 22))])
+                                         "return", back,
+                                         "borrow", "find", ("cursor", self.POINT), ("click", 0.15), "return", back,
+                                         "borrow", ("keys", "esc"), "return", back])
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンの行が来ない）"])
         self.assertLess(self.w.now[0], config.RESPAWN_MENU_WAIT_SEC + 2 * config.RESPAWN_LOG_WAIT_SEC + 0.5)
+        self.assertTrue(all(self.w.locked), "前面の操作は鍵の中")
+
+    def test_the_line_is_waited_for_without_the_lock(self):
+        """押した後の「Player respawned」待ちは鍵の外（ほかの窓が前面の操作をできる）"""
+        self.w.respawns = False
+        locked_while_waiting = []
+        self.w.on_sleep = lambda: (locked_while_waiting.append(SharedState._GLOBAL_ACTION_LOCK.locked())
+                                   if ("click", 0.15) in self.w.events and "return" in self.w.events
+                                   and self.w.events[-1] == ("cursor", (11, 22)) else None)
+        self._run()
+        self.assertTrue(locked_while_waiting, "待っている間に眠った")
+        self.assertEqual(set(locked_while_waiting), {False})
 
     def test_the_second_press_goes_through(self):
         """1回目を取りこぼした（重い窓）→ 2回目で行が来る → 続ける"""
@@ -323,7 +339,12 @@ class TestTheFreezes(_Case):
         self.w.on_sleep = on_sleep
         self._run()
         first = self.w.events.index("return")
-        self.assertEqual(self.w.events[first - 1], ("keys", "esc"), "メニューを閉じてから返す")
+        self.assertEqual(self.w.events[first - 1], ("click", 0.15), "押したらすぐ前面を返す（行は鍵の外で待つ）")
+        self.assertEqual(self.w.events.count(("keys", "esc")), 1,
+                         "フリーズが解けてから押し直すとき、開いたままのメニューに Esc を送らない")
+        self.assertEqual(self.w.events[first + 1:first + 7],
+                         [("cursor", (11, 22)), "borrow", "find", ("cursor", self.POINT), ("click", 0.15), "return"],
+                         "解けたら前面を借り直して押し直す")
         self.assertEqual(self.w.events[-4:], [("osc", "/input/MoveBackward", 2.85), "release",
                                               ("osc", "/input/LookLeft", 0.9), "release"])
 

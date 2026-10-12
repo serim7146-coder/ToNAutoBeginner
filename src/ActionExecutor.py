@@ -128,6 +128,7 @@ class ActionExecutor:
         self._run_respawn_idle = threading.Event()
         self._run_respawn_idle.set()
         self._noted_round_over_after_respawn = False   # debug.log に1回だけ
+        self._respawn_menu_open = False       # Run のリスポーンで Esc のメニューを開いたまま押しをまたぐか
 
     @property
     def uses_osc(self) -> bool:
@@ -1717,6 +1718,7 @@ class ActionExecutor:
             return
         self._run_respawn_idle.clear()
         self._noted_round_over_after_respawn = False
+        self._respawn_menu_open = False         # Esc のメニューを開いているか（_respawn_press が持つ）
         try:
             why = self._respawn_when_free(round_seq)
             if why:
@@ -1952,12 +1954,37 @@ class ActionExecutor:
         return np.ascontiguousarray(bgra[:, :, :3])
 
     def _respawn_in_front(self, round_seq: int) -> str | None:
-        """鍵の中で前面を借りて: Esc → 撮る → ボタンを探す → カーソルを置いて読み直す → クリック →
-        「Player respawned」を待つ。どの終わり方でも、メニューが開いたままなら Esc で閉じ、前面を返し、
-        カーソルを戻す。None（できた）・"frozen"（ほかの窓のフリーズ）・理由"""
+        """前面を借りて Esc のメニューからリスポーンする。None（できた）・"frozen"（ほかの窓のフリーズ）・理由。
+
+        鍵（_GLOBAL_ACTION_LOCK）と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけ
+        （_respawn_press）。押したら前面を返して鍵を離し、「Player respawned」の行は鍵の外で待つ
+        （ほかの窓の Begin のクリックを最大 RESPAWN_LOG_WAIT_SEC × 2 止めない）。来なければもう一度
+        前面を借り、ボタンがまだ写っていれば押し直す（1 回）。それでも来なければメニューを閉じる。
+        メニューが開いているか（self._respawn_menu_open）は押しをまたいで覚える——ほかの窓のフリーズで
+        やり直すとき、開いたままのメニューに Esc を送って閉じてしまわないため"""
+        st = self._st
+        head = f"[操作] [窓{st.window_idx}] Run:"
+        seen = st.respawn_seen_seq
+        for presses in (1, 2):
+            outcome = self._respawn_press(round_seq, presses, head)
+            if outcome is not None:
+                return outcome
+            if self._wait_respawn_line(seen, round_seq):
+                self._respawn_menu_open = False         # 押せた（メニューは閉じている）
+                DebugLog.write(f"{head} 「Player respawned」を受けた")
+                return None
+            DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
+        self._respawn_close_menu(head)
+        return "リスポーンの行が来ない"
+
+    def _respawn_press(self, round_seq: int, presses: int, head: str) -> str | None:
+        """鍵の中で前面を借りて: （メニューが開いていなければ Esc →）撮る → ボタンを探す → カーソルを置いて
+        読み直す → クリック。押したら None。押せなければ理由（"frozen" を含む）を返し、メニューが開いて
+        いれば Esc で閉じる。どの終わり方でも前面を返し、カーソルを戻す。
+        2 回目（presses == 2）はボタンがまだ写っているかを 1 回だけ見て、写っていなければ押し直さない
+        （メニューは閉じている＝押せていたかもしれない。DQ）"""
         st = self._st
         hwnd = self._cfg.hwnd
-        head = f"[操作] [窓{st.window_idx}] Run:"
         with SharedState._GLOBAL_ACTION_LOCK:
             stop = self._respawn_stop_before_front(round_seq)
             if stop:
@@ -1966,31 +1993,37 @@ class ActionExecutor:
             ok, loan = WindowOperator.borrow_front(hwnd)
             if not ok:
                 return "前面にできない"
-            menu = False
+            pressed = False
             try:
                 stop = self._respawn_stop(round_seq)
                 if stop:
                     return stop
-                WindowOperator.send_keys("esc")
-                menu = True
-                stop = self._respawn_wait(config.RESPAWN_MENU_WAIT_SEC, round_seq)
-                if stop:
-                    return stop
+                if not self._respawn_menu_open:
+                    WindowOperator.send_keys("esc")
+                    self._respawn_menu_open = True
+                    stop = self._respawn_wait(config.RESPAWN_MENU_WAIT_SEC, round_seq)
+                    if stop:
+                        return stop
                 found = None
-                for tries in range(1, config.RESPAWN_FIND_TRIES + 1):
+                tries = config.RESPAWN_FIND_TRIES if presses == 1 else 1
+                for n in range(1, tries + 1):
                     shot = self._capture_bgr()
                     found = RespawnButton.find(shot) if shot is not None else None
-                    DebugLog.write(f"{head} ボタンを探す {tries} 回目: "
+                    DebugLog.write(f"{head} ボタンを探す {n} 回目: "
                                    + ("見つからない" if found is None else
                                       f"中心 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・倍率 {found[3]:.2f}"))
                     if found is not None:
                         break
-                    if tries < config.RESPAWN_FIND_TRIES:
+                    if n < tries:
                         stop = self._respawn_wait(config.RESPAWN_FIND_RETRY_SEC, round_seq)
                         if stop:
                             return stop
                 if found is None:
-                    return "リスポーンのボタンが見つからない"
+                    if presses == 1:
+                        return "リスポーンのボタンが見つからない"
+                    DebugLog.write(f"{head} ボタンがもう写っていない → 押し直さない")
+                    self._respawn_menu_open = False     # 閉じている（Esc を送らない）
+                    return "リスポーンの行が来ない"
                 origin = WindowOperator.window_origin(hwnd)
                 if origin is None:
                     return "窓が無い"
@@ -2000,46 +2033,61 @@ class ActionExecutor:
                 stop = self._respawn_stop(round_seq)
                 if stop:
                     return stop
-                seen = st.respawn_seen_seq
-                for presses in (1, 2):
-                    DebugLog.write(f"{head} リスポーンのボタンを押す {point}（{presses} 回目）")
-                    WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
-                    deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
-                    while st.respawn_seen_seq == seen and time.time() < deadline:
-                        stop = self._respawn_stop(round_seq)
-                        if stop:
-                            return stop
-                        time.sleep(config.RUN_RESPAWN_POLL_SEC)
-                    if st.respawn_seen_seq != seen:
-                        menu = False            # 押せた（メニューは閉じている）
-                        DebugLog.write(f"{head} 「Player respawned」を受けた")
-                        return None
-                    DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
-                    if presses == 2:
-                        break
-                    # 押し損ねたかもしれない（重い窓）。ボタンがまだ写っていれば、もう1回だけ押す
-                    shot = self._capture_bgr()
-                    again = RespawnButton.find(shot) if shot is not None else None
-                    if again is None:
-                        DebugLog.write(f"{head} ボタンがもう写っていない → 押し直さない")
-                        break
-                    point = (int(round(again[0] + origin[0])), int(round(again[1] + origin[1])))
-                    if not self._place_cursor(point, head):
-                        return "カーソルを置けない"
-                    stop = self._respawn_stop(round_seq)
-                    if stop:
-                        return stop
-                return "リスポーンの行が来ない"
+                DebugLog.write(f"{head} リスポーンのボタンを押す {point}（{presses} 回目）")
+                WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
+                pressed = True
+                return None
             finally:
                 try:
-                    if menu and WindowOperator.foreground_hwnd() == hwnd:
-                        WindowOperator.send_keys("esc")     # メニューを閉じる
-                        DebugLog.write(f"{head} メニューを閉じた（Esc）")
+                    if not pressed:
+                        self._respawn_esc_if_open(head)     # 押せずに終わる: メニューを閉じて返す
                 finally:
                     try:
                         WindowOperator.return_front(loan)
                     finally:
                         self._put_cursor_back(cursor, "Run", "前面を借りる前")
+
+    def _respawn_esc_if_open(self, head: str):
+        """メニューが開いていて、この窓が前面なら Esc で閉じる（前面でなければ送らない）"""
+        if self._respawn_menu_open and WindowOperator.foreground_hwnd() == self._cfg.hwnd:
+            WindowOperator.send_keys("esc")
+            self._respawn_menu_open = False
+            DebugLog.write(f"{head} メニューを閉じた（Esc）")
+
+    def _wait_respawn_line(self, seen: int, round_seq: int) -> bool:
+        """押した後、「Player respawned」の行を RESPAWN_LOG_WAIT_SEC まで待つ（鍵の外・前面は返してある）。
+        来たら True。止めた・ラウンドが変わった・private でなくなったら False"""
+        st = self._st
+        deadline = time.time() + config.RESPAWN_LOG_WAIT_SEC
+        while st.respawn_seen_seq == seen:
+            if time.time() >= deadline or not self._is_running() or st.round_seq != round_seq \
+                    or not self.can_operate():
+                return False
+            time.sleep(config.RUN_RESPAWN_POLL_SEC)
+        return True
+
+    def _respawn_close_menu(self, head: str):
+        """2 回押しても行が来なかった後始末: 鍵の中で前面を借りてメニューを閉じる（開いていれば）。
+        ほかの窓がフリーズ中なら前面を借りない（開いたまま。debug.log に残す）"""
+        if not self._respawn_menu_open:
+            return
+        hwnd = self._cfg.hwnd
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._nobody_else_frozen():
+                DebugLog.write(f"{head} ほかの窓のフリーズ中なのでメニューを閉じません（開いたまま）")
+                return
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(hwnd)
+            if not ok:
+                DebugLog.write(f"{head} 前面にできないのでメニューを閉じません（開いたまま）")
+                return
+            try:
+                self._respawn_esc_if_open(head)
+            finally:
+                try:
+                    WindowOperator.return_front(loan)
+                finally:
+                    self._put_cursor_back(cursor, "Run", "前面を借りる前")
 
     def _respawn_stop_before_front(self, round_seq: int) -> str | None:
         """鍵を取った後、前面を借りる前の見張り（前面かどうかはまだ見ない）"""
