@@ -797,8 +797,13 @@ class LogMonitor:
         # 「起動前からあった行」として読み飛ばされる。
         self._detect_instance_from_log(end=self.st.log_pos)
         self._log("監視開始")
+        # 書きかけの行（まだ改行が来ていない末尾）。完全な行として読まず、次の読みに持ち越す
+        # （UtilsWatch.refresh・ToNEntry.wait_verified と同じ）。VRChat が 1 行を書き終える前に読むと、
+        # `Verified Round End` が `Verified` で切れて受理と取り違える。バイトで読むのは、
+        # 日本語の名前の途中で切れた文字を次の読みとつなげるため
+        rest = b""
         try:
-            with open(cfg.log_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(cfg.log_path, "rb") as f:
                 f.seek(self.st.log_pos)
                 while self._running:
                     try:
@@ -806,13 +811,16 @@ class LogMonitor:
                         if current_size < self.st.log_pos:
                             f.seek(0)
                             self.st.log_pos = 0
+                            rest = b""
 
                         f.seek(self.st.log_pos)
                         chunk = f.read()
                         self.st.log_pos = f.tell()
                         if chunk:
-                            for line in chunk.splitlines():
-                                self._process(line)
+                            lines = (rest + chunk).split(b"\n")
+                            rest = lines.pop()
+                            for raw in lines:
+                                self._process(raw.rstrip(b"\r").decode("utf-8", errors="replace"))
                     except Exception as e:
                         DebugLog.exception("LogMonitor._run")
                         self._log(f"読み取りエラー: {e}")

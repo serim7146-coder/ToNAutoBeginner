@@ -1543,6 +1543,42 @@ class TestGroupListStatePolled(unittest.TestCase):
 
         self.assertEqual(calls["n"], 3)
 
+    def test_a_line_still_being_written_waits_for_its_newline(self):
+        """書きかけの行（改行がまだ無い）は読まない。`Verified Round End` が `Verified` で切れて
+        受理と取り違えないため。日本語の途中で切れても、次の読みとつないで 1 行にする"""
+        monitor = self._monitor()
+        monitor._running = True
+        monitor._stop_event = threading.Event()
+        seen = []
+        prefix = "2026.10.12 12:00:00 Debug      -  "
+        name = "すぅみ_suumi"
+        joined = (prefix + f"[Behaviour] OnPlayerJoined {name} (usr_0e01408a)").encode("utf-8")
+        ticks = {"n": 0}
+
+        def tick():
+            ticks["n"] += 1
+            with open(log, "ab") as f:
+                if ticks["n"] == 1:
+                    f.write((prefix + "Verified").encode("utf-8"))          # 書きかけ
+                elif ticks["n"] == 2:
+                    f.write(b" Round End\r\n" + joined[:len(prefix) + 30])   # 日本語の途中まで
+                elif ticks["n"] == 3:
+                    f.write(joined[len(prefix) + 30:] + b"\n")
+                else:
+                    monitor._running = False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "output_log.txt"
+            log.write_text("", encoding="utf-8")
+            monitor.cfg.log_path = log
+            with patch.object(config, "LOG_POLL_INTERVAL", 0), \
+                 patch.object(monitor, "_process", side_effect=seen.append), \
+                 patch.object(monitor, "_check_group_list_state", tick), \
+                 patch.object(monitor, "_detect_instance_from_log"):
+                monitor._run()
+
+        self.assertEqual(seen, [prefix + "Verified Round End", joined.decode("utf-8")])
+
 
 
 
