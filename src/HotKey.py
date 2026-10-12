@@ -10,7 +10,7 @@
 GUI から切り離して単体テストできるようにしてある。
 """
 
-import queue
+import threading
 
 import config
 import DebugLog
@@ -48,44 +48,72 @@ def display(name) -> str:
     return "+".join(part.strip().title() for part in name.split("+") if part.strip())
 
 
+# 捕捉の前から「押されている」と記録されたまま残るキー。読み込んだ設定から外す（EL: 日本語キーボードの
+# 「半角/全角」は離した（KEY_UP）が届かないことがあり、keyboard の記録に残り続けて、どのキーを設定しても
+# 「+半角/全角」が付いていた）
+STALE_KEYS = ("半角/全角",)
+
+
+def without_stale(name):
+    """設定のキーから STALE_KEYS を外す。(外した後, 外したか)。外して何も残らなければ (None, True)
+    （None は呼び出し側の検証で不正 → その設定の既定・未設定の扱いになる）。文字列でなければそのまま"""
+    if not isinstance(name, str):
+        return name, False
+    parts = [part.strip() for part in name.split("+")]
+    kept = [part for part in parts if part.lower() not in STALE_KEYS]
+    if len(kept) == len(parts):
+        return name, False
+    kept = [part for part in kept if part]
+    return ("+".join(kept) if kept else None), True
+
+
 def capture(timeout_sec: float = 5.0):
-    """押されたキーを1つ返す（`keyboard.read_hotkey` と同じ形。離した瞬間に、押されている組み合わせの名前）。
-    押されなければ（または失敗すれば）None。
+    """押されたキー（組み合わせ）を1つ返す。押されなければ（または失敗すれば）None。
 
     `suppress=True` にしないこと。設定のために押したキーが VRChat や他の
     アプリに届かなくなる。
 
-    `keyboard.read_hotkey()` はキーが押されるまで戻らず、時間切れで置き去りにしたスレッドが
-    次の打鍵まで残っていた。ここは自分でフックを掛け、時間切れなら外す（残らない）。
-    組み合わせの名前は `read_hotkey` と同じやり方（離したキー＋そのとき押されているキー）
+    `keyboard.read_hotkey()` は使わない。あれは最初に離したときに、ライブラリが「押されている」と
+    記録しているキーを全部入れるので、捕捉の前から離した記録が届かずに残っているキー（「半角/全角」）が
+    毎回付いてきた（EL）。自前のフックで、捕捉を始めた後に押したキーだけを覚え、最初に離したときに
+    「捕捉中に押して、まだ離していないキー＋今離したキー」を返す。捕捉の前から押されていたキーの
+    離した通知は数えない。名前の並べ方は `keyboard.get_hotkey_name`（read_hotkey と同じ）。
+    時間切れなら None。フックはどの終わり方でも外す（待つスレッドも立てないので、時間切れの後に
+    何も残らない。前は read_hotkey のスレッドが次の打鍵まで残っていた）。
     """
     if keyboard is None:
         return None
-    found = queue.Queue()
+    pressed = {}            # スキャンコード（無ければ名前）→ 名前。捕捉中に押して、まだ離していない（押した順）
+    result = {}
+    done = threading.Event()
+    down = getattr(keyboard, "KEY_DOWN", "down")
     up = getattr(keyboard, "KEY_UP", "up")
 
     def on_event(event):
-        if getattr(event, "event_type", None) != up:
+        if done.is_set():
             return
         try:
-            pressed = getattr(keyboard, "_pressed_events", {})
-            names = [e.name for e in list(pressed.values())] + [event.name]
-            found.put(keyboard.get_hotkey_name(names))
+            code = getattr(event, "scan_code", None)
+            code = code if code is not None else event.name
+            if event.event_type == down:
+                pressed.setdefault(code, event.name)
+            elif event.event_type == up and code in pressed:
+                result["key"] = keyboard.get_hotkey_name(list(pressed.values()))
+                done.set()
         except Exception:
-            DebugLog.exception("HotKey.capture.on_event")
-            found.put(None)
+            DebugLog.exception("HotKey.capture")
+            done.set()
 
     try:
-        hooked = keyboard.hook(on_event, suppress=False)
+        hook = keyboard.hook(on_event, suppress=False)
     except Exception:
-        DebugLog.exception("HotKey.capture")
+        DebugLog.exception("HotKey.hook")
         return None
     try:
-        return found.get(timeout=max(0.0, timeout_sec))
-    except queue.Empty:
-        return None
+        done.wait(max(0.0, timeout_sec))
     finally:
         try:
-            keyboard.unhook(hooked)
+            keyboard.unhook(hook)
         except Exception:
-            DebugLog.exception("HotKey.capture.unhook")
+            DebugLog.exception("HotKey.unhook")
+    return result.get("key")

@@ -1894,20 +1894,35 @@ class TestHotKey(unittest.TestCase):
         def get_hotkey_name(names):
             return "+".join(names)
 
-        def press(self, name, up=True):
-            event = type("E", (), {"name": name, "event_type": self.KEY_UP if up else self.KEY_DOWN})()
+        def press(self, name, up=True, code=None):
+            event = type("E", (), {"name": name, "scan_code": code,
+                                   "event_type": self.KEY_UP if up else self.KEY_DOWN})()
             for callback in list(self.callbacks):
                 callback(event)
 
+        def read_hotkey(self, *_a, **_kw):
+            raise AssertionError("read_hotkey は使わない（捕捉の前から押されたままのキーが付く。EL）")
+
     def test_capture_returns_what_was_pressed(self):
-        """離した瞬間に、押されている組み合わせの名前（read_hotkey と同じ形）"""
+        """離した瞬間に、捕捉を始めた後に押したキーの組み合わせの名前（EL: 前から押されたままのキーは入れない）"""
+        self._kb.stop()
+        self.addCleanup(self._kb.start)
+        fake = self._FakeKeyboard(pressed=("半角/全角",))
+        with patch.object(HotKey, "keyboard", fake):
+            threading.Timer(0.05, lambda: (fake.press("ctrl", up=False), fake.press("f9", up=False),
+                                           fake.press("f9"))).start()
+            self.assertEqual(HotKey.capture(2.0), "ctrl+f9")
+        self.assertEqual(fake.unhooked, fake.callbacks, "フックは外す")
+
+    def test_capture_ignores_keys_held_before(self):
+        """捕捉の前から押されたまま（ライブラリの記録）のキーは、入らないし、離しても終わらない"""
         self._kb.stop()
         self.addCleanup(self._kb.start)
         fake = self._FakeKeyboard(pressed=("ctrl",))
         with patch.object(HotKey, "keyboard", fake):
-            threading.Timer(0.05, lambda: (fake.press("f9", up=False), fake.press("f9"))).start()
-            self.assertEqual(HotKey.capture(2.0), "ctrl+f9")
-        self.assertEqual(fake.unhooked, fake.callbacks, "フックは外す")
+            threading.Timer(0.05, lambda: (fake.press("ctrl"), fake.press("f9", up=False),
+                                           fake.press("f9"))).start()
+            self.assertEqual(HotKey.capture(2.0), "f9")
 
     def test_capture_never_suppresses(self):
         """押したキーがVRChatや他のアプリに届かなくなる"""
@@ -1915,8 +1930,8 @@ class TestHotKey(unittest.TestCase):
         self.addCleanup(self._kb.start)
         fake = self._FakeKeyboard()
         with patch.object(HotKey, "keyboard", fake):
-            threading.Timer(0.05, lambda: fake.press("p")).start()
-            HotKey.capture(2.0)
+            threading.Timer(0.05, lambda: (fake.press("p", up=False), fake.press("p"))).start()
+            self.assertEqual(HotKey.capture(2.0), "p")
         self.assertEqual(fake.suppress, [False])
 
     def test_capture_gives_up_on_a_timeout_and_leaves_nothing_behind(self):

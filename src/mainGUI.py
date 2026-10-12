@@ -2598,6 +2598,20 @@ class App(tk.Tk):
             else:
                 self._log(f"[TNL] 読み込みエラー: {e}")
 
+    STALE_KEY_LABELS = {"emergency_stop_key": ("停止", "v_emergency_key"),
+                        "start_key": ("マクロ開始", "v_start_key"),
+                        "suicide_cancel_key": ("自爆キャンセル", "v_suicide_cancel_key"),
+                        "chase_cw_key": ("チェイス（時計回り）", "v_chase_cw_key"),
+                        "chase_ccw_key": ("チェイス（反時計回り）", "v_chase_ccw_key")}
+
+    def _report_stale_keys(self, fields):
+        """読み込みで「半角/全角」を外したキーを画面のログに 1 つ 1 回出し、外した結果を保存する（EL）"""
+        for field in fields:
+            label, var = App.STALE_KEY_LABELS[field]
+            now = getattr(self, var).get()
+            self._log(f"[キー] {label}のキーから「半角/全角」を外しました（{HotKey.display(now) if now else '未設定'}）")
+        self._schedule_settings_save()
+
     def _load_saved_settings(self):
         """起動時: 前回選んだtnlを復元して即読み込む"""
         data = load_settings()
@@ -2622,14 +2636,23 @@ class App(tk.Tk):
         # 復元しない。持ち越した自爆設定は、別のインスタンスでは危ない
         # 手編集や別バージョンで壊れた値が入りうる。読むときも検証する——
         # 不正なキーのままだと緊急停止が黙って効かなくなる
-        key = data.get("emergency_stop_key", config.EMERGENCY_STOP_KEY)
+        # 捕捉の前から押されたままの記録が付いた「半角/全角」を外す（EL）。外して何も残らなければ None に
+        # して、下の検証でその設定の既定・未設定の扱いにする。外したら画面のログに 1 回出して保存する
+        stale = []
+
+        def saved_key(field, default):
+            value, removed = HotKey.without_stale(data.get(field, default))
+            if removed:
+                stale.append(field)
+            return value
+        key = saved_key("emergency_stop_key", config.EMERGENCY_STOP_KEY)
         if key != "" and not HotKey.is_valid(key):     # "" は解除した（DV2）
             key = config.EMERGENCY_STOP_KEY
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
         # マクロ開始のキーは、不正なら既定値へ倒さずに無効（未設定）にする。
         # 停止キーと同じキーも無効にする（どちらか一方しか働かないため）
-        start_key = data.get("start_key", config.START_KEY)
+        start_key = saved_key("start_key", config.START_KEY)
         if not HotKey.is_valid(start_key) or start_key == key:
             start_key = ""
         self.v_start_key.set(start_key)
@@ -2641,7 +2664,7 @@ class App(tk.Tk):
         taken = {key, start_key}
         for direction, name, default in (("cw", "chase_cw_key", config.CHASE_CW_KEY),
                                          ("ccw", "chase_ccw_key", config.CHASE_CCW_KEY)):
-            chase_key = data.get(name, default)
+            chase_key = saved_key(name, default)
             if chase_key != "" and not HotKey.is_valid(chase_key):
                 chase_key = default
             if chase_key in taken:
@@ -2650,7 +2673,7 @@ class App(tk.Tk):
             self._chase_key_var(direction).set(chase_key)
         self._refresh_chase_key_labels()
         # 自爆キャンセルのキー。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
-        cancel_key = data.get("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
+        cancel_key = saved_key("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
         if cancel_key == "":
             pass                                        # 解除した（DV2）
         elif not HotKey.is_valid(cancel_key) or self._suicide_cancel_key_conflict(cancel_key):
@@ -2659,6 +2682,8 @@ class App(tk.Tk):
                 cancel_key = ""
         self.v_suicide_cancel_key.set(cancel_key)
         self._refresh_suicide_cancel_key_label()
+        if stale:
+            App._report_stale_keys(self, stale)
         # 古い settings.json にはキーが無い。無くても落ちないこと
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
