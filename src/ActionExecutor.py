@@ -1626,9 +1626,22 @@ class ActionExecutor:
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
                     return
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
-                self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
+                sampler = None
+                if address == "/input/MoveBackward" and self._receiver is not None:
+                    sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
+                    sampler.start()
+                try:
+                    self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                finally:
+                    if sampler is not None:
+                        sampler.release()
                 self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
             fixed = self._face_the_stairs(round_seq)
+            moved = self._fix_depth(round_seq)
+            if moved:
+                self._log(f"Run: 位置を直しました（{moved}）")
+                fixed += self._face_the_stairs(round_seq)     # 前後に動かしたら向きをもう 1 周
             if self._run_after_respawn(round_seq):
                 self._log("Run: リスポーンして正面を向きました"
                           + (f"（向きを {fixed} 回直しました）" if fixed else ""))
@@ -1647,8 +1660,14 @@ class ActionExecutor:
         if not self._run_after_respawn(round_seq):
             return 0
         shot, mark = self._measure_face()
+        self._last_face = (shot, mark)
         if mark is None:
             DebugLog.write(f"{head}: 目印が見つからない → 今の向きのまま")
+            wide = RunFace.best_anywhere(shot) if shot is not None else None
+            if wide is not None:
+                # 次に起きたときの材料（記録だけ。範囲の外は目印でない所とも合うので動きには使わない。EE）
+                DebugLog.write(f"{head}: 範囲の外も含めた一番よい一致 {wide[1]:.3f}・"
+                               f"倍率 {RunFace.factor(wide, shot.shape[0]):.2f}・x {wide[0]:.1f}")
             RunFace.save_shot(shot, idx, "notfound")
             return 0
         fixed = 0
@@ -1686,6 +1705,66 @@ class ActionExecutor:
                 RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "reverted")
                 return fixed - 1
             shot, mark = new_shot, new_mark
+            self._last_face = (shot, mark)
+
+    def _fix_depth(self, round_seq: int) -> str | None:
+        """向きを直した後、目印の倍率 f（いつもの位置で 1.0）が 1.0 ± RUN_DEPTH_TOL の外なら前後に動かす（EE）。
+        遠い（f が小さい）→ MoveForward、近い → MoveBackward。最初は RUN_DEPTH_FIRST_SEC、その後は撮り直した
+        f の変わり方（秒あたり）で残りを割った長さ（RUN_DEPTH_MIN_SEC〜MAX_SEC）。f が 1.0 から遠のいた・
+        目印が消えた → 同じ長さだけ逆へ戻して止める。RUN_DEPTH_TRIES 回まで。背面・OSC（前面は借りない）。
+        動かした（戻した分を除いて残した）なら画面のログ用の説明、動かさなければ None"""
+        idx = self._st.window_idx
+        head = f"[操作] [窓{idx}] Run: 前後"
+        # 向きを直し終えた撮影を使う（撮り直さない。向きは動かしていない）。止めた・ラウンドが変わったかは
+        # 押す前ごとに見る
+        shot, mark = getattr(self, "_last_face", (None, None))
+        self._last_face = (None, None)
+        if mark is None or shot is None:
+            DebugLog.write(f"{head}: 目印が見つからない → 直さない")
+            return None
+        f = RunFace.factor(mark, shot.shape[0])
+        rate = None                     # 秒あたりの f の変化
+        kept = []                       # 残した (向き, 秒)
+        tries = 0
+        while True:
+            DebugLog.write(f"{head}: 倍率 {f:.3f}（一致 {mark[1]:.3f}・{tries} 回動かした）")
+            if abs(f - 1.0) <= config.RUN_DEPTH_TOL:
+                break
+            if tries >= config.RUN_DEPTH_TRIES:
+                DebugLog.write(f"{head}: {tries} 回動かしても倍率 {f:.3f} → やめる")
+                break
+            if not self._run_after_respawn(round_seq):
+                break
+            forward = f < 1.0
+            address = "/input/MoveForward" if forward else "/input/MoveBackward"
+            sec = (config.RUN_DEPTH_FIRST_SEC if rate is None
+                   else min(config.RUN_DEPTH_MAX_SEC, max(config.RUN_DEPTH_MIN_SEC, abs(1.0 - f) / rate)))
+            DebugLog.write(f"{head}: {address} {sec:.3f}秒")
+            self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+            self._osc.stop_all(repeat=1)
+            tries += 1
+            if not self._run_after_respawn(round_seq):
+                break
+            new_shot, new_mark = self._measure_face()
+            new_f = RunFace.factor(new_mark, new_shot.shape[0]) if new_mark is not None else None
+            if new_f is None or abs(new_f - 1.0) > abs(f - 1.0):
+                back = "/input/MoveBackward" if forward else "/input/MoveForward"
+                why = "目印が消えた" if new_f is None else f"倍率が遠のいた（{new_f:.3f}）"
+                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める")
+                self._osc.press(back, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                self._osc.stop_all(repeat=1)
+                RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "depth_reverted")
+                break
+            if abs(new_f - f) > 1e-3:
+                rate = abs(new_f - f) / sec
+            kept.append((forward, sec))
+            shot, mark, f = new_shot, new_mark, new_f
+        if not kept:
+            return None
+        RunFace.save_shot(shot, idx, "depth")      # 直した後の撮影も残す
+        first = kept[0][0]
+        total = sum(sec if fw == first else -sec for fw, sec in kept)
+        return f"{'遠い → 前へ' if first else '近い → 後ろへ'} {total:.1f} 秒"
 
     def _measure_face(self):
         """回し終えるのを待って撮り、目印を探す。(撮影 or None, 目印 or None)"""
