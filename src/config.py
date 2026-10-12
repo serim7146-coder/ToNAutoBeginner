@@ -213,6 +213,13 @@ BEGIN_FORWARD_SEC     = 2.08   # 前進を押している総時間
 BEGIN_LEFT_SEC        = 0.15   # 冒頭で左を重ねる時間（斜めになる区間）
 BEGIN_FORWARD_SEC_LATER = 3.2  # パニッシュ後
 BEGIN_LEFT_SEC_LATER  = 0.16   # パニッシュ後
+# Begin 前の移動は、押している時間を「動き出し」（受信の速さが MOTION_START_SPEED を超えた時）から数える（EF）。
+# 離すのは 押し始め ＋ 秒数 ＋ 延び。延び ＝ 動き出しまで − BEGIN_USUAL_START_SEC（0〜BEGIN_EXTEND_MAX_SEC）。
+# BEGIN_START_WAIT_SEC たっても動き出さなければ延ばさない（受信が無い窓は今どおり）
+BEGIN_USUAL_START_SEC = 0.08
+BEGIN_EXTEND_MAX_SEC  = 0.5
+BEGIN_START_WAIT_SEC  = 0.6
+BEGIN_START_POLL_SEC  = 0.01
 
 # `Verified` は Begin の受理のほかに、定期シグナルでも出る（VerifiedTracker）。
 # 手元のログ全部で調べた規則（2026-09-30）: 定期は前回の定期から300秒後。その時点が
@@ -388,7 +395,8 @@ BEGIN_ADJUST_MIN_MOVE_PX  = 5      # 横移動でこれ以下しかずれが変�
 # 後ろへ 0.2秒 0.069・0.4秒 0.044、前へ 0.15秒 0.146。高さはほとんど変わらない）
 # 押せる範囲（実測 2026-10-03 1920x1080: 押せる一番近い 0.404・一番遠い 0.066）の内側に余裕を
 # 持たせた範囲なら前後に動かない。外なら、合わせる先へ向けて動く（合わせる先は秒数の計算にだけ使う）
-BEGIN_ADJUST_DEPTH_OK        = (0.08, 0.33)
+# 下限は 0.11（EF: 幅 0.086 で「済み」にして押せなかった。位置合わせ済み 24 回のうち 22 回は 0.12 以上）
+BEGIN_ADJUST_DEPTH_OK        = (0.11, 0.33)
 BEGIN_ADJUST_FORWARD_TARGET_W = 0.12  # 遠い（0.08 未満）→ 前へ。ここへ向けて
 BEGIN_ADJUST_BACK_TARGET_W    = 0.25  # 近い（0.33 超）→ 後ろへ。ここへ向けて
 BEGIN_ADJUST_DEPTH_PROBE_SEC = 0.1    # 1回目の前後移動（w/H 毎秒がまだ分からないとき）

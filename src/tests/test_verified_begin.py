@@ -705,9 +705,9 @@ class TestBeginAdjust(unittest.TestCase):
         self.ex = ActionExecutor.ActionExecutor(cfg, self.st, lambda: True, self.logs.append)
         self.addCleanup(setattr, ActionExecutor.ActionExecutor, "_detector_unavailable_logged",
                         ActionExecutor.ActionExecutor._detector_unavailable_logged)
-        # 高さ 971px で幅 100px の文字は w/H 0.103（目標）。横のテストで前後は動かない
+        # 高さ 800px で幅 100px の文字は w/H 0.125（押せる範囲の中。EF で下限 0.11）。横のテストで前後は動かない
         self.capture = patch.object(ScreenCapture, "capture_window",
-                                    return_value=(b"\0" * 16, 2, 971))
+                                    return_value=(b"\0" * 16, 2, 800))
         for p in (patch.object(BeginDetect, "available", return_value=True),
                   patch.object(BeginDetect, "find", side_effect=self._find),
                   patch.object(WindowOperator, "aim_in_window_image", return_value=self.AIM),
@@ -1081,11 +1081,11 @@ class TestBeginAdjustDepth(unittest.TestCase):
         self.moves.append((direction, round(sec, 3)))
 
     def test_the_direction_from_the_width(self):
-        """押せる範囲（実測 0.066〜0.404）の内側 0.08〜0.33 は動かない。外なら前・後ろへ"""
+        """押せる範囲の内側 0.11〜0.33 は動かない（EF: 下限 0.08 → 0.11）。外なら前・後ろへ"""
         D = ActionExecutor.depth_direction
-        for ratio in (0.07, 0.066, 0.065, 0.044, 0.0799):
+        for ratio in (0.07, 0.066, 0.065, 0.044, 0.0799, 0.08, 0.086, 0.103, 0.105, 0.1099):
             self.assertEqual(D(ratio), "forward", ratio)
-        for ratio in (0.08, 0.103, 0.12, 0.2, 0.3, 0.33):
+        for ratio in (0.11, 0.12, 0.2, 0.3, 0.33):
             self.assertIsNone(D(ratio), ratio)
         for ratio in (0.3301, 0.40, 0.404):
             self.assertEqual(D(ratio), "back", ratio)
@@ -1095,7 +1095,7 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     def test_far_moves_forward_toward_0_12_and_stops_in_range(self):
         """0.040 → 前へ0.1秒で 0.060（0.2/秒）→ 0.12 へ向けて 0.30秒 → 範囲に入って止まる"""
-        self.hits = [(0.0, 0.040), (0.0, 0.060), (0.0, 0.100)]
+        self.hits = [(0.0, 0.040), (0.0, 0.060), (0.0, 0.115)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("forward", 0.1), ("forward", 0.3)])
         self.assertTrue(any("位置合わせ（前後: 幅 0.040 → 目標 0.120）→ 前へ 0.10秒" in m for m in self.logs),
@@ -1110,7 +1110,7 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     def test_a_pressable_place_does_not_move(self):
         """依頼者「Begin が目の前で押せる状態でも後ろに下がる」: 0.2〜0.3 でも動かない"""
-        for ratio in (0.30, 0.20, 0.12, 0.085):
+        for ratio in (0.30, 0.20, 0.12, 0.11):
             self.moves.clear()
             self.hits = [(0.1, ratio)]
             self.assertEqual(self.ex._adjust_to_begin(1), "aimed", ratio)
@@ -1118,9 +1118,19 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     def test_one_step_into_the_range_stops(self):
         """合わせる先に届かなくても、範囲に入れば止まる"""
-        self.hits = [(0.0, 0.070), (0.0, 0.086)]
+        self.hits = [(0.0, 0.070), (0.0, 0.115)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("forward", 0.1)])
+
+    def test_0_086_and_0_105_move_forward(self):
+        """EF: 10:22 窓4 は幅 0.086 で「済み」にして押せなかった。0.086・0.105 は前へ合わせる"""
+        for ratio, step in ((0.086, 0.1), (0.105, 0.1)):
+            self.moves.clear()
+            self.hits = [(0.0, ratio), (0.0, 0.12)]
+            self.assertEqual(self.ex._adjust_to_begin(1), "aimed", ratio)
+            self.assertEqual(self.moves, [("forward", step)], ratio)
+        self.assertEqual(config.BEGIN_ADJUST_DEPTH_OK, (0.11, 0.33))
+        self.assertEqual(ActionExecutor.depth_target("forward"), 0.12, "合わせる先は今のまま")
 
     def test_a_different_walking_speed_still_reaches_the_range(self):
         """足が速い（Punished の後など）: 0.1秒で 0.04 変わる → 2回目はそれに合わせて短く"""
@@ -1135,7 +1145,7 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     def test_the_horizontal_rate_is_in_text_widths(self):
         """横の速さは文字幅/秒: 1回目 0.1秒で 1.04 減 → 残り 1.54 は 0.148秒"""
-        self.hits = [(2.58, 0.103), (1.54, 0.103), (0.05, 0.103)]
+        self.hits = [(2.58, 0.12), (1.54, 0.12), (0.05, 0.12)]
         self.ex._adjust_to_begin(1)
         self.assertEqual(self.moves, [("right", 0.1), ("right", 0.148)])
 
@@ -1160,13 +1170,13 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     # ── 見つからないとき ─────────────────────────────
     def test_too_near_is_found_by_stepping_back(self):
-        self.hits = [None, (0.0, 0.104)]
+        self.hits = [None, (0.0, 0.12)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("back", 0.15)])
 
     def test_too_far_is_found_by_stepping_forward(self):
         """実機1: 前へ 0.3秒×3 で見つかった（幅 0.070）→ 範囲まで前へ"""
-        self.hits = [None, None, None, None, (0.0, 0.070), (0.0, 0.086)]
+        self.hits = [None, None, None, None, (0.0, 0.070), (0.0, 0.115)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("back", 0.15), ("forward", 0.15), ("forward", 0.3), ("forward", 0.3),
                                       ("forward", 0.3), ("forward", 0.1)])
@@ -1185,13 +1195,13 @@ class TestBeginAdjustDepth(unittest.TestCase):
 
     # ── 見失ったら撮り直す・探し直す（1度だけ） ───────────────
     def test_losing_it_once_retakes_and_continues(self):
-        self.hits = [(2.0, 0.10), None, (0.1, 0.10)]
+        self.hits = [(2.0, 0.12), None, (0.1, 0.12)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("right", 0.1)], "撮り直しで見つかれば探さない")
 
     def test_losing_it_twice_searches_again(self):
         """23:53 の回: 右へ 0.10秒の後に見失った → 撮り直しても無い → 探し直して見つける"""
-        self.hits = [(2.0, 0.10), None, None, (0.1, 0.10)]
+        self.hits = [(2.0, 0.12), None, None, (0.1, 0.12)]
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(self.moves, [("right", 0.1), ("back", 0.15)])
         self.assertTrue(any("見失いました → 探し直します" in m for m in self.logs), self.logs)

@@ -288,13 +288,70 @@ class ActionExecutor:
             return False
         self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
                     f"（{'OSC' if self._osc is not None else 'キー'}）")
+        self._move_extension = None
         if self._osc is not None:
-            ok = self._osc.press_multi([("/input/MoveForward", forward_sec),
-                                        ("/input/MoveLeft", left_sec)], stop=self._move_stopped)
+            if self._receiver is not None:
+                ok = self._press_from_movement_start(forward_sec, left_sec)
+            else:
+                ok = self._osc.press_multi([("/input/MoveForward", forward_sec),
+                                            ("/input/MoveLeft", left_sec)], stop=self._move_stopped)
             self._osc.stop_all(repeat=1)
             return ok is not False
         ok = self.move("forward", forward_sec) is not False
         return (self.move("left", left_sec) is not False) and ok
+
+    def _press_from_movement_start(self, forward_sec: float, left_sec: float) -> bool:
+        """前と左を同時に押し、押している時間を「動き出し」から数える（EF）。動き出しが遅れた（重い）
+        ときに、遅れた分だけ距離が足りなくなっていた（10:22 窓4: 動き出し 0.34 秒・距離 10.58）。
+        延び ＝ 動き出しまで − BEGIN_USUAL_START_SEC（0 未満にはしない＝今より早くは離さない・
+        BEGIN_EXTEND_MAX_SEC まで）。動き出すまで左は押したまま。速さを受け取れていない間は延ばさない
+        （左は今どおり left_sec で離す）。BEGIN_START_WAIT_SEC たっても動き出さなければ延ばさない。
+        結果は self._move_extension = (延び, どう決めたか)"""
+        osc = self._osc
+        holds = [("/input/MoveForward", forward_sec), ("/input/MoveLeft", left_sec)]
+        ok = True
+        for address, _sec in holds:
+            ok = osc.send(address, 0) and ok        # 0→1 の変化で反応する入力があるため
+        for address, _sec in holds:
+            ok = osc.send(address, 1) and ok
+        started = time.time()
+        extension = None            # 決まった延び
+        how = ""
+        released = set()
+        try:
+            while len(released) < len(holds):
+                if self._move_stopped():
+                    return False
+                elapsed = time.time() - started
+                speed = self._receiver_speed()
+                if extension is None:
+                    if speed is not None and speed > MOTION_START_SPEED:
+                        extension = min(config.BEGIN_EXTEND_MAX_SEC,
+                                        max(0.0, elapsed - config.BEGIN_USUAL_START_SEC))
+                        how = "動き出し"
+                    elif elapsed >= config.BEGIN_START_WAIT_SEC:
+                        extension, how = 0.0, "動き出さない"
+                # 決まるまでは、速さを受け取れていれば「今 動き出した」とみなして押し続ける
+                pending = (min(config.BEGIN_EXTEND_MAX_SEC, max(0.0, elapsed - config.BEGIN_USUAL_START_SEC))
+                           if extension is None and speed is not None else 0.0)
+                hold_more = extension if extension is not None else pending
+                for address, sec in holds:
+                    if address not in released and elapsed >= sec + hold_more:
+                        ok = osc.send(address, 0) and ok
+                        released.add(address)
+                time.sleep(config.BEGIN_START_POLL_SEC)
+        finally:
+            for address, _sec in holds:
+                if address not in released:
+                    osc.send(address, 0)
+            self._move_extension = (extension if extension is not None else 0.0, how or "受信なし")
+        return ok
+
+    def _receiver_speed(self):
+        try:
+            return self._receiver.speed if self._receiver is not None else None
+        except Exception:
+            return None
 
     # ── ヘルパー ──────────────────────────────
 
@@ -1250,6 +1307,10 @@ class ActionExecutor:
             DebugLog.write(f"{head}: 途中で止めた（{type(e).__name__}）")
             raise
         finally:
+            extension = getattr(self, "_move_extension", None)
+            if extension is not None:
+                sampler.suffix = (f"・動き出しから数えた（+{extension[0]:.2f} 秒）" if extension[1] == "動き出し"
+                                  else f"・押し始めから数えた（{extension[1]}）")
             sampler.release()
         if ok is False:
             DebugLog.write(f"{head}: 途中で止めた（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
@@ -2398,6 +2459,7 @@ class MotionSampler:
         self._tail = MOTION_TAIL_SEC if tail is None else tail
         self._started = None
         self._released = None
+        self.suffix = ""            # 実測の行の後ろに足す（EF: 動き出しから数えた延び）
         self.samples = []
         self.thread = None
 
@@ -2411,7 +2473,7 @@ class MotionSampler:
     def release(self):
         self._released = self._clock()
         if self.thread is None:
-            self._write(summarize_motion([], 0.0))
+            self._write(summarize_motion([], 0.0) + self.suffix)
 
     def _read(self):
         try:
@@ -2432,7 +2494,7 @@ class MotionSampler:
                     break           # 離した記録が来ないまま（念のため）
                 self._sleep(self._interval)
             released = self._released if self._released is not None else self._clock()
-            self._write(summarize_motion(self.samples, released - self._started))
+            self._write(summarize_motion(self.samples, released - self._started) + self.suffix)
         except Exception:
             DebugLog.exception("ActionExecutor.MotionSampler")
 
