@@ -340,6 +340,10 @@ class LogMonitor:
             self._log("速度検知 開始")
         self._start_daemon(self._action.do_speed_detect)
 
+    # ラウンド突入の音声の種類（PlaySound の声ごとの音量。EO）
+    ROUND_ENTRY_VOICE_KINDS = {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
+                               "Alternate": "alternate", "Ghost": "ghost"}
+
     def _round_entry_voice(self, round_type: str) -> str:
         """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字"""
         return {"Fog": self.cfg.voice_fog,
@@ -1145,7 +1149,7 @@ class LogMonitor:
             self._log(f"グループ判定: {st.round_type} 【プレイ】")
             if not was_continue_round:
                 if not self._hands_free():
-                    PlaySound.play_sound(self.cfg.voice_continue)
+                    PlaySound.play_sound(self.cfg.voice_continue, kind="continue")
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)
@@ -1257,7 +1261,7 @@ class LogMonitor:
         else:
             self._log("⚠ 主催リストが取れません → この窓の自爆を停止します")
         if not self._hands_free():
-            PlaySound.play_sound(self.cfg.voice_list_lost)
+            PlaySound.play_sound(self.cfg.voice_list_lost, kind="list_lost")
 
     def _notify_group_list_back(self):
         st = self.st
@@ -1373,7 +1377,7 @@ class LogMonitor:
         flag = event.flag
         self._log(TerrorReplacement.signal(flag).announce)
         if flag == "foxy" and not self._hands_free():
-            PlaySound.play_sound(self.cfg.voice_foxy)
+            PlaySound.play_sound(self.cfg.voice_foxy, kind="foxy")
         self._mark_replacement(flag)
         if flag == "foxy":
             self._foxy_in_fog()
@@ -1598,7 +1602,7 @@ class LogMonitor:
             # 対象は依頼の5つだけ。Punished / 8 Pages の音声は速度検知用
             voice = self._round_entry_voice(st.round_type)
             if voice:
-                PlaySound.play_sound(voice)
+                PlaySound.play_sound(voice, kind=self.ROUND_ENTRY_VOICE_KINDS[st.round_type])
 
         if st.round_type == "Run":
             st.is_continue_round = False
@@ -1615,7 +1619,7 @@ class LogMonitor:
             # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
             if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
                     and "Fog" not in SharedState.get_freeze_rounds()):
-                PlaySound.play_sound(self.cfg.voice_fog)
+                PlaySound.play_sound(self.cfg.voice_fog, kind="fog")
             self._log(f"開始: {st.round_type}")
             return
 
@@ -1797,7 +1801,7 @@ class LogMonitor:
                 # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
             self._log("ラウンド終了")
         if self.cfg.announce_intermission and not self._hands_free():
-            PlaySound.play_sound(self.cfg.voice_intermission)
+            PlaySound.play_sound(self.cfg.voice_intermission, kind="intermission")
         st.round_end_seen = True   # Beginのクリック待ちを解除する合図
         self._start_speed_probe()
 
@@ -2303,7 +2307,7 @@ class LogMonitor:
         self._log(f"判定: Glorbo / {round_type} 【プレイ(Glorbo)】")
         if not was_continue_round:
             if not self._hands_free():
-                PlaySound.play_sound(self.cfg.voice_continue)
+                PlaySound.play_sound(self.cfg.voice_continue, kind="continue")
                 self._log("🎙 続行アナウンス再生")
             self._focus_for_freeze("続行ラウンド")           # 数える前に見る
             SharedState.continue_round_start(st)
@@ -2342,7 +2346,7 @@ class LogMonitor:
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
                 if not self._hands_free():
-                    PlaySound.play_sound(self.cfg.voice_continue)
+                    PlaySound.play_sound(self.cfg.voice_continue, kind="continue")
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)

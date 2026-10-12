@@ -59,6 +59,41 @@ def set_sound_volume(volume: float):
         sound_volume = max(0.0, min(1.0, volume))
 
 
+# 声の種類ごとの音量（EO）。鳴らす音量 ＝ 全体（sound_volume）× その声の音量。種類の名前は窓の設定の
+# voice_<種類> と同じ。ファイルのパスでは引かない（同じファイルを 2 種類に使っても別々に効くように）
+VOICE_KINDS = ("continue", "alternate", "midnight", "unbound", "fog", "ghost", "8pages", "punish",
+               "item_lost", "intermission", "foxy", "list_lost")
+_voice_volumes: dict = {}
+
+
+def get_voice_volume(kind) -> float:
+    """その声の音量（0.0〜1.0）。覚えていない・種類なしは 1.0"""
+    with _SOUND_VOLUME_LOCK:
+        return _voice_volumes.get(kind, 1.0)
+
+
+def set_voice_volume(kind: str, volume: float):
+    with _SOUND_VOLUME_LOCK:
+        _voice_volumes[kind] = max(0.0, min(1.0, float(volume)))
+
+
+def voice_volumes_setting() -> dict:
+    """settings.json に書く形（12 種類すべて。小数 2 桁）"""
+    return {kind: round(get_voice_volume(kind), 2) for kind in VOICE_KINDS}
+
+
+def load_voice_volumes(value) -> dict:
+    """settings.json の値を読む。無い・壊れた値・範囲の外は 1.0（100%）。読んだ値を返す"""
+    value = value if isinstance(value, dict) else {}
+    got = {}
+    for kind in VOICE_KINDS:
+        v = value.get(kind)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= v <= 1.0
+        got[kind] = float(v) if ok else 1.0
+        set_voice_volume(kind, got[kind])
+    return got
+
+
 def _next_alias() -> str:
     """再生ごとに別のエイリアスを返す（同時再生を潰さないため）"""
     global _alias_seq
@@ -128,9 +163,10 @@ def _warn_once(key: str, message: str):
     _say(message)
 
 
-def _mci_volume_value() -> int:
-    """0.0〜1.0 の音量を MCI の 0〜1000 に直す"""
-    return int(round(max(0.0, min(1.0, get_sound_volume())) * 1000))
+def _mci_volume_value(kind=None) -> int:
+    """全体 × その声（種類なしは全体だけ）の 0.0〜1.0 を MCI の 0〜1000 に直す"""
+    volume = get_sound_volume() * (get_voice_volume(kind) if kind else 1.0)
+    return int(round(max(0.0, min(1.0, volume)) * 1000))
 
 
 def _open_command(path: Path, alias: str, path_text: str = "") -> str:
@@ -177,7 +213,8 @@ def _say(message: str):
     DebugLog.write(f"[音声] {message}")
 
 
-def play_sound(path: str):
+def play_sound(path: str, kind: str | None = None):
+    """鳴らす。kind（VOICE_KINDS の 1 つ）を渡すと、その声の音量も掛ける（EO）"""
     if not path:
         return
     p = Path(path)
@@ -197,7 +234,7 @@ def play_sound(path: str):
             try:
                 # waveaudio は setaudio 非対応。音量が効かないだけで再生はできるので、
                 # 再生自体は続ける。毎回出すとうるさいので警告は拡張子ごとに1回。
-                code = _mci(f"setaudio {alias} volume to {_mci_volume_value()}")
+                code = _mci(f"setaudio {alias} volume to {_mci_volume_value(kind)}")
                 if code:
                     _warn_once(
                         f"volume{p.suffix.lower()}",

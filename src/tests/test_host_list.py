@@ -503,7 +503,7 @@ class TestWishesPerWindow(unittest.TestCase):
             monitor._check_group_list_state()
 
         self.assertTrue(monitor.st.list_lost_notified)
-        played.assert_called_once_with("lost.mp3")
+        played.assert_called_once_with("lost.mp3", kind="list_lost")
 
     def test_finding_wishes_again_resumes(self):
         monitor = self._monitor(me="nobody")
@@ -2635,7 +2635,7 @@ class TestGroupNeedsHostList(unittest.TestCase):
         self.assertEqual(
             len([m for m in monitor.logs if "主催リストが取れません" in m]), 1,
             monitor.logs)
-        self.played.assert_called_once_with("lost.mp3")
+        self.played.assert_called_once_with("lost.mp3", kind="list_lost")
 
     def test_three_rounds_still_notify_once(self):
         SharedState.set_list_source("tnl")
@@ -2704,7 +2704,7 @@ class TestGroupNeedsHostList(unittest.TestCase):
         self._killers(monitor)
 
         self.assertFalse(monitor._hands_free())
-        self.played.assert_called_once_with("lost.mp3")
+        self.played.assert_called_once_with("lost.mp3", kind="list_lost")
         self.assertTrue(any("主催リストが取れません" in m for m in monitor.logs))
 
     def test_the_voice_defaults_to_the_bundled_file(self):

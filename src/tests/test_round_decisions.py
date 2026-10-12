@@ -540,7 +540,7 @@ class TestPrivateSabotageContinues(unittest.TestCase):
 
         self.assertNotIn("do_skip", started, "自爆しない")
         self.assertTrue(monitor.st.is_continue_round)
-        self.play.assert_called_once_with("continue.mp3")
+        self.play.assert_called_once_with("continue.mp3", kind="continue")
         self.assertEqual(SharedState.get_continue_round_count(), 1, "他窓フリーズ")
         self.record.assert_called_once_with(1)
 
@@ -1201,7 +1201,7 @@ class TestEightPagesListId(unittest.TestCase):
 
         self.assertEqual(monitor.st.terror_ids, [135], "ログ番号 50 ではなく 135")
         self.assertNotIn("do_skip", started, "リストにあるので続行")
-        play.assert_called_once_with("continue.mp3")
+        play.assert_called_once_with("continue.mp3", kind="continue")
         self.assertEqual(sent.call_args.args[1], [135], "統計・DB も変換後")
 
     def test_the_log_number_alone_does_not_continue(self):
@@ -1377,7 +1377,7 @@ class TestGroupListStatePolled(unittest.TestCase):
         self._tick(monitor)
 
         self.assertEqual(len(self._lost(monitor)), 1, monitor.logs)
-        self.played.assert_called_once_with("lost.mp3")
+        self.played.assert_called_once_with("lost.mp3", kind="list_lost")
 
     def test_ticking_again_stays_quiet(self):
         SharedState.set_list_source("tnl")
@@ -1424,7 +1424,7 @@ class TestGroupListStatePolled(unittest.TestCase):
         self._tick(monitor)
 
         self.assertEqual(len(self._lost(monitor)), 2, monitor.logs)
-        self.played.assert_called_once_with("lost.mp3")
+        self.played.assert_called_once_with("lost.mp3", kind="list_lost")
 
     def test_a_solo_private_window_is_untouched(self):
         SharedState.set_list_source("tnl")
@@ -1864,7 +1864,7 @@ class TestSabotageStarAnnounces(unittest.TestCase):
 
         self.assertTrue(self._apply(monitor))
 
-        self.played.assert_called_once_with("continue.mp3")
+        self.played.assert_called_once_with("continue.mp3", kind="continue")
         self.assertTrue(monitor.st.is_continue_round)
         self.assertEqual(SharedState.get_continue_round_count(), 1)
 
@@ -1911,7 +1911,7 @@ class TestSabotageStarAnnounces(unittest.TestCase):
             self._apply(monitor)
 
             self.assertTrue(monitor.st.is_continue_round, itype)
-            self.played.assert_called_once_with("continue.mp3")
+            self.played.assert_called_once_with("continue.mp3", kind="continue")
 
     # ── CONTINUE は従来どおり無音 ───────────────
     def test_plain_continue_stays_silent(self):
@@ -2795,7 +2795,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
             monitor._on_killers([42], "Double Trouble", revealed=False)
 
         self.assertTrue(monitor.st.is_continue_round)
-        mock_play.assert_called_once_with("continue.mp3")
+        mock_play.assert_called_once_with("continue.mp3", kind="continue")
 
     def test_normal_judgement_skips_when_not_wanted(self):
         """挙動が変わるところ: グループでも続行リストに無ければ自爆する"""

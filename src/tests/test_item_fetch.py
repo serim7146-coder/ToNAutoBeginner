@@ -826,7 +826,7 @@ class TestItemFetch(unittest.TestCase):
              patch.object(ex, "_fetch_item",
                           side_effect=lambda seq, shop, item: order.append(("fetch", shop, item)) or outcome), \
              patch.object(ex, "_attend_to_item_loss", side_effect=lambda: order.append("attend")), \
-             patch.object(PlaySound, "play_sound", side_effect=lambda _p: order.append("sound")):
+             patch.object(PlaySound, "play_sound", side_effect=lambda _p, **_kw: order.append("sound")):
             ex.do_after_round()
         return order
 
@@ -890,7 +890,7 @@ class TestItemFetch(unittest.TestCase):
              patch.object(ex, "_confirm_begin"), \
              patch.object(ex, "_fetch_item", side_effect=fetch), \
              patch.object(ex, "_attend_to_item_loss", side_effect=attend), \
-             patch.object(PlaySound, "play_sound", side_effect=lambda _p: order.append("sound")), \
+             patch.object(PlaySound, "play_sound", side_effect=lambda _p, **_kw: order.append("sound")), \
              patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
             ex.do_after_round()
         return order

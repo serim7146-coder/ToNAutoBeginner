@@ -3193,6 +3193,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "window_layout",                                     # DX で足した
             "ton_entry_plush",                                   # DZ で足した
             "follow_utils",                                      # EB で足した
+            "voice_volumes",                                     # EO で足した
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")

@@ -307,7 +307,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
 
         self.assertTrue(monitor.st.is_continue_round)
-        self.play.assert_called_once_with("continue.mp3")
+        self.play.assert_called_once_with("continue.mp3", kind="continue")
         self.assertEqual(self._skipped(), 0)
 
     def test_ok_capable_falls_back_to_enrage(self):
@@ -477,7 +477,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self._identify_by(monitor, how)
 
             self.assertTrue(monitor.st.is_continue_round, how)
-            self.play.assert_called_once_with("continue.mp3")
+            self.play.assert_called_once_with("continue.mp3", kind="continue")
             self.assertEqual(self._skipped(), 0, how)
 
     def test_ng_sends_only_once_per_round(self):
@@ -1257,7 +1257,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
 
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
-        self.play.assert_any_call("foxy.mp3")
+        self.play.assert_any_call("foxy.mp3", kind="foxy")
         self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID], "Foxy で確定")
         self.assertEqual(self._started().count("do_skip"), 1)
         self.assertFalse(self.send.call_args.kwargs["quiet"])
@@ -1275,7 +1275,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
 
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
-        self.play.assert_called_with("foxy.mp3")
+        self.play.assert_called_with("foxy.mp3", kind="foxy")
 
     # ── OK の霧は今までどおり ─────────────────────
     def test_ok_fog_foxy_is_as_before(self):
@@ -1284,7 +1284,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
 
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
-        self.play.assert_any_call("foxy.mp3")
+        self.play.assert_any_call("foxy.mp3", kind="foxy")
         self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID], "Foxy で確定")
         self.assertIn("do_skip", self._started())
 
@@ -1312,7 +1312,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         monitor._process(self.PREFIX + self.SIGNALS["Foxy"])
 
         self.assertTrue(any("🦊" in m for m in monitor.logs), monitor.logs)
-        self.play.assert_called_once_with("foxy.mp3")
+        self.play.assert_called_once_with("foxy.mp3", kind="foxy")
 
 
 
@@ -1367,7 +1367,7 @@ class TestFogStunned(unittest.TestCase):
 
         self.assertEqual(monitor.st.enrage_identified, self.WITCH)
         self.assertTrue(monitor.st.is_continue_round)
-        self.play.assert_called_once_with("continue.mp3")
+        self.play.assert_called_once_with("continue.mp3", kind="continue")
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
         self.assertFalse(self.send.call_args.kwargs["quiet"])
 
@@ -1379,7 +1379,7 @@ class TestFogStunned(unittest.TestCase):
 
         self.assertEqual(monitor.st.enrage_identified, self.WITCH)
         self.assertTrue(monitor.st.is_continue_round)
-        self.play.assert_called_once_with("continue.mp3")
+        self.play.assert_called_once_with("continue.mp3", kind="continue")
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
         # Walpurgisnacht はオルタネイトのテラー。DB へは Fog (Alternate) で送る
         self.send.assert_called_once_with("Fog (Alternate)", [self.WITCH], 0, None, quiet=False,
@@ -2145,7 +2145,7 @@ class TestLogMonitorFogRound(unittest.TestCase):
 
         self.assertTrue(monitor.st.is_continue_round)
         self.assertEqual(SharedState.get_continue_round_count(), 1)
-        mock_play.assert_called_once_with("continue.mp3")
+        mock_play.assert_called_once_with("continue.mp3", kind="continue")
 
     def test_the_fog_voice_is_off_by_default(self):
         monitor = self._monitor()
@@ -2162,7 +2162,7 @@ class TestLogMonitorFogRound(unittest.TestCase):
              patch.object(PlaySound, "play_sound") as mock_play:
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
 
-        mock_play.assert_called_once_with("fog.mp3")
+        mock_play.assert_called_once_with("fog.mp3", kind="fog")
         self.assertEqual(SharedState.get_continue_round_count(), 0,
                          "音声を戻してもフリーズは戻らない")
 

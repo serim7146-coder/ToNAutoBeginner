@@ -538,7 +538,7 @@ class TestRecordingHooks(unittest.TestCase):
         with patch.object(monitor, "_group_decision", return_value=GroupRound.WANTED):
             monitor._apply_group_decision("Sabotage")
 
-        PlaySound.play_sound.assert_called_once_with("continue.mp3")
+        PlaySound.play_sound.assert_called_once_with("continue.mp3", kind="continue")
         self.started.assert_called_once_with(3)
 
     def test_hands_free_sabotage_star_in_private_does_not_record(self):

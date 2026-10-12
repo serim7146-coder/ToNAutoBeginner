@@ -409,7 +409,7 @@ class ActionExecutor:
         if self._st.item_lost_announced:
             return
         self._st.item_lost_announced = True
-        PlaySound.play_sound(self._cfg.voice_item_lost)
+        PlaySound.play_sound(self._cfg.voice_item_lost, kind="item_lost")
 
     def _attend_to_item_loss(self):
         """アイテムロストの窓で、フリーズ・前面化・音声をまとめて出す。
@@ -2407,7 +2407,7 @@ class ActionExecutor:
             # （アイテムを取りに行く時間を作らない＝人が動く場面ではない）。
             # 人が遊んでいる窓では、フリーズ設定に関わらず鳴らす
             return
-        PlaySound.play_sound(self._speed_voice(kind))
+        PlaySound.play_sound(self._speed_voice(kind), kind=kind)
 
     @staticmethod
     def _freeze_enabled_for(kind: str) -> bool:

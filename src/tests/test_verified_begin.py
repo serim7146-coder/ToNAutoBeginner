@@ -418,7 +418,7 @@ class TestSpeedVoiceFollowsAutoBegin(unittest.TestCase):
              patch.object(PlaySound, "play_sound") as play:
             ex._announce_speed_kind("8pages", 3.0)
 
-        play.assert_called_once_with("8pages.mp3")
+        play.assert_called_once_with("8pages.mp3", kind="8pages")
 
     def test_the_round_over_split_uses_the_same_rule(self):
         src = Path(LogMonitor.__file__).read_text(encoding="utf-8")

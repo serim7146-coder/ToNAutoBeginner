@@ -960,7 +960,7 @@ class TestContinueRoundFocus(unittest.TestCase):
 
         self.assertTrue(monitor.st.is_continue_round)
         self.assertEqual(SharedState.get_continue_round_count(), 1)
-        play.assert_called_once_with("continue.mp3")
+        play.assert_called_once_with("continue.mp3", kind="continue")
         record.assert_called_once_with(2)
         self.assertTrue(any("前面化に失敗" in m for m in logs), logs)
 
@@ -1040,7 +1040,7 @@ class TestAttendToItemLoss(unittest.TestCase):
         with patch.object(WindowOperator, "focus_window",
                           side_effect=lambda h: events.append("focus") or True), \
              patch.object(PlaySound, "play_sound",
-                          side_effect=lambda p: events.append("sound")), \
+                          side_effect=lambda p, **_kw: events.append("sound")), \
              patch.object(ActionExecutor.threading, "Thread") as thread:
             ex._attend_to_item_loss()
         return events, thread
@@ -1110,7 +1110,7 @@ class TestAttendToItemLoss(unittest.TestCase):
         with patch.object(WindowOperator, "focus_window",
                           side_effect=lambda h: events.append("focus") or True), \
              patch.object(PlaySound, "play_sound",
-                          side_effect=lambda p: events.append("sound")), \
+                          side_effect=lambda p, **_kw: events.append("sound")), \
              patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
             ex._watch_item_loss(st.round_seq)
         return events
@@ -1222,7 +1222,7 @@ class TestAttendToItemLoss(unittest.TestCase):
         played = []
 
         with patch.object(WindowOperator, "focus_window", return_value=False), \
-             patch.object(PlaySound, "play_sound", side_effect=played.append), \
+             patch.object(PlaySound, "play_sound", side_effect=lambda p, kind=None, **_kw: played.append(p)), \
              patch.object(ActionExecutor.threading, "Thread"):
             ex._attend_to_item_loss()
 
@@ -1284,7 +1284,7 @@ class TestAttendToItemLoss(unittest.TestCase):
              patch.object(WindowOperator, "focus_window",
                           side_effect=lambda h: order.append("focus") or True), \
              patch.object(PlaySound, "play_sound",
-                          side_effect=lambda p: order.append("sound")), \
+                          side_effect=lambda p, **_kw: order.append("sound")), \
              patch.object(ActionExecutor.threading, "Thread"):
             ex.do_after_round()
         return order
@@ -1346,7 +1346,7 @@ class TestItemLossAtRoundOver(unittest.TestCase):
             with patch.object(WindowOperator, "focus_window",
                               side_effect=lambda h, l=line: seen.append(("focus", l)) or True), \
                  patch.object(PlaySound, "play_sound",
-                              side_effect=lambda p, l=line: seen.append(("sound", l))), \
+                              side_effect=lambda p, l=line, **_kw: seen.append(("sound", l))), \
                  patch.object(LogMonitor.threading, "Thread"), \
                  patch.object(ActionExecutor.threading, "Thread"), \
                  patch.object(Recorder, "on_round_over"):
@@ -1526,7 +1526,7 @@ class TestEquipQueue(unittest.TestCase):
         return (patch.object(WindowOperator, "focus_window",
                              side_effect=lambda h: self.shown.append(("focus", h)) or True),
                 patch.object(PlaySound, "play_sound",
-                             side_effect=lambda p: self.shown.append(
+                             side_effect=lambda p, **_kw: self.shown.append(
                                  ("sound", int(p[4:-4])))))
 
     def _attend(self, ex):
@@ -2158,7 +2158,7 @@ class TestItemLostFreezeEveryWindow(unittest.TestCase):
             self.assertEqual(SharedState.get_equip_freeze_count(), 1, name)
             self.assertFalse(SharedState.EQUIP_WAIT_EVENT.is_set(), f"{name}: 他窓を止める")
             self.front.assert_called_once_with(0x10)
-            self.play.assert_called_once_with("lost.mp3")
+            self.play.assert_called_once_with("lost.mp3", kind="item_lost")
             self.assertTrue(self._said(monitor, "RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】"),
                             (name, monitor.logs))
 
@@ -2281,7 +2281,7 @@ class TestItemLossVoice(unittest.TestCase):
         self.addCleanup(SharedState.equip_freeze_reset)
         self.sounds = []
         self.focus = []
-        for p in (patch.object(PlaySound, "play_sound", side_effect=self.sounds.append),
+        for p in (patch.object(PlaySound, "play_sound", side_effect=lambda p, kind=None, **_kw: self.sounds.append(p)),
                   patch.object(WindowOperator, "borrow_front",
                                side_effect=lambda h: self.focus.append(h) or (True, None)),
                   patch.object(WindowOperator, "focus_window", side_effect=lambda h: self.focus.append(h) or True)):
@@ -2458,7 +2458,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(fake_sleep)),              patch.object(ActionExecutor.SharedState, "equip_freeze_start",
                           side_effect=lambda state: order.append("freeze")),              patch.object(ActionExecutor.PlaySound, "play_sound",
-                          side_effect=lambda _p: order.append("sound")),              patch.object(executor, "move",
+                          side_effect=lambda _p, **_kw: order.append("sound")),              patch.object(executor, "move",
                           side_effect=lambda d, sec: order.append("move")),              patch.object(executor, "move_forward_left",
                           side_effect=lambda f, l: order.append("move")),              patch.object(WindowOperator, "focus_window",
                           side_effect=lambda _h: order.append("focus") or True),              patch.object(WindowOperator, "click",
@@ -2515,7 +2515,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
                 st.item_id = 5      # プレイヤーが装備した
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0),              patch.object(ActionExecutor, "time", _module_time(fake_sleep)),              patch.object(ActionExecutor.PlaySound, "play_sound",
-                          side_effect=lambda _p: order.append("sound")),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click",
+                          side_effect=lambda _p, **_kw: order.append("sound")),              patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(WindowOperator, "click",
                           side_effect=lambda: order.append("click")):
             executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
             with patch.object(executor, "move"), patch.object(executor, "move_forward_left"):
@@ -3203,7 +3203,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
         self.assertTrue(monitor.st.item_lost_announced)
 
     def test_run_survival_does_not_play_item_lost_voice(self):
@@ -3255,7 +3255,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             monitor._process("You died.")
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertTrue(monitor.st.item_lost_announced)
 
@@ -3302,7 +3302,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             self.assertTrue(monitor.st.sabotage_murder_this_round)
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
         self.assertTrue(monitor.st.waiting_for_equip)
 
     def test_sabotage_sus_player_second_slot_can_mark_self(self):
@@ -3384,7 +3384,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             self.assertEqual(monitor.st.item_id, 94)
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
         self.assertEqual(monitor.st.item_id, 94)
         self.assertTrue(monitor.st.randomizer_item_changed)
         self.assertFalse(monitor.st.item_lost_this_round)
@@ -3464,7 +3464,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             monitor._process("You died.")
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
         self.assertEqual(monitor.st.item_id, 0)
         self.assertTrue(monitor.st.waiting_for_equip)
         self.assertTrue(monitor.st.item_lost_announced)
@@ -3479,7 +3479,7 @@ class TestLogMonitorItemLostVoice(unittest.TestCase):
             monitor._process("Verified Round End")
             monitor._process("RoundOver")
 
-        mock_play.assert_called_once_with("lost.mp3")
+        mock_play.assert_called_once_with("lost.mp3", kind="item_lost")
 
     def test_round_start_resets_item_lost_voice_announcement(self):
         monitor = self._monitor(auto_begin=False)

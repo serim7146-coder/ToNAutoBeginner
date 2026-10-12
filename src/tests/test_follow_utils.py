@@ -121,7 +121,7 @@ class TestTheDecision(_Case):
         self.assertTrue(monitor.st.is_continue_round)
         self.assertTrue(monitor.st.continue_freeze_held, "続行フリーズを張る")
         self.assertTrue(any("【プレイ】" in m for m in monitor.logs))
-        PlaySound.play_sound.assert_called_once_with("continue.mp3")
+        PlaySound.play_sound.assert_called_once_with("continue.mp3", kind="continue")
 
     def test_a_round_that_ended_does_nothing(self):
         monitor = self._monitor()

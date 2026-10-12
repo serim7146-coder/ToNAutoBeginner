@@ -1684,7 +1684,10 @@ class App(tk.Tk):
         fv_wrap.pack(fill="x", padx=12, pady=4)
         fv = fv_wrap.content
 
-        def voice_row(parent, label, var):
+        # 声ごとの音量（EO。全体の音量と掛け合わせる）。種類は PlaySound.VOICE_KINDS
+        self.v_voice_volumes = {}
+
+        def voice_row(parent, label, var, kind):
             f = ttk.Frame(parent)
             f.pack(fill="x", pady=2)
             ttk.Label(f, text=label, width=24, anchor="w").pack(side="left")
@@ -1696,6 +1699,16 @@ class App(tk.Tk):
                         filetypes=[("音声", "*.wav *.mp3"), ("All", "*.*")]
                     ) or v.get()
                 )).pack(side="left")
+            vol = tk.DoubleVar(value=PlaySound.get_voice_volume(kind))
+            self.v_voice_volumes[kind] = vol
+            ttk.Scale(f, from_=0.0, to=1.0, variable=vol, orient="horizontal", length=80,
+                      command=lambda v, k=kind: self._set_voice_volume(k, float(v))).pack(side="left", padx=(6, 2))
+            pct = ttk.Label(f, text=f"{int(round(vol.get() * 100))}%", width=5)
+            pct.pack(side="left")
+            vol.trace_add("write", lambda *_a, v=vol, l=pct: l.config(text=f"{int(round(v.get() * 100))}%"))
+            ttk.Button(f, text="▶", width=3,
+                       command=lambda k=kind, v=var, n=label.rstrip(":"): self._try_voice(k, v.get(), n)
+                       ).pack(side="left")
 
         self.v_voice_continue     = tk.StringVar(value=config.VOICE_CONTINUE)
         self.v_voice_alternate    = tk.StringVar(value=config.VOICE_ALTERNATE)
@@ -1714,18 +1727,18 @@ class App(tk.Tk):
         self._announce_frame = CollapsibleFrame(fv, text="アナウンス", collapsed=True)
         self._announce_frame.pack(fill="x", pady=(0, 2))
         fva = self._announce_frame.content
-        voice_row(fva, "続行ラウンド:", self.v_voice_continue)
-        voice_row(fva, "Alternate:", self.v_voice_alternate)
-        voice_row(fva, "Midnight:", self.v_voice_midnight)
-        voice_row(fva, "Unbound:", self.v_voice_unbound)
-        voice_row(fva, "Fog:", self.v_voice_fog)
-        voice_row(fva, "Ghost:", self.v_voice_ghost)
-        voice_row(fva, "8 Pages(速度検知):", self.v_voice_8pages)
-        voice_row(fva, "Punish(速度検知):", self.v_voice_punish)
-        voice_row(fva, "アイテムロスト:", self.v_voice_item_lost)
-        voice_row(fva, "Intermission:", self.v_voice_intermission)
-        voice_row(fva, "Foxy:", self.v_voice_foxy)
-        voice_row(fva, "主催リスト喪失:", self.v_voice_list_lost)
+        voice_row(fva, "続行ラウンド:", self.v_voice_continue, "continue")
+        voice_row(fva, "Alternate:", self.v_voice_alternate, "alternate")
+        voice_row(fva, "Midnight:", self.v_voice_midnight, "midnight")
+        voice_row(fva, "Unbound:", self.v_voice_unbound, "unbound")
+        voice_row(fva, "Fog:", self.v_voice_fog, "fog")
+        voice_row(fva, "Ghost:", self.v_voice_ghost, "ghost")
+        voice_row(fva, "8 Pages(速度検知):", self.v_voice_8pages, "8pages")
+        voice_row(fva, "Punish(速度検知):", self.v_voice_punish, "punish")
+        voice_row(fva, "アイテムロスト:", self.v_voice_item_lost, "item_lost")
+        voice_row(fva, "Intermission:", self.v_voice_intermission, "intermission")
+        voice_row(fva, "Foxy:", self.v_voice_foxy, "foxy")
+        voice_row(fva, "主催リスト喪失:", self.v_voice_list_lost, "list_lost")
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -2628,6 +2641,7 @@ class App(tk.Tk):
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
         self.v_ton_access.set(access)
         self._load_launch_options_setting(data)
+        App._load_voice_volumes(self, data)
         self._saved_profiles = data.get("profiles", [])
         # 窓数は控えるだけ。反映するのは _auto_detect_windows() の「未検出」の
         # ときだけ（開いている窓があればその数を優先する）
@@ -3711,6 +3725,25 @@ class App(tk.Tk):
         except tk.TclError:
             pass        # ウィンドウ破棄後にタイマーが発火した
 
+    def _set_voice_volume(self, kind: str, volume: float):
+        """声ごとの音量のスライダー（EO）。すぐ効く（次に鳴らすときから）。保存は予約"""
+        PlaySound.set_voice_volume(kind, volume)
+        self._schedule_settings_save()
+
+    def _try_voice(self, kind: str, path: str, label: str):
+        """▶: その行のファイルを今の音量（全体 × その声）で 1 回鳴らす。マクロが止まっていても鳴る（EO）"""
+        path = (path or "").strip()
+        if not path or not Path(path).is_file():
+            self._log(f"[音声] {label} のファイルがありません")
+            return
+        PlaySound.play_sound(path, kind=kind)
+
+    def _load_voice_volumes(self, data):
+        """settings.json の声ごとの音量（EO。無い・壊れた値は 100%）を PlaySound と画面のスライダーへ"""
+        got = PlaySound.load_voice_volumes(data.get("voice_volumes"))
+        for kind, var in (getattr(self, "v_voice_volumes", None) or {}).items():
+            var.set(got[kind])
+
     def _save_launch_settings(self):
         data = {
             **load_settings(),
@@ -3748,6 +3781,7 @@ class App(tk.Tk):
             "follow_utils":            SharedState.get_follow_utils(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
+            "voice_volumes":           PlaySound.voice_volumes_setting(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が
