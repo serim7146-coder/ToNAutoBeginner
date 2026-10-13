@@ -905,6 +905,11 @@ class ActionExecutor:
             return None
         hit = BeginDetect.find(bits, w, h)
         if hit is not None:
+            if hit.get("rule") == "features":
+                # 斜めから見た天板を特徴点で見つけた（ET。あとで見直せるように）
+                DebugLog.write(f"[窓{self._st.window_idx}] Begin: 斜めの BEGIN を特徴点で見つけた"
+                               f"（{stage or '位置合わせ'}・中心 ({hit['cx']:.0f}, {hit['cy']:.0f})・"
+                               f"幅 {hit['w']:.0f}・インライア {hit['inliers']}）")
             hit = {**hit, "H": h}           # 前後は文字の幅÷窓の高さで見る
         else:
             BeginMiss.save(self._st.window_idx, bits, w, h, stage or "位置合わせ")

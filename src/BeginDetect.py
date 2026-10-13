@@ -34,6 +34,17 @@
   割合」で、今のロビーの赤い光・舞う光では天板の周りが 30 を少し超える（9月30日の撮影より明るい）。
   9月30日の撮影 99枚で BEGIN でないものの近さは最高 0.640 → 近さ ≥ SCORE_STRONG（0.75）なら
   黒さを見ずに受け入れる
+
+斜めから見た BEGIN（ET。2026-10-13 16:12 窓6: Run の後に台の左横の一段低い所に着き、BEGIN が画面の右寄りに
+下から斜めに小さく見えた。上の照合では見つからない）: 上で見つからなかったときだけ、天板の見本
+（PANEL_FILE。上下の点線を含む「[ BEGIN ]」）を特徴点（SIFT＋ホモグラフィ）で探す（_find_by_features）。
+画像はグレーにして高さ PANEL_MAX_H までで 2 倍に拡大し、特徴点を 1 回取って、見本の大きさ 1.0・0.75 の 2 つに当てる。
+インライアが少ない（6〜9）ので、受け入れは「写した天板の四隅が凸の四角形・文字の中心が画像の中・文字の所が
+赤い・縦横比と幅がありえる範囲」を全部満たすときだけ。
+実測（2026-10-13。手元の撮影に目で印を付けた。BEGIN が写っている 10 枚・端で切れた 2 枚・無い 51 枚）:
+  上の照合だけ → 写っている 10 枚のうち 6 枚。特徴点を足す → 7 枚（依頼者のスクショ 31.webp を新たに拾う。
+  中心 (552, 335)・本当の中心はおよそ (563, 333)）。特徴点だけで見ると 3 枚を拾い、無い 51 枚で誤検出 0
+  （2 回流して同じ結果）。特徴点の 1 回は平均 0.35 秒・最大 0.73 秒
 """
 import threading
 
@@ -55,12 +66,29 @@ SCORE_STRONG = 0.75         # これ以上の近さなら黒さを見ない（BE
 # 見本（高さ H0 にそろえた画面から切り出した「[ BEGIN ]」の文字。元は利用者が
 # Begin 前に置いた位置の撮影）。1枚目は粗い段でも使う
 TEMPLATE_FILES = ("assets/templates/begin/begin_1.png", "assets/templates/begin/begin_2.png")
+# 特徴点で探す見本（ET）: 2560×1440 の正面に近い撮影から切り出した天板（879×319）。文字「[ BEGIN ]」は
+# その中の PANEL_TEXT（x0, y0, x1, y1）。返す中心と幅はこの四角を写したもの（上の照合と同じく文字の中心・幅）
+PANEL_FILE = "assets/templates/begin/begin_panel.png"
+PANEL_TEXT = (155, 161, 629, 232)
+PANEL_SCALES = (1.0, 0.75)          # 見本の大きさ（2 つに当てて、受け入れたものでインライアの多い方）
+PANEL_UP = 2.0                      # 画像の拡大（小さい窓で特徴点を取るため）
+PANEL_MAX_H = 1500                  # 拡大した後の高さの上限（大きい窓は拡大しない・縮める）
+PANEL_RATIO = 0.75                  # 対応の比の検定（Lowe）
+PANEL_RANSAC_PX = 5.0
+# ホモグラフィは USAC_MAGSAC で求める。インライアが 6〜10 と少ないので、RANSAC（既定）は同じ撮影でも回すたびに
+# 結果が変わった（拾えたり拾えなかったり）。MAGSAC は種を変えても同じ結果で、拾える数も多かった
+PANEL_MIN_INLIERS = 6
+PANEL_RED_MIN = 0.15                # 写した文字の四角の中で赤い画素（赤さ > 60）の割合の下限
+PANEL_ASPECT = (2.0, 12.0)          # 写した文字の幅 ÷ 高さ（正面で 6.7。斜めで潰れても）
+PANEL_WIDTH = (0.03, 1.0)           # 写した文字の幅 ÷ 画像の高さ
 
 _lock = threading.Lock()    # 見本の読み込みを1回にする
 # 探すのは一度に1窓だけ（1回あたり平均0.9〜1.9秒・最大3.8秒ほど CPU を使い切る。6窓が同時に探すと、
 # ほかの VRChat の窓の動きが重くなる）
 _find_lock = threading.Lock()
 _templates = None           # 読み込んだ見本（赤さ）。読めなかったら []
+_panel = None               # 天板の見本の特徴点 [(倍率, keypoints, descriptors)]。読めなかったら []
+_panel_size = (0, 0)        # 天板の見本の (高さ, 幅)
 
 
 def _redness(bgr):
@@ -90,6 +118,32 @@ def _load_templates() -> list:
         except Exception:
             out = []
         _templates = out
+        return out
+
+
+def _load_panel() -> list:
+    """天板の見本の特徴点を、PANEL_SCALES の大きさごとに 1 回だけ作る（ET）"""
+    global _panel, _panel_size
+    with _lock:
+        if _panel is not None:
+            return _panel
+        out = []
+        try:
+            import cv2
+            import numpy as np
+            data = np.fromfile(str(config.resource_path(PANEL_FILE)), dtype=np.uint8)
+            img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if img is not None:
+                _panel_size = img.shape[:2]
+                sift = cv2.SIFT_create()
+                for scale in PANEL_SCALES:
+                    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                    kp, des = sift.detectAndCompute(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), None)
+                    if des is not None:
+                        out.append((scale, kp, des))
+        except Exception:
+            out = []
+        _panel = out
         return out
 
 
@@ -196,7 +250,10 @@ def find_in_bgr(bgr):
     if not tmpl or bgr is None or bgr.ndim != 3 or bgr.shape[0] < 50:
         return None
     with _find_lock:
-        return _find(bgr, tmpl)
+        hit = _find(bgr, tmpl)
+        if hit is None:
+            hit = _find_by_features(bgr)    # 見つからないときだけ、斜めから見た天板を特徴点で（ET）
+        return hit
 
 
 def _find(bgr, tmpl):
@@ -220,6 +277,75 @@ def _find(bgr, tmpl):
             best = {"score": sc, "dark": dark, "cx": box[0], "cy": box[1],
                     "w": box[2], "h": box[3], "rule": rule}
     return best
+
+
+def _find_by_features(bgr):
+    """天板の見本を特徴点（SIFT＋ホモグラフィ）で探す（ET）。受け入れの条件を全部満たせば
+    {"score": インライア/100, "dark": None, "cx", "cy", "w", "h", "rule": "features", "inliers"}、無ければ None"""
+    try:
+        import cv2
+        import numpy as np
+        panel = _load_panel()
+        if not panel:
+            return None
+        height, width = bgr.shape[:2]
+        up = min(PANEL_UP, PANEL_MAX_H / height)
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        if up != 1.0:
+            gray = cv2.resize(gray, None, fx=up, fy=up,
+                              interpolation=cv2.INTER_CUBIC if up > 1 else cv2.INTER_AREA)
+        kp, des = cv2.SIFT_create().detectAndCompute(gray, None)
+        if des is None or len(kp) < PANEL_MIN_INLIERS:
+            return None
+        matcher = cv2.BFMatcher()
+        best = None
+        for scale, pkp, pdes in panel:
+            pairs = matcher.knnMatch(pdes, des, k=2)
+            good = [m[0] for m in pairs if len(m) == 2 and m[0].distance < PANEL_RATIO * m[1].distance]
+            if len(good) < PANEL_MIN_INLIERS:
+                continue
+            src = np.float32([pkp[m.queryIdx].pt for m in good]).reshape(-1, 1, 2) / scale
+            dst = np.float32([kp[m.trainIdx].pt for m in good]).reshape(-1, 1, 2) / up
+            homo, mask = cv2.findHomography(src, dst, cv2.USAC_MAGSAC, PANEL_RANSAC_PX)
+            if homo is None or mask is None:
+                continue
+            inliers = int(mask.sum())
+            hit = _panel_hit(bgr, homo, inliers) if inliers >= PANEL_MIN_INLIERS else None
+            if hit is not None and (best is None or inliers > best["inliers"]):
+                best = hit
+        return best
+    except Exception:
+        return None
+
+
+def _panel_hit(bgr, homo, inliers):
+    """写した天板と文字を確かめる。四隅が凸・文字の中心が画像の中・文字の所が赤い・縦横比と幅がありえる範囲"""
+    import cv2
+    import numpy as np
+    height, width = bgr.shape[:2]
+    ph, pw = _panel_size
+    quad = cv2.perspectiveTransform(np.float32([[0, 0], [pw, 0], [pw, ph], [0, ph]]).reshape(-1, 1, 2), homo)
+    if not cv2.isContourConvex(quad):
+        return None
+    x0, y0, x1, y1 = PANEL_TEXT
+    text = cv2.perspectiveTransform(np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).reshape(-1, 1, 2),
+                                    homo).reshape(-1, 2)
+    cx, cy = (float(v) for v in text.mean(axis=0))
+    if not (0 <= cx < width and 0 <= cy < height):
+        return None
+    tw = float((np.linalg.norm(text[1] - text[0]) + np.linalg.norm(text[2] - text[3])) / 2)
+    th = float((np.linalg.norm(text[3] - text[0]) + np.linalg.norm(text[2] - text[1])) / 2)
+    if th <= 0 or not (PANEL_ASPECT[0] <= tw / th <= PANEL_ASPECT[1]):
+        return None
+    if not (PANEL_WIDTH[0] <= tw / height <= PANEL_WIDTH[1]):
+        return None
+    lo = np.clip(text.min(axis=0), 0, [width - 1, height - 1]).astype(int)
+    hi = np.clip(text.max(axis=0), 0, [width - 1, height - 1]).astype(int)
+    roi = bgr[lo[1]:hi[1] + 1, lo[0]:hi[0] + 1]
+    if roi.size == 0 or float((_redness(roi) > 60).mean()) < PANEL_RED_MIN:
+        return None
+    return {"score": inliers / 100, "dark": None, "cx": cx, "cy": cy, "w": tw, "h": th,
+            "rule": "features", "inliers": inliers}
 
 
 def find(bits: bytes, w: int, h: int):
