@@ -2474,13 +2474,13 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
         """
         order = self._order_of_actions(osc_port=9000)
 
-        self.assertEqual(order, ["move", "freeze", "focus", "click"])
+        self.assertEqual(order, ["move", "focus", "click"], "Begin の前に張らない（EV）")
 
     def test_no_announce_right_before_the_click_no_osc(self):
         """非OSC窓も背面送信になったので、OSC窓と同じ順になる"""
         order = self._order_of_actions(osc_port=0)
 
-        self.assertEqual(order, ["move", "freeze", "focus", "click"])
+        self.assertEqual(order, ["move", "focus", "click"], "Begin の前に張らない（EV）")
 
 
     def test_announce_is_skipped_when_item_is_kept(self):
@@ -3532,7 +3532,7 @@ class TestStopLeavesNoFreeze(unittest.TestCase):
         self.assertFalse(old.equip_freeze_held)
 
     def test_the_waiting_window_does_not_leave_a_freeze_after_stop(self):
-        """窓A が装備待ち・窓B は A の装備待ちが解けるのを待っている → 停止"""
+        """窓A が装備待ち・窓B もロスト → 停止。EV から B は Begin の前に A を待たず・張らない"""
         running = {"on": True}
         a = WindowState(run_id=SharedState.current_run(), waiting_for_equip=True)
         b = WindowState(run_id=SharedState.current_run(), waiting_for_equip=True, item_id=0)
@@ -3549,7 +3549,8 @@ class TestStopLeavesNoFreeze(unittest.TestCase):
         worker.join(3)
 
         self.assertFalse(worker.is_alive())
-        self.assertFalse(result["ok"])
+        self.assertTrue(result["ok"], "Begin の前には待たない（EV）")
+        self.assertFalse(b.equip_freeze_held, "Begin の前には張らない（EV）")
         self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set(), "再開したらすぐ動ける")
         self.assertEqual(SharedState.get_equip_freeze_count(), 0)
 

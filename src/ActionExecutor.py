@@ -117,6 +117,8 @@ class ActionExecutor:
         self._cursor_reasons: set = set()
         self._spam_paused_round = -1      # 連打の休止を告げたラウンド
         self._begin_given_up_round = -1   # BEGIN が見つからずあきらめたラウンド
+        self._begin_gave_up_round = -1    # 3 回押して受理されなかったラウンド（EV）
+        self._give_up_retry_round = -1    # 3 回押して受理されず、30 秒後に押し直したラウンド（EV）
         self._last_press = "click"        # 直前の回で何で押したか（"dip" / "click"）
         self._dip_landed = False          # 直前の差し込みでカーソルを置けたか
         # 受信の準備（bind）が済んだことを横移動側へ伝える。
@@ -679,6 +681,23 @@ class ActionExecutor:
                 return
         if not self._accepted_after_press(round_seq) and self._should_retry_begin(round_seq):
             self._log(f"⚠ Begin を{limit}回押しましたが受理されませんでした")
+            self._begin_gave_up_round = round_seq      # do_after_round が 30 秒後に 1 回押し直す（EV）
+
+    def _retry_after_giving_up(self, round_seq: int):
+        """Begin を BEGIN_RETRY_MAX 回押して受理されなかった窓（EV）: BEGIN_GIVE_UP_RETRY_SEC おいて、押し直しの
+        流れ（do_begin_again。位置合わせ・特徴点を含む）を 1 ラウンドに 1 回だけ。受理・ラウンド開始・停止でやめる"""
+        if self._give_up_retry_round == round_seq:
+            return
+        self._give_up_retry_round = round_seq
+        deadline = time.time() + config.BEGIN_GIVE_UP_RETRY_SEC
+        while time.time() < deadline:
+            if not self._should_retry_begin(round_seq):
+                return
+            time.sleep(config.BEGIN_GIVE_UP_POLL_SEC)
+        if not self._should_retry_begin(round_seq):
+            return
+        self._log(f"Begin をもう一度押します（あきらめてから {config.BEGIN_GIVE_UP_RETRY_SEC:.0f} 秒）")
+        self.do_begin_again(round_seq)
 
     def _accepted_after_press(self, round_seq: int) -> bool:
         """直前の回が受理されたか。差し込みは中で受理を待ち終えているので待たない。
@@ -1301,27 +1320,10 @@ class ActionExecutor:
                 return False
             self._log("✅ アイテム装備確認 → Beginへ向かいます")
         else:
-            # Begin時フリーズモード: 他窓の解除を待ってから即フリーズ
-            if not st.is_continue_round:
-                while self._is_running():
-                    if (SharedState.EQUIP_WAIT_EVENT.is_set()
-                            and SharedState.CONTINUE_ROUND_EVENT.is_set()
-                            and (st.speed_freeze_held
-                                 or SharedState.SPEED_FREEZE_EVENT.is_set())
-                            and (st.round_freeze_held
-                                 or SharedState.ROUND_FREEZE_EVENT.is_set())):
-                        break
-                    SharedState.EQUIP_WAIT_EVENT.wait(timeout=1.0)
-                    SharedState.CONTINUE_ROUND_EVENT.wait(timeout=1.0)
-                    if not st.speed_freeze_held:
-                        SharedState.SPEED_FREEZE_EVENT.wait(timeout=1.0)
-                    if not st.round_freeze_held:
-                        SharedState.ROUND_FREEZE_EVENT.wait(timeout=1.0)
-                if not self._is_running():
-                    return False
-            SharedState.equip_freeze_start(st)
-            # 通知はここではなくBeginクリックの直前で行う
-            self._log("⚠ アイテムロスト → 全窓フリーズ（Beginへ向かいます）")
+            # ここでは張らない（EV: 23:12 窓1・09:47 窓2 は Begin を押す前に張り、Begin が通らずに取りに
+            # 行けず、全窓が止まり続けた）。取りに行く窓は店でボタンを押す間だけ（_fetch_in_front）、
+            # 取りに行かない窓は Begin が通ったとき（do_after_round のフェーズ 2）に張る
+            self._log("⚠ アイテムロスト → Beginへ向かいます（フリーズは Begin が通ってから）")
         return True
 
     def _wait_round_end(self, timeout: float = 30.0) -> bool:
@@ -1469,6 +1471,8 @@ class ActionExecutor:
 
         if clicked:
             self._confirm_begin(round_seq)
+            if self._begin_gave_up_round == round_seq:
+                self._retry_after_giving_up(round_seq)
         if spam is not None:
             spam.set()      # 連打を止める（条件が変われば自分でも終わる）
 
@@ -1690,42 +1694,58 @@ class ActionExecutor:
         return None
 
     def _fetch_in_front(self, fetcher, shop: str, item_id: int, plush: bool = False) -> str:
+        st = self._st
         with SharedState._GLOBAL_ACTION_LOCK:
             fetcher._check()                # ロックを待つ間にラウンドが始まったら押さない
-            cursor = WindowOperator.cursor_position()   # 前面を借りる前の Windows のカーソル
-            ok, loan = self._borrow_front()
-            if not ok:
-                return "failed"
+            # ロストしたアイテムを取りに行くときだけ、店でボタンを押す間は装備待ちフリーズを張る（EV。
+            # 柵越え・移動の間は張らない。Equip が済んだら解く）。入室時の Guidance Plush・放置モードは張らない
+            froze = st.waiting_for_equip and not self._hands_free()
+            if froze:
+                SharedState.equip_freeze_start(st)
+                DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 店で押す間 装備待ちフリーズを張る")
             try:
-                fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
-                bought = fetcher.buy_plush(item_id) if plush else fetcher.buy(shop, item_id)
-                if not bought:
-                    return "failed"
-                if fetcher.measured_gain is not None:
-                    # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ）
-                    SharedState.set_item_fetch_gain(
-                        (*fetcher.measured_gain, ItemFetch.STEP_SEC, SharedState.ITEM_FETCH_GAIN_MARK))
-                return "ok"
+                return self._fetch_in_front_locked(fetcher, shop, item_id, plush)
             finally:
-                # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。
-                # 窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らないよう戻さない
-                try:
-                    fetcher.mouse.inner.restoring = True   # 止まった後でも、前面なら視点は戻す
-                    if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
-                        fetcher.restore_view()
-                    elif fetcher.mouse.total != [0, 0]:
-                        DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: "
-                                       f"窓が前に無いので視点を戻せません（{fetcher.mouse.total}）")
-                except ItemFetch.Stopped:
-                    pass                            # 戻す途中で前面でなくなった（残りは下で覚える）
-                except Exception:
-                    DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
-                # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す
-                try:
-                    self._pending_view_dy += -fetcher.mouse.total[1]
-                    WindowOperator.return_front(loan)
-                finally:
-                    self._put_cursor_back(cursor)
+                if froze:
+                    SharedState.equip_freeze_end(st)
+                    DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 装備待ちフリーズを解いた（Equip の後）")
+
+    def _fetch_in_front_locked(self, fetcher, shop: str, item_id: int, plush: bool) -> str:
+        """鍵の中: 前面を借りて店で押し、視点を戻して前面を返す"""
+        cursor = WindowOperator.cursor_position()   # 前面を借りる前の Windows のカーソル
+        ok, loan = self._borrow_front()
+        if not ok:
+            return "failed"
+        try:
+            fetcher.sleep(config.ITEM_FETCH_FOCUS_SEC)
+            bought = fetcher.buy_plush(item_id) if plush else fetcher.buy(shop, item_id)
+            if not bought:
+                return "failed"
+            if fetcher.measured_gain is not None:
+                # 次回に使う。保存するのは測った値だけ（合わせで直した値はその回の中だけ）
+                SharedState.set_item_fetch_gain(
+                    (*fetcher.measured_gain, ItemFetch.STEP_SEC, SharedState.ITEM_FETCH_GAIN_MARK))
+            return "ok"
+        finally:
+            # 視点を戻してから前面を返す（どの終わり方でも。戻さないと次の Begin が押せない）。
+            # 窓が前に無い（閉じた・奪われた）ときは、ほかの窓へ送らないよう戻さない
+            try:
+                fetcher.mouse.inner.restoring = True   # 止まった後でも、前面なら視点は戻す
+                if WindowOperator.foreground_hwnd() == self._cfg.hwnd:
+                    fetcher.restore_view()
+                elif fetcher.mouse.total != [0, 0]:
+                    DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: "
+                                   f"窓が前に無いので視点を戻せません（{fetcher.mouse.total}）")
+            except ItemFetch.Stopped:
+                pass                            # 戻す途中で前面でなくなった（残りは下で覚える）
+            except Exception:
+                DebugLog.exception("ActionExecutor._fetch_in_front.restore_view")
+            # 戻せなかった縦の視点は、次にツールがこの窓を前面にしたとき最初に戻す
+            try:
+                self._pending_view_dy += -fetcher.mouse.total[1]
+                WindowOperator.return_front(loan)
+            finally:
+                self._put_cursor_back(cursor)
 
     def _put_cursor_back(self, cursor, what: str = "アイテム取得", when: str = "取得前"):
         """アイテム取得（など）で動かした Windows のカーソルを、前にあった場所へ戻す（依頼者）。

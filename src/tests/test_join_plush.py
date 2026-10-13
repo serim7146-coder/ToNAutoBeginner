@@ -259,7 +259,8 @@ class TestFetchGuidancePlush(unittest.TestCase):
         self.assertEqual(ex._fetch_stopped(0, 1e18, want=PLUSH), "round")
 
     def test_the_in_front_part_uses_buy_plush(self):
-        src = inspect.getsource(ActionExecutor.ActionExecutor._fetch_in_front)
+        # EV で、前面を借りて押すところは _fetch_in_front_locked に分けた（_fetch_in_front は装備待ちフリーズと鍵）
+        src = inspect.getsource(ActionExecutor.ActionExecutor._fetch_in_front_locked)
         self.assertIn("fetcher.buy_plush(item_id) if plush else fetcher.buy(shop, item_id)", src)
 
 

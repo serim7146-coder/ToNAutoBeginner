@@ -359,6 +359,9 @@ RUN_POS_RUN_KEEP     = 30         # Run の後は全部でこの枚数まで
 # 入室時に Guidance Plush を取れなかった窓は、次の普通のラウンドの後（Begin が通った後）にふだんの自動取得の
 # 道で取りに行く（ER）。成功するまでこの回数まで
 PLUSH_RETRY_MAX      = 3
+# Begin を BEGIN_RETRY_MAX 回押して受理されなかった窓は、この秒数おいて押し直しの流れを 1 回だけ（EV）
+BEGIN_GIVE_UP_RETRY_SEC = 30.0
+BEGIN_GIVE_UP_POLL_SEC  = 0.5
 RUN_DEPTH_WORSE      = 0.02       # 実際に動いて f が 1.0 からこれ以上遠のいたら戻す（0.01 ほどは測りのぶれ）
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、

@@ -1786,13 +1786,15 @@ class LogMonitor:
                     self._log("ラウンド終了 【⚠ アイテムロスト → 全窓フリーズ中】")
                 else:
                     st.waiting_for_equip = True
-                    self._log("ラウンド終了 【⚠ アイテムロスト → Begin時にフリーズ開始】")
+                    self._log("ラウンド終了 【⚠ アイテムロスト → Begin が通ったら"
+                              + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
             elif not st.item_id:
                 if not self.cfg.auto_begin and not st.waiting_for_equip:
                     self._log("ラウンド終了 【⚠ アイテム未回収 → RoundOver時に通知予定】")
                 else:
                     st.waiting_for_equip = True
-                    self._log("ラウンド終了 【⚠ アイテム未回収 → Begin時に再フリーズ】")
+                    self._log("ラウンド終了 【⚠ アイテム未回収 → Begin が通ったら"
+                              + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
             else:
                 self._log("ラウンド終了")
         else:

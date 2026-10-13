@@ -935,13 +935,14 @@ class TestActionExecutorSkip(unittest.TestCase):
         return st, order, mock_sound
 
     def test_do_after_round_freezes_when_item_lost_found_at_round_end_osc(self):
-        """OSC窓: RoundOver後に判明したアイテムロストでもフリーズが張られる"""
+        """OSC窓: RoundOver後に判明したアイテムロストでも、Begin の前には張らない。Begin が通らなければ
+        張らない（EV: 23:12 窓1 は Begin の前に張って通らず、全窓が止まり続けた）"""
         with patch.object(ActionExecutor.OSCClient, "OSCClient", return_value=MagicMock()):
             st, order, mock_sound = self._run_late_item_lost(osc_port=9000)
 
-        self.assertTrue(st.equip_freeze_held, "フリーズが張られていない")
-        self.assertFalse(SharedState.EQUIP_WAIT_EVENT.is_set())
-        self.assertEqual(order, ["freeze", "click"], "フリーズはBeginクリック前")
+        self.assertFalse(st.equip_freeze_held, "Begin が通っていないので張らない")
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set(), "ほかの窓は止まらない")
+        self.assertEqual(order, ["click"], "Begin の前に張らない")
         # 音声は前面化と一緒にしか出さない。押す直前には鳴らさない
         mock_sound.assert_not_called()
 
@@ -949,9 +950,9 @@ class TestActionExecutorSkip(unittest.TestCase):
         """非OSC窓: 同上（キーボード操作経路でもフリーズが張られる）"""
         st, order, mock_sound = self._run_late_item_lost(osc_port=0)
 
-        self.assertTrue(st.equip_freeze_held, "フリーズが張られていない")
-        self.assertFalse(SharedState.EQUIP_WAIT_EVENT.is_set())
-        self.assertEqual(order, ["freeze", "click"], "フリーズはBeginクリック前")
+        self.assertFalse(st.equip_freeze_held, "Begin が通っていないので張らない（EV）")
+        self.assertTrue(SharedState.EQUIP_WAIT_EVENT.is_set())
+        self.assertEqual(order, ["click"], "Begin の前に張らない")
         # 音声は前面化と一緒にしか出さない。押す直前には鳴らさない
         mock_sound.assert_not_called()
 

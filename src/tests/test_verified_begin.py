@@ -229,6 +229,8 @@ class TestBeginRetry(unittest.TestCase):
             if after_click:
                 after_click(len(clicks), st)
 
+        self.give_up_retry = MagicMock()                 # 30 秒後の押し直し（EV）は別のテストで見る
+        ex._retry_after_giving_up = self.give_up_retry
         with patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(ex, "move", side_effect=lambda *a: moves.append(1)), \
@@ -261,6 +263,7 @@ class TestBeginRetry(unittest.TestCase):
         self.assertEqual(clicks, 3)
         self.assertTrue(any("⚠ Begin を3回押しましたが受理されませんでした" in m
                             for m in self.logs), self.logs)
+        self.give_up_retry.assert_called_once_with(4)
 
     def test_a_started_round_stops_the_retry(self):
         def round_started(n, st):
