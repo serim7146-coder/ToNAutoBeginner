@@ -69,8 +69,19 @@ MISS_SEC = 0.08
 CLICK_SEC = 0.04
 
 # 移動（OSC。Begin を押した位置から。開始から約 2.5 秒で店の正面）
-JUMP_AFTER_SEC = 0.30       # 左を押してから1回目のジャンプまで
-JUMP_GAP_SEC = 0.14         # 1回目と2回目のジャンプの間
+JUMP_AFTER_SEC = 0.30       # 左を押してから1回目のジャンプまで（速さを受け取れない窓だけ）
+JUMP_GAP_SEC = 0.14         # 1回目と2回目のジャンプの間（速さを受け取れない窓だけ）
+# 柵越えを速さで（ER。2026-10-13 11:33 の実測: 6 窓とも柵に当たると速さが 6 前後から 0.0〜0.21 に落ち、跳ぶと
+# 接地 0 → 約 0.25 秒で 1（柵の上）→ 0 → 約 0.6 秒後に 1（柵の向こう）。前の「0.30 秒で決め打ち」は出発点が柵から
+# 遠いと手前で跳び、歩いている途中の接地の浮きも着地に数えて「柵を越えた」が早すぎた）
+FENCE_MOVE_SPEED = 1.0      # 速さがいったんこれ以上出たら歩き出した
+FENCE_HIT_SPEED = 0.5       # 歩き出した後にこれ未満へ落ちたら柵に当たった → 跳ぶ
+FENCE_LIMIT_SEC = 3.0       # 左を押してから越えるまでの上限
+FENCE_JUMPS = 3             # 越えられずに張り付いたら跳び直す（合わせてこの回数まで）
+FENCE_REJUMP_SEC = 0.4      # 跳んでからこの秒数たっても地面にいて止まっていれば、跳べていない → 跳び直す
+FENCE_START_WAIT_SEC = 0.6  # 速さが一度も出ないまま、この秒数で押し直す（EH と同じ）
+FENCE_REPRESS_MAX = 2
+FENCE_REPRESS_GAP_SEC = 0.1
 JUMP_HOLD_SEC = 0.06
 LAND_LIMIT_SEC = 2.5        # 着地2回（柵の上・柵の向こう）を待つ上限
 LAND_POLL_SEC = 0.01
@@ -324,8 +335,14 @@ class Fetcher:
     """
 
     def __init__(self, osc, grounded, capture, mouse, equip_seen, stopped, log,
-                 locate_fn=locate, sleep=None, clock=None, saved_gain=None, client_height=None):
+                 locate_fn=locate, sleep=None, clock=None, saved_gain=None, client_height=None,
+                 speed=None, on_miss=None):
         self.osc = osc
+        # () → 速さ（VelocityMagnitude）か None。無ければ柵越えは決め打ち（ER）
+        self.speed = speed
+        # (撮影, 理由) → 見つからなかった撮影を残す（ER。FetchMiss）。last_shot は直前に撮ったもの
+        self.on_miss = on_miss
+        self.last_shot = None
         # () → 窓のクライアント領域の高さ（HUD の範囲の大きさ）。無い・取れなければ撮影の高さ
         self.client_height = client_height
         self.grounded = grounded
@@ -361,33 +378,107 @@ class Fetcher:
         self.sleep(JUMP_HOLD_SEC)
         self.osc.send("/input/Jump", 0)
 
-    def move_to_shop(self) -> bool:
-        """店の正面へ。着地2回が来なければ False。止まったら Stopped。どちらでも入力は離す"""
-        started = self.clock()
+    def _speed_now(self):
         try:
+            return self.speed() if self.speed is not None else None
+        except Exception:
+            return None
+
+    def _cross_fence_fixed(self) -> bool:
+        """速さを受け取れない窓: 左を押して JUMP_AFTER_SEC で決め打ちに 2 回跳び、着地 2 回で越えた（前のまま）"""
+        self._wait(JUMP_AFTER_SEC)
+        self._jump()
+        self._wait(JUMP_GAP_SEC)
+        self._jump()
+        lands, air = 0, False
+        deadline = self.clock() + LAND_LIMIT_SEC
+        while True:
+            if self.clock() >= deadline:
+                self.log(f"アイテム取得: 柵を越えられません（着地 {lands} 回）")
+                return False
             self._check()
-            self.osc.send("/input/MoveLeft", 1)
-            self._wait(JUMP_AFTER_SEC)
-            self._jump()
-            self._wait(JUMP_GAP_SEC)
-            self._jump()
-            lands, air = 0, False
-            deadline = self.clock() + LAND_LIMIT_SEC
-            while True:
-                if self.clock() >= deadline:
-                    self.log(f"アイテム取得: 柵を越えられません（着地 {lands} 回）")
-                    return False
-                self._check()
-                g = self.grounded()
+            g = self.grounded()
+            if g is False:
+                air = True
+            elif g is True and air:
+                lands += 1
+                air = False
+                if lands == 2:
+                    return True             # 柵の向こうに着いた
+            self.sleep(LAND_POLL_SEC)
+
+    def _cross_fence_by_speed(self, started: float) -> bool:
+        """左を押したまま、速さがいったん FENCE_MOVE_SPEED 以上出た後に FENCE_HIT_SPEED 未満へ落ちたら（柵に
+        当たった）跳ぶ。着地は跳んだ後から数え、接地の 0→1 が 2 回で越えた（歩いている途中の浮きは数えない）。
+        2 回目の着地の前に、地面にいて速さが FENCE_HIT_SPEED 未満（越えられずに張り付いた・跳べていない）なら
+        跳び直す（合わせて FENCE_JUMPS 回まで。数え直す）。速さが一度も出なければ跳ばずに押し直す
+        （FENCE_REPRESS_MAX 回まで）。FENCE_LIMIT_SEC で越えられなければ False"""
+        deadline = started + FENCE_LIMIT_SEC
+        moved = False
+        pressed_at = started
+        represses = 0
+        jumps = 0
+        jumped_at = None
+        lands, air = 0, False
+        land_times = []
+        while True:
+            now = self.clock()
+            if now >= deadline:
+                self.log(f"アイテム取得: 柵を越えられません（{FENCE_LIMIT_SEC:.1f}秒・跳んだ {jumps} 回・"
+                         f"着地 {lands} 回・" + ("歩き出した" if moved else "速さが出ない") + "）")
+                return False
+            self._check()
+            s = self._speed_now()
+            g = self.grounded()
+            if jumps == 0:
+                if s is not None and s >= FENCE_MOVE_SPEED:
+                    moved = True
+                if moved and s is not None and s < FENCE_HIT_SPEED:
+                    self.log(f"アイテム取得: 柵に当たった {now - started:.2f}秒（速さ {s:.2f}）→ 跳ぶ")
+                    jumps, jumped_at, lands, air = 1, self.clock(), 0, False     # 着地は跳び始めから数える
+                    self._jump()
+                elif not moved and now - pressed_at >= FENCE_START_WAIT_SEC and represses < FENCE_REPRESS_MAX:
+                    represses += 1
+                    self.log(f"アイテム取得: 速さが出ない（{FENCE_START_WAIT_SEC:.1f}秒）→ 左を押し直す（{represses} 回目）")
+                    self.osc.send("/input/MoveLeft", 0)
+                    self.sleep(FENCE_REPRESS_GAP_SEC)
+                    self.osc.send("/input/MoveLeft", 1)
+                    pressed_at = self.clock()
+                    continue
+            else:
                 if g is False:
                     air = True
                 elif g is True and air:
                     lands += 1
                     air = False
+                    land_times.append(now - jumped_at)
                     if lands == 2:
-                        break               # 柵の向こうに着いた。すぐ左を離す
-                self.sleep(LAND_POLL_SEC)
-            self.osc.send("/input/MoveLeft", 0)
+                        self.log("アイテム取得: 着地 " + "・".join(f"{t:.2f}" for t in land_times)
+                                 + f" 秒（跳んでから。跳んだ {jumps} 回）")
+                        return True
+                stuck = (g is True and s is not None and s < FENCE_HIT_SPEED
+                         and (lands >= 1 or now - jumped_at >= FENCE_REJUMP_SEC))
+                if stuck and jumps < FENCE_JUMPS:
+                    jumps += 1
+                    self.log(f"アイテム取得: 越えられずに張り付いた {now - started:.2f}秒（速さ {s:.2f}・着地 {lands} 回）"
+                             f"→ 跳び直す（{jumps} 回目）")
+                    jumped_at, lands, air, land_times = self.clock(), 0, False, []
+                    self._jump()
+            self.sleep(LAND_POLL_SEC)
+
+    def move_to_shop(self) -> bool:
+        """店の正面へ。柵を越えられなければ False。止まったら Stopped。どちらでも入力は離す"""
+        started = self.clock()
+        try:
+            self._check()
+            self.osc.send("/input/MoveLeft", 1)
+            if self.speed is None or self._speed_now() is None:
+                crossed = self._cross_fence_fixed()     # 速さを受け取れない窓は今の決め打ち
+            else:
+                crossed = self._cross_fence_by_speed(started)
+            if not crossed:
+                return False
+            self.osc.send("/input/MoveLeft", 0)     # 柵の向こうに着いた。すぐ左を離す
             self.log(f"アイテム取得: 柵を越えた {self.clock() - started:.2f}秒")
             self.osc.send("/input/MoveBackward", 1)
             self._wait(BACK_SEC)
@@ -424,12 +515,15 @@ class Fetcher:
         while True:
             self._check()
             shot = self.capture()
+            if shot is not None:
+                self.last_shot = shot[0]
             found = self.locate(shot[0], point) if shot is not None else None
             if found is None or len(found) < 6 or not callable(found[5]):
                 misses += 1
                 self.log(f"アイテム取得: 店の画面 {misses} 回目: 見つからない")
                 if misses > MISS_TRIES:
                     self.log("アイテム取得: 店の画面が見つかりません")
+                    self._miss("店の画面")
                     return None
                 self._wait(MISS_SEC)
                 continue
@@ -648,6 +742,7 @@ class Fetcher:
                 row = self._show_plush_row(project)
                 if row is None:
                     self.log("アイテム取得: Have Plush の行が見つかりません")
+                    self._miss("Have Plush の行")
                     return False
                 self._check()
                 if not self.mouse.click_at(*row):
@@ -673,6 +768,8 @@ class Fetcher:
             self.knob_at = target
             self._wait(DRAG_SETTLE_SEC)
             shot = self.capture()
+            if shot is not None:
+                self.last_shot = shot[0]
             rx, ry, sx, sy = project(PLUSH_ROW)
             center = (green_center(shot[0], (rx, ry), (sx, sy), PLUSH_ROW_WINDOW)
                       if shot is not None else None)
@@ -681,6 +778,14 @@ class Fetcher:
             if center is not None:
                 return center
         return None
+
+    def _miss(self, why: str):
+        """見つからなかった。直前の撮影を残す（ER。残すのは呼び出し側の on_miss）"""
+        if self.on_miss is not None and self.last_shot is not None:
+            try:
+                self.on_miss(self.last_shot, why)
+            except Exception:
+                pass
 
     def _drag(self, start, end, what: str):
         self._check()

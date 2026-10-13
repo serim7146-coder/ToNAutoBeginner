@@ -6,6 +6,7 @@ import BeginDetect
 import BeginMiss
 import config
 import DebugLog
+import FetchMiss
 import ItemFetch
 import ScreenCapture
 import SharedState
@@ -132,6 +133,7 @@ class ActionExecutor:
         # Run の位置合わせのためのデータ集め（EQ）。この監視（マクロの 1 回の開始）の間だけ覚える
         self._pos_rounds = 0              # 普通に終わったラウンドの数
         self._pos_ref_size = None         # 基準を撮った時のクライアントの大きさ（撮っていなければ None）
+        self._plush_retries = 0           # 入室時に取れなかった Guidance Plush をやり直す残りの回数（ER）
         self._respawn_menu_open = False       # Run のリスポーンで Esc のメニューを開いたまま押しをまたぐか
 
     @property
@@ -1474,6 +1476,11 @@ class ActionExecutor:
             if fetch:
                 self._fetch_item(round_seq, *fetch)
 
+        # 入室時に Guidance Plush を取れなかった窓（ER）。ロストの装備待ちが無いラウンドで、Begin が通った後に
+        if (self._plush_retries and st.begin_done and not st.waiting_for_equip
+                and not st.in_round and self._is_running()):
+            self._retry_plush(round_seq)
+
         # ── フェーズ2: アイテムロスト装備待ち（ロック外）──
         # 装備済み（アイテム取得→Beginモードで先に装備確認済み）の場合は何もしない
         # （フリーズ解除はBEGIN_DONEイベント側で行う）
@@ -1588,7 +1595,9 @@ class ActionExecutor:
             stopped=stopped,
             log=lambda m: DebugLog.write(f"{head} {m}"),
             saved_gain=self._saved_fetch_gain(),
-            client_height=lambda: WindowOperator.client_height(self._cfg.hwnd))
+            client_height=lambda: WindowOperator.client_height(self._cfg.hwnd),
+            speed=self._receiver_speed if receiver is not None else None,
+            on_miss=lambda shot, why: FetchMiss.save(shot, st.window_idx, why))
         name = f"{shop} Shop の id={item_id}"
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
@@ -1618,6 +1627,40 @@ class ActionExecutor:
                    "front_lost": "この窓が前面でなくなりました"}.get(outcome, outcome)
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
+
+    def request_plush_retry(self, why: str):
+        """入室時に Guidance Plush を取れなかった（ER）。次の普通のラウンドの後から、最大 PLUSH_RETRY_MAX 回
+        ふだんの自動取得の道で取りに行く"""
+        self._plush_retries = config.PLUSH_RETRY_MAX
+        DebugLog.write(f"[操作] [窓{self._st.window_idx}] Guidance Plush: 入室時に取れなかった（{why}）→ "
+                       f"次のラウンドの後に取りに行く（最大 {config.PLUSH_RETRY_MAX} 回）")
+
+    def _retry_plush(self, round_seq: int):
+        """入室時に取れなかった Guidance Plush を取りに行く 1 回（ER）。別のアイテムを持っていればやめる。
+        アイテム自動取得の条件（設定・OSC・ツールが Begin を押す窓・private・見本・アイテム取得→Begin モードでない）
+        を満たさなければ、その回は行かない（回数は減らさない）"""
+        st = self._st
+        if self._plush_retries <= 0:
+            return
+        head = f"[操作] [窓{st.window_idx}] Guidance Plush:"
+        plush = RoundDecision.guidance_plush_id()
+        held = st.held_item_id          # 持っているアイテム（0 = 持っていない）
+        if held:
+            self._plush_retries = 0
+            DebugLog.write(f"{head} "
+                           + ("もう持っている" if held == plush else f"別のアイテム（id={held}）を持っている")
+                           + " → やり直さない")
+            return
+        if (not plush or SharedState.get_item_begin_mode() or not SharedState.get_item_fetch()
+                or self._osc is None or not self._auto_begin_active() or not self.can_operate()
+                or self._receiver is None or not ItemFetch.available()):
+            DebugLog.write(f"{head} アイテム自動取得の条件がそろわないので、このラウンドは取りに行かない")
+            return
+        self._plush_retries -= 1
+        DebugLog.write(f"{head} 入室時に取れなかった分を取りに行く（残り {self._plush_retries} 回）")
+        outcome = self._fetch_item(round_seq, "Event", plush, plush=True)
+        if outcome == "ok":
+            self._plush_retries = 0
 
     def fetch_guidance_plush(self, extra_stop=None) -> str:
         """入室の Begin が受理された後に Guidance Plush を取りに行く（DZ）。マクロの監視中で、この窓の

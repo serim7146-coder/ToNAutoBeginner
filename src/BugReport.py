@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 import BeginMiss
+import FetchMiss
 import RunFace
 import config
 import ConnectDB            # .env を読み込む（同じ候補）。値は debug.log に書かないよう覚えている
@@ -181,7 +182,8 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
         notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 入れていません（未選択）")
     else:
         # Run の向きの撮影（DQ）も同じチェックで入れる（ほかのプレイヤーの名前が写りうる）
-        for files_for in (BeginMiss.files_for, RunFace.files_for):
+        # アイテム取得で見つからなかった撮影（ER）も同じ
+        for files_for in (BeginMiss.files_for, RunFace.files_for, FetchMiss.files_for):
             for n in windows or [0]:
                 images.update(files_for(n))
         if not images:

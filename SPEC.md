@@ -74,9 +74,11 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight・Drop）と、速度（VelocityMagnitude）の受信。受け方は窓ごとに「OSCQuery → 届かなければ固定ポート」。 |
 | `OSCQuery.py` | ツールに1つの OSCQuery のサービス（HTTP＋mDNS）。VRChat が送ってきた値を、送り元のポート → プロセス → 窓で振り分ける。 |
 | `BeginDetect.py` / `BeginMiss.py` / `ScreenCapture.py` | 画像で `[ BEGIN ]` を探す（PrintWindow で背面の窓も撮る）、見つからなかった撮影を残す。 |
-| `ItemFetch.py` | アイテム自動取得。OSC で店へ移動し、SIFT＋ホモグラフィで店のボタンを見つけ、視点を回してクリックする。HUD に掛かるなら店の画面を真ん中へ寄せる。 |
+| `ItemFetch.py` | アイテム自動取得。OSC で店へ移動し（柵は速さで当たったのを見て跳び、跳んだ後の着地 2 回で越えた。速さを受け取れない窓は決め打ち）、SIFT＋ホモグラフィで店のボタンを見つけ、視点を回してクリックする。HUD に掛かるなら店の画面を真ん中へ寄せる。 |
+| `FetchMiss.py` | アイテム取得で「店の画面」「Have Plush の行」が見つからなかったときの撮影を残す（不具合の報告には撮影のチェックがあるときだけ）。 |
 | `RespawnButton.py` | Esc のメニューの「リスポーン」のボタンを撮影から絵で探す（Run のリスポーン）。 |
 | `RunFace.py` | Run のリスポーンの後、階段の上の構造の絵（目印）を撮影から探し、真正面からのずれと大きさ（倍率）を測る。 |
+| `RunPos.py` | Run の位置合わせのためのデータ集め（撮って残すだけ）。止まっているときの基準の撮影と、Run の後の撮影を等倍の PNG で残す。 |
 | `ToNEntry.py` | 入室直後の選択画面を突破する（OSC の横移動＋クリック）。セーブコードを貼る流れ（`load_code`）。 |
 | `SaveLoad.py` | Save/Load のコード欄・入力欄を絵で探す所と、クリップボード。セーブコードはどこにも書き出さない。 |
 
@@ -262,6 +264,8 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\fog_object_names.json` | 看破の名前ごとの答え合わせ |
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToNAutoBeginner\run_face\` | Run の向き・前後でうまくいかなかったときの撮影（1/2 の JPEG。最新 `SHOT_KEEP` 枚） |
+| `%APPDATA%\ToNAutoBeginner\run_pos\` | Run の位置合わせのためのデータ（等倍の PNG。基準は窓ごとに 3 枚・Run の後は 30 枚。不具合の報告には入れない） |
+| `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
 | `%APPDATA%\ton-syncskip\ton-utils.log`・`save-history.sqlite` | ToN Utils のログと記録（読むだけ。sqlite は `file:…?mode=ro` で開き、`logs` の source・started だけを読む。写しも取らない） |
 | リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |

@@ -3664,23 +3664,38 @@ class App(tk.Tk):
         監視中でその窓の受信があるときだけ（無ければ飛ばす）"""
         def log(m):
             self._log(f"[窓{window_no}] {m}")
+
+        def action_now():
+            monitor = next((m for m in list(getattr(self, "monitors", []) or [])
+                            if m.cfg.hwnd == hwnd), None) if self._running else None
+            return getattr(monitor, "_action", None)
+
+        def retry_later(why):
+            # 取れなかった。マクロが動いていれば、次の普通のラウンドの後に取りに行く（ER）
+            action = action_now()
+            if action is not None and not self._entry_stop.is_set():
+                action.request_plush_retry(why)
         try:
             result = ToNEntry.wait_verified(log_path, offset, config.PLUSH_VERIFIED_WAIT_SEC,
                                             is_running=lambda: not self._entry_stop.is_set())
             if result == "round":
                 log("ラウンドが始まったため Guidance Plush を取りに行きません")
+                retry_later("ラウンドが始まった")
                 return
             if result != "verified":
                 if result == "timeout":
                     log("⚠ Begin の受理を確認できないため Guidance Plush を取りに行きません")
+                    retry_later("Begin の受理を確認できない")
                 return
-            monitor = next((m for m in list(getattr(self, "monitors", []) or [])
-                            if m.cfg.hwnd == hwnd), None) if self._running else None
-            action = getattr(monitor, "_action", None)
+            action = action_now()
             if action is None or getattr(action, "_receiver", None) is None:
                 log("マクロが動いていないため Guidance Plush を取りに行きません")
+                if action is not None:
+                    action.request_plush_retry("受信が無い")
                 return
-            action.fetch_guidance_plush(extra_stop=self._entry_stop.is_set)
+            outcome = action.fetch_guidance_plush(extra_stop=self._entry_stop.is_set)
+            if outcome not in ("ok", "stopped"):
+                retry_later(outcome)
         except Exception:
             DebugLog.exception("mainGUI._plush_after_entry")
 
