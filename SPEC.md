@@ -69,7 +69,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 ### 操作
 | モジュール | 責務 |
 |---|---|
-| `ActionExecutor.py` | 実際の操作。自爆（背面へキー）、Begin（移動・押し方・押し直し・位置合わせ）、DTM/Waldo の AFK 対策、速度検知、チェイス、アイテム自動取得、アイテムロストの前面化と音声、ラウンドの後にアイテムを落とす、Run のリスポーン。移動の実測（`MotionSampler`）。 |
+| `ActionExecutor.py` | 実際の操作。自爆（背面へキー）、Begin（移動・押し方・押し直し・位置合わせ）、DTM/Waldo の AFK 対策、速度検知、チェイス、アイテム自動取得、アイテムロストの前面化と音声、死んだ・生き残ったときにアイテムを落とす、Run のリスポーン。移動の実測（`MotionSampler`）。 |
 | `WindowOperator.py` | Win32 の操作。前面化・背面へのキー・クリック・カーソル・窓の矩形と移動・前面の貸し借り（`FrontLoan`）。VRChat を前に出すたびに `config.CURSOR_LOCK_KEY`（Tab）を押して離し、カーソルを中央に固定する（`lock_cursor`。依頼者の実測。浮いているかは見ない。その窓が前面のときだけ押す）。 |
 | `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight・Drop）と、速度（VelocityMagnitude）の受信。受け方は窓ごとに「OSCQuery → 届かなければ固定ポート」。 |
 | `OSCQuery.py` | ツールに1つの OSCQuery のサービス（HTTP＋mDNS）。VRChat が送ってきた値を、送り元のポート → プロセス → 窓で振り分ける。 |
@@ -201,7 +201,8 @@ LogMonitor._process(line)
 - **ラウンド開始**: ラウンドごとの状態を落とす。Moon の何回目か（`RoundSequence`）、突入フリーズ、ラウンド開始でのアイテムロスト、Run ならリスポーン（§9）。テラーを持たないラウンド（Moon・Run・Special）はここで統計を送る。
 - **テラー確定**（Killers set / revealed・Enrage・Stunned・Joy・Foxy・看破）→ `_on_killers` → `_plan()` で手順を決めて `_decide()`。置き換えで結論が変わるときだけ合図を待つ。Utils の判断に従う窓は Utils を待つ（§9）。
 - **置き換えの合図**（`EVENT_REPLACEMENT`）: 知らせる → `TerrorReplacement.TABLE` で差し替える。
-- **RoundOver**: チェイス停止・録画の終了予約・続行フリーズの解除予約・アイテムロストの案内・持っているアイテムを落とす・`do_after_round`。
+- **RoundOver**: チェイス停止・録画の終了予約・続行フリーズの解除予約・アイテムロストの案内・`do_after_round`。
+- **死亡（You died.）・生存（Lived in round.）**: そのラウンドで先に来た方で 1 回、アイテムを落とす（`_drop_when_round_ends`）。
 - **Verified Round End**: Begin を押せる合図。アイテムロストの判定・速度検知の開始。
 - **Verified**: `VerifiedTracker` で受理か定期かを見分ける。受理なら `begin_done`。15秒以内にラウンドが始まらなければ定期だったとして押し直す。
 
@@ -237,7 +238,7 @@ LogMonitor._process(line)
 - **速さの受信**: まずツールに1つの OSCQuery のサービス（mDNS で広告）で待つ。`OSCQUERY_CONNECT_WAIT_SEC` たってもその窓から届かなければ、固定ポート（VRChat の送信ポート）を開く。固定ポートは先に開いたアプリだけが受け取れるので、ほかのアプリ（ToN Utils など）と取り合わないように OSCQuery を先にする。
 - **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。完全放置モードでは Guidance Plush だけ（`RoundDecision.guidance_plush_id`）。合計 `ITEM_FETCH_LIMIT_SEC` まで）。取得で動かした縦の視点は、どの終わり方でも戻す。前面を取られて戻せなかった分は、裏で見張って、この窓が前面になったら・ほかの窓が誰もフリーズしていなければ前面を借りて戻す（`_restore_view_soon`）。
   - 押す文字（店のボタン・Equip）が照準の左下の HUD に掛かるなら、店の画面の真ん中を照準へ寄せてから押す。重なりは「横は押す点・縦は文字の箱（`GREEN_WINDOW` の縦 × 倍率）の上下」で見る（`ItemFetch.button_box`）。範囲 `HUD_X`・`HUD_Y` は照準からの位置を高さで割った割合。
-- **ラウンドの後にアイテムを落とす**（「アイテムを落とす」）: RoundOver で `/input/DropRight` を押して離す（続行ラウンドだけでなく毎ラウンド）。
+- **アイテムを落とす**（「アイテムを落とす」）: 死んだ・生き残った行が来たとき、ラウンドごとに 1 回 `/input/DropRight` を押して離す（続行ラウンドも同じ。RoundOver・続行の終わりでは落とさない。死んだ・生き残った行が来ない Run のリスポーンでは落とさない。落としたことはログの出来事にならないので、アイテムロストと数えない）。
 - **続行ラウンドの後に窓を戻す**（「窓位置リセット」）: 続行フリーズを張ったときに窓の矩形を覚え（最大化なら通常の矩形。全画面・最小化は覚えない）、解いたら位置を戻す（全画面は前面を借りて Alt+Enter で窓に、最大化は前面を取らずに戻す）。設定で切れる。
 - **チェイス**: キー（既定 F1 時計回り・F2 反時計回り）で前面の窓が回り続ける（OSC の移動＋視点）。同じキーでもう一度押すと止まり、反対のキーで向きを変える。設定で使わないようにできる（キーを拾わない）。private の窓だけ。
 - **Run のリスポーン**（「Runリスポーン」）: Run のラウンドに入ったら、ほかの窓のフリーズが無いときに前面を借りて Esc のメニューからリスポーンし（`RespawnButton`。鍵と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけで、「Player respawned」の行は前面を返してから鍵の外で待つ。来なければ借り直して 1 回押し直す）、背面の OSC で後ろへ 2.85 秒（動き出しから数える。上限 `RUN_EXTEND_MAX_SEC` 1.0 秒・押し直しは Begin と同じ）→ 左へ 0.9 秒 → 撮影で目印（`RunFace`）を探して向きを直す（`RUN_FACE_TRIES` まで。ずれが大きくなったら戻して止める）。**前後の位置は直さない**（`RUN_DEPTH_ENABLED = False`。目印の倍率は debug.log に書くだけ。理由は §13）。

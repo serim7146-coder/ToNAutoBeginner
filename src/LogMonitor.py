@@ -1681,6 +1681,7 @@ class LogMonitor:
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")
             self._lose_held_item(HELD_LOST_RUN_DEATH)
+        self._drop_when_round_ends("死んだ")
 
     def _on_respawn(self, event):
         """リスポーン（ラウンド中ならアイテムロスト）"""
@@ -1747,18 +1748,12 @@ class LogMonitor:
             # このモードでは自動取得を動かさない（item_fetch_target が None）
             self._action._attend_to_item_loss()
             self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
-        # どのラウンドの後でもアイテムを落とす（DW）。続行フリーズを張ったラウンドは
-        # 続行の終わり（after_continue_round）で落とすので、ここでは落とさない（二重にしない）。
-        # 落とすのは Begin 前の移動・アイテム自動取得より前（do_after_round の頭で）
-        st.drop_after_round_seq = (st.round_seq if st.continue_freeze_round != st.round_seq
-                                   else -1)
+        # アイテムを落とすのは死んだ・生き残ったとき（EU。_drop_when_round_ends）。RoundOver では落とさない
         # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
         # Verified Round End を待ってから行う（RoundOver時点だと
         # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
         if self.cfg.auto_begin:
             self._start_daemon(self._action.do_after_round)
-        elif st.drop_after_round_seq >= 0:
-            self._start_daemon(self._action.drop_after_round)
 
     def _on_verified_end(self, event):
         """Verified Round End（Begin を押せる）"""
@@ -1936,6 +1931,18 @@ class LogMonitor:
                     self._log("🎉 3勝達成！" + self._after_unlock_text(
                         "以降のDTM/Waldoラウンドはスキップします"))
         st.is_open_special_round_round = False
+        self._drop_when_round_ends("生き残った")
+
+    def _drop_when_round_ends(self, why: str):
+        """死んだ・生き残った行が来たら、そのラウンドで 1 回だけアイテムを落とす（EU。依頼者 2026-10-13
+        「デスした時か勝った時」）。続行ラウンドも同じ。RoundOver・続行の終わりでは落とさない。死んだ・
+        生き残った行が来ないラウンド（Run のリスポーンなど）は落とさない。条件（設定・OSC・private）は
+        ActionExecutor.drop_at_round_end が見る。落としたことはロストと数えない（ログの出来事にならない）"""
+        st = self.st
+        if st.dropped_round_seq == st.round_seq or not SharedState.get_continue_drop_item():
+            return
+        st.dropped_round_seq = st.round_seq
+        self._start_daemon(self._action.drop_at_round_end, st.round_seq, why)
 
     # ── テラー確定処理 ────────────────────────
     def _on_enrage(self, name: str):

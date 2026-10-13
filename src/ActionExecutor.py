@@ -1415,8 +1415,7 @@ class ActionExecutor:
         clicked = False
         if not self._wait_run_respawn():
             return
-        # アイテムを落とすのは、Run のリスポーンが終わった後・Begin 前の移動より前（DW）
-        self.drop_after_round()
+        # アイテムを落とすのは死んだ・生き残ったとき（EU。LogMonitor → drop_at_round_end）。ここでは落とさない
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
@@ -2306,40 +2305,27 @@ class ActionExecutor:
                        + ("（最大化の元の矩形）" if state == "maximized" else ""))
 
     def after_continue_round(self):
-        """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）。この順で:
-        1. アイテムを落とす（/input/DropRight を押して離す。OSC なので private だけ。持っているかは見ない）
-        2. 窓を始まりの位置へ戻す（覚えた矩形があるときだけ。どのインスタンスでも）"""
+        """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）: 窓を始まりの位置へ戻す
+        （覚えた矩形があるときだけ。どのインスタンスでも）。アイテムはここでは落とさない（EU: 死んだ・
+        生き残ったときに落とす。drop_at_round_end）"""
         rect, self._continue_rect = self._continue_rect, None
         if not self._is_running():
             return
-        if SharedState.get_continue_drop_item():
-            self._drop_item_after_continue()
         if rect is not None and SharedState.get_continue_restore_window():
             self._restore_continue_window(rect)
 
-    def _drop_item_after_continue(self):
-        self._press_drop(f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:",
-                         "続行ラウンドが終わったので、アイテムを落としました")
-
-    def drop_after_round(self):
-        """どのラウンドの後でも（DW）: RoundOver の後に1回アイテムを落とす。続行フリーズを張った
-        ラウンドは after_continue_round が落とすので、ここでは落とさない（LogMonitor が決める）。
-        Run のリスポーンが走っていれば終わってから（同時に送らない）。Begin 前の移動・アイテム
-        自動取得は、自動 Begin の窓なら do_after_round でこの後に続く（同じスレッドで順に）"""
+    def drop_at_round_end(self, round_seq: int, why: str):
+        """死んだ・生き残った行が来たラウンドで 1 回（EU。LogMonitor._drop_when_round_ends が 1 回にする）:
+        /input/DropRight を押して離す。設定 OFF・OSC が使えない・private でない・次のラウンドになった・
+        止めた → 落とさない"""
         st = self._st
-        seq, st.drop_after_round_seq = st.drop_after_round_seq, -1
-        if seq < 0 or seq == st.dropped_round_seq:
-            return                  # 落とすラウンドでない・もう落とした
-        if not self._wait_run_respawn():
+        head = f"[操作] [窓{st.window_idx}] {why}:"
+        if not self._is_running() or not SharedState.get_continue_drop_item():
             return
-        head = f"[操作] [窓{st.window_idx}] ラウンドの終わり:"
-        if st.in_round or st.round_seq != seq:
+        if st.round_seq != round_seq:
             DebugLog.write(f"{head} アイテムを落としません（次のラウンドが始まった）")
             return
-        st.dropped_round_seq = seq
-        if not SharedState.get_continue_drop_item():
-            return
-        self._press_drop(head, "ラウンドが終わったので、アイテムを落としました")
+        self._press_drop(head, f"{why}ので、アイテムを落としました")
 
     def _press_drop(self, head: str, message: str):
         """/input/DropRight を押して離す。OSC の窓・private のときだけ。持っているかは見ない"""

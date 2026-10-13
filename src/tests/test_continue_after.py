@@ -148,22 +148,22 @@ class TestAtTheEnd(_Case):
     def test_fullscreen_drop_then_alt_enter_then_move_then_give_back(self):
         world = _World(self, state="fullscreen", rect=(0, 0, 2560, 1440))
         ex = self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1), "borrow", ("keys", "alt+enter"),
+        self.assertEqual(world.events, ["borrow", ("keys", "alt+enter"),
                                         ("move", 1699, 0), "return", ("cursor", (11, 22))])
-        self.assertEqual(self.logs, ["続行ラウンドが終わったので、アイテムを落としました",
-                                     "窓を元の位置に戻しました（フルスクリーンを解除）"])
+        self.assertEqual(self.logs, ["窓を元の位置に戻しました（フルスクリーンを解除）"],
+                         "アイテムは落とさない（EU: 死んだ・生き残ったときに落とす）")
         self.assertIsNone(ex._continue_rect, "1回戻したら忘れる")
 
     def test_only_moved_does_not_borrow_the_front(self):
         world = _World(self, rect=(100, 200, 968, 902))
         self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1), ("move", 1699, 0)])
+        self.assertEqual(world.events, [("move", 1699, 0)])
         self.assertEqual(self.logs[-1], "窓を元の位置に戻しました")
 
     def test_not_moved_does_nothing_to_the_window(self):
         world = _World(self)
         self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1)])
+        self.assertEqual(world.events, [])
         self.assertNotIn("窓を元の位置に戻しました", self.logs)
 
     def test_not_private_does_not_drop_but_restores(self):
@@ -181,7 +181,7 @@ class TestAtTheEnd(_Case):
     def test_not_back_to_a_window_moves_nothing_but_gives_the_front_back(self):
         world = _World(self, state="fullscreen", rect=(0, 0, 2560, 1440), windowed_after=None)
         self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1), "borrow", ("keys", "alt+enter"),
+        self.assertEqual(world.events, ["borrow", ("keys", "alt+enter"),
                                         "return", ("cursor", (11, 22))])
         self.assertTrue(any("窓に戻りません" in m for m in world.written), world.written)
         self.assertGreaterEqual(world.now[0], config.CONTINUE_WINDOWED_WAIT_SEC)
@@ -191,14 +191,14 @@ class TestAtTheEnd(_Case):
         world = _World(self, state="maximized", rect=(-8, -8, 2568, 1400))
         world.normal = (1500, 0, 2368, 702)             # 元の矩形が、始まりの位置とずれている
         self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1), "unmaximize", ("move", 1699, 0)])
+        self.assertEqual(world.events, ["unmaximize", ("move", 1699, 0)])
         self.assertEqual(world.front, 0x900, "前面は変えない")
         self.assertEqual(self.logs[-1], "窓を元の位置に戻しました（最大化を解除）")
 
     def test_a_maximized_window_already_in_place_is_only_restored(self):
         world = _World(self, state="maximized", rect=(-8, -8, 2568, 1400))
         self._end(world)
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1), "unmaximize"])
+        self.assertEqual(world.events, ["unmaximize"])
         self.assertEqual(self.logs[-1], "窓を元の位置に戻しました（最大化を解除）")
 
     def test_another_size_moves_only_the_position(self):
@@ -212,13 +212,13 @@ class TestAtTheEnd(_Case):
         for state in (None, "minimized"):
             world = _World(self, state=state, rect=(100, 200, 968, 902))
             self._end(world)
-            self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1)], state)
+            self.assertEqual(world.events, [], state)
 
     def test_nothing_remembered_nothing_restored(self):
         world = _World(self, rect=(100, 200, 968, 902))
         ex = self._executor(world)
         ex.after_continue_round()
-        self.assertEqual(world.events, [("osc", "/input/DropRight", 0.1)])
+        self.assertEqual(world.events, [])
 
     def test_stopped_does_nothing(self):
         world = _World(self, state="fullscreen", rect=(0, 0, 2560, 1440))
@@ -228,7 +228,7 @@ class TestAtTheEnd(_Case):
     def test_the_settings(self):
         for drop, restore, expected in (
                 (False, True, [("move", 1699, 0)]),
-                (True, False, [("osc", "/input/DropRight", 0.1)]),
+                (True, False, []),
                 (False, False, [])):
             SharedState.set_continue_drop_item(drop)
             SharedState.set_continue_restore_window(restore)
@@ -448,7 +448,8 @@ class TestTheSettings(unittest.TestCase):
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("アイテムを落とす・窓位置リセット", readme)
-        self.assertIn("どのラウンドでも、終わったら", readme)          # DW
+        self.assertIn("死んだとき・生き残ったときに、1 回だけ", readme)  # EU（前は DW の「どのラウンドでも、終わったら」）
+        self.assertNotIn("どのラウンドでも、終わったら", readme)
 
 
 class TestTheDropIsNotALoss(unittest.TestCase):

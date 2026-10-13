@@ -218,7 +218,6 @@ class TestTheBeginWaitIsNotDelayed(unittest.TestCase):
         started = []
         w.st.round_over_time = w.now[0]
         with patch.object(w.ex, "_wait_run_respawn", return_value=True), \
-             patch.object(w.ex, "drop_after_round"), \
              patch.object(w.ex, "_begin_precheck", side_effect=lambda **k: started.append(w.now[0]) or False):
             w.ex.do_after_round()
         return started[0] - w.st.round_over_time
