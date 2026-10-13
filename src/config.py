@@ -234,7 +234,7 @@ MOVE_REPRESS_GAP_SEC  = 0.1
 VERIFIED_PERIODIC_SEC      = 300.0
 VERIFIED_PERIODIC_TOL_SEC  = 1.0     # 予定からの許容ズレ
 VERIFIED_AFTER_OVER_SEC    = 2.0     # RoundOver からこの秒数以内の Verified は遅れて出た定期の候補
-BEGIN_PRESS_RECENT_SEC     = 3.0     # 予定と重なった1回を受理とみなす「直前に押した」の長さ（壁時計）
+BEGIN_PRESS_RECENT_SEC     = 3.0     # 「直前に押した」の長さ（壁時計）。予定の外の Verified で「ツールがまだ押していない → 定期」を見分ける（予定と重なった1回は押していても定期。EP）
 VERIFIED_LEARN_BACK_SEC    = 1800.0  # 起動時に位相を取り戻すため遡るログの長さ
 # 採用した Verified の後、ラウンド開始が来るまでの実測は12〜13秒
 VERIFIED_ROUND_START_WAIT_SEC = 15.0
@@ -344,6 +344,9 @@ RUN_DEPTH_MAX_SEC    = 0.6
 RUN_DEPTH_TRIES      = 4          # 前後に動かす回数の上限
 # Run の後ろへ・前後の直しも「動き出し」から数える（EH）。延びの上限（12:09 窓3 の動き出し 0.75 秒が入るように）
 RUN_EXTEND_MAX_SEC   = 1.0
+# 「Player respawned」を受けてから後ろへを押すまで（EP: リスポーン直後の速さ 1.2 が残っていて、動き出しから
+# 数える（EH）が「動き出し 0.00 秒」と取り違えていた。2026-10-13 窓2・5）
+RUN_BACK_DELAY_SEC   = 0.5
 RUN_DEPTH_WORSE      = 0.02       # 実際に動いて f が 1.0 からこれ以上遠のいたら戻す（0.01 ほどは測りのぶれ）
 # 入室時のクリックで借りた前面を、離してから元の窓へ返すまでの間。入室パネルは
 # 離した瞬間に判定されるので、離した後に待つ。Begin は押した瞬間に判定され、

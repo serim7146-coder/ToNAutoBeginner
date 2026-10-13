@@ -1724,6 +1724,14 @@ class ActionExecutor:
             if why:
                 self._log(f"Run: リスポーンできませんでした（{why}）")
                 return
+            # 「Player respawned」から RUN_BACK_DELAY_SEC 待ってから後ろへ（EP: 直後の速さが残っていて、
+            # 動き出しから数えるのが 0 秒と取り違えていた）。待つ間に止めた・ラウンドが変わったらやめる
+            deadline = time.time() + config.RUN_BACK_DELAY_SEC
+            while time.time() < deadline:
+                if not self._run_after_respawn(round_seq):
+                    DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
+                    return
+                time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
             for address, sec in (("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
                 if not self._run_after_respawn(round_seq):

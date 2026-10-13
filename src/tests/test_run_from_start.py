@@ -151,7 +151,7 @@ class TestRunBackward(unittest.TestCase):
              patch.object(ActionExecutor.MotionSampler, "start", lambda s: None), \
              patch.object(ActionExecutor.MotionSampler, "release", lambda s: s._write("実測 距離 9.00" + s.suffix)):
             w.ex.do_run_respawn(1)
-        self.assertAlmostEqual(w.released(B), 2.85 + 0.67, delta=0.011)
+        self.assertAlmostEqual(w.released(B), config.RUN_BACK_DELAY_SEC + 2.85 + 0.67, delta=0.011)
         self.assertIn(("press", "/input/LookLeft", 0.9), w.sent, "左へは今どおり 0.9 秒")
         self.assertIn("[操作] [窓3] Run: 後ろへ: 実測 距離 9.00・動き出しから数えた（+0.67 秒）・押し直し 1 回",
                       w.written)
@@ -164,7 +164,7 @@ class TestRunBackward(unittest.TestCase):
         w.ex._fix_depth = lambda seq: None
         with patch.object(SharedState, "get_run_respawn", lambda: True),              patch.object(config, "BEGIN_START_WAIT_SEC", 3.0),              patch.object(ActionExecutor.MotionSampler, "start", lambda s: None),              patch.object(ActionExecutor.MotionSampler, "release", lambda s: None):
             w.ex.do_run_respawn(1)
-        self.assertAlmostEqual(w.released(B), 2.85 + 1.0, delta=0.011)
+        self.assertAlmostEqual(w.released(B), config.RUN_BACK_DELAY_SEC + 2.85 + 1.0, delta=0.011)
 
     def test_no_receiver_is_as_before(self):
         w = _World(self)

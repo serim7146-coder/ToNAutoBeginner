@@ -303,7 +303,7 @@ class TestTheFreezes(_Case):
         SharedState.round_freeze_start(self.st)         # Run の突入フリーズ（自分）
         self._run()
         self.assertEqual(self.w.events, self.WHOLE)
-        self.assertLess(self.w.now[0], config.RESPAWN_MENU_WAIT_SEC + 0.5)
+        self.assertLess(self.w.now[0], config.RESPAWN_MENU_WAIT_SEC + config.RUN_BACK_DELAY_SEC + 0.5)
 
     def test_a_continue_round_while_in_front_gives_it_back_then_does_it_again(self):
         other = WindowState()

@@ -902,16 +902,17 @@ class TestBeginAfterFalseVerified(unittest.TestCase):
         self.assertEqual(len(self._again()), 1, "1回だけ")
 
     def test_a_scheduled_one_right_after_a_press(self):
+        """EP: 予定と重なった1回は、押した直後でも定期（受理にしないので、取り違えの押し直しも無い）"""
         monitor = self._monitor()
         monitor._verified.last_periodic = self.BASE - 287          # 次の予定は BASE+13
         self._feed(monitor, self.BASE, "RoundOver")
         self._feed(monitor, self.BASE + 12, "Verified Round End")
         monitor.st.last_begin_press_at = 50_000.0
         self._feed(monitor, self.BASE + 13, "Verified", clock=50_000.5)
-        self.assertTrue(monitor.st.begin_done, "前提: 重なった1回は受理")
+        self.assertFalse(monitor.st.begin_done, "重なった1回は定期")
         self._feed(monitor, self.BASE + 30)
         self.assertFalse(monitor.st.begin_done)
-        self.assertEqual(len(self._again()), 1)
+        self.assertEqual(self._again(), [])
 
     def test_a_round_start_within_15_seconds_does_nothing(self):
         monitor = self._monitor()
@@ -1427,12 +1428,17 @@ class TestVerifiedPhase(unittest.TestCase):
         self.assertEqual(monitor._verified.last_periodic, self.BASE + 13)
 
     def test_a_round_start_12s_later_undoes_the_learned_phase(self):
-        for phase, name in ((None, "位相を知らなかった"), (self.BASE + 13 - 300, "予定と重なった")):
+        """位相を知らなかった → 戻す。予定と重なった → そのまま（その時刻には定期も出ている。戻すと 300 秒後の
+        定期が予定の外になり、受理と取り違える。EP・技術選定の決定 A）"""
+        for phase, expected, name in ((None, None, "位相を知らなかった"),
+                                      (self.BASE + 13 - 300, self.BASE + 13, "予定と重なった")):
             monitor = self._monitor(phase=phase)
             self._verified_after_round_end(monitor)
             self._feed(monitor, self.BASE + 25, self.START)
-            self.assertEqual(monitor._verified.last_periodic, phase, name)
+            self.assertEqual(monitor._verified.last_periodic, expected, name)
             self.assertTrue(any("無視した Verified の 12.0秒後にラウンド開始" in m for m in self.debug), name)
+            self.assertEqual(any("予定と重なった1回なので定期の位相はそのまま" in m for m in self.debug),
+                             phase is not None, name)
 
     def test_no_round_start_keeps_it(self):
         monitor = self._monitor(phase=None)
@@ -3899,14 +3905,16 @@ class TestVerifiedTracker(unittest.TestCase):
         self.assertEqual(self.tr.on_verified(1190.0, False), VerifiedTracker.BEGIN)
         self.assertEqual(self.tr.last_periodic, 1000.0)
 
-    def test_one_on_schedule_is_begin_only_if_just_pressed(self):
-        for pressed, expected in ((True, VerifiedTracker.BEGIN),
+    def test_one_on_schedule_is_periodic_even_if_just_pressed(self):
+        """EP: 予定と重なった1回は、押した直後でも定期（09:38 窓5 の取り違え）"""
+        for pressed, expected in ((True, VerifiedTracker.PERIODIC),
                                   (False, VerifiedTracker.PERIODIC)):
             tr = VerifiedTracker.VerifiedTracker()
             tr.last_periodic = 1000.0
             tr.on_round_end_verified(1200.0)
             self.assertEqual(tr.on_verified(1300.0, pressed), expected, pressed)
             self.assertEqual(tr.last_periodic, 1300.0, "どちらでも位相は更新")
+            self.assertEqual(tr.schedule_due, 1300.0, "重なった予定を覚える（理由の行用）")
 
     def test_two_in_a_row_are_periodic_and_begin(self):
         self.tr.last_periodic = 1000.0
@@ -3998,14 +4006,16 @@ class TestVerifiedInTheMonitor(unittest.TestCase):
         self.assertNotIn("do_speed_strafe", started)
         self.assertFalse(monitor.st.begin_done)
 
-    def test_a_press_just_before_makes_the_scheduled_one_a_begin(self):
+    def test_a_press_just_before_does_not_make_the_scheduled_one_a_begin(self):
+        """EP: 押した直後でも、予定と重なった1回は定期"""
         base = datetime(2026, 9, 30, 21, 0, 0).timestamp()
         monitor = self._monitor()
         monitor._verified.last_periodic = base
         self._feed(monitor, base + 213, "Verified Round End")
         monitor.st.last_begin_press_at = 50_000.0
         started = self._feed(monitor, base + 300, "Verified", clock=50_000.0 + config.BEGIN_PRESS_RECENT_SEC)
-        self.assertIn("do_speed_strafe", started)
+        self.assertNotIn("do_speed_strafe", started)
+        self.assertFalse(monitor.st.begin_done)
 
     def test_a_press_too_long_ago_does_not_count(self):
         base = datetime(2026, 9, 30, 21, 0, 0).timestamp()

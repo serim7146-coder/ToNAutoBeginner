@@ -25,6 +25,7 @@ class VerifiedTracker:
         self._in_round = False
         self._round_over_at = None      # 直近の RoundOver の時刻（Verified Round End まで）
         self._round_end_seen = False    # Verified Round End の後か（Begin を押せる）
+        self.schedule_due = None        # 直前の on_verified が予定と重なったなら、その予定の時刻（理由の行用）
 
     def on_round_start(self, t):
         self._in_round = True
@@ -47,8 +48,10 @@ class VerifiedTracker:
         self.last_periodic = t
 
     def on_verified(self, t, pressed_recently: bool) -> str:
-        """"begin" / "periodic" / "ignore" を返す。pressed_recently はツールが直前に
-        Begin を押したか（予定と重なった1回を見分けるのに使う）"""
+        """"begin" / "periodic" / "ignore" を返す。予定と重なった 1 回は、ツールが直前に押していても
+        定期（EP。pressed_recently は見ない）。本物の受理が重なっていたら、ラウンド開始が 12 秒ほど後に
+        来るので、呼び出し側（LogMonitor._undo_ignored_verified）が後から本物だったと分かる"""
+        self.schedule_due = None
         if self._in_round:
             return IGNORE                   # 位相も動かさない
         due = (None if self.last_periodic is None
@@ -62,7 +65,9 @@ class VerifiedTracker:
                 return PERIODIC
             return IGNORE
         if due is not None and t is not None and abs(t - due) <= config.VERIFIED_PERIODIC_TOL_SEC:
-            # 予定と重なった1回。押した直後なら、定期と受理が1行にまとまったとみなす
+            # 予定と重なった1回は定期（EP: 09:38 窓5 は位相どおりの定期を、前面の連打の直後なので受理と取り違え、
+            # 店へ行って戻れなくなった。前は「押した直後なら定期と受理が1行にまとまった」とみなしていた）
             self.last_periodic = t
-            return BEGIN if pressed_recently else PERIODIC
+            self.schedule_due = due
+            return PERIODIC
         return BEGIN if self._round_end_seen else IGNORE

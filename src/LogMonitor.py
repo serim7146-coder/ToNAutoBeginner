@@ -360,9 +360,11 @@ class LogMonitor:
             return
         at, phase_before = ignored
         if 0 <= self.st.log_now - at <= config.VERIFIED_ROUND_START_WAIT_SEC:
+            kept = phase_before == at           # 予定と重なった1回（定期も出ていた。EP）
             self._verified.last_periodic = phase_before
             self._debug(f"[状態] 無視した Verified の {self.st.log_now - at:.1f}秒後にラウンド開始"
-                        f" → 本物の Begin だった。定期の位相を戻す")
+                        f" → 本物の Begin だった。"
+                        + ("予定と重なった1回なので定期の位相はそのまま" if kept else "定期の位相を戻す"))
 
     def _check_pending_verified(self):
         """採用したVerifiedにラウンド開始が続かなければ、定期シグナルだった。
@@ -1452,7 +1454,13 @@ class LogMonitor:
         phase_before = self._verified.last_periodic
         kind = self._verified.on_verified(now, pressed)
         if kind == VerifiedTracker.PERIODIC:
-            self._ignored_verified = (now, phase_before)
+            due = self._verified.schedule_due
+            # 予定と重なった1回は、本物の受理が重なっていても定期は出ている。後でラウンド開始が続いて
+            # 本物と分かっても、位相は戻さない（戻すと次の予定を見失う。EP）
+            self._ignored_verified = (now, now if due is not None else phase_before)
+            if due is not None:
+                self._debug(f"Verified: 予定（{datetime.fromtimestamp(due).strftime('%H:%M:%S')}）と重なった → 定期"
+                            + ("（ツールが直前に押していた）" if pressed else ""))
             self._debug_verified("無視（定期）")
             self._log("Verified を無視（定期シグナル）")
             return
