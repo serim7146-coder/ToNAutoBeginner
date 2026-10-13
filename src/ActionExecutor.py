@@ -15,6 +15,7 @@ import OSCReceiver
 import PlaySound
 import RespawnButton
 import RunFace
+import RunPos
 import RoundDecision
 from State import WindowConfig, WindowState
 
@@ -128,6 +129,9 @@ class ActionExecutor:
         self._run_respawn_idle = threading.Event()
         self._run_respawn_idle.set()
         self._noted_round_over_after_respawn = False   # debug.log に1回だけ
+        # Run の位置合わせのためのデータ集め（EQ）。この監視（マクロの 1 回の開始）の間だけ覚える
+        self._pos_rounds = 0              # 普通に終わったラウンドの数
+        self._pos_ref_size = None         # 基準を撮った時のクライアントの大きさ（撮っていなければ None）
         self._respawn_menu_open = False       # Run のリスポーンで Esc のメニューを開いたまま押しをまたぐか
 
     @property
@@ -1410,11 +1414,18 @@ class ActionExecutor:
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
         # Verified Round End が出てクリックできる状態になる想定。
+        pos_ref = self._pos_ref_plan()          # 待つ前に（終わったラウンドの種類を見る。EQ）
         if config.BEGIN_WAIT_SEC > 0:
             elapsed = (time.time() - st.round_over_time) if st.round_over_time else 0.0
             remain = config.BEGIN_WAIT_SEC - elapsed
             if remain > 0:
-                time.sleep(remain)
+                if pos_ref:
+                    # 待ちの中で基準を撮る。Begin 前の移動は遅らせない（待ちの終わりで打ち切る）
+                    deadline = time.time() + remain
+                    self._take_pos_ref(deadline)
+                    remain = deadline - time.time()
+                if remain > 0:
+                    time.sleep(remain)
         # Beginはフレ/フレ+/招待/招待+のみ
         if not self.can_operate():
             return
@@ -1765,6 +1776,7 @@ class ActionExecutor:
             if self._run_after_respawn(round_seq):
                 self._log("Run: リスポーンして正面を向きました"
                           + (f"（向きを {fixed} 回直しました）" if fixed else ""))
+                self._take_pos_run()
         finally:
             self._run_respawn_idle.set()
 
@@ -1914,6 +1926,91 @@ class ActionExecutor:
         time.sleep(config.RUN_FACE_SETTLE_SEC)
         shot = self._capture_bgr()
         return shot, (RunFace.find_mark(shot) if shot is not None else None)
+
+    # ── Run の位置合わせのためのデータ集め（EQ。撮って残すだけ）──────────
+    def _pos_ref_plan(self) -> bool:
+        """RoundOver の後（Begin 前の移動の待ちの前）。終わったラウンドを数え、今回の待ちの中で基準を撮るか。
+        撮らない理由（続行ラウンド・Run の後・private でない・受信なし・まだ数えていない）は debug.log に。
+        撮った後は、窓の大きさが変わったときだけまた撮る"""
+        st = self._st
+        head = f"[操作] [窓{st.window_idx}] Run の位置: 基準"
+        if st.round_type == "Run":
+            why = "Run の後"
+        elif st.is_continue_round or st.open_special_continue:
+            why = "続行ラウンドの後"
+        else:
+            self._pos_rounds += 1
+            why = None
+        if self._pos_ref_size is not None:
+            size = WindowOperator.client_size(self._cfg.hwnd)
+            if size == self._pos_ref_size:
+                return False                # 撮ってある（毎ラウンドは書かない）
+            if why is None:
+                DebugLog.write(f"{head}: 窓の大きさが変わった（{self._pos_ref_size} → {size}）→ 撮り直す")
+        if why is None and self._pos_rounds < config.RUN_POS_AFTER_ROUNDS:
+            why = f"普通に終わったラウンド {self._pos_rounds}/{config.RUN_POS_AFTER_ROUNDS}"
+        if why is None and not self.can_operate():
+            why = "private でない"
+        if why is None and self._receiver is None:
+            why = "速さの受信が無い"
+        if why:
+            DebugLog.write(f"{head}: 撮らない（{why}）")
+            return False
+        return True
+
+    def _take_pos_ref(self, deadline: float):
+        """deadline（Begin 前の移動を始める時刻）までに、止まっている（速さ RUN_POS_STILL_SPEED 未満が
+        RUN_POS_STILL_SEC 続く）のを待って 2 枚を RUN_POS_GAP_SEC あけて撮り、差が RUN_POS_DIFF_MAX 以下なら
+        残す。間に合わない・動いた・差が大きい → 撮らずに次のラウンドで。背面のまま撮る（前面・入力は使わない）"""
+        st = self._st
+        head = f"[操作] [窓{st.window_idx}] Run の位置: 基準"
+        still_since = None
+        top = 0.0
+        while True:
+            if not self._is_running() or st.in_round:
+                return
+            now = time.time()
+            if now + config.RUN_POS_GAP_SEC >= deadline:
+                DebugLog.write(f"{head}: 撮らない（Begin 前の移動までに止まらなかった。最高の速さ {top:.2f}）")
+                return
+            speed = self._receiver_speed()
+            if speed is not None:
+                top = max(top, speed)
+            if speed is None or speed >= config.RUN_POS_STILL_SPEED:
+                still_since = None
+            elif still_since is None:
+                still_since = now
+            elif now - still_since >= config.RUN_POS_STILL_SEC:
+                break
+            time.sleep(config.RUN_POS_POLL_SEC)
+        size = WindowOperator.client_size(self._cfg.hwnd)
+        first = self._capture_bgr()
+        time.sleep(config.RUN_POS_GAP_SEC)
+        speed = self._receiver_speed()
+        second = self._capture_bgr()
+        if speed is None or speed >= config.RUN_POS_STILL_SPEED:
+            DebugLog.write(f"{head}: 撮らない（2 枚の間に動いた。速さ {speed}）")
+            return
+        d = RunPos.diff(first, second)
+        if d is None:
+            DebugLog.write(f"{head}: 撮らない（撮れない・2 枚の大きさが違う）")
+            return
+        if d > config.RUN_POS_DIFF_MAX:
+            DebugLog.write(f"{head}: 撮らない（2 枚の差 {d:.2f} > {config.RUN_POS_DIFF_MAX}。向きを変えた？）")
+            return
+        path = RunPos.save(second, st.window_idx, "ref", size)
+        if path is None:
+            return
+        self._pos_ref_size = size
+        DebugLog.write(f"{head}: 撮った {path.name}（2 枚の差 {d:.2f}・窓 {size}）")
+
+    def _take_pos_run(self):
+        """Run のリスポーン → 後ろへ → 左へ → 向きの直し、の後に 1 枚（背面のまま。等倍）"""
+        st = self._st
+        size = WindowOperator.client_size(self._cfg.hwnd)
+        path = RunPos.save(self._capture_bgr(), st.window_idx, "run", size)
+        DebugLog.write(f"[操作] [窓{st.window_idx}] Run の位置: Run の後 "
+                       + (f"撮った {path.name}（窓 {size}）" if path else "撮れない"))
 
     def _respawn_when_free(self, round_seq: int) -> str | None:
         """ほかの窓のフリーズが無いときに、前面を借りてリスポーンする。できたら None、だめなら理由。

@@ -41,6 +41,7 @@ class _World:
         self.ex._osc = self
         self.ex._receiver = self
         self.ex._run_after_respawn = lambda seq: w.active
+        self.ex._capture_bgr = lambda: None     # 本物の撮影は使わない（EQ: Run の後に 1 枚撮る）
         self.ex._measure_face = self.measure
         self.ex._last_face = (_IMG, (433.0, 0.9, f))
         real = self.ex._press_counted_from_start

@@ -216,6 +216,7 @@ class TestTheRespawnFlow(unittest.TestCase):
                                            self.logs.append)
         ex._osc = MagicMock()
         ex._receiver = MagicMock(speed=1.0, grounded_or_none=True) if receiver else None
+        ex._capture_bgr = lambda: None      # 本物の撮影は使わない（EQ: Run の後に 1 枚撮る）
         ex._respawn_when_free = lambda seq: None
         ex._run_after_respawn = lambda seq: True
         self.written = []
@@ -317,6 +318,7 @@ class TestDepthIsOff(unittest.TestCase):
         ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x30, osc_port=9000), st, lambda: True, logs.append)
         ex._osc = MagicMock()
         ex._receiver = None
+        ex._capture_bgr = lambda: None      # 本物の撮影は使わない（EQ）
         ex._respawn_when_free = lambda seq: None
         ex._run_after_respawn = lambda seq: True
         faced = []
