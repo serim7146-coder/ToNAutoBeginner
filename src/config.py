@@ -546,6 +546,11 @@ SAVELOAD_BOX_WAIT_SEC    = 3.0    # 入力欄（送信の矢印）が出るの�
 SAVELOAD_BOX_POLL_SEC    = 0.2
 # Ctrl+V から Enter まで。コードは約 1 万 5 千文字で、0.3 秒では貼り終わる前に Enter が届いて効かない窓があった（EC）
 SAVELOAD_PASTE_ENTER_SEC = 1.0
+# 入力欄（送信の矢印）が出たと分かってから貼るまで（ES: 12:59 窓3 は出た直後に Ctrl+V を送って空振りし、
+# 空のまま Enter が効いた。入力欄は閉じたが「Loaded Data Successfully」が出なかった）
+SAVELOAD_SETTLE_SEC      = 0.5
+# 読み込めず入力欄が閉じていたら、コード欄を探すところから最初からやり直す回数（ES）
+SAVELOAD_TRIES           = 2
 SAVELOAD_LOG_WAIT_SEC    = 8.0    # Enter の後、ログに「Loaded Data Successfully」が出るのを待つ上限
 SAVELOAD_RETRY_WAIT_SEC  = 3.0    # これで出なければ、入力欄が開いたままか見て Enter を押し直す（EC）
 SAVELOAD_ENTER_RETRIES   = 2      # 押し直しの上限

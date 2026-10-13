@@ -74,8 +74,11 @@ class _World:
         def box_shown(bgr, width, height):
             w.box_sizes.append((width, height))
             w.box_polls += 1
-            if ("keys", "ctrl+v") in w.events:      # 貼った後: Enter で閉じたか（EC）
+            pasted = [i for i, e in enumerate(w.events) if e == ("keys", "ctrl+v")]
+            clicked = [i for i, e in enumerate(w.events) if e[0] == "click"]
+            if pasted and pasted[-1] > clicked[-1]:  # 貼った後: Enter で閉じたか（EC）
                 return w.closes_on_enter is None or w.enters < w.closes_on_enter
+            # コード欄をクリックした後（ES: やり直しでもう一度クリックすると、また出る）
             return w.box_after is not None and w.box_polls >= w.box_after
 
         def capture():
@@ -503,10 +506,12 @@ class TestEnterAgain(unittest.TestCase):
         self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼り直さない")
 
     def test_a_closed_box_is_not_pressed_again(self):
+        """閉じた入力欄に Enter は押し直さない。読めなければ、コード欄からもう 1 回だけやり直す（ES）"""
         world = _World(self, loads_on_enter=None, closes_on_enter=1)
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
-        self.assertEqual(self._enters(world), 1)
-        self.assertGreaterEqual(world.now[0], config.SAVELOAD_LOG_WAIT_SEC, "残りの時間（8 秒まで）ログを待つ")
+        self.assertEqual(self._enters(world), 2, "1 回目と、やり直しの 1 回（押し直しは無い）")
+        self.assertNotIn("Enter を押し直しました（1 回目）", world.logs)
+        self.assertGreaterEqual(world.now[0], 2 * config.SAVELOAD_LOG_WAIT_SEC, "どちらも 8 秒までログを待つ")
         self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
 
     def test_a_late_load_after_the_box_closed_counts(self):
@@ -593,3 +598,100 @@ class TestEnterAgain(unittest.TestCase):
         src = inspect.getsource(ToNEntry.ToNEntry._input_box_open)
         self.assertIn("SaveLoad.input_box_shown", src)
         self.assertIn("del bgr", src)
+
+
+# ── ES: 入力欄が出てから少し待って貼る・空振りしたら最初からもう 1 回 ───────────────
+class TestSettleAndTryAgain(unittest.TestCase):
+    """12:59 窓3: 入力欄が出た直後に Ctrl+V を送って空振り → 空のまま Enter で閉じ、読み込まれなかった"""
+
+    def _times(self, world):
+        out = []
+        keys = WindowOperator.send_keys.side_effect
+        shown = SaveLoad.input_box_shown.side_effect
+
+        def note_keys(k):
+            out.append((k, world.now[0]))
+            return keys(k)
+
+        def note_shown(*a):
+            got = shown(*a)
+            if got and not any(e == ("keys", "ctrl+v") for e in world.events[-1:]):
+                out.append(("box", world.now[0]))
+            return got
+        WindowOperator.send_keys.side_effect = note_keys
+        SaveLoad.input_box_shown.side_effect = note_shown
+        return out
+
+    def test_it_waits_half_a_second_after_the_box_shows(self):
+        self.assertEqual(config.SAVELOAD_SETTLE_SEC, 0.5)
+        world = _World(self)
+        times = self._times(world)
+        clip = []
+        write = SaveLoad.write_clipboard.side_effect
+        SaveLoad.write_clipboard.side_effect = lambda text: clip.append(world.now[0]) or write(text)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "loaded")
+        box = next(t for k, t in times if k == "box")
+        paste = next(t for k, t in times if k == "ctrl+v")
+        self.assertAlmostEqual(paste - box, config.SAVELOAD_SETTLE_SEC, places=6, msg="出てから 0.5 秒で貼る")
+        self.assertGreaterEqual(clip[0], box + config.SAVELOAD_SETTLE_SEC, "待ってから入れ直す")
+        enter = next(t for k, t in times if k == "enter")
+        self.assertAlmostEqual(enter - paste, config.SAVELOAD_PASTE_ENTER_SEC, places=6, msg="Enter までは今どおり 1 秒")
+
+    def test_a_closed_box_without_load_tries_once_more_from_the_codebox(self):
+        world = _World(self, loads_on_enter=2, closes_on_enter=1)
+        finds = []
+        with patch.object(SaveLoad, "find_codebox", side_effect=lambda bgr, h: finds.append(1) or FOUND):
+            self.assertEqual(world.entry().load_code(CODE, world.log_path), "loaded")
+        self.assertEqual(len(finds), 2, "コード欄を探すところから")
+        self.assertEqual(world.events.count(("keys", "ctrl+v")), 2)
+        self.assertEqual(world.kinds().count("click"), 2)
+        self.assertEqual(world.clipboard, [CODE, CODE], "入れ直してから貼る")
+        self.assertIn("コードの読み込みをやり直します", world.logs)
+        self.assertIn("✅ コードを読み込みました", world.logs)
+        self.assertNotIn("⚠ コードの読み込みを確認できませんでした", world.logs)
+
+    def test_a_second_failure_warns_and_there_is_no_third(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=1)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(config.SAVELOAD_TRIES, 2)
+        self.assertEqual(world.events.count(("keys", "ctrl+v")), 2, "3 回目は無い")
+        self.assertEqual(world.logs.count("コードの読み込みをやり直します"), 1)
+        self.assertEqual(world.logs.count("⚠ コードの読み込みを確認できませんでした"), 1)
+
+    def test_a_box_left_open_is_not_tried_again(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=None)
+        self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼ったコードを消さない")
+        self.assertNotIn("コードの読み込みをやり直します", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+
+    def test_a_stop_after_the_first_try_does_not_try_again(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=1)
+        entry = world.entry()
+        keys = WindowOperator.send_keys.side_effect
+
+        def stop_after_enter(k):
+            got = keys(k)
+            if k == "enter":
+                world.running = False
+            return got
+        WindowOperator.send_keys.side_effect = stop_after_enter
+        self.assertEqual(entry.load_code(CODE, world.log_path), "unconfirmed")
+        self.assertEqual(world.events.count(("keys", "ctrl+v")), 1)
+        self.assertNotIn("コードの読み込みをやり直します", world.logs)
+
+    def test_a_missing_codebox_on_the_second_try_is_unconfirmed(self):
+        world = _World(self, loads_on_enter=None, closes_on_enter=1)
+        found = iter([FOUND, None])
+        with patch.object(SaveLoad, "find_codebox", side_effect=lambda bgr, h: next(found)):
+            self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
+        self.assertIn("⚠ コード欄が見つかりません → コードを読み込みません", world.logs)
+        self.assertIn("⚠ コードの読み込みを確認できませんでした", world.logs)
+
+    def test_the_code_is_never_written_on_a_retry(self):
+        for kwargs in ({"loads_on_enter": 2, "closes_on_enter": 1}, {"loads_on_enter": None, "closes_on_enter": 1}):
+            world = _World(self, **kwargs)
+            world.entry().load_code(CODE, world.log_path)
+            text = "\n".join(map(str, world.logs + world.written + world.events))
+            self.assertNotIn(CODE, text, kwargs)
+            self.assertNotIn(str(len(CODE)), text, ("長さも出さない", kwargs))

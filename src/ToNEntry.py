@@ -249,6 +249,26 @@ class ToNEntry:
         if not code:
             self._log("⚠ クリップボードが空のためコードを読み込みません")
             return "skipped"
+        # 読めず、入力欄が閉じている（Enter は効いたが貼り付けが空振りした）なら、コード欄を探すところから
+        # やり直す（SAVELOAD_TRIES 回まで。ES）。入力欄が開いたままならやり直さない（貼ったコードを消さない）
+        for attempt in range(1, config.SAVELOAD_TRIES + 1):
+            result = self._load_once(code, log_path)
+            if result == "loaded":
+                return "loaded"
+            if result == "skipped" and attempt == 1:
+                return "skipped"
+            if result != "closed" or attempt == config.SAVELOAD_TRIES or not self._is_running():
+                break
+            self._log("コードの読み込みをやり直します")
+        self._log("⚠ コードの読み込みを確認できませんでした")
+        if result == "open":
+            # Esc は押さない（閉じると貼ったコードが消えて、手で確定できなくなる）
+            self._log("⚠ 入力欄が開いたままです（手で Enter を押してください）")
+        return "unconfirmed"
+
+    def _load_once(self, code: str, log_path: str) -> str:
+        """コード欄を探して貼って Enter、ログを待つ 1 回分。"loaded"・"closed"（読めず、入力欄は閉じている）・
+        "open"（読めず、入力欄が開いたまま）・"skipped"（コード欄が無い・貼れない。理由は画面のログへ）"""
         bgr = self._capture_bgr()
         height = WindowOperator.client_height(self._hwnd) or 0
         found = SaveLoad.find_codebox(bgr, height) if bgr is not None else None
@@ -289,11 +309,7 @@ class ToNEntry:
             else:
                 left_open = state == "open"
             break
-        self._log("⚠ コードの読み込みを確認できませんでした")
-        if left_open:
-            # Esc は押さない（閉じると貼ったコードが消えて、手で確定できなくなる）
-            self._log("⚠ 入力欄が開いたままです（手で Enter を押してください）")
-        return "unconfirmed"
+        return "open" if left_open else "closed"
 
     def _wait_loaded(self, log_path: str, offset: int, until: float) -> bool:
         """until（time.time）までに、ログの offset より後に「Loaded Data Successfully」が出たか"""
@@ -381,6 +397,8 @@ class ToNEntry:
                 tab = False
                 if not self._wait_input_box():
                     return "入力欄が出ない" if self._is_running() else "中止"
+                # 出た直後はまだ文字を受け付けないことがある（ES）。少し待ってから貼る
+                time.sleep(config.SAVELOAD_SETTLE_SEC)
                 if not self._still_ours():
                     return "中止" if not self._is_running() else "前面でなくなった"
                 if not SaveLoad.write_clipboard(code):
