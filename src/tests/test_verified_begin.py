@@ -1,5 +1,6 @@
 """Begin（移動・押し方・受理の見分け・位置合わせ）"""
 from tests.support import *  # noqa: F401,F403
+import inspect
 
 
 
@@ -3736,6 +3737,42 @@ class TestBeginMiss(unittest.TestCase):
         with patch.object(DebugLog, "write") as write:
             self._save(4, 50, stage="動いた後")
         write.assert_called_once_with("[操作] [窓4] Begin: 見つからなかった撮影を保存 窓4_1.png（動いた後・4x3）")
+
+    def test_the_first_shot_is_not_overwritten_while_searching(self):
+        """ET: 「最初」の撮影は 窓N_first.png に残し、探す途中の撮影（何枚でも）では消えない"""
+        first = self._save(6, 99, stage="最初")
+        self.assertEqual(first.name, "窓6_first.png")
+        for v, stage in ((10, "探す"), (11, "動いた後"), (12, "撮り直し"), (13, "探す"), (14, "探す")):
+            self._save(6, v, stage=stage)
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓6_first.png"), 99)
+        self.assertEqual(sorted(p.name for p in (self.dir / "begin_miss").iterdir()),
+                         ["窓6_1.png", "窓6_2.png", "窓6_first.png"])
+
+    def test_the_next_first_shot_replaces_it(self):
+        self._save(6, 1, stage="最初")
+        self._save(6, 2, stage="探す")
+        self._save(6, 3, stage="最初")
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓6_first.png"), 3)
+        self.assertEqual(self._value(self.dir / "begin_miss" / "窓6_1.png"), 2, "途中の撮影は今どおり交互")
+
+    def test_the_first_shot_goes_into_the_report(self):
+        self._save(6, 1, stage="最初")
+        self._save(6, 2, stage="探す")
+        self._save(5, 3, stage="最初")
+        self.assertEqual(sorted(BeginMiss.files_for(6)), ["begin_miss/窓6_1.png", "begin_miss/窓6_first.png"])
+        self.assertEqual(sorted(BeginMiss.files_for(0)),
+                         ["begin_miss/窓5_first.png", "begin_miss/窓6_1.png", "begin_miss/窓6_first.png"])
+
+    def test_the_adjust_saves_its_first_shot_as_first(self):
+        ex = self._executor(window_idx=6)
+        self._look(ex, None, stage="最初")
+        self._look(ex, None, stage="探す")
+        self._look(ex, None, stage="探す")
+        self._look(ex, None, stage="探す")
+        self.assertTrue((self.dir / "begin_miss" / "窓6_first.png").is_file())
+        src = inspect.getsource(ActionExecutor.ActionExecutor._adjust_to_begin)
+        self.assertIn('self._look_for_begin("最初")', src)
+        self.assertEqual(BeginMiss.FIRST_STAGE, "最初")
 
     def test_a_failing_save_does_not_raise(self):
         (self.dir / "begin_miss").write_text("ファイルがあってフォルダを作れない")

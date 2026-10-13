@@ -1,6 +1,8 @@
 """Begin の位置合わせで BEGIN が見つからなかった撮影を残す。
 
 窓ごとに最新の2枚だけ: %APPDATA%\\ToNAutoBeginner\\begin_miss\\窓N_1.png・窓N_2.png（古い方から上書き）。
+位置合わせの「最初」の撮影だけは別の 窓N_first.png に残し、探す途中の撮影では上書きしない（ET: 16:12 窓6 は最初は
+BEGIN が写っていたのに、前へ進んで外れた後の撮影で上書きされて残っていなかった）。次の位置合わせの「最初」で入れ替わる。
 撮影は位置合わせで使ったものをそのまま保存する（撮り直さない）。保存に失敗しても例外を外へ出さない
 （位置合わせを止めない）。不具合報告（BugReport）の添付に入れる。
 """
@@ -21,8 +23,15 @@ def folder() -> Path:
     return Path(config.SETTINGS_PATH).parent / DIR_NAME
 
 
+FIRST_STAGE = "最初"         # この段の撮影は first_path の名前に残す
+
+
 def slots(window: int) -> list[Path]:
     return [folder() / f"窓{window}_{n}.png" for n in range(1, KEEP + 1)]
+
+
+def first_path(window: int) -> Path:
+    return folder() / f"窓{window}_first.png"
 
 
 def _next_slot(window: int) -> Path:
@@ -52,7 +61,7 @@ def save(window: int, bits: bytes, w: int, h: int, stage: str) -> Path | None:
             return None
         with _lock:
             folder().mkdir(parents=True, exist_ok=True)
-            path = _next_slot(window)
+            path = first_path(window) if stage == FIRST_STAGE else _next_slot(window)
             path.write_bytes(data)      # cv2.imwrite は日本語のパスに書けないのでバイトで書く
         DebugLog.write(f"[操作] [窓{window}] Begin: 見つからなかった撮影を保存 {path.name}"
                        f"（{stage}・{w}x{h}）")
@@ -66,7 +75,7 @@ def files_for(window) -> dict[str, bytes]:
     """不具合報告に入れる {zip の中の名前: PNG}。window が 0（窓なし）なら全部の窓の分。古い順"""
     try:
         if window:
-            paths = [p for p in slots(window) if p.is_file()]
+            paths = [p for p in [first_path(window), *slots(window)] if p.is_file()]
         else:
             paths = [p for p in folder().glob("窓*_*.png") if p.is_file()] if folder().is_dir() else []
         paths.sort(key=lambda p: (p.stat().st_mtime_ns, p.name))
