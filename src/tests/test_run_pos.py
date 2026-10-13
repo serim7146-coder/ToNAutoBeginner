@@ -184,7 +184,8 @@ class TestTheReferenceShot(unittest.TestCase):
         w.round_over()
         refs = w.files("ref")
         self.assertEqual(len(refs), 2)
-        self.assertIn("_ref_1280x720.png", refs[-1])
+        # 名前の並びでは見ない（テストの中の 2 枚は同じ時刻の名前になりうる。そのとき 1280 < 867 と並ぶ）
+        self.assertEqual(sorted(n.rsplit("_", 1)[1] for n in refs), ["1280x720.png", "867x663.png"])
         self.assertIn("[操作] [窓2] Run の位置: 基準: 窓の大きさが変わった（(867, 663) → (1280, 720)）→ 撮り直す",
                       w.written)
         w.round_over()
