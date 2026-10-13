@@ -44,6 +44,18 @@ def diff(a, b):
         return None
 
 
+def brightness(bgr):
+    """グレーの平均（0〜255）。測れなければ None（EW）"""
+    try:
+        if not hasattr(bgr, "shape"):
+            return None
+        import cv2
+        return float(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).mean())
+    except Exception:
+        DebugLog.exception("RunPos.brightness")
+        return None
+
+
 def save(bgr, window: int, kind: str, size) -> Path | None:
     """等倍の PNG で残す（kind は "ref" か "run"）。古いものは残す数を超えた分を消す"""
     try:

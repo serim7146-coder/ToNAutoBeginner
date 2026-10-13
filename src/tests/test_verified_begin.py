@@ -3773,7 +3773,7 @@ class TestBeginMiss(unittest.TestCase):
         self._look(ex, None, stage="探す")
         self._look(ex, None, stage="探す")
         self.assertTrue((self.dir / "begin_miss" / "窓6_first.png").is_file())
-        src = inspect.getsource(ActionExecutor.ActionExecutor._adjust_to_begin)
+        src = inspect.getsource(ActionExecutor.ActionExecutor._adjust_to_begin_inner)   # 中身（EW で分けた）
         self.assertIn('self._look_for_begin("最初")', src)
         self.assertEqual(BeginMiss.FIRST_STAGE, "最初")
 

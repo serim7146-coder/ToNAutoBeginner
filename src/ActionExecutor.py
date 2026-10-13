@@ -3,6 +3,7 @@ import time
 from typing import Callable
 
 import BeginDetect
+import BeginAdjustShots
 import BeginMiss
 import config
 import DebugLog
@@ -750,6 +751,16 @@ class ActionExecutor:
         "not_found": 探しても BEGIN が無い／"skip": 使えない・撮れない・中止。
         視点は回さない。_GLOBAL_ACTION_LOCK は取らない（撮影も移動も前面を奪わない）
         """
+        # 各段の撮影を残す組（EW）。_look_for_begin が使う
+        self._adjust_group = BeginAdjustShots.new_group(self._st.window_idx)
+        self._adjust_index = 0
+        try:
+            return self._adjust_to_begin_inner(round_seq)
+        finally:
+            self._adjust_group = None
+
+    def _adjust_to_begin_inner(self, round_seq: int) -> str:
+        """_adjust_to_begin の中身（撮影の組を作った後）"""
         if not BeginDetect.available():
             if not ActionExecutor._detector_unavailable_logged:
                 ActionExecutor._detector_unavailable_logged = True
@@ -932,7 +943,16 @@ class ActionExecutor:
             hit = {**hit, "H": h}           # 前後は文字の幅÷窓の高さで見る
         else:
             BeginMiss.save(self._st.window_idx, bits, w, h, stage or "位置合わせ")
+        self._keep_adjust_shot(stage, bits, w, h, hit, aim)
         return hit, aim[0]
+
+    def _keep_adjust_shot(self, stage, bits, w, h, hit, aim):
+        """位置合わせの各段の撮影を、見つかった・見つからなかったに関係なく残す（EW）。位置合わせの外では残さない"""
+        group = getattr(self, "_adjust_group", None)
+        if not group:
+            return
+        self._adjust_index = getattr(self, "_adjust_index", 0) + 1
+        BeginAdjustShots.save(group, self._adjust_index, stage or "位置合わせ", bits, w, h, hit, aim)
 
     def _show_window_without_begin(self, round_seq: int):
         """BEGIN が画面に無い。クリックしても当たらないので、窓を前に出すだけにして
@@ -2065,11 +2085,16 @@ class ActionExecutor:
         if d > config.RUN_POS_DIFF_MAX:
             DebugLog.write(f"{head}: 撮らない（2 枚の差 {d:.2f} > {config.RUN_POS_DIFF_MAX}。向きを変えた？）")
             return
+        light = RunPos.brightness(second)
+        if light is None or light < config.RUN_POS_DARK_MAX:
+            DebugLog.write(f"{head}: 撮らない（画面が暗い（死んだ画面など）。明るさ "
+                           + ("測れない" if light is None else f"{light:.1f} < {config.RUN_POS_DARK_MAX}") + "）")
+            return
         path = RunPos.save(second, st.window_idx, "ref", size)
         if path is None:
             return
         self._pos_ref_size = size
-        DebugLog.write(f"{head}: 撮った {path.name}（2 枚の差 {d:.2f}・窓 {size}）")
+        DebugLog.write(f"{head}: 撮った {path.name}（2 枚の差 {d:.2f}・明るさ {light:.1f}・窓 {size}）")
 
     def _take_pos_run(self):
         """Run のリスポーン → 後ろへ → 左へ → 向きの直し、の後に 1 枚（背面のまま。等倍）"""

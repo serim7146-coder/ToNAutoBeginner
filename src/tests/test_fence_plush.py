@@ -224,7 +224,8 @@ class TestTheMissShots(unittest.TestCase):
         self.assertEqual(FetchMiss.files_for(4), {})
         import BugReport
         src = inspect.getsource(BugReport)
-        self.assertIn("for files_for in (BeginMiss.files_for, RunFace.files_for, FetchMiss.files_for):", src)
+        self.assertIn("for files_for in (BeginMiss.files_for, BeginAdjustShots.files_for, RunFace.files_for, "
+                      "FetchMiss.files_for):", src)
         i = src.index("if not include.get(BEGIN_MISS, False):")
         self.assertLess(i, src.index("FetchMiss.files_for):"))
 

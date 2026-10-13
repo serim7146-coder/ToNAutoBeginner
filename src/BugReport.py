@@ -19,6 +19,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
+import BeginAdjustShots
 import BeginMiss
 import FetchMiss
 import RunFace
@@ -183,7 +184,8 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
     else:
         # Run の向きの撮影（DQ）も同じチェックで入れる（ほかのプレイヤーの名前が写りうる）
         # アイテム取得で見つからなかった撮影（ER）も同じ
-        for files_for in (BeginMiss.files_for, RunFace.files_for, FetchMiss.files_for):
+        # 位置合わせの各段の撮影（EW）も同じ
+        for files_for in (BeginMiss.files_for, BeginAdjustShots.files_for, RunFace.files_for, FetchMiss.files_for):
             for n in windows or [0]:
                 images.update(files_for(n))
         if not images:

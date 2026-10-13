@@ -353,6 +353,9 @@ RUN_POS_STILL_SPEED  = 0.1        # 速さがこれ未満なら止まってい�
 RUN_POS_STILL_SEC    = 1.0        # 止まったままこの秒数続いたら撮る
 RUN_POS_GAP_SEC      = 0.5        # 2 枚をこの秒数あけて撮り、向きを変えていないか比べる
 RUN_POS_DIFF_MAX     = 3.0        # 2 枚の差（グレーの画素の差の絶対値の平均。0〜255）がこれ以下なら撮る
+# 2 枚目の明るさ（グレーの平均）がこれ未満なら基準にしない（EW: 死んだ画面「Your skin burns away…」が基準に
+# なっていた。2026-10-13 の基準 18 枚は 13.0〜13.5 で全部が死んだ画面、Run の後の撮影は 19.9〜32.8）
+RUN_POS_DARK_MAX     = 15.0
 RUN_POS_POLL_SEC     = 0.05
 RUN_POS_REF_KEEP     = 3          # 基準は窓ごとに新しいこの枚数まで
 RUN_POS_RUN_KEEP     = 30         # Run の後は全部でこの枚数まで
