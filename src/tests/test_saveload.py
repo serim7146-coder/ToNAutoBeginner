@@ -254,7 +254,9 @@ class TestFinding(unittest.TestCase):
 
     def test_the_click_point_is_offset_by_the_scale(self):
         shot = self._shot(1280, 720, self.codebox, (900, 300), 0.5)
-        x, y, score, s = SaveLoad.find_codebox(shot, 720)
+        with patch.object(SaveLoad, "_features", return_value=(None, 0)):    # 今の照合の点（EX: 特徴点が先）
+            x, y, score, s, how = SaveLoad.find_codebox(shot, 720)
+        self.assertEqual(how, "template")
         self.assertEqual(s, 0.5)
         self.assertGreater(score, 0.95)
         self.assertEqual((round(x), round(y)), (900 + 50, 300 + 32))
@@ -682,8 +684,8 @@ class TestSettleAndTryAgain(unittest.TestCase):
 
     def test_a_missing_codebox_on_the_second_try_is_unconfirmed(self):
         world = _World(self, loads_on_enter=None, closes_on_enter=1)
-        found = iter([FOUND, None])
-        with patch.object(SaveLoad, "find_codebox", side_effect=lambda bgr, h: next(found)):
+        found = iter([FOUND])
+        with patch.object(SaveLoad, "find_codebox", side_effect=lambda bgr, h: next(found, None)):
             self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertIn("⚠ コード欄が見つかりません → コードを読み込みません", world.logs)
         self.assertIn("⚠ コードの読み込みを確認できませんでした", world.logs)

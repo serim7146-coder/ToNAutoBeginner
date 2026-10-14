@@ -269,14 +269,16 @@ class ToNEntry:
     def _load_once(self, code: str, log_path: str) -> str:
         """コード欄を探して貼って Enter、ログを待つ 1 回分。"loaded"・"closed"（読めず、入力欄は閉じている）・
         "open"（読めず、入力欄が開いたまま）・"skipped"（コード欄が無い・貼れない。理由は画面のログへ）"""
-        bgr = self._capture_bgr()
-        height = WindowOperator.client_height(self._hwnd) or 0
-        found = SaveLoad.find_codebox(bgr, height) if bgr is not None else None
+        found = self._find_codebox()
         if found is None:
             self._log("⚠ コード欄が見つかりません → コードを読み込みません")
             return "skipped"
-        DebugLog.write(f"[コードの読み込み] コード欄 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・"
-                       f"倍率 {found[3]:.2f}")
+        if len(found) > 4 and found[4] == "features":
+            DebugLog.write(f"[コードの読み込み] コード欄 ({found[0]:.1f}, {found[1]:.1f})・特徴点 インライア "
+                           f"{found[2]}・倍率 {found[3]:.2f}")
+        else:
+            DebugLog.write(f"[コードの読み込み] コード欄 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・"
+                           f"倍率 {found[3]:.2f}")
         offset = SaveLoad.log_size(log_path) if log_path else 0
         result = self._paste_code(code, found)
         if result != "pasted":
@@ -354,6 +356,26 @@ class ToNEntry:
                 finally:
                     if cursor is not None:
                         WindowOperator.set_cursor_position(cursor)
+
+    def _find_codebox(self):
+        """撮ってコード欄を探す。見つからなければ SAVELOAD_FIND_SEC の間 SAVELOAD_FIND_POLL_SEC おきに撮り直す
+        （EX: 入室直後は描画が遅れることがある）。それでも無ければ、数字だけを debug.log に書いて None。
+        撮影はメモリの中だけ（コード欄にはセーブコードが出ていることがあるので書き出さない）"""
+        deadline = time.time() + config.SAVELOAD_FIND_SEC
+        shots = 0
+        while True:
+            bgr = self._capture_bgr()
+            shots += 1
+            height = WindowOperator.client_height(self._hwnd) or 0
+            found = SaveLoad.find_codebox(bgr, height) if bgr is not None else None
+            if found is not None:
+                return found
+            if not self._is_running() or time.time() + config.SAVELOAD_FIND_POLL_SEC > deadline:
+                break
+            time.sleep(config.SAVELOAD_FIND_POLL_SEC)
+        DebugLog.write(f"[コードの読み込み] コード欄が見つからない（{shots} 回）: "
+                       + SaveLoad.miss_numbers(bgr, height))
+        return None
 
     def _capture_bgr(self):
         bits, w, h = self.capture()

@@ -548,6 +548,9 @@ TON_ENTRY_BEGIN_FORWARD_SEC = 5.30
 TON_ENTRY_BEGIN_LEFT_SEC    = 0.12
 # 入室の選択画面の後・Begin の前に、Save/Load のコード欄へクリップボードのセーブコードを貼る（DY）
 SAVELOAD_CLICK_SEC       = 0.15   # コード欄を押している長さ
+# コード欄が見つからないとき、すぐあきらめずに撮り直す長さと間（EX: 入室直後は描画が遅れることがある）
+SAVELOAD_FIND_SEC        = 3.0
+SAVELOAD_FIND_POLL_SEC   = 0.5
 SAVELOAD_BOX_WAIT_SEC    = 3.0    # 入力欄（送信の矢印）が出るのを待つ上限
 SAVELOAD_BOX_POLL_SEC    = 0.2
 # Ctrl+V から Enter まで。コードは約 1 万 5 千文字で、0.3 秒では貼り終わる前に Enter が届いて効かない窓があった（EC）
