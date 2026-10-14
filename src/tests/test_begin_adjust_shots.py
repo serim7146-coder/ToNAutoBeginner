@@ -216,7 +216,8 @@ class TestTheDarkReference(unittest.TestCase):
     def test_a_dark_reference_already_there_is_taken_again(self):
         """前の版が残した暗い基準（今の窓1）があっても、起動ごとに撮り直し、新しい基準は明るい"""
         w = _world(self)
-        RunPos.save(np.full((66, 86, 3), 13, np.uint8), 2, "ref", (867, 663))
+        # 大きさの違う名前にする（同じ時刻の名前になると上書きされて 1 枚になる。1b7b167 と同じ）
+        RunPos.save(np.full((66, 86, 3), 13, np.uint8), 2, "ref", (866, 662))
         for _ in range(3):
             w.round_over()
         refs = sorted(RunPos.folder().glob("*_窓2_ref_*.png"))
