@@ -25,8 +25,32 @@ ALL_CONTINUE = "all_continue"       # 全続行・ラウンド突入フリーズ
 CATEGORY_LABELS = {CONTINUE: "続行", ALL_CONTINUE: "全続行", FREEZE: "フリーズ窓", OTHER: "その他"}
 
 
+_RANK = {OTHER: 0, FREEZE: 1, ALL_CONTINUE: 2, CONTINUE: 3}
+_HOLDABLE = (CONTINUE, ALL_CONTINUE)
+
+
 def category_of(st) -> str:
-    """窓の分類。重なったら上が勝つ: 続行 ＞ 全続行（全続行のラウンド・ラウンド突入フリーズを張った窓。EZ）＞
+    """窓の分類。続行・全続行（突入フリーズを含む）は、そのラウンドの RoundOver まで保つ（FH: 依頼者「死亡か生存で
+    音量が変化する → RoundOver で変化するように」）。死んだ・生き残った・フリーズの解除で下がっても、ラウンドの中
+    （in_round）なら保った分類のまま。上がるのはその場で。判断のやり直しで続行でなくなったときは LogMonitor が
+    保ちを外す（その場で下がる）。RoundOver・次のラウンド（round_seq が変わった）で保ちは外れる"""
+    live = _live_category(st, round_kinds=not getattr(st, "after_round_over", False))
+    if not getattr(st, "in_round", False):
+        st.volume_hold = None
+        return live
+    hold = getattr(st, "volume_hold", None)
+    if hold is not None and hold[1] != st.round_seq:
+        hold = None
+    if live in _HOLDABLE and (hold is None or _RANK[live] >= _RANK[hold[0]]):
+        hold = (live, st.round_seq)
+    st.volume_hold = hold
+    if hold is not None and _RANK[hold[0]] > _RANK[live]:
+        return hold[0]
+    return live
+
+
+def _live_category(st, round_kinds: bool = True) -> str:
+    """今の状態だけで決めた分類。重なったら上が勝つ: 続行 ＞ 全続行（全続行のラウンド・ラウンド突入フリーズを張った窓。EZ）＞
     フリーズ窓（装備待ち・速度検知のフリーズを張った窓）＞ その他。
 
     続行の窓は続行フリーズも張っているが続行として扱う。Run と DTM/Waldo の続行は
@@ -35,9 +59,11 @@ def category_of(st) -> str:
     """
     if st.round_type == "Run":
         return OTHER
-    if st.is_continue_round and not st.open_special_continue:
+    if not round_kinds:
+        pass        # RoundOver の後: 続行・全続行・突入フリーズは見ない（FH: 生き残った続行も RoundOver で戻す）
+    elif st.is_continue_round and not st.open_special_continue:
         return CONTINUE
-    if getattr(st, "all_continue_round", False) or st.round_freeze_held:
+    elif getattr(st, "all_continue_round", False) or st.round_freeze_held:
         return ALL_CONTINUE
     if st.equip_freeze_held or st.speed_freeze_held:
         return FREEZE

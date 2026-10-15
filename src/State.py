@@ -98,6 +98,10 @@ class WindowState:
     open_special_continue: bool = False
     # 全続行（private のラウンド指定 cfg.continue_rounds で続行）のラウンドか。音量の「全続行」（EZ）
     all_continue_round: bool = False
+    # 窓の音量の分類をそのラウンドの RoundOver まで保つ（FH）。(分類, round_seq)。WindowVolume.category_of が持つ
+    volume_hold: Optional[tuple] = None
+    # RoundOver の後（次のラウンド開始まで）か。続行・全続行・突入フリーズの音量は RoundOver で戻す（FH）
+    after_round_over: bool = False
     instance_id: str = ""                  # 今のインスタンスの ID（DB v1 でまとめる目印の元）
     round_start_time: Optional[float] = None   # そのラウンドの開始の行の時刻（送る時刻ではない）
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、

@@ -1152,6 +1152,12 @@ class LogMonitor:
             st.is_continue_round = False
             st.open_special_continue = False
             SharedState.continue_round_end(st)
+            self._drop_volume_hold()
+
+    def _drop_volume_hold(self):
+        """判断のやり直しで続行でなくなった → 保っていた音量の分類をその場で外す（FH。死亡・生存・フリーズの解除
+        では外さない＝RoundOver まで保つ）"""
+        self.st.volume_hold = None
 
     def _start_group_skip(self):
         st = self.st
@@ -1612,6 +1618,7 @@ class LogMonitor:
             self._log("ラウンド開始 → ラウンド突入フリーズ解除")
         st.is_open_special_round_round = False
         st.all_continue_round          = False
+        st.after_round_over            = False     # 音量の分類（FH）
         st.item_id_at_round_start      = st.item_id
         st.item_lost_announced         = False
         st.item_lost_this_round        = False
@@ -1743,6 +1750,10 @@ class LogMonitor:
         st = self.st
         st.in_round = False
         st.begin_move_done = False      # 次の Begin 前の移動はこれから
+        # 音量の分類は RoundOver で今の決まりに戻す（FH）。全続行も Verified Round End まで待たない
+        st.all_continue_round = False
+        st.volume_hold = None
+        st.after_round_over = True
         self._verified.on_round_over(st.log_now)
         if self._action.chase_stop():
             self._log("チェイス停止（ラウンド終了）")
@@ -2276,6 +2287,7 @@ class LogMonitor:
                 st.is_continue_round = False
                 st.open_special_continue = False
                 SharedState.continue_round_end(st)
+                self._drop_volume_hold()
             self._log(f"インスタンス制限: 操作スキップ ({st.instance_type})")
             return
         if kind == "hands_free":
@@ -2410,6 +2422,7 @@ class LogMonitor:
 
         if was_continue_round and not st.is_continue_round:
             SharedState.continue_round_end(st)
+            self._drop_volume_hold()
 
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
