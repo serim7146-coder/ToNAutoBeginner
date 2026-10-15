@@ -147,7 +147,6 @@
 
 ### 自動自爆
 * Run は自爆しません。Run の窓が選ばれることもありません。
-* 8 Pages はテラーを正確に判定できません。
 * Bloodbath EX は、ラウンド開始では Bloodbath と出るため、テラーが出た時点で 3 体が同じなら Bloodbath EX と判定します。
 * 干し芋・焼き芋のインスタンスでは、次のルールで自爆します（自動自爆が ON のとき）。
   * Classic（Variant を除く）・Bloodbath・Classic.exe・Randomizer は自爆します。
