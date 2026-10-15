@@ -120,6 +120,7 @@ class ActionExecutor:
         self._begin_given_up_round = -1   # BEGIN が見つからずあきらめたラウンド
         self._begin_gave_up_round = -1    # 3 回押して受理されなかったラウンド（EV）
         self._give_up_retry_round = -1    # 3 回押して受理されず、30 秒後に押し直したラウンド（EV）
+        self._fetched_round = -1          # アイテム取得で店へ行ったラウンド（EY: 押し直しは Begin の前へ戻ってから）
         self._last_press = "click"        # 直前の回で何で押したか（"dip" / "click"）
         self._dip_landed = False          # 直前の差し込みでカーソルを置けたか
         # 受信の準備（bind）が済んだことを横移動側へ伝える。
@@ -138,6 +139,7 @@ class ActionExecutor:
         self._pos_ref_size = None         # 基準を撮った時のクライアントの大きさ（撮っていなければ None）
         self._plush_retries = 0           # 入室時に取れなかった Guidance Plush をやり直す残りの回数（ER）
         self._respawn_menu_open = False       # Run のリスポーンで Esc のメニューを開いたまま押しをまたぐか
+        self._respawn_lobby = False           # ラウンドの外（店に行った後の押し直し。EY）でリスポーンしている間
 
     @property
     def uses_osc(self) -> bool:
@@ -1409,8 +1411,17 @@ class ActionExecutor:
         if (not self._is_running() or st.in_round or st.begin_done
                 or st.round_seq != round_seq):
             return
-        self._trace(f"[状態] Begin の押し直しを開始（移動{'済み' if st.begin_move_done else 'から'}）")
-        if not st.begin_move_done:
+        fetched = self._fetched_round == round_seq
+        self._trace("[状態] Begin の押し直しを開始（"
+                    + ("店に行った後: リスポーンから" if fetched
+                       else f"移動{'済み' if st.begin_move_done else 'から'}") + "）")
+        if fetched:
+            # 自動取得で柵を越えて店の前にいる。「移動済み」とみなさず、Run の後と同じくリスポーン → Begin 前の
+            # 移動（EY: 09:23 窓3 は店の前で押し直し、BEGIN が見つからず受理されなかった）
+            self._fetched_round = -1
+            if not self._back_to_begin_after_fetch(round_seq):
+                return
+        elif not st.begin_move_done:
             if not self._begin_precheck(check_freeze=False):
                 return
             self._begin_move()
@@ -1422,6 +1433,28 @@ class ActionExecutor:
             return
         if self._press_begin(again=True):
             self._confirm_begin(round_seq)
+            if self._begin_gave_up_round == round_seq:
+                # 押し直しの流れであきらめたときも、30 秒おいて 1 回（EY。1 ラウンドに 1 回は今どおり）
+                self._retry_after_giving_up(round_seq)
+
+    def _back_to_begin_after_fetch(self, round_seq: int) -> bool:
+        """店に行った後の押し直し（EY）: Run の後と同じ流れ（リスポーン → 後ろへ → 左へ → 向きの直し。EN・EH）
+        で戻ってから Begin 前の移動。リスポーンできなければ移動しない（店の前から動くと別の所へ行く。押す所の
+        位置合わせ・探すに任せる）。止めた・ラウンドが始まった・Begin が通った → False"""
+        st = self._st
+        self._log("Begin の押し直し: 店に行った後なので、リスポーンして Begin の前へ戻ります")
+        self._respawn_lobby = True
+        try:
+            faced = self._respawn_and_face(round_seq, "店に行った後")
+        finally:
+            self._respawn_lobby = False
+        if not self._is_running() or st.in_round or st.round_seq != round_seq or st.begin_done:
+            return False
+        if faced:
+            if not self._begin_precheck(check_freeze=False):
+                return False
+            self._begin_move()
+        return True
 
     # ── Begin自動操作 ─────────────────────────
 
@@ -1533,6 +1566,19 @@ class ActionExecutor:
                 # 次のラウンドでまた取りに行く
             self._log("アイテム装備を待っています… （装備すると自動再開）")
             while st.waiting_for_equip and self._is_running():
+                if not st.begin_done:
+                    # 受理と見た Verified が定期だった（押し直しは LogMonitor → do_begin_again）。ここで待ち続けず、
+                    # Begin が通ってから装備を待つ（EY: 09:23 窓3 はこのループにいて、押し直しの後もあきらめた
+                    # ままになった）
+                    self._log("Begin が通っていません → Begin が通ってから装備を待ちます")
+                    while (not st.begin_done and st.waiting_for_equip and self._is_running()
+                           and not st.in_round):
+                        time.sleep(0.3)
+                    if st.in_round:
+                        break                       # ラウンドが始まった（装備待ちはふつうラウンド開始で外れる）
+                    if st.begin_done and st.waiting_for_equip and self._is_running():
+                        self._log("アイテム装備を待っています… （装備すると自動再開）")
+                    continue
                 time.sleep(0.3)
             if not self._is_running():
                 SharedState.equip_freeze_end(st)
@@ -1627,6 +1673,7 @@ class ActionExecutor:
             speed=self._receiver_speed if receiver is not None else None,
             on_miss=lambda shot, why: FetchMiss.save(shot, st.window_idx, why))
         name = f"{shop} Shop の id={item_id}"
+        self._fetched_round = st.round_seq          # 柵を越えて店へ行く（EY: 押し直しは Begin の前へ戻ってから）
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
         outcome = "failed"
@@ -1790,9 +1837,17 @@ class ActionExecutor:
                 return False
         return True
 
+    def _lobby_still(self, round_seq: int) -> bool:
+        """店に行った後の押し直しのリスポーン（EY）: まだラウンドの外で、Begin も通っていないか"""
+        st = self._st
+        return (self._is_running() and not st.in_round and st.round_seq == round_seq
+                and not st.begin_done and self.can_operate())
+
     def _run_still(self, round_seq: int) -> bool:
         """リスポーンする前: まだ Run のラウンドの中で、続けてよいか（停止・private でない・次のラウンド・
-        Run が終わった → False）"""
+        Run が終わった → False）。店に行った後の押し直し（EY）では _lobby_still"""
+        if self._respawn_lobby:
+            return self._lobby_still(round_seq)
         st = self._st
         return (self._is_running() and st.in_round and st.round_seq == round_seq
                 and self.can_operate())
@@ -1800,7 +1855,10 @@ class ActionExecutor:
     def _run_after_respawn(self, round_seq: int) -> bool:
         """リスポーンした後（後ろへ・左へ・向きの直し）: 続けてよいか。ToN はリスポーン（opt out）で
         その人のラウンドをその場で終わらせる（同じ秒に RoundOver）ので in_round は見ない。
-        停止・次のラウンドが始まった（round_seq が変わった）・private でない → False（DP）"""
+        停止・次のラウンドが始まった（round_seq が変わった）・private でない → False（DP）。
+        店に行った後の押し直し（EY）では _lobby_still"""
+        if self._respawn_lobby:
+            return self._lobby_still(round_seq)
         st = self._st
         if self._is_running() and st.round_seq == round_seq and not st.in_round                 and not self._noted_round_over_after_respawn:
             self._noted_round_over_after_respawn = True
@@ -1814,27 +1872,33 @@ class ActionExecutor:
         if not SharedState.get_run_respawn() or self._osc is None or not self.can_operate():
             DebugLog.write(f"{head} リスポーンしません（{'設定 OFF' if not SharedState.get_run_respawn() else 'OSC が使えない窓' if self._osc is None else 'private でない'}）")
             return
+        self._respawn_and_face(round_seq, "Run")
+
+    def _respawn_and_face(self, round_seq: int, label: str) -> bool:
+        """リスポーン → 後ろへ → 左へ → 向きの直し（do_run_respawn の中身。店に行った後の押し直しでも使う。EY）。
+        最後（正面を向く）まで続けられたら True"""
+        head = f"[操作] [窓{self._st.window_idx}] Run:"
         self._run_respawn_idle.clear()
         self._noted_round_over_after_respawn = False
         self._respawn_menu_open = False         # Esc のメニューを開いているか（_respawn_press が持つ）
         try:
             why = self._respawn_when_free(round_seq)
             if why:
-                self._log(f"Run: リスポーンできませんでした（{why}）")
-                return
+                self._log(f"{label}: リスポーンできませんでした（{why}）")
+                return False
             # 「Player respawned」から RUN_BACK_DELAY_SEC 待ってから後ろへ（EP: 直後の速さが残っていて、
             # 動き出しから数えるのが 0 秒と取り違えていた）。待つ間に止めた・ラウンドが変わったらやめる
             deadline = time.time() + config.RUN_BACK_DELAY_SEC
             while time.time() < deadline:
                 if not self._run_after_respawn(round_seq):
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
-                    return
+                    return False
                 time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
             for address, sec in (("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
                 if not self._run_after_respawn(round_seq):
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
-                    return
+                    return False
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
                 # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
                 sampler = None
@@ -1860,10 +1924,13 @@ class ActionExecutor:
             if moved:
                 self._log(f"Run: 位置を直しました（{moved}）")
                 fixed += self._face_the_stairs(round_seq)     # 前後に動かしたら向きをもう 1 周
-            if self._run_after_respawn(round_seq):
-                self._log("Run: リスポーンして正面を向きました"
-                          + (f"（向きを {fixed} 回直しました）" if fixed else ""))
-                self._take_pos_run()
+            if not self._run_after_respawn(round_seq):
+                return False
+            self._log(f"{label}: リスポーンして正面を向きました"
+                      + (f"（向きを {fixed} 回直しました）" if fixed else ""))
+            if not self._respawn_lobby:
+                self._take_pos_run()            # Run の後の撮影（EQ）。店に行った後には撮らない
+            return True
         finally:
             self._run_respawn_idle.set()
 

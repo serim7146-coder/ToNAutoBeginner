@@ -5,6 +5,8 @@
 - 定期は前回の定期から 300秒後に出る
 - その時点がラウンド中なら、そのラウンドの RoundOver の0〜1秒後まで遅れて出て、
   次はそこから300秒後（定期 4,294件のうち 300秒ちょうど 1,402件・RoundOver 直後 2,254件）
+- ラウンド中に出た定期（位相を動かさない）の次も、最後の定期から 300 秒の倍数で出る。予定は「最後の定期 +
+  300×k」のうちいちばん近いもの（EY: 09:23 窓3 は 09:13 から 600.14 秒で出たのに、300 秒後だけを見ていた）
 - 本物の受理は、ほぼ必ずラウンド開始の12〜13秒前（26,442件中26,436件）
 - ラウンド中の Verified は全ログで1回だけ
 
@@ -47,6 +49,13 @@ class VerifiedTracker:
         """呼び出し側が定期と分かった（ツールが押していないのに来た Verified）→ 位相の材料にする"""
         self.last_periodic = t
 
+    def nearest_due(self, t):
+        """t にいちばん近い予定「最後の定期 + 300×k」（k ≥ 1。EY）。位相を知らない・時刻が無ければ None"""
+        if self.last_periodic is None or t is None:
+            return None
+        k = max(1, round((t - self.last_periodic) / config.VERIFIED_PERIODIC_SEC))
+        return self.last_periodic + config.VERIFIED_PERIODIC_SEC * k
+
     def on_verified(self, t, pressed_recently: bool) -> str:
         """"begin" / "periodic" / "ignore" を返す。予定と重なった 1 回は、ツールが直前に押していても
         定期（EP。pressed_recently は見ない）。本物の受理が重なっていたら、ラウンド開始が 12 秒ほど後に
@@ -64,7 +73,8 @@ class VerifiedTracker:
                 self.last_periodic = t
                 return PERIODIC
             return IGNORE
-        if due is not None and t is not None and abs(t - due) <= config.VERIFIED_PERIODIC_TOL_SEC:
+        due = self.nearest_due(t)
+        if due is not None and abs(t - due) <= config.VERIFIED_PERIODIC_TOL_SEC:
             # 予定と重なった1回は定期（EP: 09:38 窓5 は位相どおりの定期を、前面の連打の直後なので受理と取り違え、
             # 店へ行って戻れなくなった。前は「押した直後なら定期と受理が1行にまとまった」とみなしていた）
             self.last_periodic = t

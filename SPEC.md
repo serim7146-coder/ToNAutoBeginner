@@ -205,7 +205,7 @@ LogMonitor._process(line)
 - **RoundOver**: チェイス停止・録画の終了予約・続行フリーズの解除予約・アイテムロストの案内・`do_after_round`。
 - **死亡（You died.）・生存（Lived in round.）**: そのラウンドで先に来た方で 1 回、アイテムを落とす（`_drop_when_round_ends`）。
 - **Verified Round End**: Begin を押せる合図。アイテムロストの判定・速度検知の開始。
-- **Verified**: `VerifiedTracker` で受理か定期かを見分ける。受理なら `begin_done`。15秒以内にラウンドが始まらなければ定期だったとして押し直す。
+- **Verified**: `VerifiedTracker` で受理か定期かを見分ける（予定は「最後の定期 + 300×k」のいちばん近いもの、許容 ±2.5 秒）。受理なら `begin_done`。15秒以内にラウンドが始まらなければ定期だったとして押し直す（そのラウンドにアイテム取得で店へ行っていたら、Run の後と同じくリスポーン → Begin 前の移動から。押し直しの流れであきらめても 30 秒後に 1 回押し直す）。
 
 ## 7. ラウンドの判定
 
