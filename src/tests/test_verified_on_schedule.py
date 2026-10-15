@@ -54,7 +54,7 @@ class TestWindow5At0938(unittest.TestCase):
 
     def test_off_by_the_tolerance_is_still_periodic(self):
         tol = config.VERIFIED_PERIODIC_TOL_SEC
-        self.assertEqual(tol, 2.5)                     # EY: 1.0 → 2.5
+        self.assertEqual(tol, 2.0)                     # FA: 1.0 → 2.0（EY は 2.5）
         st = self.monitor.st
         self._feed(self.phase + 263, "Verified Round End")
         st.last_begin_press_at = 60_000.0

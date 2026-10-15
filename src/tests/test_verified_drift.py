@@ -1,6 +1,7 @@
 """EY: 定期 Verified の予定を外さない・店に行った後の押し直しは Begin の前に戻ってから（依頼者 2026-10-15
 「窓3の Begin が止まった」）。09:23 窓3: 09:13:00.38 の定期を予定（+300）から 1.45 秒ずれて受理と取り違え、
-09:23:00.52 も予定を 300 秒後だけで見て受理 → 店へ → 定期と分かって押し直したのは店の前 → あきらめたまま。
+位相を失って 09:23:00.52 も受理 → 店へ → 定期と分かって押し直したのは店の前 → あきらめたまま。
+予定は FA で「最後の定期 + 300 秒」だけに戻した（許容は ±2.0 秒）。
 本物の OSC・入力・撮影・前面は使わない"""
 from tests.support import *  # noqa: F401,F403
 from datetime import datetime
@@ -12,22 +13,24 @@ def _t(hms: str) -> float:
 
 
 class TestWindow3At0923(unittest.TestCase):
-    def test_0913_and_0923_are_periodic(self):
+    def test_0913_0918_and_0923_are_periodic(self):
+        """FA: 09:13 を ±2.0 で定期と見るので、09:18・09:23 も「最後の定期 + 300 秒」で当たる"""
         tr = VerifiedTracker.VerifiedTracker()
         tr.last_periodic = _t("09:07:58.93")
         tr.on_round_over(_t("09:12:46.000"))
         tr.on_round_end_verified(_t("09:12:59.000"))
-        self.assertEqual(tr.on_verified(_t("09:13:00.38"), False), VerifiedTracker.PERIODIC,
-                         "予定 09:12:58.93 から +1.45 秒")
-        self.assertEqual(tr.last_periodic, _t("09:13:00.38"))
-        tr.on_round_start(_t("09:13:12.000"))
-        self.assertEqual(tr.on_verified(_t("09:18:00.400"), False), VerifiedTracker.IGNORE, "ラウンド中")
-        self.assertEqual(tr.last_periodic, _t("09:13:00.38"), "ラウンド中の定期は位相を動かさない")
-        tr.on_round_over(_t("09:22:46.976"))
-        tr.on_round_end_verified(_t("09:23:00.217"))
-        self.assertEqual(tr.on_verified(_t("09:23:00.52"), False), VerifiedTracker.PERIODIC,
-                         "09:13:00.38 + 600 秒（k=2）から +0.14 秒")
-        self.assertAlmostEqual(tr.schedule_due, _t("09:23:00.38"), places=3)
+        for at, due in (("09:13:00.38", "09:12:58.93"), ("09:18:00.53", "09:18:00.38"),
+                        ("09:23:00.52", "09:23:00.53")):
+            self.assertEqual(tr.on_verified(_t(at), False), VerifiedTracker.PERIODIC, at)
+            self.assertEqual(tr.last_periodic, _t(at))
+            self.assertAlmostEqual(tr.schedule_due, _t(due), places=3)
+
+    def test_600_seconds_is_not_the_schedule(self):
+        """倍数では追わない（遅れて出た定期の次は、遅れた時刻から 300 秒で来る）"""
+        tr = VerifiedTracker.VerifiedTracker()
+        tr.last_periodic = _t("09:13:00.38")
+        tr.on_round_end_verified(_t("09:22:59.000"))
+        self.assertEqual(tr.on_verified(_t("09:23:00.52"), False), VerifiedTracker.BEGIN)
 
     def test_with_the_old_rule_both_were_taken_as_begin(self):
         """前の決まり（+300 だけ・±1.0）では 2 回とも受理（直す前の再現）"""
@@ -45,22 +48,16 @@ class TestTheSchedule(unittest.TestCase):
         tr.on_round_end_verified(999.0)
         return tr
 
-    def test_the_nearest_multiple(self):
-        tr = self._tracker()
-        self.assertEqual(tr.nearest_due(1100.0), 1300.0, "k は 1 から")
-        self.assertEqual(tr.nearest_due(1449.0), 1300.0)
-        self.assertEqual(tr.nearest_due(1451.0), 1600.0)
-        self.assertEqual(tr.nearest_due(1000.0 + 300 * 7 + 2.0), 1000.0 + 300 * 7)
-        self.assertIsNone(VerifiedTracker.VerifiedTracker().nearest_due(1100.0), "位相を知らない")
-        self.assertIsNone(tr.nearest_due(None))
-
-    def test_any_multiple_within_the_tolerance(self):
-        for k in (1, 2, 3, 6, 12):
-            for off, expected in ((-2.5, VerifiedTracker.PERIODIC), (2.4, VerifiedTracker.PERIODIC),
-                                  (-2.6, VerifiedTracker.BEGIN), (2.6, VerifiedTracker.BEGIN),
-                                  (150.0, VerifiedTracker.BEGIN)):
-                tr = self._tracker()
-                self.assertEqual(tr.on_verified(1000.0 + 300 * k + off, False), expected, (k, off))
+    def test_only_300_seconds_after_within_two_seconds(self):
+        for off, expected in ((-2.0, VerifiedTracker.PERIODIC), (2.0, VerifiedTracker.PERIODIC),
+                              (-2.1, VerifiedTracker.BEGIN), (2.1, VerifiedTracker.BEGIN),
+                              (150.0, VerifiedTracker.BEGIN)):
+            tr = self._tracker()
+            self.assertEqual(tr.on_verified(1300.0 + off, False), expected, off)
+        for k in (2, 3, 12):
+            tr = self._tracker()
+            self.assertEqual(tr.on_verified(1000.0 + 300 * k, False), VerifiedTracker.BEGIN, f"{k} 周期後は予定にしない")
+        self.assertFalse(hasattr(VerifiedTracker.VerifiedTracker, "nearest_due"))
 
     def test_the_round_over_rule_is_as_before(self):
         """RoundOver 直後の遅れた定期は今どおり（+300 がラウンド中に来ていたら定期）"""
@@ -74,7 +71,7 @@ class TestTheSchedule(unittest.TestCase):
         self.assertEqual(tr.on_verified(1200.5, False), VerifiedTracker.IGNORE, "予定はまだ")
 
     def test_the_value(self):
-        self.assertEqual(config.VERIFIED_PERIODIC_TOL_SEC, 2.5)
+        self.assertEqual(config.VERIFIED_PERIODIC_TOL_SEC, 2.0)
 
 
 class TestPressingAgainAfterTheShop(_Case):

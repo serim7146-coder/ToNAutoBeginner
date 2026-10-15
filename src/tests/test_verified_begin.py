@@ -3962,11 +3962,11 @@ class TestVerifiedTracker(unittest.TestCase):
         self.assertEqual(self.tr.on_verified(1300.0, False), VerifiedTracker.PERIODIC)
         self.assertEqual(self.tr.on_verified(1301.5, False), VerifiedTracker.BEGIN)
 
-    def test_the_tolerance_is_two_and_a_half_seconds(self):
-        """EY: 1.0 → 2.5 秒"""
-        self.assertEqual(config.VERIFIED_PERIODIC_TOL_SEC, 2.5)
-        for offset, expected in ((-2.6, VerifiedTracker.BEGIN), (-2.5, VerifiedTracker.PERIODIC),
-                                 (2.5, VerifiedTracker.PERIODIC), (2.6, VerifiedTracker.BEGIN)):
+    def test_the_tolerance_is_two_seconds(self):
+        """FA: 1.0 → 2.0 秒"""
+        self.assertEqual(config.VERIFIED_PERIODIC_TOL_SEC, 2.0)
+        for offset, expected in ((-2.1, VerifiedTracker.BEGIN), (-2.0, VerifiedTracker.PERIODIC),
+                                 (2.0, VerifiedTracker.PERIODIC), (2.1, VerifiedTracker.BEGIN)):
             tr = VerifiedTracker.VerifiedTracker()
             tr.last_periodic = 1000.0
             tr.on_round_end_verified(1250.0)
@@ -4237,11 +4237,11 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         self.assertTrue(any("定期シグナル" in m for m in monitor.logs), monitor.logs)
 
     def test_a_missed_periodic_is_picked_up_after_the_next_round_over(self):
-        """取りこぼしても、次に RoundOver 直後に来た定期で位相を掴み直す（EY から予定は 300 秒の倍数で見るので、
-        予定から外れた所で受理させる）"""
+        """倍数では追わない（定期はラウンド中なら RoundOver 直後へ遅れて位相がずれる。FA で EY から戻した）。
+        取りこぼしても、次に RoundOver 直後に来た定期で位相を掴み直す"""
         base = self._base()
         monitor = self._monitor(phase=base)
-        self._at(monitor, base + 2 * config.VERIFIED_PERIODIC_SEC + 100)
+        self._at(monitor, base + 2 * config.VERIFIED_PERIODIC_SEC)
         self.assertTrue(monitor.st.begin_done, "予定から外れた Verified は受理")
 
         over = base + 2 * config.VERIFIED_PERIODIC_SEC + 200
@@ -4255,20 +4255,16 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         self.assertFalse(monitor.st.begin_done)
         self.assertEqual(monitor._verified.last_periodic, over + 1)
 
-    def test_between_the_multiples_is_not_periodic(self):
-        """EY: 予定は「最後の定期 + 300×k」のいちばん近いもの。その間（ここでは 11 周期と 12 周期の真ん中）は受理"""
+    def test_too_far_is_not_periodic(self):
         base = self._base()
         monitor = self._monitor(phase=base)
 
-        self._at(monitor, base + 11 * config.VERIFIED_PERIODIC_SEC + 150)
-
-        self.assertTrue(monitor.st.begin_done, "予定の外")
-        monitor = self._monitor(phase=base)
         self._at(monitor, base + 11 * config.VERIFIED_PERIODIC_SEC)
-        self.assertFalse(monitor.st.begin_done, "11 周期後も予定")
 
-    def test_the_boundary_is_two_and_a_half_seconds(self):
-        """EY: 1.0 → 2.5 秒"""
+        self.assertTrue(monitor.st.begin_done, "予定（前回＋300秒）以外は当てにしない")
+
+    def test_the_boundary_is_two_seconds(self):
+        """FA: 1.0 → 2.0 秒"""
         base = self._base()
         for offset, periodic in ((-3, False), (-2, True), (0, True), (2, True), (3, False)):
             monitor = self._monitor(phase=base)
