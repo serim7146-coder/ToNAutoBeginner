@@ -13,6 +13,8 @@ from typing import Optional
 import config
 import DebugLog
 import UIFont
+import UiInbox
+import ProcStats
 from config import resource_path
 import ActionExecutor
 import AutoUpdate
@@ -752,7 +754,7 @@ class ReportDialog(tk.Toplevel):
                 DebugLog.exception("mainGUI.ReportDialog.worker")
                 ok, message = False, f"送れませんでした（{type(e).__name__}）"
             try:
-                self.app.after(0, lambda: self._done(ok, message))
+                UiInbox.call_soon(self.app, lambda: self._done(ok, message))
             except (tk.TclError, RuntimeError):
                 pass
 
@@ -817,6 +819,9 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
+        # 別のスレッドからの画面の更新はここへ（FC。Tk はこのスレッドでだけ呼ぶ）。何かがログを書く前に作る
+        self._inbox = UiInbox.UiInbox(self)
+        self._inbox.start()
 
         icon_path = resource_path("assets/ToNAutoBeginnerIcon.ico")
         if icon_path.exists():
@@ -888,6 +893,19 @@ class App(tk.Tk):
         self._start_host_save_polling()
         self._debug_environment()
         self._start_tool_poll()
+        self._log_memory()
+
+    def _log_memory(self):
+        """MEMORY_LOG_SEC ごとに debug.log へ WS・Private・ハンドル数・スレッド数（FC。起動時にも）"""
+        try:
+            DebugLog.write(ProcStats.line())
+        except Exception:
+            DebugLog.exception("mainGUI._log_memory")
+        try:
+            self.after(int(config.MEMORY_LOG_SEC * 1000), self._log_memory)
+        except tk.TclError:
+            pass
+
 
     def _start_emergency_stop_polling(self):
         self._hook_chase_keys()
@@ -1001,7 +1019,7 @@ class App(tk.Tk):
 
     def _after_from_hook(self, func, *args):
         try:
-            self.after(0, func, *args)
+            UiInbox.call_soon(self, func, *args)
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
@@ -1063,7 +1081,7 @@ class App(tk.Tk):
         if self._capturing_key:
             return                  # キーの設定中は反応しない
         try:
-            self.after(0, self._on_chase_key, direction, key)
+            UiInbox.call_soon(self, self._on_chase_key, direction, key)
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
@@ -1107,7 +1125,7 @@ class App(tk.Tk):
         if self._capturing_key:
             return                  # キーの設定中は反応しない
         try:
-            self.after(0, self._on_suicide_cancel_key, key)
+            UiInbox.call_soon(self, self._on_suicide_cancel_key, key)
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
@@ -1429,7 +1447,7 @@ class App(tk.Tk):
         def worker():
             key = HotKey.capture(config.EMERGENCY_KEY_CAPTURE_SEC)
             try:
-                self.after(0, lambda: self._finish_capture_key(key, target))
+                UiInbox.call_soon(self, lambda: self._finish_capture_key(key, target))
             except tk.TclError:
                 pass
 
@@ -2474,7 +2492,7 @@ class App(tk.Tk):
     def _after_from_worker(self, func, *args):
         """裏のスレッドから Tk のスレッドへ渡す。閉じた後なら捨てる"""
         try:
-            self.after(0, func, *args)
+            UiInbox.call_soon(self, func, *args)
         except (tk.TclError, RuntimeError):
             pass
 
@@ -2791,7 +2809,7 @@ class App(tk.Tk):
     def _clear_tab_round_settings(self, window_idx: int):
         """監視スレッドから呼ばれる。Tk変数はメインスレッドでしか触れない"""
         try:
-            self.after(0, lambda: self._do_clear_tab_round_settings(window_idx))
+            UiInbox.call_soon(self, lambda: self._do_clear_tab_round_settings(window_idx))
         except (tk.TclError, RuntimeError):
             # 破棄後は TclError、mainloop の外なら RuntimeError。どちらも
             # 監視スレッドで投げると、そのスレッドごと黙って止まる
@@ -3177,7 +3195,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
         try:
-            self.after(0, _a)
+            UiInbox.call_soon(self, _a)
         except tk.TclError:
             pass
 
@@ -3213,7 +3231,7 @@ class App(tk.Tk):
                     self._log(f"[更新] 新バージョン {tag} を検出しましたが、"
                               f"リリースに {config.UPDATE_ASSET_NAME} が添付されていません")
                     return
-                self.after(0, lambda: self._prompt_update(tag, asset))
+                UiInbox.call_soon(self, lambda: self._prompt_update(tag, asset))
             except tk.TclError:
                 pass
 
@@ -3237,7 +3255,7 @@ class App(tk.Tk):
         def worker():
             tmp = AutoUpdate.download_to_temp(url, size)
             try:
-                self.after(0, lambda: self._finish_update(tag, tmp))
+                UiInbox.call_soon(self, lambda: self._finish_update(tag, tmp))
             except tk.TclError:
                 pass
 
@@ -3516,11 +3534,11 @@ class App(tk.Tk):
                 found = VRChatLauncher.wait_for_windows(
                     baseline, len(launch_plan), config.LAUNCH_WINDOW_TIMEOUT)
                 n = len(found)
-                self.after(0, lambda: self._on_launch_finished(n, len(launch_plan), existing))
+                UiInbox.call_soon(self, lambda: self._on_launch_finished(n, len(launch_plan), existing))
             except Exception as e:
                 DebugLog.exception("mainGUI.worker")
                 msg = str(e)
-                self.after(0, lambda: self._on_launch_error(msg))
+                UiInbox.call_soon(self, lambda: self._on_launch_error(msg))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3671,7 +3689,7 @@ class App(tk.Tk):
                 self._log("[入室操作] 完了")
             finally:
                 try:
-                    self.after(0, lambda: self.btn_stop_entry.config(state="disabled"))
+                    UiInbox.call_soon(self, lambda: self.btn_stop_entry.config(state="disabled"))
                 except tk.TclError:
                     pass
 
@@ -3934,4 +3952,7 @@ class App(tk.Tk):
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
         self._show_own_windows_again()
+        inbox = getattr(self, "_inbox", None)
+        if inbox is not None:
+            inbox.close()                   # 停止の直前のログなど、受付箱に残った分を出してから閉じる（FC）
         self.destroy()

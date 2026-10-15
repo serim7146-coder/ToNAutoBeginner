@@ -9,6 +9,7 @@ import config
 import DebugLog
 import SharedState
 import UIFont
+import UiInbox
 import WindowOperator
 import ConnectDB
 import RoundStore
@@ -307,6 +308,8 @@ class StatisticsWindow(tk.Toplevel):
         self.geometry("1180x900")
         self.minsize(980, 760)
         self.configure(bg=BG)
+        self._inbox = UiInbox.UiInbox(self)        # 裏のスレッドの結果はここへ（FC）
+        self._inbox.start()
         self.store = store or RoundStore.default_store()
         self._dt_vars: dict[str, dict[str, tk.IntVar]] = {}
         self.round_vars: dict[str, tk.BooleanVar] = {}
@@ -567,7 +570,7 @@ class StatisticsWindow(tk.Toplevel):
     def _load_rows_worker(self):
         ok = self.store.sync(ConnectDB.fetch_rounds)
         try:
-            self.after(0, lambda: self._on_rows_loaded(ok))
+            UiInbox.call_soon(self, lambda: self._on_rows_loaded(ok))
         except (tk.TclError, RuntimeError):
             pass                     # 取り込みの間に閉じた
 
@@ -668,8 +671,12 @@ class StatisticsWindow(tk.Toplevel):
         self._reanalyze_job = None
         self._analyze()
 
+
     def destroy(self):
         """閉じた後に予約が走らないように取り消す"""
+        inbox = getattr(self, "_inbox", None)
+        if inbox is not None:
+            inbox.close()
         job, self._reanalyze_job = getattr(self, "_reanalyze_job", None), None
         if job is not None:
             try:
@@ -778,7 +785,7 @@ class StatisticsWindow(tk.Toplevel):
                 DebugLog.exception("StatisticsGUI._off_gui")
                 return
             try:
-                self.after(0, done, result)
+                UiInbox.call_soon(self, done, result)
             except (tk.TclError, RuntimeError):
                 pass                    # 閉じた後
         threading.Thread(target=run, daemon=True).start()

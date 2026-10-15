@@ -2134,13 +2134,16 @@ class TestEmergencyKeyGui(unittest.TestCase):
              patch.object(self.app, "after") as mock_after:
             self.app._begin_capture_key()
             for _ in range(50):
-                if "thread" in seen:
+                if "thread" in seen and self.app._inbox._queue.qsize():
                     break
                 time.sleep(0.02)
+            # 結果は GUI スレッドへ戻す。裏のスレッドは Tk を呼ばず、受付箱に入れるだけ（FC）
+            self.assertEqual(self.app._inbox._queue.qsize(), 1, "結果はGUIスレッドへ戻すこと")
+            mock_after.assert_not_called()
 
         self.assertIn("thread", seen, "捕捉が始まっていること")
         self.assertIsNot(seen["thread"], threading.main_thread())
-        self.assertTrue(mock_after.called, "結果はGUIスレッドへ戻すこと")
+        self.app._inbox.drain()
         self.app._capturing_key = False
 
     def test_the_configured_key_stops_the_macro(self):
