@@ -2075,13 +2075,24 @@ class TestContinueRoundsByType(unittest.TestCase):
         self.assertEqual(started, [])
         self.assertFalse(monitor.st.is_continue_round)
 
-    def test_a_keep_listed_terror_still_announces_nothing(self):
+    def test_a_keep_listed_terror_becomes_a_continue_round(self):
+        """FE: 全続行のラウンドでも続行リストを見る。続行なら普通の続行ラウンドと同じ（アナウンスも）"""
         monitor = self._monitor(keep_on={self.CLASSIC_KEY: {99}})
 
         self._killers(monitor, [99])
 
+        self.assertTrue(monitor.st.is_continue_round)
+        self.played.assert_called()
+
+    def test_an_unlisted_terror_is_still_quiet(self):
+        """続行リストで続行にならなければ今どおり全続行（アナウンスなし）"""
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {12}})
+
+        started = self._killers(monitor, [99])
+
         self.assertFalse(monitor.st.is_continue_round)
         self.played.assert_not_called()
+        self.assertNotIn("do_skip", started)
 
     def test_continue_beats_skip_when_both_are_set(self):
         """settings.json を手編集された場合の保険。自爆しない側に倒す"""
@@ -2092,15 +2103,16 @@ class TestContinueRoundsByType(unittest.TestCase):
 
         self.assertEqual(started, [])
 
-    def test_no_variant_wait_for_a_listed_round(self):
-        """先に return するので Variant 待ちにも入らない"""
+    def test_a_listed_round_waits_for_the_variant_like_any_round(self):
+        """FE: 全続行のラウンドでも続行リストを見るので、置き換えで続行かが変わるなら待つ（普通のラウンドと同じ）"""
         monitor = self._monitor(continue_rounds=("Classic",),
                                 skip_rounds=("Classic",),
                                 keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
 
         started = self._killers(monitor)
 
-        self.assertNotIn("_delayed_decision", started)
+        self.assertIn("_delayed_decision", started)
+        self.assertNotIn("do_skip", started, "全続行は自爆の指定より前（自爆しない）")
 
     def test_an_unlisted_round_uses_the_normal_judgement(self):
         monitor = self._monitor(continue_rounds=("Bloodbath",),

@@ -1192,7 +1192,8 @@ class LogMonitor:
             was_continue_round = st.is_continue_round
             st.is_continue_round = True
             st.open_special_continue = False     # グループの WANTED は普通の続行
-            self._log(f"グループ判定: {st.round_type} 【プレイ】")
+            self._log(f"グループ判定: {st.round_type} "
+                      + ("【全続行 → 続行リストで続行】" if self._is_all_continue_round() else "【プレイ】"))
             if not was_continue_round:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue, kind="continue")
@@ -2162,20 +2163,32 @@ class LogMonitor:
             reason = self._hands_free_skip_reason(ids)
             if reason:
                 return ("hands_free", reason)
-        # privateのラウンド指定。全続行が先。続行リストは見ない
-        if is_private and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds:
-            return ("continue_rounds",)
+        # privateのラウンド指定。全続行が先（自爆するラウンドの指定より前）。続行リストで続行になれば、
+        # 普通の続行ラウンドとすべて同じ（FE: アナウンス・他窓フリーズ・音量「続行」・録画など）。ならなければ全続行
+        if self._is_all_continue_round():
+            listed = self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
+            return listed if self._outcome(listed) in ("continue", "open_special") else ("continue_rounds",)
         # privateのラウンド指定自爆。続行リストより優先する
         if (is_private and self.cfg.skip_rounds
                 and self._should_skip_by_round(ids, bloodthirsty)):
             return ("round_skip",)
+        return self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
+
+    def _plan_by_lists(self, round_type: str, ids, bloodthirsty, is_private: bool) -> tuple:
+        """ラウンド指定（全続行・自爆）の後の判断: プラベ系の Sabotage は焼き芋と同じ判定、ほかは続行リスト"""
         # プラベ系の Sabotage は焼き芋と同じ判定にする（依頼者の決定）。ここへ
         # 置くのは、「自爆する」の指定と放置モードの即自爆を先に効かせるため
-        if is_private and st.round_type == "Sabotage":
+        if is_private and self.st.round_type == "Sabotage":
             decision = self._group_decision(round_type, ids)
             if decision != GroupRound.NORMAL:
                 return ("group", decision)
         return self._list_plan(ids, bloodthirsty)
+
+    def _is_all_continue_round(self) -> bool:
+        """private（と同じ扱い）の窓で、このラウンドが全続行（ラウンド指定 cfg.continue_rounds）か"""
+        st = self.st
+        return (st.instance_type in config.PRIVATE_LIKE_INSTANCES
+                and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds)
 
     def _list_plan(self, ids, bloodthirsty) -> tuple:
         """続行リストでの判定"""
@@ -2399,6 +2412,8 @@ class LogMonitor:
 
         tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
                "【プレイ】" if st.is_continue_round else "【スキップ】")
+        if st.is_continue_round and self._is_all_continue_round():
+            tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
         self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}")
 
         if st.is_continue_round:
