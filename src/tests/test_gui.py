@@ -1367,7 +1367,7 @@ class TestGuiTweaks(unittest.TestCase):
     # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────
     def _speed_check(self, text):
         """フリーズの枠の「速度検知」の行（DV・DV2）"""
-        row = self.app.freeze_frame.pack_slaves()[0]
+        row = self.app.freeze_frame.grid_slaves(row=0, column=1)[0]        # FG: grid の 1 行目のチェック
         for child in row.winfo_children():
             if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
                 return child
@@ -1963,10 +1963,10 @@ class TestHotKey(unittest.TestCase):
 class TestAnnounceFold(unittest.TestCase):
     """③ の音声ファイル12行は「アナウンス」（既定で閉じる）に畳む。音量の2つは外（下）"""
 
-    LABELS = ["続行ラウンド:", "Alternate:", "Midnight:", "Unbound:", "Fog:", "Ghost:",
-              "8 Pages(速度検知):", "Punish(速度検知):", "アイテムロスト:", "Intermission:",
-              "Foxy:", "主催リスト喪失:", "Sabotage murder:", "Sabotage star:", "Cracked:", "Double Trouble:",
-              "AFK:"]
+    LABELS = ["続行ラウンド", "Alternate", "Midnight", "Unbound", "Fog", "Ghost",
+              "8 Pages(速度検知)", "Punish(速度検知)", "アイテムロスト", "Intermission",
+              "Foxy", "主催リスト喪失", "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
+              "AFK"]                         # FG: 見出しの「:」は外した（依頼者了承の案）
     VARS = ["v_voice_continue", "v_voice_alternate", "v_voice_midnight", "v_voice_unbound",
             "v_voice_fog", "v_voice_ghost", "v_voice_8pages", "v_voice_punish",
             "v_voice_item_lost", "v_voice_intermission", "v_voice_foxy", "v_voice_list_lost",
@@ -2001,11 +2001,13 @@ class TestAnnounceFold(unittest.TestCase):
                 if option in w.keys() and str(w.cget(option)) == str(var)]
 
     def test_the_twelve_entries_are_in_the_fold_which_starts_closed(self):
+        """FG: ファイル欄はファイル名だけを出す（フルパスは中で持つ）。欄はアナウンスの枠の中"""
         fold = self.app._announce_frame
         for name in self.VARS:
-            entries = self._bound_to("textvariable", getattr(self.app, name))
-            self.assertEqual(len(entries), 1, name)
-            self.assertTrue(self._inside(entries[0], fold.content), name)
+            var = getattr(self.app, name)
+            entries = [w for w in self._all(fold.content) if isinstance(w, ttk.Entry)
+                       and w.get() == Path(var.get()).name]
+            self.assertTrue(entries, name)
         self.assertEqual(fold.content.winfo_manager(), "", "既定で閉じている")
 
     def test_the_two_volumes_stay_outside_below_the_fold(self):
@@ -2031,7 +2033,7 @@ class TestAnnounceFold(unittest.TestCase):
         fold._toggle()
         self.addCleanup(fold._toggle)
         self.assertEqual(fold.content.winfo_manager(), "pack")
-        labels = [row.winfo_children()[0].cget("text") for row in fold.content.pack_slaves()]
+        labels = [row.winfo_children()[1].cget("text") for row in fold.content.pack_slaves()]
         self.assertEqual(labels, self.LABELS)
 
 
@@ -3198,6 +3200,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "window_layout",                                     # DX で足した
             "ton_entry_plush",                                   # DZ で足した
+            "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）
             "follow_utils",                                      # EB で足した
             "voice_volumes",                                     # EO で足した
             "win_count",

@@ -93,6 +93,9 @@ class VelocityReceiver:
         self._speed = None
         self._grounded = None      # 未受信。Groundedを持たないアバターもある
         self._last_recv = 0.0
+        # 動いたと見た時刻（FG: AFK 回避）。VelocityMagnitude が AFK_MOVING_SPEED 以上で届いた・Grounded が変わった
+        # （跳んだ・着地した）。変わったときにしか送られないので、確認の瞬間の値だけではジャンプを取りこぼす
+        self._moved_at = 0.0
         self._started = 0.0
         self._ever_received = False
         # 「変化しなかった時間」はパケットが届いた瞬間に分かる。
@@ -207,6 +210,8 @@ class VelocityReceiver:
                 self._speed = value
                 self._last_recv = now
                 self._ever_received = True
+                if value >= config.AFK_MOVING_SPEED:
+                    self._moved_at = now
                 # 更新するのは許容を超えて変化したときだけ。許容内の揺らぎで
                 # 更新すると _stable_since が延々リセットされ、張り付かなくなる。
                 if (self._stable_value is None
@@ -215,6 +220,8 @@ class VelocityReceiver:
                     self._stable_since = now
         elif address == GROUNDED:
             with self._lock:
+                if self._grounded is not None and bool(value) != self._grounded:
+                    self._moved_at = time.time()
                 self._grounded = bool(value)
 
     @property
@@ -250,6 +257,18 @@ class VelocityReceiver:
         with self._lock:
             since = self._stable_since
         return (time.time() - since) if since else 0.0
+
+    @property
+    def last_received_at(self) -> float:
+        """最後に VelocityMagnitude を受けた時刻（time.time()）。受けていなければ 0.0（FG）"""
+        with self._lock:
+            return self._last_recv
+
+    @property
+    def last_moved_at(self) -> float:
+        """最後に動いたと見た時刻（速さが AFK_MOVING_SPEED 以上で届いた・Grounded が変わった）。無ければ 0.0（FG）"""
+        with self._lock:
+            return self._moved_at
 
     @property
     def ever_received(self) -> bool:

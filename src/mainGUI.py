@@ -73,6 +73,45 @@ def skip_round_vars(make_var) -> dict:
 
 
 FREEZE_ROUNDS_PER_ROW = 7      # 突入フリーズのチェックを 1 行に並べる数（EZ: 11 個になった）
+VOICE_FILE_WIDTH = 18          # アナウンス欄のファイル名の欄の幅（文字。FG: いちばん長い StopAutoSuicide.mp3 が入る）
+
+
+def display_width(text: str) -> int:
+    """画面の幅（文字。全角は 2、半角は 1）"""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def voice_file_name(path: str) -> str:
+    """アナウンス欄に出すファイル名（FG。フルパスはツールチップ）"""
+    path = (path or "").strip()
+    return Path(path).name if path else ""
+
+
+class Tooltip:
+    """マウスを乗せている間だけ、小さな窓に text() を出す（FG: アナウンス欄のフルパス）"""
+
+    def __init__(self, widget, text):
+        self.widget, self.text, self.tip = widget, text, None
+        widget.bind("<Enter>", self.show, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+
+    def show(self, _event=None):
+        if self.tip is not None:
+            return
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{self.widget.winfo_rootx()}+{self.widget.winfo_rooty() + self.widget.winfo_height()}")
+        tk.Label(self.tip, text=self.text(), background="#ffffe0", relief="solid", borderwidth=1,
+                 padx=4, pady=1).pack()
+
+    def hide(self, _event=None):
+        tip, self.tip = self.tip, None
+        if tip is not None:
+            try:
+                tip.destroy()
+            except tk.TclError:
+                pass
 
 
 def freeze_round_vars(make_var) -> dict:
@@ -1708,12 +1747,27 @@ class App(tk.Tk):
         # 声ごとの音量（EO。全体の音量と掛け合わせる）。種類は PlaySound.VOICE_KINDS
         self.v_voice_volumes = {}
 
-        def voice_row(parent, label, var, kind):
+        self.v_voice_enabled = {}
+        # 行の高さをそろえる（FG: ボタンをファイル欄と同じ高さに。行の間は詰める）
+        ttk.Style(self).configure("Voice.TButton", padding=(0, 0))
+
+        def voice_row(parent, label, var, kind, label_width):
+            """☑ 見出し ファイル名 […] 音量 % ▶（FG）。ファイル欄はファイル名だけ（フルパスはツールチップ）。
+            中で持つ・保存する値はフルパスのまま（var）"""
             f = ttk.Frame(parent)
-            f.pack(fill="x", pady=2)
-            ttk.Label(f, text=label, width=24, anchor="w").pack(side="left")
-            ttk.Entry(f, textvariable=var, width=36).pack(side="left", padx=(0, 4))
-            ttk.Button(f, text="…", width=3,
+            f.pack(fill="x", pady=0)
+            enabled = tk.BooleanVar(value=PlaySound.get_voice_enabled(kind))
+            self.v_voice_enabled[kind] = enabled
+            ttk.Checkbutton(f, variable=enabled,
+                            command=lambda k=kind, e=enabled: self._set_voice_enabled(k, e.get())
+                            ).pack(side="left")
+            ttk.Label(f, text=label, width=label_width, anchor="w").pack(side="left")
+            shown = tk.StringVar(value=voice_file_name(var.get()))
+            var.trace_add("write", lambda *_a, v=var, s=shown: s.set(voice_file_name(v.get())))
+            entry = ttk.Entry(f, textvariable=shown, width=VOICE_FILE_WIDTH, state="readonly")
+            entry.pack(side="left", padx=(0, 2))
+            entry.tooltip = Tooltip(entry, lambda v=var: v.get().strip() or "（ファイルなし）")
+            ttk.Button(f, text="…", width=3, style="Voice.TButton",
                 command=lambda v=var: v.set(
                     filedialog.askopenfilename(
                         title="音声ファイルを選択",
@@ -1727,8 +1781,8 @@ class App(tk.Tk):
             pct = ttk.Label(f, text=f"{int(round(vol.get() * 100))}%", width=5)
             pct.pack(side="left")
             vol.trace_add("write", lambda *_a, v=vol, l=pct: l.config(text=f"{int(round(v.get() * 100))}%"))
-            ttk.Button(f, text="▶", width=3,
-                       command=lambda k=kind, v=var, n=label.rstrip(":"): self._try_voice(k, v.get(), n)
+            ttk.Button(f, text="▶", width=3, style="Voice.TButton",
+                       command=lambda k=kind, v=var, n=label: self._try_voice(k, v.get(), n)
                        ).pack(side="left")
 
         self.v_voice_continue     = tk.StringVar(value=config.VOICE_CONTINUE)
@@ -1753,23 +1807,27 @@ class App(tk.Tk):
         self._announce_frame = CollapsibleFrame(fv, text="アナウンス", collapsed=True)
         self._announce_frame.pack(fill="x", pady=(0, 2))
         fva = self._announce_frame.content
-        voice_row(fva, "続行ラウンド:", self.v_voice_continue, "continue")
-        voice_row(fva, "Alternate:", self.v_voice_alternate, "alternate")
-        voice_row(fva, "Midnight:", self.v_voice_midnight, "midnight")
-        voice_row(fva, "Unbound:", self.v_voice_unbound, "unbound")
-        voice_row(fva, "Fog:", self.v_voice_fog, "fog")
-        voice_row(fva, "Ghost:", self.v_voice_ghost, "ghost")
-        voice_row(fva, "8 Pages(速度検知):", self.v_voice_8pages, "8pages")
-        voice_row(fva, "Punish(速度検知):", self.v_voice_punish, "punish")
-        voice_row(fva, "アイテムロスト:", self.v_voice_item_lost, "item_lost")
-        voice_row(fva, "Intermission:", self.v_voice_intermission, "intermission")
-        voice_row(fva, "Foxy:", self.v_voice_foxy, "foxy")
-        voice_row(fva, "主催リスト喪失:", self.v_voice_list_lost, "list_lost")
-        voice_row(fva, "Sabotage murder:", self.v_voice_murder, "murder")
-        voice_row(fva, "Sabotage star:", self.v_voice_sabotage, "sabotage")
-        voice_row(fva, "Cracked:", self.v_voice_cracked, "cracked")
-        voice_row(fva, "Double Trouble:", self.v_voice_double_trouble, "double_trouble")
-        voice_row(fva, "AFK:", self.v_voice_afk, "afk")
+        rows = (("続行ラウンド", self.v_voice_continue, "continue"),
+                ("Alternate", self.v_voice_alternate, "alternate"),
+                ("Midnight", self.v_voice_midnight, "midnight"),
+                ("Unbound", self.v_voice_unbound, "unbound"),
+                ("Fog", self.v_voice_fog, "fog"),
+                ("Ghost", self.v_voice_ghost, "ghost"),
+                ("8 Pages(速度検知)", self.v_voice_8pages, "8pages"),
+                ("Punish(速度検知)", self.v_voice_punish, "punish"),
+                ("アイテムロスト", self.v_voice_item_lost, "item_lost"),
+                ("Intermission", self.v_voice_intermission, "intermission"),
+                ("Foxy", self.v_voice_foxy, "foxy"),
+                ("主催リスト喪失", self.v_voice_list_lost, "list_lost"),
+                ("Sabotage murder", self.v_voice_murder, "murder"),
+                ("Sabotage star", self.v_voice_sabotage, "sabotage"),
+                ("Cracked", self.v_voice_cracked, "cracked"),
+                ("Double Trouble", self.v_voice_double_trouble, "double_trouble"),
+                ("AFK", self.v_voice_afk, "afk"))
+        # 見出しの幅は、いちばん長い見出しに合わせる（全角は 2 文字分。FG: 今までの 24 は空きすぎ）
+        label_width = max(display_width(label) for label, _v, _k in rows)
+        for label, var, kind in rows:
+            voice_row(fva, label, var, kind, label_width)
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -1889,29 +1947,31 @@ class App(tk.Tk):
         # 先読み（速度検知）とラウンド突入を1つの枠に（DV）。速度検知のボタンのすぐ下
         self.freeze_frame = ttk.LabelFrame(self, text="フリーズ", padding=(8, 2))
         self.freeze_frame.pack(pady=(0, 4))
-        fpre = ttk.Frame(self.freeze_frame)
-        fpre.pack(anchor="w")
-        ttk.Label(fpre, text="速度検知:").pack(side="left")
+        # 見出しの列（文字にぴったり）とチェックの列に分ける（FG: 依頼者「A で」）。チェックは見出しのすぐ右から並べ、
+        # 2 行目（折り返し）は 1 行目のチェックと同じ位置から始める。11 個を 1 行に並べると窓の幅（最小 880）を
+        # 超えるので FREEZE_ROUNDS_PER_ROW 個ずつ折り返す（EZ・FB）
+        def checks_line(row):
+            line = ttk.Frame(self.freeze_frame)
+            line.grid(row=row, column=1, sticky="w")
+            return line
+        ttk.Label(self.freeze_frame, text="速度検知:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        fpre = checks_line(0)
         self.v_freeze_8pages = tk.BooleanVar(value=False)
         self.v_freeze_punish = tk.BooleanVar(value=False)
         ttk.Checkbutton(fpre, text="8 Pages", variable=self.v_freeze_8pages,
                         command=lambda: self._on_speed_freeze_changed("8 Pages")
-                        ).pack(side="left", padx=(8, 0))
+                        ).pack(side="left", padx=(0, 8))
         ttk.Checkbutton(fpre, text="Punished", variable=self.v_freeze_punish,
                         command=lambda: self._on_speed_freeze_changed("Punished")
-                        ).pack(side="left", padx=(8, 0))
+                        ).pack(side="left", padx=(0, 8))
         self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
-        # 11 個を 1 行に並べると窓の幅（最小 880）を超えるので、FREEZE_ROUNDS_PER_ROW 個ずつ折り返す（EZ・FB）。
-        # 2 行目からは見出しを空けて揃える
+        ttk.Label(self.freeze_frame, text="ラウンド突入:").grid(row=1, column=0, sticky="w", padx=(0, 4))
         names = list(self.v_freeze_rounds)
-        for start in range(0, len(names), FREEZE_ROUNDS_PER_ROW):
-            ffr = ttk.Frame(self.freeze_frame)
-            ffr.pack(anchor="w")
-            ttk.Label(ffr, text="ラウンド突入:" if start == 0 else "",
-                      width=len("ラウンド突入:") * 2).pack(side="left")
+        for i, start in enumerate(range(0, len(names), FREEZE_ROUNDS_PER_ROW)):
+            ffr = checks_line(1 + i)
             for name in names[start:start + FREEZE_ROUNDS_PER_ROW]:
                 ttk.Checkbutton(ffr, text=name, variable=self.v_freeze_rounds[name],
-                                command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
+                                command=self._apply_freeze_settings).pack(side="left", padx=(0, 8))
 
         # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
         fcr = ttk.Frame(self)
@@ -2680,6 +2740,7 @@ class App(tk.Tk):
         self.v_ton_access.set(access)
         self._load_launch_options_setting(data)
         App._load_voice_volumes(self, data)
+        App._load_voice_enabled(self, data)
         self._saved_profiles = data.get("profiles", [])
         # 窓数は控えるだけ。反映するのは _auto_detect_windows() の「未検出」の
         # ときだけ（開いている窓があればその数を優先する）
@@ -3789,12 +3850,24 @@ class App(tk.Tk):
         self._schedule_settings_save()
 
     def _try_voice(self, kind: str, path: str, label: str):
-        """▶: その行のファイルを今の音量（全体 × その声）で 1 回鳴らす。マクロが止まっていても鳴る（EO）"""
+        """▶: その行のファイルを今の音量（全体 × その声）で 1 回鳴らす。マクロが止まっていても鳴る（EO）。
+        その声をオフにしていても鳴らす（FG）"""
         path = (path or "").strip()
         if not path or not Path(path).is_file():
             self._log(f"[音声] {label} のファイルがありません")
             return
-        PlaySound.play_sound(path, kind=kind)
+        PlaySound.play_sound(path, kind=kind, force=True)
+
+    def _set_voice_enabled(self, kind: str, enabled: bool):
+        """声ごとのオン・オフ（FG）。すぐ効く。保存は予約"""
+        PlaySound.set_voice_enabled(kind, enabled)
+        self._schedule_settings_save()
+
+    def _load_voice_enabled(self, data):
+        """settings.json の声ごとのオン・オフ（FG。無い・壊れた値はオン）を PlaySound と画面のチェックへ"""
+        got = PlaySound.load_voice_enabled(data.get("voice_enabled"))
+        for kind, var in (getattr(self, "v_voice_enabled", None) or {}).items():
+            var.set(got[kind])
 
     def _load_voice_volumes(self, data):
         """settings.json の声ごとの音量（EO。無い・壊れた値は 100%）を PlaySound と画面のスライダーへ"""
@@ -3840,6 +3913,7 @@ class App(tk.Tk):
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
             "voice_volumes":           PlaySound.voice_volumes_setting(),
+            "voice_enabled":           PlaySound.voice_enabled_setting(),
             **self._launch_options_setting(),
         }
         # load_settings() をマージしているので、書かないだけでは前回の値が

@@ -24,8 +24,11 @@ class _Afk(unittest.TestCase):
         ex._osc = MagicMock()
         moves = []
         ex.move = lambda d, sec: moves.append((now[0] - start, d, sec))
-        if speed is not None:
-            ex._receiver = type("R", (), {"speed": property(lambda _s: speed(now[0] - start))})()
+        if speed is None:
+            speed = lambda _t: 0.0                      # 0 を受けたまま（止まっている。FG: 受けていない窓は鳴らさない）
+        if speed != "none":
+            ex._receiver = type("R", (), {"speed": property(lambda _s: speed(now[0] - start)),
+                                          "ever_received": True, "last_received_at": 0.0})()
         if setup:
             setup(st, ex)
         clock, now = _clock()
@@ -62,6 +65,13 @@ class TestTheAfkWatch(_Afk):
     def test_moving_starts_the_count_again(self):
         moves, _s, _l = self._watch(speed=lambda t: 3.0 if t < 30 else 0.0)
         self.assertEqual([round(t) for t, *_ in moves], [99], "最後に動いていた 29 秒（1 秒ごとに見る）から 70 秒")
+
+    def test_a_window_that_never_got_a_speed_does_nothing(self):
+        """FG（依頼者の判断 A）: 速さを一度も受けていない（受信器が無い・届かない）窓は鳴らさない・動かさない"""
+        moves, sounds, logs = self._watch(speed="none")
+        self.assertEqual((moves, sounds), ([], []))
+        moves, sounds, logs = self._watch(private=False, speed=lambda _t: None)
+        self.assertEqual((moves, sounds), ([], []))
 
     def test_69_seconds_does_nothing(self):
         moves, sounds, _l = self._watch(end_at=69.5)

@@ -170,7 +170,7 @@ class TestTheScreen(unittest.TestCase):
         self.app._running = False
         with patch.object(PlaySound, "play_sound") as play:
             mainGUI.App._try_voice(self.app, "item_lost", f"  {f}  ", "アイテムロスト")
-        play.assert_called_once_with(str(f), kind="item_lost")
+        play.assert_called_once_with(str(f), kind="item_lost", force=True)     # FG: オフでも鳴らす
         self.assertEqual(self.app.logs, [])
 
     def test_the_play_button_says_when_the_file_is_missing(self):
@@ -182,7 +182,7 @@ class TestTheScreen(unittest.TestCase):
 
     def test_every_row_has_its_kind(self):
         src = inspect.getsource(mainGUI.App)
-        rows = re.findall(r'voice_row\(fva, "[^"]+", self\.v_voice_(\w+), "(\w+)"\)', src)
+        rows = re.findall(r'\("[^"]+", self\.v_voice_(\w+), "(\w+)"\)', src)      # FG: 行の一覧
         self.assertEqual(len(rows), 17)
         for attr, kind in rows:
             self.assertEqual(attr, kind)
@@ -215,9 +215,10 @@ class TestTheRealRows(unittest.TestCase):
         rows = self._rows()
         self.assertEqual(len(rows), 17)
         for classes, kids in rows:
-            self.assertEqual(classes, ["TLabel", "TEntry", "TButton", "TScale", "TLabel", "TButton"])
+            self.assertEqual(classes, ["TCheckbutton", "TLabel", "TEntry", "TButton", "TScale", "TLabel",
+                                       "TButton"], "FG: 頭にオン・オフのチェック")
             self.assertEqual(kids[-1].cget("text"), "▶")
-            self.assertEqual(kids[4].cget("text"), "100%")
+            self.assertEqual(kids[5].cget("text"), "100%")
         self.assertEqual(set(self.app.v_voice_volumes), set(PlaySound.VOICE_KINDS))
 
     def test_the_percent_follows_the_slider(self):
@@ -225,8 +226,8 @@ class TestTheRealRows(unittest.TestCase):
             self.app.v_voice_volumes["item_lost"].set(0.42)
             self.app.update_idletasks()
         _classes, kids = self._rows()[8]
-        self.assertEqual(kids[0].cget("text"), "アイテムロスト:")
-        self.assertEqual(kids[4].cget("text"), "42%")
+        self.assertEqual(kids[1].cget("text"), "アイテムロスト")
+        self.assertEqual(kids[5].cget("text"), "42%")
         self.app.v_voice_volumes["item_lost"].set(1.0)
 
     def test_the_play_button_plays_that_row(self):

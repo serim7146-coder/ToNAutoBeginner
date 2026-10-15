@@ -2730,13 +2730,38 @@ class ActionExecutor:
         suicide = st.suicide_seq == round_seq and st.suicide_cancelled_round != round_seq
         return suicide or st.glorbo_afk or st.is_open_special_round_round
 
+    def _afk_speed_note(self, speed, peak, now) -> str:
+        """AFK 回避で動かす・鳴らすときの速さの記録（FG: 動いているのに鳴った件を追うため）"""
+        receiver = self._receiver
+        if receiver is None:
+            return "速さの受信器なし"
+        try:
+            ever = receiver.ever_received
+            last = receiver.last_received_at
+        except Exception:
+            return "速さの受信器の値を読めない"
+        since = f"{now - last:.1f} 秒" if last else "なし"
+        moved = self._receiver_moved_at()
+        return (f"最後に受けた速さ {speed if speed is None else f'{speed:.2f}'}・最後に受けてから {since}・"
+                f"受けたことが{'ある' if ever else 'ない'}・この {config.AFK_STILL_SEC:.0f} 秒の最大 "
+                f"{'なし' if peak is None else f'{peak:.2f}'}・最後に動いたと見てから "
+                f"{f'{now - moved:.1f} 秒' if moved else 'なし'}")
+
+    def _receiver_moved_at(self) -> float:
+        """受信器が最後に動いたと見た時刻（無ければ 0.0）"""
+        try:
+            return float(getattr(self._receiver, "last_moved_at", 0.0) or 0.0)
+        except Exception:
+            return 0.0
+
     def do_afk_watch(self, round_seq: int):
         """ツールが自爆しないラウンドの AFK 回避（EZ。依頼者 2026-10-15）。生きている間、速さ（OSC の受信。ツールが
         動かした分も動いたに数える）が AFK_MOVING_SPEED 未満のまま AFK_STILL_SEC たったら、private の窓は微移動
-        （DTM/Waldo の AFK 解除ループと同じ動かし方）、それ以外は警告音。どちらの後も数え直す。受信が無い窓は
-        止まっていると見る。死んだ・ラウンドが終わった・止めた → やめる"""
+        （DTM/Waldo の AFK 解除ループと同じ動かし方）、それ以外は警告音。どちらの後も数え直す。速さを一度も
+        受けていない窓は鳴らさない・動かさない（FG）。死んだ・ラウンドが終わった・止めた → やめる"""
         st = self._st
-        still_since = time.time()
+        still_since = last_check = time.time()
+        peak = None                         # この 70 秒で見た速さの最大（FG: 記録の行）
         while True:
             time.sleep(config.AFK_POLL_SEC)
             if (not self._is_running() or not st.in_round or st.round_seq != round_seq
@@ -2744,12 +2769,25 @@ class ActionExecutor:
                 return
             now = time.time()
             speed = self._receiver_speed()
-            if self._afk_not_mine(round_seq) or (speed is not None and speed >= config.AFK_MOVING_SPEED):
-                still_since = now
+            # 前の確認から今までに動いたか（FG: 跳んで着地すると、確認の瞬間には 0 に戻っている）
+            moved = self._receiver_moved_at() > last_check
+            last_check = now
+            if (self._afk_not_mine(round_seq) or moved
+                    or (speed is not None and speed >= config.AFK_MOVING_SPEED)):
+                still_since, peak = now, None
                 continue
+            if speed is not None:
+                peak = speed if peak is None else max(peak, speed)
             if now - still_since < config.AFK_STILL_SEC:
                 continue
             still_since = now
+            DebugLog.write(f"[操作] [窓{st.window_idx}] AFK 回避: {self._afk_speed_note(speed, peak, now)}")
+            peak = None
+            if speed is None:
+                # 速さを一度も受けていない窓（受信器が無い・届かない）は、動いているか分からないので鳴らさない・
+                # 動かさない（FG: 依頼者の判断 A。0 が届いた後に何も来ないのは止まっているのと同じなので、そちらは鳴らす）
+                DebugLog.write(f"[操作] [窓{st.window_idx}] AFK 回避: 速さを受けていない → 鳴らさない・動かさない")
+                continue
             if self.can_operate():
                 self.move("forward", config.OPERATOR_WAIT_SEC)
                 self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていない → 微移動")

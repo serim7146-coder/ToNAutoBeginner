@@ -339,13 +339,30 @@ class TestFreezeFrame(_AppCase):
         self.addCleanup(SharedState.set_freeze_on_punish, False)
 
     def _rows(self):
+        """[(見出し, [チェック])]。FG: 見出しの列（0）とチェックの列（1）の grid。折り返しの行は見出しが空"""
         frame = self.app.freeze_frame
         self.assertEqual(frame.cget("text"), "フリーズ")
-        rows = []
-        for row in frame.pack_slaves():
-            items = row.pack_slaves()
-            rows.append((items[0].cget("text"), [w for w in items[1:]]))
-        return rows
+        rows = {}
+        for w in frame.grid_slaves():
+            info = w.grid_info()
+            row = rows.setdefault(int(info["row"]), ["", []])
+            if int(info["column"]) == 0:
+                row[0] = w.cget("text")
+            else:
+                row[1] = list(w.pack_slaves())
+        return [tuple(rows[r]) for r in sorted(rows)]
+
+    def test_the_checks_start_right_after_the_titles_and_line_up(self):
+        """FG（依頼者「A で」）: 見出しのすぐ右から並べ、2 行目は 1 行目のチェックにそろえる"""
+        self.app.update_idletasks()
+        rows = self._rows()
+        starts = {r[1][0].winfo_rootx() for r in rows}
+        self.assertEqual(len(starts), 1, "速度検知・ラウンド突入の 1 行目・2 行目のチェックが同じ位置から")
+        titles = [w for w in self.app.freeze_frame.grid_slaves(column=0)]
+        right = max(w.winfo_rootx() + w.winfo_reqwidth() for w in titles)
+        self.assertLessEqual(starts.pop() - right, 8, "見出しのすぐ右（見出しの幅は文字にぴったり）")
+        for w in titles:
+            self.assertEqual(str(w.cget("width")), "", "幅を決めない（文字にぴったり）")
 
     def test_two_rows(self):
         """速度検知の行と、ラウンド突入の行（EZ: 7 個で折り返す。2 行目は見出しを空ける。FB で 11 個）"""
@@ -442,8 +459,8 @@ class TestDv2MainScreen(_AppCase):
                                                       self.app.v_follow_utils)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
-        row = self.app.freeze_frame.pack_slaves()[0]
-        self.assertEqual(row.pack_slaves()[0].cget("text"), "速度検知:")
+        title = self.app.freeze_frame.grid_slaves(row=0, column=0)[0]       # FG: grid
+        self.assertEqual(title.cget("text"), "速度検知:")
 
 
 class TestDv2Keys(_AppCase):

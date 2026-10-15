@@ -65,6 +65,7 @@ VOICE_KINDS = ("continue", "alternate", "midnight", "unbound", "fog", "ghost", "
                "item_lost", "intermission", "foxy", "list_lost",
                "murder", "sabotage", "cracked", "double_trouble", "afk")     # 後ろの 5 つは EZ（FB で EX を外した）
 _voice_volumes: dict = {}
+_voice_enabled: dict = {}       # 声ごとのオン・オフ（FG。覚えていなければオン）
 
 
 def get_voice_volume(kind) -> float:
@@ -76,6 +77,33 @@ def get_voice_volume(kind) -> float:
 def set_voice_volume(kind: str, volume: float):
     with _SOUND_VOLUME_LOCK:
         _voice_volumes[kind] = max(0.0, min(1.0, float(volume)))
+
+
+def get_voice_enabled(kind) -> bool:
+    """その声を鳴らすか（FG）。覚えていない・種類なしはオン"""
+    with _SOUND_VOLUME_LOCK:
+        return _voice_enabled.get(kind, True)
+
+
+def set_voice_enabled(kind: str, enabled: bool):
+    with _SOUND_VOLUME_LOCK:
+        _voice_enabled[kind] = bool(enabled)
+
+
+def voice_enabled_setting() -> dict:
+    """settings.json に書く形（VOICE_KINDS すべて）"""
+    return {kind: get_voice_enabled(kind) for kind in VOICE_KINDS}
+
+
+def load_voice_enabled(value) -> dict:
+    """settings.json の値を読む。無い・壊れた値（真偽でない）はオン。読んだ値を返す"""
+    value = value if isinstance(value, dict) else {}
+    got = {}
+    for kind in VOICE_KINDS:
+        v = value.get(kind)
+        got[kind] = v if isinstance(v, bool) else True
+        set_voice_enabled(kind, got[kind])
+    return got
 
 
 def voice_volumes_setting() -> dict:
@@ -214,9 +242,13 @@ def _say(message: str):
     DebugLog.write(f"[音声] {message}")
 
 
-def play_sound(path: str, kind: str | None = None):
-    """鳴らす。kind（VOICE_KINDS の 1 つ）を渡すと、その声の音量も掛ける（EO）"""
+def play_sound(path: str, kind: str | None = None, force: bool = False):
+    """鳴らす。kind（VOICE_KINDS の 1 つ）を渡すと、その声の音量も掛ける（EO）。その声をオフにしていれば
+    鳴らさない（FG）。force は画面の ▶（試し再生）: オフでも鳴らす"""
     if not path:
+        return
+    if kind and not force and not get_voice_enabled(kind):
+        DebugLog.write(f"[音声] {kind} はオフ → 鳴らさない")
         return
     p = Path(path)
     if not p.exists():

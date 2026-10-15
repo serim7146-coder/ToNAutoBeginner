@@ -1210,6 +1210,7 @@ class LogMonitor:
             # 落としているが、張りっぱなしは全窓が止まるので念のため
             self._clear_stale_continue_round()
             self._log(f"グループ判定: {self.st.round_type} 【全続行】")
+            self.st.all_continue_round = True     # 音量「全続行」（FG: 干し芋の Mystic Moon など）
             return True
         return False
 
