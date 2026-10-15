@@ -12,6 +12,11 @@ REPO_ROOT = SRC_DIR.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+# 本物の入力（OSC・キー・マウス・カーソル・クリップボード・音・ほかのプロセスの窓）を見張る（FF）。
+# どのモジュールよりも前に入れる（モジュールが読み込みのときに引いた関数も包むため）
+from tests import input_guard  # noqa: E402
+input_guard.install()
+
 import unittest
 import hashlib
 import base64
@@ -318,6 +323,20 @@ def setUpModule():
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
 
 
+def end_sound_threads(timeout: float = 3.0) -> bool:
+    """鳴っている声を止め、再生のスレッド（PlaySound._play_sound）が終わるまで待つ（FF: 偽の _mci を外した後まで
+    スレッドが生き残り、本物の MCI に「status」「close」を送っていた）。偽物を外す前に呼ぶ。終われば True"""
+    deadline = time.monotonic() + timeout
+    while True:
+        PlaySound.stop_all()
+        alive = [t for t in threading.enumerate() if "_play_sound" in t.name and t.is_alive()]
+        if not alive:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _refuse_network(*_args, **_kwargs):
     raise OSError("テスト中は本物のネットワーク（DB）へ送らない")
 
@@ -332,6 +351,7 @@ def tearDownModule():
     config.ITEMS = _real_paths["items"]
     _sandbox.cleanup()
     _OscSocketTrap.check()
+    input_guard.check_outside()             # テストの外（別のスレッドの残りなど）で本物に届いた分（FF）
 
 ConnectDB.SUPABASE_URL = "https://example.supabase.co"
 ConnectDB.SUPABASE_KEY = "test-key"

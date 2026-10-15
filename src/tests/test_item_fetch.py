@@ -4,6 +4,17 @@ from tests.support import *  # noqa: F401,F403
 
 
 
+
+def _fake_cursor(test):
+    """本物のカーソルを読まない・動かさない（FF: _put_cursor_back が本物の SetCursorPos を呼んでいた）。
+    置いた位置は test.cursor_moves に残る（取得前の位置へ戻すことは、これで確かめられる）"""
+    test.cursor_moves = []
+    for name, fake in (("cursor_position", lambda: (400, 300)),
+                       ("set_cursor_position", lambda point: test.cursor_moves.append(point) or True)):
+        p = patch.object(WindowOperator, name, side_effect=fake)
+        p.start()
+        test.addCleanup(p.stop)
+
 class TestItemCatalog(unittest.TestCase):
     """item.json（テスト用の一時ファイル。本物は読まない）"""
 
@@ -190,6 +201,7 @@ class TestFetchYield(unittest.TestCase):
             self.addCleanup(reset)
         SharedState.set_item_fetch_gain(None)
         self.addCleanup(SharedState.set_item_fetch_gain, None)
+        _fake_cursor(self)
         self.front = {"hwnd": self.HWND}
         self.sent = []
         self.clicks = []
@@ -504,6 +516,7 @@ class TestItemFetch(unittest.TestCase):
         SharedState.equip_freeze_reset()
         self.addCleanup(SharedState.equip_freeze_reset)
         self.now = [0.0]
+        _fake_cursor(self)
 
     # ── 偽物 ──────────────────────────────────
     def _sleep(self, sec):
@@ -1038,6 +1051,7 @@ class TestItemFetch(unittest.TestCase):
         self.assertEqual(outcome, "ok")
         self.assertEqual(calls, ["move", "front", ("buy", "Survival", 29), ("back", "loan"), "release"])
         self.assertIn("アイテム取得: 装備できました", " ".join(logs))
+        self.assertEqual(self.cursor_moves[-1:], [(400, 300)], "取得前の位置（偽のカーソル）へ戻す")
 
     def test_a_failed_buy_is_failed(self):
         ex, st, _ = self._executor()
@@ -1201,6 +1215,7 @@ class TestItemFetchViewRestore(unittest.TestCase):
         self.now = [0.0]
         SharedState.set_item_fetch_gain(None)
         self.addCleanup(SharedState.set_item_fetch_gain, None)
+        _fake_cursor(self)
 
     def _sleep(self, sec):
         self.now[0] += sec

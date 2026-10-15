@@ -23,6 +23,8 @@ class _Device:
         test.addCleanup(p.stop)
         PlaySound._active.clear()
         test.addCleanup(PlaySound._active.clear)
+        # 後で足したものが先に動く: 偽物を外す前に、再生のスレッドを止めて終わるのを待つ（FF）
+        test.addCleanup(lambda: test.assertTrue(end_sound_threads(), "再生のスレッドが終わらない"))
 
     def mci(self, command):
         with self.lock:
@@ -83,6 +85,17 @@ class TestStopAll(unittest.TestCase):
         for alias in dev.aliases():
             self.assertEqual(dev.verbs(alias), ["open", "setaudio", "play", "stop", "close"], alias)
         self.assertIn("[音声] 鳴っている 2 個を止めました", self.written)
+
+    def test_the_test_ends_the_sound_threads_before_the_fakes_go(self):
+        """FF: 鳴り止まない声の再生のスレッドが、偽の _mci を外した後まで残ると本物の MCI に届く。
+        end_sound_threads が止めて終わるのを待つ。_Device は偽物を外す前にそれを呼ぶ"""
+        dev = _Device(self)
+        PlaySound.play_sound("voice/ItemLost.mp3")
+        self.assertTrue(_wait(lambda: len(PlaySound._active) == 1))
+        self.assertTrue(end_sound_threads())
+        self.assertEqual([t for t in threading.enumerate() if "_play_sound" in t.name], [])
+        self.assertEqual(dev.verbs(dev.aliases()[0])[-2:], ["stop", "close"], "偽物のうちに閉じた")
+        self.assertIn("end_sound_threads()", inspect.getsource(_Device.__init__))
 
     def test_the_playing_thread_sends_stop_and_close_once(self):
         """MCI のエイリアスは開いたスレッドに縛られる（ほかのスレッドからは 263）。stop・close は再生のスレッドが
