@@ -263,9 +263,9 @@ class LogMonitor:
     def _instance_label(instance_type: str, suffix: str = "") -> str:
         """画面・debug.log のインスタンスの種類。Seer's Apostle は扱いも添える（FD）"""
         if instance_type == config.INSTANCE_SEER:
-            return f"{instance_type}（グループ・メンバーのみ → private と同じに扱う）"
+            return f"{instance_type}（グループオンリー → private と同じに扱う）"
         if f"group({config.SEER_GROUP_ID})" in (suffix or ""):
-            return (f"{instance_type}（Seer's Apostle・メンバーのみでない → マクロ・霧の看破はしない）")
+            return (f"{instance_type}（Seer's Apostle・グループオンリーでない → マクロ・霧の看破はしない）")
         return instance_type
 
     @staticmethod

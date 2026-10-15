@@ -57,14 +57,14 @@ class TestTheJoiningLine(unittest.TestCase):
         monitor, logs = self._join("members")
         self.assertEqual(monitor.st.instance_type, config.INSTANCE_SEER)
         self.assertTrue(monitor._action.can_operate())
-        self.assertIn("[窓1] インスタンスタイプ: Seer's Apostle（グループ・メンバーのみ → private と同じに扱う）", logs)
+        self.assertIn("[窓1] インスタンスタイプ: Seer's Apostle（グループオンリー → private と同じに扱う）", logs)
 
     def test_plus_public_unknown(self):
         for access in ("plus", "public", "x"):
             monitor, logs = self._join(access)
             self.assertEqual(monitor.st.instance_type, config.INSTANCE_OTHER_GROUP, access)
             self.assertFalse(monitor._action.can_operate(), access)
-            self.assertIn("[窓1] インスタンスタイプ: その他のグループ（Seer's Apostle・メンバーのみでない → "
+            self.assertIn("[窓1] インスタンスタイプ: その他のグループ（Seer's Apostle・グループオンリーでない → "
                           "マクロ・霧の看破はしない）", logs)
 
     def test_a_plain_group_has_no_note(self):
