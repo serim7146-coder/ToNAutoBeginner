@@ -494,8 +494,9 @@ INSTANCE_PUBLIC        = "public"
 INSTANCE_PRIVATE       = "private"
 INSTANCE_HOSHIIMO      = "干し芋"
 INSTANCE_YAKIIMO       = "焼き芋"
-INSTANCE_OTHER_GROUP   = "other_group"
+INSTANCE_OTHER_GROUP   = "その他のグループ"
 INSTANCE_EMERALD_CITY  = "Emerald City"
+INSTANCE_SEER          = "Seer's Apostle"
 
 # ── インスタンスid ──
 HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
@@ -503,6 +504,11 @@ YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 # 識別のみ。自爆・グループ判定の対象にはしない
 # （GroupRound.GROUP_INSTANCES に入れると自爆が走る）
 EMERALD_CITY_GROUP_ID = "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8"
+SEER_GROUP_ID = "grp_71fee430-5156-41e0-9623-e36860058af8"
+# private とすべて同じに扱うインスタンス（FD: Seer's Apostle の「グループ（メンバーのみ）」。依頼者 2026-10-15）。
+# 操作（can_operate）・ラウンドの判断・霧の看破。Seer's Apostle でもグループ+・公開・分からないは
+# INSTANCE_OTHER_GROUP（マクロ・看破とも全面禁止）。自爆のグループ判定（GroupRound.GROUP_INSTANCES）には入れない
+PRIVATE_LIKE_INSTANCES = frozenset({INSTANCE_PRIVATE, INSTANCE_SEER})
 
 
 # ── Variant判定待ち ──

@@ -147,7 +147,7 @@ class LogMonitor:
         同じ判定を使う。1か所に置き、ActionExecutor には関数として渡す
         """
         return bool(self.cfg.auto_begin
-                    and self.st.instance_type == config.INSTANCE_PRIVATE)
+                    and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES)
 
     def _item_begin_mode_active(self) -> bool:
         """アイテム取得→Begin モードが、この窓で効いているか。
@@ -245,14 +245,28 @@ class LogMonitor:
             return config.INSTANCE_HOSHIIMO
         if f"group({config.YAKIIMO_GROUP_ID})" in suffix:
             return config.INSTANCE_YAKIIMO
-        # 一般の ~group( より前に置くこと。後ろだと other_group に吸われる
+        # 一般の ~group( より前に置くこと。後ろだと「その他のグループ」に吸われる
         if f"group({config.EMERALD_CITY_GROUP_ID})" in suffix:
             return config.INSTANCE_EMERALD_CITY
+        if f"group({config.SEER_GROUP_ID})" in suffix:
+            # Seer's Apostle（FD）: メンバーのみなら private と同じ。グループ+・公開・分からないは全面禁止
+            if LogParser.instance_access(suffix) == LogParser.ACCESS_GROUP_MEMBERS:
+                return config.INSTANCE_SEER
+            return config.INSTANCE_OTHER_GROUP
         if "~group(" in suffix:
             return config.INSTANCE_OTHER_GROUP
         if any(marker in suffix for marker in ("~private", "~friends", "~hidden", "~canRequestInvite")):
             return config.INSTANCE_PRIVATE
         return config.INSTANCE_PUBLIC
+
+    @staticmethod
+    def _instance_label(instance_type: str, suffix: str = "") -> str:
+        """画面・debug.log のインスタンスの種類。Seer's Apostle は扱いも添える（FD）"""
+        if instance_type == config.INSTANCE_SEER:
+            return f"{instance_type}（グループ・メンバーのみ → private と同じに扱う）"
+        if f"group({config.SEER_GROUP_ID})" in (suffix or ""):
+            return (f"{instance_type}（Seer's Apostle・メンバーのみでない → マクロ・霧の看破はしない）")
+        return instance_type
 
     @staticmethod
     def _same_player_name(a: str, b: str) -> bool:
@@ -603,7 +617,7 @@ class LogMonitor:
                     self.st.instance_id = event.instance
                     self.st.instance_type = self._parse_instance_type(event.suffix)
                     self.st.instance_access = LogParser.instance_access(event.suffix)
-                    self._log(f"インスタンスタイプ検出: {self.st.instance_type}")
+                    self._log(f"インスタンスタイプ検出: {self._instance_label(self.st.instance_type, event.suffix)}")
                     # マクロを途中で始めても人数が分かるように。積み上げないと
                     # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
                     self._restore_players(reversed(player_events))
@@ -1002,7 +1016,7 @@ class LogMonitor:
         干し芋の窓とプラベの窓を同時に監視することがあるため、窓ごとに判定する。
         """
         return (SharedState.get_hands_free()
-                and self.st.instance_type == config.INSTANCE_PRIVATE)
+                and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES)
 
     def _mark_item_lost(self, message: str = ""):
         """アイテムロストとして扱う。message は「<理由>: アイテムロスト」の形。
@@ -1206,7 +1220,7 @@ class LogMonitor:
         自爆しないので要らない。操作しないインスタンス（public など）は
         判定そのものをしないので、ここでも求めない。
         """
-        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         return self.cfg.do_skip and self._others_present()
@@ -1222,7 +1236,7 @@ class LogMonitor:
         いるので止めない（全部自爆する）。誰もリストを持っていないときは、
         続行が無いのか分からないので止める。
         """
-        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip:
@@ -1253,7 +1267,7 @@ class LogMonitor:
         なる。人数を復元できなかった窓がそれで判定すると、全ラウンド自爆する。
         tnl のときは従来どおり（空の tnl で判定するのは利用者の選択）。
         """
-        if self.st.instance_type not in (config.INSTANCE_PRIVATE,
+        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip or SharedState.get_list_source() != "host":
@@ -1523,7 +1537,7 @@ class LogMonitor:
         # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
         # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
         # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
-        if (st.instance_type == config.INSTANCE_PRIVATE
+        if (st.instance_type in config.PRIVATE_LIKE_INSTANCES
                 and SharedState.get_speed_detect()
                 and not self._hands_free()
                 and not st.speed_strafe_done):
@@ -1909,7 +1923,7 @@ class LogMonitor:
         # 片方だけ外れていると、表示と動きが食い違う
         if self._on_round_settings_cleared:
             self._on_round_settings_cleared(self.window_idx)
-        self._log(f"インスタンスタイプ: {st.instance_type}")
+        self._log(f"インスタンスタイプ: {self._instance_label(st.instance_type, event.suffix)}")
 
     def _on_item_equip(self, event):
         """アイテム装備"""
@@ -2129,7 +2143,7 @@ class LogMonitor:
         """
         st = self.st
         itype = st.instance_type
-        is_private = itype == config.INSTANCE_PRIVATE
+        is_private = itype in config.PRIVATE_LIKE_INSTANCES
         is_group = itype in GroupRound.GROUP_INSTANCES
         # Glorbo（Punished の Arkus の置き換え）は、続行リストに Glorbo の続行があれば
         # 放置モードの即自爆・ラウンド指定の自爆より優先して続行する（依頼者の決定）
@@ -2366,7 +2380,7 @@ class LogMonitor:
     # ── 通常判定（続行リスト照合） ──────────────
     def _decide_with_keep_on_set(self, round_type: str, plan: tuple | None = None):
         st = self.st
-        is_private = st.instance_type == config.INSTANCE_PRIVATE
+        is_private = st.instance_type in config.PRIVATE_LIKE_INSTANCES
         is_group = st.instance_type in GroupRound.GROUP_INSTANCES
 
         all_ids = st.terror_ids
@@ -2467,7 +2481,7 @@ class LogMonitor:
     # ── 霧の看破 ─────────────────────────────
     def _may_show_fog_info(self) -> bool:
         """公開前の霧の情報を判定・表示に使ってよいインスタンスか"""
-        return FogEarlyRead.early_read_allowed(self.st.instance_access)
+        return FogEarlyRead.early_read_allowed(self.st.instance_access, self.st.instance_type)
 
     def _send_early_statistics(self, tid: int):
         """DB にだけ送る。判定には使わない。送信について何も出さない"""

@@ -77,9 +77,9 @@ def depth_target(direction: str) -> float:
 def can_operate_in(instance_type: str) -> bool:
     """このインスタンスで OSC 操作・クリック操作（移動・マウス・カーソル・チェイス）をしてよいか。
     private（招待・招待+・フレンド・フレンド+）だけ（依頼者）。種類が分からない（入室前・
-    ログに入室の行が無い）ときは今までの private の判定と同じく不可。
-    前面化・窓の切り替え・音・判定・グループの自爆（キー）はこれを見ない"""
-    return instance_type == config.INSTANCE_PRIVATE
+    ログに入室の行が無い）ときは今までの private の判定と同じく不可。Seer's Apostle の「グループ（メンバー
+    のみ）」も private と同じ（FD）。前面化・窓の切り替え・音・判定・グループの自爆（キー）はこれを見ない"""
+    return instance_type in config.PRIVATE_LIKE_INSTANCES
 
 
 class ActionExecutor:
@@ -410,7 +410,7 @@ class ActionExecutor:
     def _hands_free(self) -> bool:
         """この窓で放置モードが効いているか（private系インスタンスのみ）"""
         return (SharedState.get_hands_free()
-                and self._st.instance_type == config.INSTANCE_PRIVATE)
+                and self._st.instance_type in config.PRIVATE_LIKE_INSTANCES)
 
     def announce_item_lost_once(self):
         """アイテムロスト音声を一度だけ再生する"""

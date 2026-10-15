@@ -47,8 +47,10 @@ def early_read_enabled() -> bool:
         return _enabled
 
 
-def early_read_allowed(access: str) -> bool:
-    return early_read_enabled() and access in EARLY_READ_ACCESS
+def early_read_allowed(access: str, instance_type: str = "") -> bool:
+    """許可のボタンが ON で、公開範囲が EARLY_READ_ACCESS か、Seer's Apostle の「グループ（メンバーのみ）」
+    （FD: private と同じ。instance_type が INSTANCE_SEER になるのはメンバーのみのときだけ）"""
+    return early_read_enabled() and (access in EARLY_READ_ACCESS or instance_type == config.INSTANCE_SEER)
 
 
 def launched_for_early_read(log_path) -> bool:
