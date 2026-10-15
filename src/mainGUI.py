@@ -70,6 +70,9 @@ def skip_round_vars(make_var) -> dict:
     return {name: make_var() for name in config.SKIP_ROUND_SELECTABLE}
 
 
+FREEZE_ROUNDS_PER_ROW = 7      # 突入フリーズのチェックを 1 行に並べる数（EZ: 12 個になった）
+
+
 def freeze_round_vars(make_var) -> dict:
     """突入フリーズのチェックボックス用の変数を作る。
 
@@ -1722,6 +1725,12 @@ class App(tk.Tk):
         self.v_voice_intermission = tk.StringVar(value=config.VOICE_INTERMISSION)
         self.v_voice_foxy         = tk.StringVar(value=config.VOICE_FOXY)
         self.v_voice_list_lost    = tk.StringVar(value=config.VOICE_LIST_LOST)
+        self.v_voice_murder       = tk.StringVar(value=config.VOICE_MURDER)          # EZ
+        self.v_voice_sabotage     = tk.StringVar(value=config.VOICE_SABOTAGE)
+        self.v_voice_cracked      = tk.StringVar(value=config.VOICE_CRACKED)
+        self.v_voice_double_trouble = tk.StringVar(value=config.VOICE_DOUBLE_TROUBLE)
+        self.v_voice_bloodbath_ex = tk.StringVar(value=config.VOICE_BLOODBATH_EX)
+        self.v_voice_afk          = tk.StringVar(value=config.VOICE_AFK)
         # 音声ファイルの12行は「アナウンス」に畳む（長すぎるので。既定は閉じた状態。
         # ② の「VRChat起動の詳細設定」と同じ入れ子）。音量の2つはこの下（外）に残す
         self._announce_frame = CollapsibleFrame(fv, text="アナウンス", collapsed=True)
@@ -1739,6 +1748,12 @@ class App(tk.Tk):
         voice_row(fva, "Intermission:", self.v_voice_intermission, "intermission")
         voice_row(fva, "Foxy:", self.v_voice_foxy, "foxy")
         voice_row(fva, "主催リスト喪失:", self.v_voice_list_lost, "list_lost")
+        voice_row(fva, "Sabotage murder:", self.v_voice_murder, "murder")
+        voice_row(fva, "Sabotage star:", self.v_voice_sabotage, "sabotage")
+        voice_row(fva, "Cracked:", self.v_voice_cracked, "cracked")
+        voice_row(fva, "Double Trouble:", self.v_voice_double_trouble, "double_trouble")
+        voice_row(fva, "Bloodbath EX:", self.v_voice_bloodbath_ex, "bloodbath_ex")
+        voice_row(fva, "AFK:", self.v_voice_afk, "afk")
 
         # 音量スライダー
         volf = ttk.Frame(fv)
@@ -1869,13 +1884,18 @@ class App(tk.Tk):
         ttk.Checkbutton(fpre, text="Punished", variable=self.v_freeze_punish,
                         command=lambda: self._on_speed_freeze_changed("Punished")
                         ).pack(side="left", padx=(8, 0))
-        ffr = ttk.Frame(self.freeze_frame)
-        ffr.pack(anchor="w")
-        ttk.Label(ffr, text="ラウンド突入:").pack(side="left")
         self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
-        for name, var in self.v_freeze_rounds.items():
-            ttk.Checkbutton(ffr, text=name, variable=var,
-                            command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
+        # 12 個を 1 行に並べると窓の幅（最小 880）を超えるので、FREEZE_ROUNDS_PER_ROW 個ずつ折り返す（EZ）。
+        # 2 行目からは見出しを空けて揃える
+        names = list(self.v_freeze_rounds)
+        for start in range(0, len(names), FREEZE_ROUNDS_PER_ROW):
+            ffr = ttk.Frame(self.freeze_frame)
+            ffr.pack(anchor="w")
+            ttk.Label(ffr, text="ラウンド突入:" if start == 0 else "",
+                      width=len("ラウンド突入:") * 2).pack(side="left")
+            for name in names[start:start + FREEZE_ROUNDS_PER_ROW]:
+                ttk.Checkbutton(ffr, text=name, variable=self.v_freeze_rounds[name],
+                                command=self._apply_freeze_settings).pack(side="left", padx=(8, 0))
 
         # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
         fcr = ttk.Frame(self)
@@ -2186,6 +2206,7 @@ class App(tk.Tk):
         self.v_wvol = {}
         for key, label, default in (
                 (WindowVolume.CONTINUE, "続行", config.DEFAULT_WINDOW_VOLUME_CONTINUE),
+                (WindowVolume.ALL_CONTINUE, "全続行", config.DEFAULT_WINDOW_VOLUME_ALL_CONTINUE),
                 (WindowVolume.FREEZE, "フリーズ窓", config.DEFAULT_WINDOW_VOLUME_FREEZE),
                 (WindowVolume.OTHER, "その他", config.DEFAULT_WINDOW_VOLUME_OTHER)):
             row = ttk.Frame(box)
@@ -2216,7 +2237,7 @@ class App(tk.Tk):
             return
         enabled, levels = self._window_volume_values()
         controller.set_levels(levels[WindowVolume.CONTINUE], levels[WindowVolume.FREEZE],
-                              levels[WindowVolume.OTHER])
+                              levels[WindowVolume.OTHER], all_continue=levels[WindowVolume.ALL_CONTINUE])
         controller.set_enabled(enabled)
 
     def _load_window_volume_settings(self, data: dict):
@@ -2229,6 +2250,7 @@ class App(tk.Tk):
         enabled, levels = self._window_volume_values()
         return {"window_volume_enabled": enabled,
                 "window_volume_continue": levels[WindowVolume.CONTINUE],
+                "window_volume_all_continue": levels[WindowVolume.ALL_CONTINUE],
                 "window_volume_freeze": levels[WindowVolume.FREEZE],
                 "window_volume_other": levels[WindowVolume.OTHER]}
 
@@ -3017,6 +3039,12 @@ class App(tk.Tk):
             cfg.voice_intermission = self.v_voice_intermission.get().strip()
             cfg.voice_foxy          = self.v_voice_foxy.get().strip()
             cfg.voice_list_lost     = self.v_voice_list_lost.get().strip()
+            cfg.voice_murder        = self.v_voice_murder.get().strip()
+            cfg.voice_sabotage      = self.v_voice_sabotage.get().strip()
+            cfg.voice_cracked       = self.v_voice_cracked.get().strip()
+            cfg.voice_double_trouble = self.v_voice_double_trouble.get().strip()
+            cfg.voice_bloodbath_ex  = self.v_voice_bloodbath_ex.get().strip()
+            cfg.voice_afk           = self.v_voice_afk.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
             # 前面が VRChat の窓かを見るために覚えておく（Begin のカーソル判定）
             SharedState.register_window_hwnd(cfg.hwnd)

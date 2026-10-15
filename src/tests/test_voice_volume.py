@@ -58,7 +58,7 @@ class TestTheVolume(unittest.TestCase):
         self.assertEqual(PlaySound.get_voice_volume("fog"), 0.0)
 
     def test_twelve_kinds_named_after_the_window_settings(self):
-        self.assertEqual(len(PlaySound.VOICE_KINDS), 12)
+        self.assertEqual(len(PlaySound.VOICE_KINDS), 18, "EZ で 6 つ（突入フリーズの 5 つと AFK）")
         for kind in PlaySound.VOICE_KINDS:
             self.assertTrue(hasattr(WindowConfig(), f"voice_{kind}"), kind)
 
@@ -87,9 +87,12 @@ class TestEveryCallerPassesItsKind(unittest.TestCase):
     def test_the_round_entry_voices(self):
         kinds = LogMonitor.LogMonitor.ROUND_ENTRY_VOICE_KINDS
         self.assertEqual(kinds, {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
-                                 "Alternate": "alternate", "Ghost": "ghost"})
+                                 "Alternate": "alternate", "Ghost": "ghost",
+                                 "Sabotage murder": "murder", "Sabotage star": "sabotage", "Cracked": "cracked",
+                                 "Double Trouble": "double_trouble", "Bloodbath EX": "bloodbath_ex"})
         cfg = WindowConfig(voice_fog="f", voice_unbound="u", voice_midnight="m", voice_alternate="a",
-                           voice_ghost="g")
+                           voice_ghost="g", voice_murder="mu", voice_sabotage="sa", voice_cracked="c",
+                           voice_double_trouble="d", voice_bloodbath_ex="e")
         monitor = type("M", (), {"cfg": cfg})()
         for round_type, kind in kinds.items():
             self.assertEqual(LogMonitor.LogMonitor._round_entry_voice(monitor, round_type),
@@ -180,14 +183,14 @@ class TestTheScreen(unittest.TestCase):
     def test_every_row_has_its_kind(self):
         src = inspect.getsource(mainGUI.App)
         rows = re.findall(r'voice_row\(fva, "[^"]+", self\.v_voice_(\w+), "(\w+)"\)', src)
-        self.assertEqual(len(rows), 12)
+        self.assertEqual(len(rows), 18)
         for attr, kind in rows:
             self.assertEqual(attr, kind)
         self.assertEqual({k for _a, k in rows}, set(PlaySound.VOICE_KINDS))
 
 
 class TestTheRealRows(unittest.TestCase):
-    """本物の App の「アナウンス」の 12 行に、スライダー・%・▶ が付いている"""
+    """本物の App の「アナウンス」の 18 行に、スライダー・%・▶ が付いている"""
 
     @classmethod
     def setUpClass(cls):
@@ -210,7 +213,7 @@ class TestTheRealRows(unittest.TestCase):
 
     def test_each_row_has_a_slider_a_percent_and_a_play_button(self):
         rows = self._rows()
-        self.assertEqual(len(rows), 12)
+        self.assertEqual(len(rows), 18)
         for classes, kids in rows:
             self.assertEqual(classes, ["TLabel", "TEntry", "TButton", "TScale", "TLabel", "TButton"])
             self.assertEqual(kids[-1].cget("text"), "▶")

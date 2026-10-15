@@ -2723,6 +2723,40 @@ class ActionExecutor:
 
     # ── AFK防止ループ ─────────────────────────
 
+    def _afk_not_mine(self, round_seq: int) -> bool:
+        """AFK 回避の見張りが手を出さない: このラウンドを自爆する（キャンセルしていない）・DTM/Waldo や Glorbo の
+        AFK 解除ループが動いている（二重にしない）"""
+        st = self._st
+        suicide = st.suicide_seq == round_seq and st.suicide_cancelled_round != round_seq
+        return suicide or st.glorbo_afk or st.is_open_special_round_round
+
+    def do_afk_watch(self, round_seq: int):
+        """ツールが自爆しないラウンドの AFK 回避（EZ。依頼者 2026-10-15）。生きている間、速さ（OSC の受信。ツールが
+        動かした分も動いたに数える）が AFK_MOVING_SPEED 未満のまま AFK_STILL_SEC たったら、private の窓は微移動
+        （DTM/Waldo の AFK 解除ループと同じ動かし方）、それ以外は警告音。どちらの後も数え直す。受信が無い窓は
+        止まっていると見る。死んだ・ラウンドが終わった・止めた → やめる"""
+        st = self._st
+        still_since = time.time()
+        while True:
+            time.sleep(config.AFK_POLL_SEC)
+            if (not self._is_running() or not st.in_round or st.round_seq != round_seq
+                    or st.died_this_round):
+                return
+            now = time.time()
+            speed = self._receiver_speed()
+            if self._afk_not_mine(round_seq) or (speed is not None and speed >= config.AFK_MOVING_SPEED):
+                still_since = now
+                continue
+            if now - still_since < config.AFK_STILL_SEC:
+                continue
+            still_since = now
+            if self.can_operate():
+                self.move("forward", config.OPERATOR_WAIT_SEC)
+                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていない → 微移動")
+            else:
+                PlaySound.play_sound(getattr(self._cfg, "voice_afk", ""), kind="afk")
+                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていない → 警告音")
+
     def do_open_special_round_loop(self, glorbo: bool = False):
         """
         ラウンド中60秒ごとに移動キーをわずかに押す（ジャンプ代替）。

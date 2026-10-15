@@ -34,6 +34,12 @@ class WindowConfig:
     voice_midnight: str = ""
     voice_alternate: str = ""
     voice_ghost: str = ""
+    voice_murder: str = ""            # ラウンド突入フリーズ（EZ）
+    voice_sabotage: str = ""
+    voice_cracked: str = ""
+    voice_double_trouble: str = ""
+    voice_bloodbath_ex: str = ""
+    voice_afk: str = ""               # AFK 回避の警告音（EZ）
 
 
 @dataclass
@@ -91,6 +97,8 @@ class WindowState:
     is_continue_round: bool = False
     # DTM/Waldo による続行か（is_continue_round と一緒に落とす）。音量では通常扱い
     open_special_continue: bool = False
+    # 全続行（private のラウンド指定 cfg.continue_rounds で続行）のラウンドか。音量の「全続行」（EZ）
+    all_continue_round: bool = False
     instance_id: str = ""                  # 今のインスタンスの ID（DB v1 でまとめる目印の元）
     round_start_time: Optional[float] = None   # そのラウンドの開始の行の時刻（送る時刻ではない）
     # この窓が「他窓フリーズ」を張っているか。is_continue_round とは別物で、

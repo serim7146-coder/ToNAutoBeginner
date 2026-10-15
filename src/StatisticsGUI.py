@@ -117,6 +117,8 @@ ROUND_ORDER_GROUPS = (
         ("Twilight", ("Twilight",)),
         ("Solstice", ("Solstice",)),
         ("Special", ("Special",)),
+        # 表に無い名前（DB の 999）。「未分類」と出し、全選択・最初の選択では選ばない（EZ）
+        ("未分類", (str(config.ROUND_TYPE_UNKNOWN_ID),)),
     ),
 )
 # 下の段＝「全選択」で選ばれない組。画面を開いたときの最初の選択でも外す（依頼者の決定）

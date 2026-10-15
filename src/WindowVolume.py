@@ -21,11 +21,13 @@ import DebugLog
 CONTINUE = "continue"
 FREEZE = "freeze"
 OTHER = "other"
-CATEGORY_LABELS = {CONTINUE: "続行", FREEZE: "フリーズ窓", OTHER: "その他"}
+ALL_CONTINUE = "all_continue"       # 全続行・ラウンド突入フリーズの窓（EZ）
+CATEGORY_LABELS = {CONTINUE: "続行", ALL_CONTINUE: "全続行", FREEZE: "フリーズ窓", OTHER: "その他"}
 
 
 def category_of(st) -> str:
-    """窓の分類。重なったら上が勝つ: 続行 ＞ フリーズ窓（フリーズを張った窓）＞ その他。
+    """窓の分類。重なったら上が勝つ: 続行 ＞ 全続行（全続行のラウンド・ラウンド突入フリーズを張った窓。EZ）＞
+    フリーズ窓（装備待ち・速度検知のフリーズを張った窓）＞ その他。
 
     続行の窓は続行フリーズも張っているが続行として扱う。Run と DTM/Waldo の続行は
     通常（その他）として扱う（依頼者 2026-09-30）。Run は突入フリーズを張っていても
@@ -35,7 +37,9 @@ def category_of(st) -> str:
         return OTHER
     if st.is_continue_round and not st.open_special_continue:
         return CONTINUE
-    if st.equip_freeze_held or st.speed_freeze_held or st.round_freeze_held:
+    if getattr(st, "all_continue_round", False) or st.round_freeze_held:
+        return ALL_CONTINUE
+    if st.equip_freeze_held or st.speed_freeze_held:
         return FREEZE
     return OTHER
 
@@ -51,6 +55,7 @@ def levels_from_settings(data: dict) -> tuple:
     enabled = data.get("window_volume_enabled", config.DEFAULT_WINDOW_VOLUME_ENABLED)
     return (enabled if isinstance(enabled, bool) else config.DEFAULT_WINDOW_VOLUME_ENABLED,
             {CONTINUE: percent("window_volume_continue", config.DEFAULT_WINDOW_VOLUME_CONTINUE),
+             ALL_CONTINUE: percent("window_volume_all_continue", config.DEFAULT_WINDOW_VOLUME_ALL_CONTINUE),
              FREEZE: percent("window_volume_freeze", config.DEFAULT_WINDOW_VOLUME_FREEZE),
              OTHER: percent("window_volume_other", config.DEFAULT_WINDOW_VOLUME_OTHER)})
 
@@ -274,6 +279,7 @@ class VolumeController:
         self._lock = threading.Lock()
         self._enabled = config.DEFAULT_WINDOW_VOLUME_ENABLED
         self._levels = {CONTINUE: config.DEFAULT_WINDOW_VOLUME_CONTINUE,
+                        ALL_CONTINUE: config.DEFAULT_WINDOW_VOLUME_ALL_CONTINUE,
                         FREEZE: config.DEFAULT_WINDOW_VOLUME_FREEZE,
                         OTHER: config.DEFAULT_WINDOW_VOLUME_OTHER}
         self._applied: dict = {}     # pid → 最後に設定した %（同じなら触らない）
@@ -288,9 +294,10 @@ class VolumeController:
         with self._lock:
             self._enabled = bool(enabled)
 
-    def set_levels(self, continue_=None, freeze=None, other=None):
+    def set_levels(self, continue_=None, freeze=None, other=None, all_continue=None):
         with self._lock:
-            for key, value in ((CONTINUE, continue_), (FREEZE, freeze), (OTHER, other)):
+            for key, value in ((CONTINUE, continue_), (FREEZE, freeze), (OTHER, other),
+                               (ALL_CONTINUE, all_continue)):
                 if value is not None:
                     self._levels[key] = int(min(100, max(0, round(value))))
 

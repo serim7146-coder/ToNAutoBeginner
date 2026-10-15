@@ -348,15 +348,18 @@ class TestFreezeFrame(_AppCase):
         return rows
 
     def test_two_rows(self):
+        """速度検知の行と、ラウンド突入の行（EZ: 12 個になったので 7 個で折り返す。2 行目は見出しを空ける）"""
         rows = self._rows()
-        self.assertEqual([title for title, _ in rows], ["速度検知:", "ラウンド突入:"])
-        pre, entry = rows[0][1], rows[1][1]
+        self.assertEqual([title for title, _ in rows], ["速度検知:", "ラウンド突入:", ""])
+        pre, entry = rows[0][1], rows[1][1] + rows[2][1]
+        self.assertEqual([len(rows[1][1]), len(rows[2][1])], [7, 5])
         self.assertEqual([w.cget("text") for w in pre], ["8 Pages", "Punished"])
         self.assertEqual([str(w.cget("variable")) for w in pre],
                          [str(self.app.v_freeze_8pages), str(self.app.v_freeze_punish)])
         self.assertEqual([w.cget("text") for w in entry], list(self.app.v_freeze_rounds))
         self.assertEqual(list(self.app.v_freeze_rounds),
-                         ["Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished"])
+                         ["Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished",
+                          "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble", "Bloodbath EX"])
         self.assertEqual([str(w.cget("variable")) for w in entry],
                          [str(v) for v in self.app.v_freeze_rounds.values()])
 

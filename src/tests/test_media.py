@@ -571,10 +571,13 @@ class TestWindowVolumeCategory(unittest.TestCase):
                          WindowVolume.CONTINUE)
 
     def test_each_freeze_this_window_holds(self):
-        for held in ("equip_freeze_held", "speed_freeze_held", "round_freeze_held"):
+        """装備待ち・速度検知はフリーズ窓。ラウンド突入フリーズは EZ から「全続行」"""
+        for held, category in (("equip_freeze_held", WindowVolume.FREEZE),
+                               ("speed_freeze_held", WindowVolume.FREEZE),
+                               ("round_freeze_held", WindowVolume.ALL_CONTINUE)):
             st = WindowState()
             setattr(st, held, True)
-            self.assertEqual(WindowVolume.category_of(st), WindowVolume.FREEZE, held)
+            self.assertEqual(WindowVolume.category_of(st), category, held)
 
     def test_continue_wins_over_a_freeze(self):
         st = WindowState(is_continue_round=True)
@@ -663,7 +666,7 @@ class TestWindowVolumeController(unittest.TestCase):
                                      "[窓2] VRChat の音量 → 続行 100%"])
 
     def test_a_freeze_window_gets_the_freeze_level(self):
-        self.a.round_freeze_held = True
+        self.a.equip_freeze_held = True                 # EZ: 突入フリーズは「全続行」へ移った
         self.ctl.tick()
         self.assertIn(("set", 11, 0.9), self.audio.sets())
 
@@ -813,24 +816,24 @@ class TestWindowVolumeSettings(unittest.TestCase):
     def test_an_old_file_gives_the_defaults(self):
         enabled, levels = WindowVolume.levels_from_settings({})
         self.assertFalse(enabled)
-        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.FREEZE: 100,
-                                  WindowVolume.OTHER: 0})
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.ALL_CONTINUE: 100,
+                                  WindowVolume.FREEZE: 100, WindowVolume.OTHER: 0})
 
     def test_saved_values_are_read_and_clamped(self):
         enabled, levels = WindowVolume.levels_from_settings({
             "window_volume_enabled": True, "window_volume_continue": 75,
             "window_volume_freeze": 150, "window_volume_other": -5})
         self.assertTrue(enabled)
-        self.assertEqual(levels, {WindowVolume.CONTINUE: 75, WindowVolume.FREEZE: 100,
-                                  WindowVolume.OTHER: 0})
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 75, WindowVolume.ALL_CONTINUE: 100,
+                                  WindowVolume.FREEZE: 100, WindowVolume.OTHER: 0})
 
     def test_broken_values_fall_back(self):
         enabled, levels = WindowVolume.levels_from_settings({
             "window_volume_enabled": "yes", "window_volume_continue": "80",
             "window_volume_freeze": True, "window_volume_other": None})
         self.assertFalse(enabled)
-        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.FREEZE: 100,
-                                  WindowVolume.OTHER: 0})
+        self.assertEqual(levels, {WindowVolume.CONTINUE: 100, WindowVolume.ALL_CONTINUE: 100,
+                                  WindowVolume.FREEZE: 100, WindowVolume.OTHER: 0})
 
     class Var:
         def __init__(self, value):
@@ -845,20 +848,21 @@ class TestWindowVolumeSettings(unittest.TestCase):
     def _app(self):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.v_wvol_enabled = self.Var(False)
-        app.v_wvol = {WindowVolume.CONTINUE: self.Var(100), WindowVolume.FREEZE: self.Var(100),
-                      WindowVolume.OTHER: self.Var(0)}
+        app.v_wvol = {WindowVolume.CONTINUE: self.Var(100), WindowVolume.ALL_CONTINUE: self.Var(100),
+                      WindowVolume.FREEZE: self.Var(100), WindowVolume.OTHER: self.Var(0)}
         app._window_volume_values = lambda: mainGUI.App._window_volume_values(app)
         return app
 
     def test_they_are_saved_and_loaded_back(self):
         app = self._app()
         mainGUI.App._load_window_volume_settings(app, {
-            "window_volume_enabled": True, "window_volume_continue": 70,
+            "window_volume_enabled": True, "window_volume_continue": 70, "window_volume_all_continue": 60,
             "window_volume_freeze": 40, "window_volume_other": 10})
 
         saved = mainGUI.App._window_volume_settings(app)
 
         self.assertEqual(saved, {"window_volume_enabled": True, "window_volume_continue": 70,
+                                 "window_volume_all_continue": 60,
                                  "window_volume_freeze": 40, "window_volume_other": 10})
 
     def test_the_save_includes_the_keys(self):
@@ -878,7 +882,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._save_launch_settings(fake)
-        for key in ("window_volume_enabled", "window_volume_continue",
+        for key in ("window_volume_enabled", "window_volume_continue", "window_volume_all_continue",
                     "window_volume_freeze", "window_volume_other"):
             self.assertIn(key, stored)
 
@@ -890,7 +894,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
 
         mainGUI.App._apply_window_volume_settings(app)
 
-        app._window_volume.set_levels.assert_called_once_with(100, 100, 25)
+        app._window_volume.set_levels.assert_called_once_with(100, 100, 25, all_continue=100)
         app._window_volume.set_enabled.assert_called_once_with(True)
 
     def test_nothing_happens_when_not_running(self):

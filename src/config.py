@@ -246,8 +246,12 @@ VERIFIED_LEARN_BACK_SEC    = 1800.0  # 起動時に位相を取り戻すため�
 VERIFIED_ROUND_START_WAIT_SEC = 15.0
 
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
+# Sabotage murder（自分がマーダー）・Sabotage star（マーダーでない）はログのラウンド名ではない（ログは「Sabotage」）。
+# どちらかは Sus player の行で分かる（ラウンド開始と同じ秒、開始の行より前に出る。EZ: 手元のログの Sabotage 8 回すべて）。
+# Bloodbath EX もログは「Bloodbath」で、Killers の行（3 体が同じ番号）で分かる → その時点で張る（EZ）
 ROUND_FREEZE_SELECTABLE = [
-    "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished"
+    "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished",
+    "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble", "Bloodbath EX",
 ]
 # 霧に入ったときの音声。既定では鳴らさない（仕組みと voice_fog の設定は残す）
 ANNOUNCE_FOG_ON_ENTRY = False
@@ -710,6 +714,7 @@ DEFAULT_SOUND_VOLUME = 1.0
 WINDOW_VOLUME_POLL_SEC          = 0.5
 DEFAULT_WINDOW_VOLUME_ENABLED   = False
 DEFAULT_WINDOW_VOLUME_CONTINUE  = 100
+DEFAULT_WINDOW_VOLUME_ALL_CONTINUE = 100     # 全続行・ラウンド突入フリーズの窓（EZ。既定は続行と同じ）
 DEFAULT_WINDOW_VOLUME_FREEZE    = 100
 DEFAULT_WINDOW_VOLUME_OTHER     = 0
 
@@ -729,6 +734,18 @@ VOICE_UNBOUND      = str(resource_path("assets/voice/Unbound.mp3"))
 VOICE_MIDNIGHT     = str(resource_path("assets/voice/Midnight.mp3"))
 VOICE_ALTERNATE    = str(resource_path("assets/voice/Alternate.mp3"))
 VOICE_GHOST        = str(resource_path("assets/voice/Ghost.mp3"))
+VOICE_MURDER       = str(resource_path("assets/voice/Murder.mp3"))         # Sabotage murder（EZ）
+VOICE_SABOTAGE     = str(resource_path("assets/voice/Sabotage.mp3"))       # Sabotage star（EZ）
+VOICE_CRACKED      = str(resource_path("assets/voice/Cracked.mp3"))
+VOICE_DOUBLE_TROUBLE = str(resource_path("assets/voice/DoubleTrouble.mp3"))
+VOICE_BLOODBATH_EX = str(resource_path("assets/voice/EX.mp3"))
+# 生き残るラウンドで AFK_STILL_SEC 動かなかったとき、private でない窓で鳴らす警告音（EZ）
+VOICE_AFK          = str(resource_path("assets/voice/AFK.mp3"))
+# ツールが自爆しないラウンドの AFK 回避（EZ。依頼者 2026-10-15）。速さ（OSC の受信）が AFK_MOVING_SPEED 未満の
+# 状態が AFK_STILL_SEC 続いたら、private の窓は微移動（DTM/Waldo と同じ）、それ以外は警告音。受信が無い窓は止まっていると見る
+AFK_STILL_SEC      = 70.0
+AFK_POLL_SEC       = 1.0
+AFK_MOVING_SPEED   = 0.1
 
 # 自動操作後の待ち時間
 OPERATOR_WAIT_SEC = 0.05

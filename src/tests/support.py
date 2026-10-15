@@ -274,6 +274,12 @@ REAL_CLIPBOARD = {"read": SaveLoad.read_clipboard, "write": SaveLoad.write_clipb
 SaveLoad.read_clipboard = lambda: ""
 SaveLoad.write_clipboard = lambda _text: False
 
+# ── ラウンド開始ごとの AFK 回避の見張り（EZ）を、ほかのテストで動かさない ──────
+# 見張りは本物の時計で 70 秒後に移動（OSC・背面のキー）か警告音を出す。ラウンドを始めるテストの残りのスレッドが
+# 後のテストの間に動かないよう、何もしない物にしておく。確かめるテストは本物（REAL_AFK_WATCH）を呼ぶ
+REAL_AFK_WATCH = ActionExecutor.ActionExecutor.do_afk_watch
+ActionExecutor.ActionExecutor.do_afk_watch = lambda self, round_seq: None
+
 
 # ── テストで本物の設定を書き換えない ─────────────────────
 # %APPDATA%\ToNAutoBeginner の settings.json / fog_object_names.json は

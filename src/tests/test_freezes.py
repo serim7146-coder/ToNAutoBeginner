@@ -156,8 +156,9 @@ class TestRoundFreezeFocus(unittest.TestCase):
 
     def test_the_source_focuses_before_it_freezes(self):
         src = Path(LogMonitor.__file__).read_text(encoding="utf-8")
-        block = src[src.index("if st.round_type in SharedState.get_freeze_rounds()"):]
-        block = block[:block.index("\n            # ", 10)]
+        # EZ: 張るところは _enter_round_freeze（Bloodbath EX は Killers の行からも呼ぶ）
+        block = src[src.index("    def _enter_round_freeze"):]
+        block = block[:block.index("\n    def ", 10)]
 
         self.assertLess(block.index('_focus_for_freeze("ラウンド突入フリーズ")'),
                         block.index("SharedState.round_freeze_start(st)"))

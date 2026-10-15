@@ -62,7 +62,8 @@ def set_sound_volume(volume: float):
 # 声の種類ごとの音量（EO）。鳴らす音量 ＝ 全体（sound_volume）× その声の音量。種類の名前は窓の設定の
 # voice_<種類> と同じ。ファイルのパスでは引かない（同じファイルを 2 種類に使っても別々に効くように）
 VOICE_KINDS = ("continue", "alternate", "midnight", "unbound", "fog", "ghost", "8pages", "punish",
-               "item_lost", "intermission", "foxy", "list_lost")
+               "item_lost", "intermission", "foxy", "list_lost",
+               "murder", "sabotage", "cracked", "double_trouble", "bloodbath_ex", "afk")     # 後ろの 6 つは EZ
 _voice_volumes: dict = {}
 
 
@@ -78,7 +79,7 @@ def set_voice_volume(kind: str, volume: float):
 
 
 def voice_volumes_setting() -> dict:
-    """settings.json に書く形（12 種類すべて。小数 2 桁）"""
+    """settings.json に書く形（VOICE_KINDS すべて。小数 2 桁）"""
     return {kind: round(get_voice_volume(kind), 2) for kind in VOICE_KINDS}
 
 

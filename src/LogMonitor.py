@@ -342,7 +342,9 @@ class LogMonitor:
 
     # ラウンド突入の音声の種類（PlaySound の声ごとの音量。EO）
     ROUND_ENTRY_VOICE_KINDS = {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
-                               "Alternate": "alternate", "Ghost": "ghost"}
+                               "Alternate": "alternate", "Ghost": "ghost",
+                               "Sabotage murder": "murder", "Sabotage star": "sabotage", "Cracked": "cracked",
+                               "Double Trouble": "double_trouble", "Bloodbath EX": "bloodbath_ex"}
 
     def _round_entry_voice(self, round_type: str) -> str:
         """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字"""
@@ -350,7 +352,36 @@ class LogMonitor:
                 "Unbound": self.cfg.voice_unbound,
                 "Midnight": self.cfg.voice_midnight,
                 "Alternate": self.cfg.voice_alternate,
-                "Ghost": self.cfg.voice_ghost}.get(round_type, "")
+                "Ghost": self.cfg.voice_ghost,
+                "Sabotage murder": self.cfg.voice_murder,
+                "Sabotage star": self.cfg.voice_sabotage,
+                "Cracked": self.cfg.voice_cracked,
+                "Double Trouble": self.cfg.voice_double_trouble,
+                "Bloodbath EX": self.cfg.voice_bloodbath_ex}.get(round_type, "")
+
+    def _round_freeze_name(self) -> str:
+        """ラウンド突入フリーズの名前。Sabotage は Sus player の行で murder／star に分ける（EZ。行はラウンド開始より
+        前に来る）。ほかはログのラウンド名"""
+        st = self.st
+        if st.round_type == "Sabotage":
+            return "Sabotage murder" if st.sabotage_murder_this_round else "Sabotage star"
+        return st.round_type
+
+    def _enter_round_freeze(self, name: str):
+        """選んだラウンドに入ったら全窓を止める（張っていなければ）。テラー判明は待たない。自窓の自爆は止めない。
+        放置モード中は Fog に揃えて張らない"""
+        st = self.st
+        if (name not in SharedState.get_freeze_rounds() or self._hands_free()
+                or st.round_freeze_held):
+            return
+        self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
+        SharedState.round_freeze_start(st)
+        self._log(f"⏸ {name} 突入 → 全窓フリーズ"
+                  f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
+        # 音声は選べるラウンドのもの。Punished / 8 Pages の音声は速度検知用
+        voice = self._round_entry_voice(name)
+        if voice:
+            PlaySound.play_sound(voice, kind=self.ROUND_ENTRY_VOICE_KINDS[name])
 
     def _undo_ignored_verified(self):
         """ラウンド開始: 定期として無視した Verified の後 VERIFIED_ROUND_START_WAIT_SEC 以内なら、それは
@@ -1438,6 +1469,7 @@ class LogMonitor:
         if self._same_player_name(event.player_name, st.local_player_name):
             if st.in_round and st.round_type == "Sabotage":
                 self._mark_sabotage_murder()
+                self._enter_round_freeze("Sabotage murder")     # 開始の後に分かった（手元のログには無い。EZ）
             else:
                 st.pending_sabotage_murder = True
             self._log(f"Sus player一致: {event.player_name}")
@@ -1564,6 +1596,7 @@ class LogMonitor:
             SharedState.round_freeze_end(st)
             self._log("ラウンド開始 → ラウンド突入フリーズ解除")
         st.is_open_special_round_round = False
+        st.all_continue_round          = False
         st.item_id_at_round_start      = st.item_id
         st.item_lost_announced         = False
         st.item_lost_this_round        = False
@@ -1600,17 +1633,10 @@ class LogMonitor:
         if held_reason:
             self._lose_held_item(held_reason)
 
-        # 指定ラウンドに突入したら全窓を止める。テラー判明は待たない。
-        # 自窓の自爆は止めない（止めるのは他窓だけ）。放置モード中はFogに揃えて張らない。
-        if st.round_type in SharedState.get_freeze_rounds() and not self._hands_free():
-            self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
-            SharedState.round_freeze_start(st)
-            self._log(f"⏸ {st.round_type} 突入 → 全窓フリーズ"
-                      f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
-            # 対象は依頼の5つだけ。Punished / 8 Pages の音声は速度検知用
-            voice = self._round_entry_voice(st.round_type)
-            if voice:
-                PlaySound.play_sound(voice, kind=self.ROUND_ENTRY_VOICE_KINDS[st.round_type])
+        # 指定ラウンドに突入したら全窓を止める（Bloodbath EX は Killers の行で。EZ）
+        self._enter_round_freeze(self._round_freeze_name())
+        # ツールが自爆しないラウンドの AFK 回避（EZ）。自爆するかはまだ分からないので、見張りの中で見る
+        self._start_daemon(self._action.do_afk_watch, st.round_seq)
 
         if st.round_type == "Run":
             st.is_continue_round = False
@@ -1762,6 +1788,7 @@ class LogMonitor:
         # 選出者のクリアはここ。ROUND_START でやると、同じ秒に先に積まれた
         # Sus player を消してしまう（ログ上は Sus player の方が前に来る）
         st.sus_players = []
+        st.all_continue_round = False       # 全続行の音量はここまで（EZ。続行の保険と同じ所）
         if self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
         if st.is_continue_round:
@@ -2045,6 +2072,9 @@ class LogMonitor:
         st.fog = False
 
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
+        if round_type == "Bloodbath EX":
+            # ラウンド開始の行では「Bloodbath」。EX と分かるのはここ（EZ）
+            self._enter_round_freeze("Bloodbath EX")
         if round_type == "8 Pages":
             ids = self._eight_pages_ids(ids)
         ids = self._apply_replacements(ids, round_type)
@@ -2232,6 +2262,7 @@ class LogMonitor:
         if kind == "continue_rounds":
             self._log(f"ラウンド指定で続行: {st.round_type}")
             self._clear_stale_continue_round()
+            st.all_continue_round = True        # 音量の「全続行」（EZ）
             return
         if kind == "round_skip":
             self._start_round_skip()
