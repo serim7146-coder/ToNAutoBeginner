@@ -38,7 +38,6 @@ class WindowConfig:
     voice_sabotage: str = ""
     voice_cracked: str = ""
     voice_double_trouble: str = ""
-    voice_bloodbath_ex: str = ""
     voice_afk: str = ""               # AFK 回避の警告音（EZ）
 
 

@@ -344,7 +344,7 @@ class LogMonitor:
     ROUND_ENTRY_VOICE_KINDS = {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
                                "Alternate": "alternate", "Ghost": "ghost",
                                "Sabotage murder": "murder", "Sabotage star": "sabotage", "Cracked": "cracked",
-                               "Double Trouble": "double_trouble", "Bloodbath EX": "bloodbath_ex"}
+                               "Double Trouble": "double_trouble"}
 
     def _round_entry_voice(self, round_type: str) -> str:
         """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字"""
@@ -356,8 +356,7 @@ class LogMonitor:
                 "Sabotage murder": self.cfg.voice_murder,
                 "Sabotage star": self.cfg.voice_sabotage,
                 "Cracked": self.cfg.voice_cracked,
-                "Double Trouble": self.cfg.voice_double_trouble,
-                "Bloodbath EX": self.cfg.voice_bloodbath_ex}.get(round_type, "")
+                "Double Trouble": self.cfg.voice_double_trouble}.get(round_type, "")
 
     def _round_freeze_name(self) -> str:
         """ラウンド突入フリーズの名前。Sabotage は Sus player の行で murder／star に分ける（EZ。行はラウンド開始より
@@ -1633,7 +1632,7 @@ class LogMonitor:
         if held_reason:
             self._lose_held_item(held_reason)
 
-        # 指定ラウンドに突入したら全窓を止める（Bloodbath EX は Killers の行で。EZ）
+        # 指定ラウンドに突入したら全窓を止める
         self._enter_round_freeze(self._round_freeze_name())
         # ツールが自爆しないラウンドの AFK 回避（EZ）。自爆するかはまだ分からないので、見張りの中で見る
         self._start_daemon(self._action.do_afk_watch, st.round_seq)
@@ -2072,9 +2071,6 @@ class LogMonitor:
         st.fog = False
 
         ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
-        if round_type == "Bloodbath EX":
-            # ラウンド開始の行では「Bloodbath」。EX と分かるのはここ（EZ）
-            self._enter_round_freeze("Bloodbath EX")
         if round_type == "8 Pages":
             ids = self._eight_pages_ids(ids)
         ids = self._apply_replacements(ids, round_type)

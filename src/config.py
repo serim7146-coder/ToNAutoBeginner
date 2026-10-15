@@ -248,10 +248,10 @@ VERIFIED_ROUND_START_WAIT_SEC = 15.0
 # ラウンド突入フリーズで選べる種別（ログ上の表記そのまま）
 # Sabotage murder（自分がマーダー）・Sabotage star（マーダーでない）はログのラウンド名ではない（ログは「Sabotage」）。
 # どちらかは Sus player の行で分かる（ラウンド開始と同じ秒、開始の行より前に出る。EZ: 手元のログの Sabotage 8 回すべて）。
-# Bloodbath EX もログは「Bloodbath」で、Killers の行（3 体が同じ番号）で分かる → その時点で張る（EZ）
+# Bloodbath EX は選べない（FB: 依頼者「EX はいらない」。古い設定に残っていても無視する）
 ROUND_FREEZE_SELECTABLE = [
     "Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished",
-    "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble", "Bloodbath EX",
+    "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
 ]
 # 霧に入ったときの音声。既定では鳴らさない（仕組みと voice_fog の設定は残す）
 ANNOUNCE_FOG_ON_ENTRY = False
@@ -738,7 +738,6 @@ VOICE_MURDER       = str(resource_path("assets/voice/Murder.mp3"))         # Sab
 VOICE_SABOTAGE     = str(resource_path("assets/voice/Sabotage.mp3"))       # Sabotage star（EZ）
 VOICE_CRACKED      = str(resource_path("assets/voice/Cracked.mp3"))
 VOICE_DOUBLE_TROUBLE = str(resource_path("assets/voice/DoubleTrouble.mp3"))
-VOICE_BLOODBATH_EX = str(resource_path("assets/voice/EX.mp3"))
 # 生き残るラウンドで AFK_STILL_SEC 動かなかったとき、private でない窓で鳴らす警告音（EZ）
 VOICE_AFK          = str(resource_path("assets/voice/AFK.mp3"))
 # ツールが自爆しないラウンドの AFK 回避（EZ。依頼者 2026-10-15）。速さ（OSC の受信）が AFK_MOVING_SPEED 未満の

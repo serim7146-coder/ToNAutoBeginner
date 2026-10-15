@@ -69,7 +69,7 @@
 次のときに、ほかの窓の操作を止めて、その窓を優先します。
 * 続行ラウンド（その窓を前面にします）
 * アイテムロストの装備待ち
-* 指定したラウンドへの突入（「フリーズ」の枠の「ラウンド突入」。Sabotage murder（自分がマーダー）・Sabotage star・Cracked・Double Trouble・Bloodbath EX も選べます。Bloodbath EX はテラーが決まった時点で止めます）
+* 指定したラウンドへの突入（「フリーズ」の枠の「ラウンド突入」。Sabotage murder（自分がマーダー）・Sabotage star・Cracked・Double Trouble も選べます）
 * 速度検知（同じ枠の「速度検知」で 8 Pages／Punished）
 
 ### アイテムを落とす・窓位置リセット（どちらも既定 ON）

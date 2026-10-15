@@ -1966,12 +1966,12 @@ class TestAnnounceFold(unittest.TestCase):
     LABELS = ["続行ラウンド:", "Alternate:", "Midnight:", "Unbound:", "Fog:", "Ghost:",
               "8 Pages(速度検知):", "Punish(速度検知):", "アイテムロスト:", "Intermission:",
               "Foxy:", "主催リスト喪失:", "Sabotage murder:", "Sabotage star:", "Cracked:", "Double Trouble:",
-              "Bloodbath EX:", "AFK:"]
+              "AFK:"]
     VARS = ["v_voice_continue", "v_voice_alternate", "v_voice_midnight", "v_voice_unbound",
             "v_voice_fog", "v_voice_ghost", "v_voice_8pages", "v_voice_punish",
             "v_voice_item_lost", "v_voice_intermission", "v_voice_foxy", "v_voice_list_lost",
             "v_voice_murder", "v_voice_sabotage", "v_voice_cracked", "v_voice_double_trouble",
-            "v_voice_bloodbath_ex", "v_voice_afk"]
+            "v_voice_afk"]
 
     @classmethod
     def setUpClass(cls):

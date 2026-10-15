@@ -90,6 +90,8 @@ TERROR_TEXT_COLORS = {
     # Triple Munci・Quadruple Sponge
     221: ("#e57373", False), 205: ("#e57373", False),
 }
+# 表に無いラウンド（DB の 999）の表示名（EZ・FB）
+UNCLASSIFIED = "未分類"
 ROUND_ORDER_GROUPS = (
     (
         ("8 Pages", ("8 Pages",)),
@@ -118,7 +120,7 @@ ROUND_ORDER_GROUPS = (
         ("Solstice", ("Solstice",)),
         ("Special", ("Special",)),
         # 表に無い名前（DB の 999）。「未分類」と出し、全選択・最初の選択では選ばない（EZ）
-        ("未分類", (str(config.ROUND_TYPE_UNKNOWN_ID),)),
+        (UNCLASSIFIED, (UNCLASSIFIED, str(config.ROUND_TYPE_UNKNOWN_ID))),
     ),
 )
 # 下の段＝「全選択」で選ばれない組。画面を開いたときの最初の選択でも外す（依頼者の決定）
@@ -215,7 +217,10 @@ def _round_count_sort_key(row: tuple[str, int, int]) -> tuple[int, tuple[int, in
 
 
 def _round_name(round_id) -> str:
-    """ラウンドの番号 → 名前（表に無い番号はその数字）"""
+    """ラウンドの番号 → 名前（表に無い番号はその数字）。999（ROUND_TYPE_UNKNOWN_ID）は「未分類」
+    （FB: 表・チップ・グラフ・出現ラウンドのどこでも。中の番号と DB に送る値は 999 のまま）"""
+    if round_id == config.ROUND_TYPE_UNKNOWN_ID:
+        return UNCLASSIFIED
     return config.ROUND_TYPE_NAMES.get(round_id, str(round_id))
 
 

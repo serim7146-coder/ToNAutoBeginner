@@ -127,7 +127,21 @@ class TestTheUnknownRound(unittest.TestCase):
 
     def test_the_db_value_is_unchanged(self):
         self.assertEqual(config.ROUND_TYPE_UNKNOWN_ID, 999)
-        self.assertEqual(StatisticsGUI._round_name(999), "999", "中の名前は数字のまま（未分類は表示だけ）")
+        self.assertEqual(ConnectDB.round_type_id("ぜんぜん知らない名前"), 999, "DB へ送る値は 999 のまま")
+
+    def test_unclassified_everywhere(self):
+        """FB: 統計の画面で 999 と出るところは全部「未分類」（表・チップ・グラフ・出現ラウンド）"""
+        self.assertEqual(StatisticsGUI._round_name(999), "未分類")
+        self.assertEqual(StatisticsGUI._round_name(1), "Classic", "ほかは今どおり")
+        rows = StatisticsGUI.round_kind_rows([(1, 3), (999, 1)])
+        self.assertEqual([r[0] for r in rows], ["Classic", "未分類"], "ラウンドタイプのタブ")
+        self.assertEqual(StatisticsGUI._round_display_name("未分類"), "未分類")
+        self.assertIn("未分類", StatisticsGUI.DEFAULT_EXCLUDED_ROUNDS)
+        self.assertIn("未分類", StatisticsGUI._round_names_in_group(StatisticsGUI.SELECT_ALL_SKIPPED_GROUP))
+        entries = StatisticsGUI._ordered_round_entries([StatisticsGUI._round_name(999), "Fog"])
+        self.assertEqual(entries[-1], ("未分類", "未分類"))
+        out = StatisticsGUI.appearance_rows([(0, 999, 1, 5, None, None, "u", "", "")], 5, set(), {})
+        self.assertEqual(out[0][1], "未分類", "出現ラウンドのタブ")
 
 
 class _Freeze(unittest.TestCase):
@@ -139,7 +153,7 @@ class _Freeze(unittest.TestCase):
     def _monitor(self, freeze):
         SharedState.set_freeze_rounds(list(freeze))
         cfg = WindowConfig(hwnd=0x10, do_skip=False, voice_murder="murder.mp3", voice_sabotage="sabotage.mp3",
-                           voice_cracked="cracked.mp3", voice_double_trouble="dt.mp3", voice_bloodbath_ex="ex.mp3")
+                           voice_cracked="cracked.mp3", voice_double_trouble="dt.mp3")
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor._running = True
@@ -204,16 +218,18 @@ class TestTheNewFreezeRounds(_Freeze):
             self.assertIn(voice, played, round_type)
             SharedState.round_freeze_reset()
 
-    def test_bloodbath_ex_at_the_killers_line(self):
+    def test_bloodbath_ex_is_not_frozen(self):
+        """FB: Bloodbath EX は外した。古い設定に残っていても張らない・鳴らさない・落ちない"""
         monitor = self._monitor({"Bloodbath EX"})
-        self._feed(monitor, [self.START.format("Bloodbath")])
-        self.assertFalse(monitor.st.round_freeze_held, "開始の行では Bloodbath")
-        played = self._feed(monitor, ["Killers have been set - 5 5 5 // Round type is Bloodbath"])
-        self.assertTrue(monitor.st.round_freeze_held)
-        self.assertEqual(played.count(("ex.mp3", "bloodbath_ex")), 1)
-        monitor = self._monitor({"Bloodbath EX"})
-        self._feed(monitor, [self.START.format("Bloodbath"), "Killers have been set - 5 6 7 // Round type is Bloodbath"])
-        self.assertFalse(monitor.st.round_freeze_held, "ふつうの Bloodbath")
+        played = self._feed(monitor, [self.START.format("Bloodbath"),
+                                      "Killers have been set - 5 5 5 // Round type is Bloodbath"])
+        self.assertFalse(monitor.st.round_freeze_held)
+        self.assertEqual(played, [])
+        self.assertNotIn("Bloodbath EX", LogMonitor.LogMonitor.ROUND_ENTRY_VOICE_KINDS)
+        self.assertNotIn("bloodbath_ex", PlaySound.VOICE_KINDS)
+        self.assertFalse(hasattr(WindowConfig(), "voice_bloodbath_ex"))
+        self.assertFalse(hasattr(config, "VOICE_BLOODBATH_EX"))
+        self.assertTrue((Path(config.resource_path("assets/voice/EX.mp3"))).is_file(), "ファイルは残す")
 
     def test_not_selected_or_hands_free(self):
         monitor = self._monitor(set())
@@ -226,11 +242,12 @@ class TestTheNewFreezeRounds(_Freeze):
         self.assertFalse(monitor.st.round_freeze_held, "放置中は張らない（今どおり）")
 
     def test_the_list(self):
-        self.assertEqual(config.ROUND_FREEZE_SELECTABLE[-5:],
-                         ["Sabotage murder", "Sabotage star", "Cracked", "Double Trouble", "Bloodbath EX"])
+        self.assertEqual(config.ROUND_FREEZE_SELECTABLE[-4:],
+                         ["Sabotage murder", "Sabotage star", "Cracked", "Double Trouble"])
+        self.assertNotIn("Bloodbath EX", config.ROUND_FREEZE_SELECTABLE, "FB")
         for name, path in (("Murder", config.VOICE_MURDER), ("Sabotage", config.VOICE_SABOTAGE),
                            ("Cracked", config.VOICE_CRACKED), ("DoubleTrouble", config.VOICE_DOUBLE_TROUBLE),
-                           ("EX", config.VOICE_BLOODBATH_EX), ("AFK", config.VOICE_AFK)):
+                           ("AFK", config.VOICE_AFK)):
             self.assertTrue(path.endswith(f"{name}.mp3"), path)
             self.assertTrue(Path(path).is_file(), path)
 

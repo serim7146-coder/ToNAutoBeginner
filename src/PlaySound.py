@@ -63,7 +63,7 @@ def set_sound_volume(volume: float):
 # voice_<種類> と同じ。ファイルのパスでは引かない（同じファイルを 2 種類に使っても別々に効くように）
 VOICE_KINDS = ("continue", "alternate", "midnight", "unbound", "fog", "ghost", "8pages", "punish",
                "item_lost", "intermission", "foxy", "list_lost",
-               "murder", "sabotage", "cracked", "double_trouble", "bloodbath_ex", "afk")     # 後ろの 6 つは EZ
+               "murder", "sabotage", "cracked", "double_trouble", "afk")     # 後ろの 5 つは EZ（FB で EX を外した）
 _voice_volumes: dict = {}
 
 
