@@ -119,6 +119,32 @@ def count_time_matched_logs(
     return len(time_matched_pairs(windows, log_times, tolerance_sec))
 
 
+def launch_log_status(
+    windows: list[tuple[int, Optional[float]]],
+    candidate_logs: list[Path],
+    tolerance_sec: float,
+) -> tuple[int, list[str]]:
+    """起動直後のログ待ちの判定。(一致した窓の数, 窓ごとの説明の行) を返す。
+    一致の数は count_time_matched_logs と同じ計算。説明は、窓ごとに「最も近いログ」と
+    その差（ログ − 窓。秒）を見せる（何が合っていないかを debug.log で分かるように）"""
+    log_times = [(p, parse_log_start_time(p)) for p in candidate_logs]
+    ready = len(time_matched_pairs(windows, log_times, tolerance_sec))
+    known = [(p, t) for p, t in log_times if t is not None]
+    lines: list[str] = []
+    for hwnd, wt in windows:
+        head = f"  窓 hwnd={int(hwnd):#x}: "
+        if wt is None:
+            lines.append(head + "起動 不明")
+            continue
+        start = datetime.datetime.fromtimestamp(wt).strftime("%H:%M:%S")
+        if not known:
+            lines.append(head + f"起動 {start} → 候補なし")
+            continue
+        path, lt = min(known, key=lambda x: abs(x[1] - wt))
+        lines.append(head + f"起動 {start} → 最も近いログ {Path(path).name}（差 {round(lt - wt):+d} 秒）")
+    return ready, lines
+
+
 def match_windows_to_logs(
     windows: list[tuple[int, Optional[float]]],
     candidate_logs: list[Path],

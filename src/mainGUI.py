@@ -3628,30 +3628,63 @@ class App(tk.Tk):
         # ログが揃ったかは既存の窓も含めた合計で判定する
         self._wait_logs_then_assign(existing + found, 0.0)
 
-    def _wait_logs_then_assign(self, expected: int, waited: float):
+    def _wait_logs_then_assign(self, expected: int, waited: float = 0.0):
         """ログファイルが起動時刻で紐づけられるようになり次第、割り当てる。
-        固定待ちだとウィンドウ出現から無駄に待つため、準備でき次第すぐ進める。"""
+        固定待ちだとウィンドウ出現から無駄に待つため、準備でき次第すぐ進める。
+        判定（窓の列挙・ログの一覧）は 1 回 0.65 秒かかるので、画面のスレッドでは待たず、裏のスレッドで
+        繰り返す（FP）。終わったら画面のスレッドで _finish_launch_wait"""
+        TaskStats.thread("mainGUI._wait_logs", lambda: self._wait_logs_worker(expected, waited),
+                         daemon=True).start()
+
+    def _poll_launch_logs(self, expected: int, waited: float):
+        """ログ待ちの判定 1 回（どのスレッドからでも）。
+        (種類, 一致の数, 窓の数, 起動時刻のある窓の数, 候補の本数, 窓ごとの説明の行) を返す。
+        種類は "ready"（揃った）・"timeout"（待ち切れた）・None（まだ待つ）"""
         windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         candidates = self._live_candidates(VRChatDiscovery.find_latest_logs(
             config.VRCHAT_LOG_DIR, config.LOG_MATCH_CANDIDATE_COUNT))
-        ready = VRChatDiscovery.count_time_matched_logs(
+        ready, lines = VRChatDiscovery.launch_log_status(
             windows, candidates, config.LOG_MATCH_TOLERANCE_SEC)
         if ready >= expected:
+            kind = "ready"
+        elif waited >= config.LAUNCH_LOG_TIMEOUT:
+            kind = "timeout"
+        else:
+            kind = None
+        timed = sum(1 for _hwnd, start in windows if start is not None)
+        return kind, ready, len(windows), timed, len(candidates), lines
+
+    def _wait_logs_worker(self, expected: int, waited: float):
+        """裏のスレッド。揃うかタイムアウトするまで config.LAUNCH_LOG_POLL_SEC ごとに判定する。
+        判定の中身は、最初・LAUNCH_LOG_DIAG_SEC ごと・最後だけ debug.log へ（画面のログには出さない）"""
+        last_diag = None
+        while True:
+            kind, ready, n_windows, n_timed, n_logs, lines = self._poll_launch_logs(expected, waited)
+            if kind is not None or last_diag is None or waited - last_diag >= config.LAUNCH_LOG_DIAG_SEC:
+                DebugLog.write("[起動] ログ待ち %.0f秒: 窓 %d（起動時刻あり %d）・候補 %d 本・一致 %d/%d"
+                               % (waited, n_windows, n_timed, n_logs, ready, expected))
+                for line in lines:
+                    DebugLog.write(line)
+                last_diag = waited
+            if kind is not None:
+                break
+            time.sleep(config.LAUNCH_LOG_POLL_SEC)
+            waited += config.LAUNCH_LOG_POLL_SEC
+        try:
+            UiInbox.call_soon(self, lambda: self._finish_launch_wait(kind, ready, expected, waited))
+        except tk.TclError:
+            pass                            # 待っている間にツールを閉じた
+
+    def _finish_launch_wait(self, kind: str, ready: int, expected: int, waited: float):
+        """画面のスレッド。ログが揃った（またはタイムアウトした）後の処理"""
+        if kind == "ready":
             self._log("[起動] ログ生成を確認（%.1f秒）" % waited)
-            self._assign_logs()
-            self._report_join_status()
-            self._auto_start_before_entry()
-            self._run_ton_entry()
-            return
-        if waited >= config.LAUNCH_LOG_TIMEOUT:
+        else:
             self._log("[起動] ログ生成待ちがタイムアウト（%d/%d）" % (ready, expected))
-            self._assign_logs()
-            self._report_join_status()
-            self._auto_start_before_entry()
-            self._run_ton_entry()
-            return
-        self.after(int(config.LAUNCH_LOG_POLL_SEC * 1000),
-                   lambda: self._wait_logs_then_assign(expected, waited + config.LAUNCH_LOG_POLL_SEC))
+        self._assign_logs()
+        self._report_join_status()
+        self._auto_start_before_entry()
+        self._run_ton_entry()
 
     def _auto_start_before_entry(self):
         """「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方 ON で、マクロが止まっていれば、

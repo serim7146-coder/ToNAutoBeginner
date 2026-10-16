@@ -127,6 +127,7 @@ class Service:
         self._sock = None
         self._http = None
         self._advert = None
+        self._advert_done = threading.Event()   # 広告の結果が出た（できた／できない。FP）
         self._running = False
         self._lock = threading.Lock()
         self._receivers = []            # 登録した窓ごとの受信器
@@ -169,7 +170,18 @@ class Service:
                        f"HTTP 127.0.0.1:{self.http_port}")
         return True
 
+    @property
+    def advertised(self) -> bool:
+        """mDNS で広告できているか（結果が出る前・失敗・取り下げた後は False。待つのは wait_advertised）"""
+        return self._advert is not None
+
     def _advertise(self):
+        try:
+            self._do_advertise()
+        finally:
+            self._advert_done.set()
+
+    def _do_advertise(self):
         try:
             advert = _advertise(self.name, self.http_port, self.osc_port)
         except Exception:
@@ -331,3 +343,13 @@ def shutdown():
 
 def current():
     return _service
+
+
+def wait_advertised(timeout: float):
+    """mDNS の広告の結果が出るまで最大 timeout 秒待ち、広告できていれば True・できていなければ False。
+    サービスが無ければ None（FP。広告できていなければ VRChat は見つけられないので、15 秒待たずに固定ポートへ）"""
+    service = current()
+    if service is None:
+        return None
+    service._advert_done.wait(timeout)
+    return service.advertised

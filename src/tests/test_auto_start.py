@@ -75,31 +75,37 @@ class TestAutoStart(unittest.TestCase):
 
 
 class TestTheLaunchOrder(unittest.TestCase):
-    def _run(self, ready, waited):
+    """ログが揃った（またはタイムアウトした）後の順番。判定は裏のスレッド、この 4 つは画面のスレッド（FP）"""
+
+    def _run(self, kind):
         app = type("FakeApp", (), {})()
         app.logs = []
         app._log = app.logs.append
         order = []
         for name in ("_assign_logs", "_report_join_status", "_auto_start_before_entry", "_run_ton_entry"):
             setattr(app, name, (lambda n: lambda: order.append(n))(name))
-        app._live_candidates = lambda c: c
-        app.after = lambda ms, fn: order.append("again")
-        with patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time", return_value=[]), \
-             patch.object(VRChatDiscovery, "find_latest_logs", return_value=[]), \
-             patch.object(VRChatDiscovery, "count_time_matched_logs", return_value=ready):
-            mainGUI.App._wait_logs_then_assign(app, 2, waited)
+        mainGUI.App._finish_launch_wait(app, kind, 2, 2, 1.0)
         return order
 
     def test_after_assigning_and_before_the_entry(self):
-        self.assertEqual(self._run(ready=2, waited=1.0),
+        self.assertEqual(self._run("ready"),
                          ["_assign_logs", "_report_join_status", "_auto_start_before_entry", "_run_ton_entry"])
 
     def test_the_timeout_path_too(self):
-        self.assertEqual(self._run(ready=1, waited=config.LAUNCH_LOG_TIMEOUT),
+        self.assertEqual(self._run("timeout"),
                          ["_assign_logs", "_report_join_status", "_auto_start_before_entry", "_run_ton_entry"])
 
-    def test_still_waiting_does_not_start(self):
-        self.assertEqual(self._run(ready=1, waited=0.0), ["again"])
+    def test_waiting_starts_a_background_thread(self):
+        app = type("FakeApp", (), {})()
+        app._wait_logs_worker = MagicMock()
+        with patch.object(mainGUI.TaskStats, "thread") as thread:
+            mainGUI.App._wait_logs_then_assign(app, 2, 0.0)
+        self.assertEqual(thread.call_args.args[0], "mainGUI._wait_logs")
+        self.assertTrue(thread.call_args.kwargs.get("daemon"))
+        thread.return_value.start.assert_called_once_with()
+        app._wait_logs_worker.assert_not_called()       # 呼び出し元では待たない
+        thread.call_args.args[1]()                       # スレッドの本体は worker
+        app._wait_logs_worker.assert_called_once_with(2, 0.0)
 
 
 class TestQuietStart(unittest.TestCase):

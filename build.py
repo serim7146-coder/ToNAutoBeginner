@@ -41,6 +41,8 @@ BASE_ARGS = [
     "--include-package=cv2",
     "--include-package=zeroconf",
     "--include-package=ifaddr",
+    "--recompile-extension-modules=zeroconf",
+    "--recompile-extension-modules=zeroconf.*",
     "--include-data-files=.env=.env",
     "--include-data-files=assets/ToNAutoBeginnerIcon.ico=assets/ToNAutoBeginnerIcon.ico",
     "--include-data-files=assets/data/maps.json=assets/data/maps.json",

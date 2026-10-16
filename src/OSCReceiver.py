@@ -147,7 +147,17 @@ class VelocityReceiver:
             OSCQuery.release(self)
 
     def _wait_then_fall_back(self):
-        if self._stop_event.wait(config.OSCQUERY_CONNECT_WAIT_SEC):
+        """広告の結果を待つ。広告できていなければ（VRChat は見つけられない）すぐ固定ポート。
+        できていれば、広告を待った分を引いた残りの時間だけ届くのを待つ（FP）"""
+        import OSCQuery
+        deadline = time.time() + config.OSCQUERY_CONNECT_WAIT_SEC
+        advertised = OSCQuery.wait_advertised(config.OSCQUERY_CONNECT_WAIT_SEC)
+        if self._stop_event.is_set():
+            return                          # 止めた
+        if advertised is False:
+            self.fall_back(why="mDNS の広告が無い（OSCQuery では届かない）")
+            return
+        if self._stop_event.wait(max(0.0, deadline - time.time())):
             return                          # 止めた
         self.fall_back()
 
@@ -165,7 +175,7 @@ class VelocityReceiver:
                            f"{self._port} は開かない")
         return accept
 
-    def fall_back(self):
+    def fall_back(self, why=None):
         """OSCQuery で届かなかった → 固定ポートを開く。開けなければ受け取れない（使っているアプリの名前を出す）"""
         with self._lock:
             if self.mode != MODE_WAITING or not self._running:
@@ -185,8 +195,8 @@ class VelocityReceiver:
             self._give_up(f"ポート {self._port} は {owner} が使っています")
             return
         self._sock = sock
-        DebugLog.write(f"[速度受信] {self.window_label}: OSCQuery で "
-                       f"{config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない → 固定ポート {self._port} で受信")
+        reason = why or f"OSCQuery で {config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない "
+        DebugLog.write(f"[速度受信] {self.window_label}: {reason}→ 固定ポート {self._port} で受信")
         TaskStats.thread("OSCReceiver._run", self._run, daemon=True).start()
 
     def _give_up(self, why: str):

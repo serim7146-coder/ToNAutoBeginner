@@ -732,6 +732,14 @@ class TestBuildScript(unittest.TestCase):
         self.assertEqual(cmd[1:4], ["-m", "nuitka", "src/main.py"])
         self.assertEqual(cmd[4:4 + len(old)], old)
 
+    def test_zeroconf_is_recompiled_entirely_from_source(self):
+        """Cython 製の .pyd と Nuitka がソースから組んだ部品が混ざると mDNS の広告が壊れる（FP）"""
+        self.assertIn("--recompile-extension-modules=zeroconf", self.build.BASE_ARGS)
+        self.assertIn("--recompile-extension-modules=zeroconf.*", self.build.BASE_ARGS)
+        args = self.build.BASE_ARGS
+        self.assertEqual(args.index("--recompile-extension-modules=zeroconf"),
+                         args.index("--include-package=ifaddr") + 1)
+
     def test_the_extract_dir_and_version_come_from_app_version(self):
         cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
         self.assertEqual(cmd[-3:], ["--onefile-tempdir-spec={CACHE_DIR}/ToNAutoBeginner/v1.2.3-20261002123456000001",

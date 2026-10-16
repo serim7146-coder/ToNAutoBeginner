@@ -694,6 +694,9 @@ LAUNCH_EACH_WINDOW_TIMEOUT = 120.0
 LAUNCH_WINDOW_TIMEOUT   = 180.0  # ウィンドウ出現を待つ上限
 LAUNCH_LOG_TIMEOUT      = 60.0   # 起動後にログ生成を待つ上限
 LAUNCH_LOG_POLL_SEC     = 1.0    # ログ生成の確認間隔
+# ログ待ちの判定の中身（窓の数・候補のログ・窓ごとの最も近いログ）を debug.log に出す間隔。
+# 最初の判定と最後の判定（揃った／タイムアウト）にも出す。1秒ごとには出さない
+LAUNCH_LOG_DIAG_SEC     = 10.0
 LAUNCH_DESKTOP_MODE     = True   # 既定はデスクトップモード(--no-vr)
 
 # ── ウィンドウ↔ログの対応付け ──
