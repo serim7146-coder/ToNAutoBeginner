@@ -12,6 +12,7 @@ from pathlib import Path
 import config
 import DebugLog
 import RoundStore
+import TaskStats
 
 try:
     from dotenv import load_dotenv
@@ -196,7 +197,7 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
         RoundStore.default_store().add_own(
             payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid)
 
-    threading.Thread(target=_send, daemon=True).start()
+    TaskStats.thread("ConnectDB._send", _send, daemon=True).start()
 
 
 def fetch_rounds(since: int | None, my_uids, page_size: int = 1000):

@@ -28,6 +28,7 @@ import config
 import DebugLog
 import OSCClient
 import OSCReceiver
+import TaskStats
 
 HOST = "127.0.0.1"          # 待つのも広告するのもここだけ（ほかの PC の VRChat から送られない）
 NAME_PREFIX = "ToNAutoBeginner"
@@ -160,10 +161,10 @@ class Service:
             self._close_sockets()
             return False
         self._running = True
-        threading.Thread(target=self._http.serve_forever, daemon=True).start()
-        threading.Thread(target=self._run, daemon=True).start()
+        TaskStats.thread("OSCQuery.serve_forever", self._http.serve_forever, daemon=True).start()
+        TaskStats.thread("OSCQuery._run", self._run, daemon=True).start()
         # mDNS の登録は名前の確かめに 1〜2 秒かかるので、待たない
-        threading.Thread(target=self._advertise, daemon=True).start()
+        TaskStats.thread("OSCQuery._advertise", self._advertise, daemon=True).start()
         DebugLog.write(f"[OSCQuery] サービス {self.name}: OSC 127.0.0.1:{self.osc_port}・"
                        f"HTTP 127.0.0.1:{self.http_port}")
         return True

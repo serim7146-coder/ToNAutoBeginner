@@ -1956,7 +1956,7 @@ class TestHostListSource(unittest.TestCase):
     @staticmethod
     def _tick(app):
         """_poll_host_save を1回まわす。裏のスレッドの代わりにその場で、Tk へ渡す分もその場で"""
-        app._off_gui = lambda work: work()
+        app._off_gui = lambda work, name=None: work()
         app._after_from_worker = lambda func, *args: func(*args)
         app._finish_host_poll = lambda result: mainGUI.App._finish_host_poll(app, result)
         mainGUI.App._poll_host_save(app)

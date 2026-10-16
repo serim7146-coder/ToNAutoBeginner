@@ -13,6 +13,7 @@ import ConnectDB
 import DebugLog
 import ItemCatalog
 import Recorder
+import TaskStats
 import FogEarlyRead
 import ReadJson
 import VerifiedTracker
@@ -273,7 +274,10 @@ class LogMonitor:
         return bool(a and b and a.strip() == b.strip())
 
     def _start_daemon(self, target, *args) -> threading.Thread:
-        thread = threading.Thread(target=target, args=args, daemon=True)
+        name = getattr(target, "__name__", type(target).__name__)      # partial には __name__ が無い
+        if name == "_run":
+            name = "LogMonitor._run"        # ほかのクラスにも _run がある
+        thread = TaskStats.thread(name, target, *args, daemon=True)     # FI: CPU を仕事の名前ごとに数える
         thread.start()
         return thread
 

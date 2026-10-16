@@ -11,6 +11,7 @@ import FetchMiss
 import ItemFetch
 import ScreenCapture
 import SharedState
+import TaskStats
 import WindowOperator
 import OSCClient
 import OSCReceiver
@@ -194,8 +195,7 @@ class ActionExecutor:
         stop = threading.Event()
         self._chase_dir = direction
         self._chase_stop = stop
-        self._chase_thread = threading.Thread(target=self._run_chase,
-                                              args=(direction, stop), daemon=True)
+        self._chase_thread = TaskStats.thread("_run_chase", self._run_chase, direction, stop, daemon=True)
         self._chase_thread.start()
 
     def _stop_chase_locked(self):
@@ -450,8 +450,7 @@ class ActionExecutor:
         if self._item_loss_watch_seq == st.round_seq:
             return                                  # もう見張っている
         self._item_loss_watch_seq = st.round_seq
-        threading.Thread(target=self._watch_item_loss, args=(st.round_seq,),
-                         daemon=True).start()
+        TaskStats.thread("_watch_item_loss", self._watch_item_loss, st.round_seq, daemon=True).start()
 
     def _watch_item_loss(self, round_seq: int):
         """ほかの窓のフリーズが解けるのを待って、前面化＋音声を出す"""
@@ -500,8 +499,7 @@ class ActionExecutor:
         インスタンスが変わった・戻し終えた、で終わる"""
         if self._view_restore_thread is not None and self._view_restore_thread.is_alive():
             return
-        self._view_restore_thread = threading.Thread(target=self._restore_view_loop,
-                                                     daemon=True)
+        self._view_restore_thread = TaskStats.thread("_restore_view_loop", self._restore_view_loop, daemon=True)
         self._view_restore_thread.start()
 
     def _restore_view_loop(self):
@@ -1016,8 +1014,7 @@ class ActionExecutor:
             return None
         stop = threading.Event()
         self._trace("[操作] UseRight の連打を開始")
-        thread = threading.Thread(target=self._spam_use_right,
-                                  args=(stop, round_seq), daemon=True)
+        thread = TaskStats.thread("_spam_use_right", self._spam_use_right, stop, round_seq, daemon=True)
         thread.start()
         return stop
 
@@ -2934,7 +2931,7 @@ class MotionSampler:
         self._started = self._clock()
         if self._receiver is None:
             return              # OSC の窓でない（release で「実測なし」を書く）
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread = TaskStats.thread("MotionSampler._run", self._run, daemon=True)
         self.thread.start()
 
     def release(self):

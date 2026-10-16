@@ -476,8 +476,8 @@ class TestFullscreenAndMinimized(unittest.TestCase):
     def test_the_tk_thread_is_not_used_for_the_work(self):
         """Alt+Enter の後に待つので、整列は別のスレッドで動かす（窓の番号は Tk のスレッドで読む）"""
         src = inspect.getsource(mainGUI.App._arrange_windows)
-        self.assertIn("threading.Thread(target=work, daemon=True).start()", src)
-        self.assertLess(src.index("targets = self._arrange_targets()"), src.index("threading.Thread"))
+        self.assertIn('TaskStats.thread("mainGUI._arrange_windows", work, daemon=True).start()', src)
+        self.assertLess(src.index("targets = self._arrange_targets()"), src.index("TaskStats.thread"))
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")

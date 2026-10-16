@@ -15,6 +15,7 @@ from typing import Callable, Optional
 import config
 import DebugLog
 import OBSClient
+import TaskStats
 
 
 class RecordPlan:
@@ -231,8 +232,8 @@ class Recorder:
     def _post(self, item):
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._run, name="OBSRecorder",
-                                                daemon=True)
+                self._thread = TaskStats.thread("Recorder._run", self._run, daemon=True,
+                                                thread_name="OBSRecorder")
                 self._thread.start()
         self._queue.put(item)
 

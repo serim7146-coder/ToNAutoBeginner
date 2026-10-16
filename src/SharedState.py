@@ -1,6 +1,7 @@
 import threading
 
 import DebugLog
+import TaskStats
 
 import config
 
@@ -71,7 +72,7 @@ def _front_heir(st):
 
 
 def _start_give_back(loan):
-    threading.Thread(target=_give_back, args=(loan,), daemon=True).start()
+    TaskStats.thread("SharedState._give_back", _give_back, loan, daemon=True).start()
 
 
 def _give_back(loan):

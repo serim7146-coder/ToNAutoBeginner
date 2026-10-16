@@ -16,6 +16,7 @@ from ctypes import POINTER, byref, c_float, c_int, c_long, c_uint, c_ulong, c_vo
 
 import config
 import DebugLog
+import TaskStats
 
 # ── 分類 ───────────────────────────────────
 CONTINUE = "continue"
@@ -330,7 +331,7 @@ class VolumeController:
     def start(self):
         self._stop_event.clear()
         self._restored.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = TaskStats.thread("WindowVolume._run", self._run, daemon=True)
         self._thread.start()
 
     def stop(self, timeout: float | None = None):

@@ -25,6 +25,7 @@ from pathlib import Path
 
 import config
 import DebugLog
+import TaskStats
 
 # Volume（0.0~1.0）
 sound_volume: float = config.DEFAULT_SOUND_VOLUME
@@ -290,4 +291,4 @@ def play_sound(path: str, kind: str | None = None, force: bool = False):
         except Exception as e:
             DebugLog.exception("PlaySound._play_sound")
             _say(f"音声再生エラー: {e}")
-    threading.Thread(target=_play_sound, daemon=True).start()
+    TaskStats.thread("PlaySound._play_sound", _play_sound, daemon=True).start()

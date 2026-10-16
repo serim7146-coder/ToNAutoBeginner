@@ -15,6 +15,7 @@ import DebugLog
 import UIFont
 import UiInbox
 import ProcStats
+import TaskStats
 from config import resource_path
 import ActionExecutor
 import AutoUpdate
@@ -797,7 +798,7 @@ class ReportDialog(tk.Toplevel):
             except (tk.TclError, RuntimeError):
                 pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("ReportDialog._send", worker, daemon=True).start()
 
     def _done(self, ok: bool, message: str):
         self._sending = False
@@ -935,9 +936,12 @@ class App(tk.Tk):
         self._log_memory()
 
     def _log_memory(self):
-        """MEMORY_LOG_SEC ごとに debug.log へ WS・Private・ハンドル数・スレッド数（FC。起動時にも）"""
+        """MEMORY_LOG_SEC ごとに debug.log へ WS・Private・ハンドル数・スレッド数（FC。起動時にも）と、
+        その間に CPU を使った仕事（FI。画面のスレッド・終わった仕事・生きているスレッド。起動時は「計測開始」だけ）"""
         try:
-            DebugLog.write(ProcStats.line())
+            snap = TaskStats.snapshot(time.thread_time(), ProcStats.process_cpu(), ProcStats.peak_working_set())
+            DebugLog.write(ProcStats.line(snap["peak_ws"], snap["peak_delta"]))
+            DebugLog.write(TaskStats.line(snap))
         except Exception:
             DebugLog.exception("mainGUI._log_memory")
         try:
@@ -1490,7 +1494,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._begin_capture_key", worker, daemon=True).start()
 
     def _finish_capture_key(self, key, target: str = "stop"):
         self._capturing_key = False
@@ -2098,7 +2102,7 @@ class App(tk.Tk):
                 DebugLog.exception("mainGUI._arrange_windows")
             finally:
                 self._arranging = False
-        threading.Thread(target=work, daemon=True).start()
+        TaskStats.thread("mainGUI._arrange_windows", work, daemon=True).start()
 
     def _arrange_windows_now(self, targets, layout):
         movable, unfullscreened, unminimized = [], [], []
@@ -2531,7 +2535,7 @@ class App(tk.Tk):
                 DebugLog.exception("mainGUI._poll_host_save")
                 result = None
             self._after_from_worker(self._finish_host_poll, result)
-        self._off_gui(work)
+        self._off_gui(work, "mainGUI._poll_host_save")
 
     def _finish_host_poll(self, result):
         try:
@@ -2545,9 +2549,10 @@ class App(tk.Tk):
             pass
 
     @staticmethod
-    def _off_gui(work):
-        """Tk のスレッドを止めずに work を走らせる（テストでは同じスレッドで走らせる）"""
-        threading.Thread(target=work, daemon=True).start()
+    def _off_gui(work, name=None):
+        """Tk のスレッドを止めずに work を走らせる（テストでは同じスレッドで走らせる）。
+        name は CPU の記録（TaskStats）の名前。閉じ込めの work は名前が同じ "work" になるので呼び出し側で渡す"""
+        TaskStats.thread(name or getattr(work, "__name__", "work"), work, daemon=True).start()
 
     def _after_from_worker(self, func, *args):
         """裏のスレッドから Tk のスレッドへ渡す。閉じた後なら捨てる"""
@@ -3296,7 +3301,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._start_update_check", worker, daemon=True).start()
 
     def _prompt_update(self, tag: str, asset: tuple):
         if self._running:
@@ -3320,7 +3325,7 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._prompt_update", worker, daemon=True).start()
 
     def _finish_update(self, tag: str, tmp):
         if tmp is None:
@@ -3357,7 +3362,7 @@ class App(tk.Tk):
             tmp = AutoUpdate.download_to_temp(*asset) if asset else None
             self._after_from_worker(self._finish_migration, exe, tmp, asset is not None)
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._start_migration", worker, daemon=True).start()
         return True
 
     def _finish_migration(self, exe, tmp, found: bool = True):
@@ -3499,7 +3504,7 @@ class App(tk.Tk):
             except Exception:
                 DebugLog.exception("mainGUI._poll_tool_buttons")
             self._after_from_worker(self._finish_tool_poll, states)
-        self._off_gui(work)
+        self._off_gui(work, "mainGUI._poll_tool_buttons")
 
     def _finish_tool_poll(self, states: dict):
         try:
@@ -3601,7 +3606,7 @@ class App(tk.Tk):
                 msg = str(e)
                 UiInbox.call_soon(self, lambda: self._on_launch_error(msg))
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._launch_vrchat", worker, daemon=True).start()
 
     def _on_launch_finished(self, found: int, expected: int, existing: int = 0):
         self.btn_launch.config(state="normal")
@@ -3739,9 +3744,8 @@ class App(tk.Tk):
                                 offset = SaveLoad.log_size(log_path)
                                 if entry.press_begin() and plush:
                                     # 次の窓の入室を待たせない（窓ごとに別のスレッドで Verified を待つ）
-                                    threading.Thread(target=self._plush_after_entry,
-                                                     args=(window_no, hwnd, log_path, offset),
-                                                     daemon=True).start()
+                                    TaskStats.thread("mainGUI._plush_after_entry", self._plush_after_entry,
+                                                     window_no, hwnd, log_path, offset, daemon=True).start()
                     except Exception as e:
                         DebugLog.exception("mainGUI.worker")
                         self._log("[窓%d] 入室操作でエラー: %s" % (window_no, e))
@@ -3754,7 +3758,7 @@ class App(tk.Tk):
                 except tk.TclError:
                     pass
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._run_ton_entry", worker, daemon=True).start()
 
     def _refresh_plush_check(self):
         """□Guidance Plush は「続けてBeginまで押す」が ON のときだけ押せる（DZ）"""
@@ -3969,7 +3973,7 @@ class App(tk.Tk):
             finally:
                 client.close()
 
-        threading.Thread(target=worker, daemon=True).start()
+        TaskStats.thread("mainGUI._test_obs_connection", worker, daemon=True).start()
         self._save_settings_now()
 
     def _open_statistics(self):

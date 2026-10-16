@@ -8,6 +8,7 @@ import types
 import tkinter
 import UiInbox
 import ProcStats
+import TaskStats
 import StatisticsGUI
 from tests.support import REAL_STATS_OFF_GUI
 
@@ -229,16 +230,17 @@ class TestTheRealStatisticsWindow(unittest.TestCase):
 class TestTheMemoryLine(unittest.TestCase):
     def test_the_line(self):
         line = ProcStats.line()
-        self.assertRegex(line, r"^\[メモリ\] WS \d+\.\dMB・Private \d+\.\dMB・ハンドル \d+・スレッド \d+$")
+        self.assertRegex(line, r"^\[メモリ\] WS \d+\.\dMB・Private \d+\.\dMB・ハンドル \d+・スレッド \d+・最大 WS \d+MB（初回）$")
 
     def test_every_10_minutes_and_at_start(self):
         self.assertEqual(config.MEMORY_LOG_SEC, 600.0)
         fake = type("A", (), {})()
         fake.after = MagicMock()
         fake._log_memory = "次の予約"
-        with patch.object(DebugLog, "write") as write:
+        with patch.object(DebugLog, "write") as write,              patch.multiple(TaskStats, _finished={}, _live={}, _last_wall=None, _last_process_cpu=None,
+                            _last_tk_cpu=None, _last_peak_ws=None):
             mainGUI.App._log_memory(fake)
-        self.assertTrue(write.call_args.args[0].startswith("[メモリ] WS "))
+        self.assertTrue(write.call_args_list[0].args[0].startswith("[メモリ] WS "))     # 2 行目は [CPU]（test_task_stats）
         fake.after.assert_called_once_with(600_000, fake._log_memory)
         self.assertIn("self._log_memory()", inspect.getsource(mainGUI.App.__init__), "起動時にも 1 行")
 

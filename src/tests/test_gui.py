@@ -454,7 +454,7 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
             self.assertLessEqual(imports, {"base64", "hashlib", "json", "os",
                                            "socket", "struct", "time", "queue",
                                            "threading", "typing", "config",
-                                           "OBSClient", "DebugLog"}, name)   # 例外を debug.log へ
+                                           "OBSClient", "DebugLog", "TaskStats"}, name)   # 例外を debug.log へ・CPU の記録（FI）
 
 
 
@@ -2771,7 +2771,7 @@ class TestToolLauncherRows(unittest.TestCase):
             else:
                 calls.append((ms, func))
         with patch.object(self.app, "after", after), \
-             patch.object(self.app, "_off_gui", lambda work: work()):
+             patch.object(self.app, "_off_gui", lambda work, name=None: work()):
             mainGUI.App._poll_tool_buttons(self.app)
 
     def test_the_poll_survives_a_failure(self):

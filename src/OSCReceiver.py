@@ -23,6 +23,7 @@ import time
 
 import config
 import DebugLog
+import TaskStats
 
 # 受け方
 MODE_WAITING = "waiting"            # OSCQuery で届くのを待っている
@@ -120,7 +121,7 @@ class VelocityReceiver:
         self._stop_event.clear()
         if OSCQuery.acquire(self):
             self._registered = True
-            self._wait_thread = threading.Thread(target=self._wait_then_fall_back, daemon=True)
+            self._wait_thread = TaskStats.thread("OSCReceiver._wait_then_fall_back", self._wait_then_fall_back, daemon=True)
             self._wait_thread.start()
         else:
             DebugLog.write(f"[速度受信] {self.window_label}: OSCQuery のサービスを立てられない → 固定ポートへ")
@@ -182,7 +183,7 @@ class VelocityReceiver:
         self._sock = sock
         DebugLog.write(f"[速度受信] {self.window_label}: OSCQuery で "
                        f"{config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない → 固定ポート {self._port} で受信")
-        threading.Thread(target=self._run, daemon=True).start()
+        TaskStats.thread("OSCReceiver._run", self._run, daemon=True).start()
 
     def _give_up(self, why: str):
         with self._lock:

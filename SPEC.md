@@ -44,6 +44,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `mainGUI.py` | 画面。窓タブ・設定の保存（settings.json）・監視の開始/停止（1つのボタン）・VRChat の起動 UI と入室操作・主催リストの追従・キー（停止・開始・自爆キャンセル・チェイス。キーの設定の画面）・窓の整列と配置を覚える・外部ツール・OBS・音量・不具合の報告・自動アップデート。 |
 | `UiInbox.py` | 別のスレッドから Tk のスレッドへ関数を渡す受付箱（`call_soon`）。別のスレッドは Python の queue に入れるだけで、Tk のスレッドが 50ms ごとに取り出して実行する。Tk のスレッドでないスレッドが Tk を呼ぶと、スレッド 1 本ごとに Tcl の Event とスレッドごとのデータ（約 17KB）が残るため（FC）。閉じるときは残りを実行してから。 |
 | `ProcStats.py` | このプロセスの WS・Private・ハンドル数・スレッド数（ctypes）。debug.log に 10 分ごと（`MEMORY_LOG_SEC`）と起動時に 1 行。 |
+| `TaskStats.py` | CPU の使い道を仕事ごとに記録する（FI）。スレッドを立てる所は `TaskStats.thread(名前, target, …)` で、終わるときにそのスレッドの CPU を名前ごとに足す（長生きのスレッドは立っている間の CPU を `ProcStats.thread_cpu` で読んだ前回との差）。`mainGUI._log_memory` が 10 分ごとに `snapshot()` で前回からの差（プロセス全体・画面のスレッド・終わった仕事・生きているスレッド・最大 WS の増え）をまとめ、`line()` が debug.log に `[CPU]` の 1 行を書く（上位 `MEMORY_LOG_TOP` 個）。 |
 | `config.py` | 定数（パス・GUI の色・待ち時間・ID・ラウンドの集合など）。`resource_path()` で開発実行と Nuitka の exe の両方から同梱データ（`assets/…`）を引く。 |
 | `State.py` | `WindowConfig`（窓ごとの設定）と `WindowState`（窓ごとの実行時の状態）。ロジックは持たない。 |
 | `SharedState.py` | 窓をまたぐ状態。`_GLOBAL_ACTION_LOCK`・全窓フリーズ4種（`_Freeze`）・全窓共通の設定（`_Setting`）・前面の貸し借り・掴んでいる窓の一覧。 |

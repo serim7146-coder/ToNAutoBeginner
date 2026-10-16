@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox
 import config
 import DebugLog
 import SharedState
+import TaskStats
 import UIFont
 import UiInbox
 import WindowOperator
@@ -565,7 +566,7 @@ class StatisticsWindow(tk.Toplevel):
             return
         self._rows_loading = True
         self.v_status.set("統計データ更新中...")
-        threading.Thread(target=self._load_rows_worker, daemon=True).start()
+        TaskStats.thread("StatisticsGUI._load_rows_worker", self._load_rows_worker, daemon=True).start()
 
     def _load_rows_worker(self):
         ok = self.store.sync(ConnectDB.fetch_rounds)
@@ -788,7 +789,7 @@ class StatisticsWindow(tk.Toplevel):
                 UiInbox.call_soon(self, done, result)
             except (tk.TclError, RuntimeError):
                 pass                    # 閉じた後
-        threading.Thread(target=run, daemon=True).start()
+        TaskStats.thread("StatisticsGUI.run", run, daemon=True).start()
 
     def _clear_all(self):
         self._clear_round_stats()
