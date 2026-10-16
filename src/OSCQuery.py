@@ -36,7 +36,7 @@ PORTS_REFRESH_SEC = 1.0     # 表に無い送り元が来たとき、送り元�
 # 表にはあるがツールの窓ではない送り元（監視していない VRChat など）は、もっと空けて取り直す
 # （送り続けられても netstat を毎秒起こさない。VRChat を立ち上げ直してポートが使い回されたときのため）
 PORTS_RECHECK_SEC = 30.0
-UNKNOWN_LOG_EVERY = 100     # 分からない送り元は、これだけ数えるごとに debug.log へ
+UNKNOWN_LOG_SEC = 60.0      # 分からない送り元のログの間隔（最初の 1 件はすぐ書く）
 # `/` で返すパラメータ（今読んでいるもの）。VRChat は /avatar を持つサービスにアバターのパラメータを送る
 PARAMETERS = {OSCReceiver.VELOCITY_MAGNITUDE: "f", OSCReceiver.GROUNDED: "T"}
 
@@ -135,6 +135,10 @@ class Service:
         self._refreshed_at = 0.0
         self._routed = set()            # debug.log に書いた (送り元ポート, 窓)
         self.unknown = 0                # 窓が分からず捨てた数
+        self._idle_logged = False       # 受信器が 0 で「数えずに捨てる」を書いたか
+        self._unknown_logged_at = 0.0   # 分からない送り元を最後に書いた時刻
+        self._unknown_since_log = 0     # その後の件数
+        self._unknown_ports = {}        # 送り元ポート → PID（最後の行以降。例に出す分。挿入順）
 
     def start(self) -> bool:
         try:
@@ -233,6 +237,7 @@ class Service:
         with self._lock:
             if receiver not in self._receivers:
                 self._receivers.append(receiver)
+            self._idle_logged = False
 
     def unregister(self, receiver) -> int:
         """外して、残りの数を返す"""
@@ -249,6 +254,9 @@ class Service:
                 continue
             except OSError:
                 break
+            # 速さ・接地だけ解析する（受信器側と同じ前方一致。ほかは解析せずに捨てる）
+            if not (data.startswith(OSCReceiver._VEL_PREFIX) or data.startswith(OSCReceiver._GND_PREFIX)):
+                continue
             parsed = OSCReceiver.parse_message(data)
             if parsed is None:
                 continue
@@ -256,7 +264,14 @@ class Service:
 
     def route(self, src_port: int, address: str, value):
         """送り元のポートの窓へ渡す。分からなければ対応表を取り直して（間隔を空けて）もう一度、
-        それでも分からなければ捨てる。渡したら True"""
+        それでも分からなければ捨てる。渡したら True。受け取る窓（受信器）が無いときは数えずに捨てる"""
+        with self._lock:
+            idle = not self._receivers
+        if idle:
+            if not self._idle_logged:
+                self._idle_logged = True
+                DebugLog.write("[OSCQuery] 受け取る窓が無い（監視していない）→ 届いたものは数えずに捨てる")
+            return False
         receiver = self._receiver_for(src_port)
         wait = PORTS_RECHECK_SEC if src_port in self._port_pid else PORTS_REFRESH_SEC
         if receiver is None and time.time() - self._refreshed_at >= wait:
@@ -264,9 +279,18 @@ class Service:
             receiver = self._receiver_for(src_port)
         if receiver is None:
             self.unknown += 1
-            if self.unknown == 1 or self.unknown % UNKNOWN_LOG_EVERY == 0:
-                DebugLog.write(f"[OSCQuery] 窓の分からない送り元 {src_port}（PID "
-                               f"{self._port_pid.get(src_port, '?')}）→ 捨てた（{self.unknown} 件目）")
+            self._unknown_since_log += 1
+            self._unknown_ports.setdefault(src_port, self._port_pid.get(src_port, "?"))
+            now = time.time()
+            if self._unknown_logged_at == 0.0 or now - self._unknown_logged_at >= UNKNOWN_LOG_SEC:
+                port, pid = next(iter(self._unknown_ports.items()))
+                example = f"{port}（PID {pid}）" + (f"など {len(self._unknown_ports)} つ"
+                                                  if len(self._unknown_ports) > 1 else "")
+                DebugLog.write(f"[OSCQuery] 窓の分からない送り元: この {UNKNOWN_LOG_SEC:.0f} 秒で "
+                               f"{self._unknown_since_log:,} 件（{example}）→ 捨てた（累計 {self.unknown:,} 件）")
+                self._unknown_logged_at = now
+                self._unknown_since_log = 0
+                self._unknown_ports = {}
             return False
         if not receiver.accept_oscquery():
             return False                    # その窓は固定ポートで受けている（二重にしない）

@@ -226,7 +226,7 @@ class TestSnapshot(unittest.TestCase):
     def test_nothing_finished_and_nothing_live(self):
         TaskStats.snapshot(0.0, 0.0, 1, wall_now=0.0)
         snap = TaskStats.snapshot(0.0, 0.0, 1, wall_now=600.0)
-        self.assertTrue(TaskStats.line(snap).endswith("・終わった: なし・生きている: なし"))
+        self.assertTrue(TaskStats.line(snap).endswith("・終わった: なし・生きている: なし・未計上 0.0秒"))
 
     def test_live_threads_are_the_difference_from_last_time(self):
         self._live(1, "LogMonitor._run", 101)
@@ -298,7 +298,7 @@ class TestLine(unittest.TestCase):
         self.assertEqual(
             TaskStats.line(self.SNAP),
             "[CPU] 10分で 78.2秒（13.0%）・画面 22.1秒・終わった: do_after_round ×72 18.4秒 / _fetch_item ×6 9.7秒"
-            "・生きている: LogMonitor._run ×6 12.0秒 / WindowVolume._run 0.3秒")
+            "・生きている: LogMonitor._run ×6 12.0秒 / WindowVolume._run 0.3秒・未計上 ?")
 
     def test_only_the_top_few_with_a_mark_for_the_rest(self):
         self.assertEqual(config.MEMORY_LOG_TOP, 8)

@@ -25,6 +25,7 @@ _last_process_cpu = None
 _last_tk_cpu = None
 _last_peak_ws = None
 _tk: dict = {}              # 名前 → [回数, CPU 秒]。前回の行からの、画面（Tk）のスレッドで走った関数の集計（FO）
+_others: dict = {}          # ident → [名前, native_id, 最後に読んだ CPU 秒]。TaskStats が知らない Python のスレッド（FS）
 
 
 def register_live(name: str):
@@ -118,7 +119,9 @@ def tk_timed(func):
 def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> dict:
     """前回の行からの差をまとめて返し、集計をリセットする。
     {first, elapsed, process_delta, tk_delta, finished: [(名前, 回数, CPU)], live: [(名前, 本数, CPU)],
-     tk_top: [(名前, 回数, CPU)], peak_ws, peak_delta}。finished・live・tk_top は CPU の多い順。取れなかった値・初回の差は None。
+     tk_top: [(名前, 回数, CPU)], others: [(Thread.name, 本数, CPU)], unaccounted, peak_ws, peak_delta}。
+    finished・live・tk_top・others は CPU の多い順。unaccounted ＝ 本体 −（画面＋終わった＋生きている＋ほかのスレッド）。
+    負なら 0.0・本体か画面が取れなければ None（FS）。取れなかった値・初回の差は None。
     初回（前回が無い）は差が取れないので first=True。終わった仕事は捨て、生きているスレッドは今の値を土台にする"""
     global _last_wall, _last_process_cpu, _last_tk_cpu, _last_peak_ws
     wall_now = time.monotonic() if wall_now is None else wall_now
@@ -137,6 +140,22 @@ def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> di
             counted = live.setdefault(entry[0], [0, 0.0])
             counted[0] += 1
             counted[1] += delta
+        # TaskStats が知らない Python のスレッド（zeroconf など）。メインスレッド＝Tk は画面として別に数える
+        others, seen = {}, set()
+        for t in threading.enumerate():
+            if t.ident is None or t.ident in _live or t is threading.main_thread() or t.native_id is None:
+                continue
+            cpu = ProcStats.thread_cpu(t.native_id)
+            if cpu is None:
+                continue                # 開けない（終わった直後）
+            seen.add(t.ident)
+            entry = _others.setdefault(t.ident, [t.name, t.native_id, cpu])
+            delta, entry[2] = max(0.0, cpu - entry[2]), cpu
+            counted = others.setdefault(t.name, [0, 0.0])
+            counted[0] += 1
+            counted[1] += delta
+        for ident in [i for i in _others if i not in seen]:
+            del _others[ident]
 
         def diff(now, last):
             return None if now is None or last is None else max(0.0, now - last)
@@ -148,9 +167,16 @@ def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> di
             "finished": [] if first else _ranked(done),
             "live": [] if first else _ranked(live),
             "tk_top": [] if first else _ranked(tk_done),
+            "others": [] if first else _ranked(others),
+            "unaccounted": None,
             "peak_ws": peak_ws,
             "peak_delta": None if peak_ws is None or _last_peak_ws is None else peak_ws - _last_peak_ws,
         }
+        if not first and result["process_delta"] is not None and result["tk_delta"] is not None:
+            accounted = (result["tk_delta"] + sum(cpu for _n, _c, cpu in result["finished"])
+                         + sum(cpu for _n, _c, cpu in result["live"])
+                         + sum(cpu for _n, _c, cpu in result["others"]))
+            result["unaccounted"] = max(0.0, result["process_delta"] - accounted)
         _last_wall, _last_process_cpu, _last_tk_cpu = wall_now, process_cpu_now, tk_cpu_now
         _last_peak_ws = peak_ws
     return result
@@ -184,4 +210,6 @@ def line(snap: dict) -> str:
     tk_top = snap.get("tk_top")
     screen = f"画面 {seconds(snap['tk_delta'])}" + (f"（上位: {_top(tk_top, True)}）" if tk_top else "")
     return (f"[CPU] {span}で {seconds(process)}（{percent}）・{screen}"
-            f"・終わった: {_top(snap['finished'], True)}・生きている: {_top(snap['live'], False)}")
+            f"・終わった: {_top(snap['finished'], True)}・生きている: {_top(snap['live'], False)}"
+            f"・未計上 {seconds(snap.get('unaccounted'))}"
+            + (f"・ほかのスレッド: {_top(snap['others'], False)}" if snap.get("others") else ""))

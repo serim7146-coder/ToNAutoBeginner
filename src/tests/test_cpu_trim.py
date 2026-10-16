@@ -479,13 +479,14 @@ class TestOnlySpeedAndGroundedAreParsed(unittest.TestCase):
         receiver._run()
         self.assertEqual(receiver.speed, 3.0, "壊れたものは今までどおり捨てる")
 
-    def test_the_other_address_user_is_not_touched(self):
-        """OSCQuery のサービスは今までどおり全部を parse_message で読む（振り分けのため。FO では触らない）"""
+    def test_the_service_filters_by_the_same_prefixes(self):
+        """OSCQuery のサービスも受信器と同じ前方一致で、速さ・接地だけ parse_message へ渡す（FS）"""
         source = Path("OSCQuery.py").read_text(encoding="utf-8")
-        self.assertIn("parsed = OSCReceiver.parse_message(data)", source)
-        self.assertNotIn("_VEL_PREFIX", source)
+        self.assertIn("data.startswith(OSCReceiver._VEL_PREFIX) or data.startswith(OSCReceiver._GND_PREFIX)", source)
+        self.assertLess(source.index("OSCReceiver._VEL_PREFIX"), source.index("parsed = OSCReceiver.parse_message(data)"),
+                        "解析の前に絞る")
         self.assertEqual(OSCReceiver.parse_message(_osc("/avatar/parameters/Voice", 0.5))[0],
-                         "/avatar/parameters/Voice")
+                         "/avatar/parameters/Voice", "parse_message 自体は変えない")
 
 
 # ── ③ 画面の内訳 ─────────────────────────────
@@ -580,7 +581,7 @@ class TestTkSnapshotAndLine(unittest.TestCase):
         self.assertEqual(
             TaskStats.line(self.SNAP),
             "[CPU] 10分で 25.2秒（4.2%）・画面 8.8秒（上位: _log ×1200 3.1秒 / _finish_host_poll ×195 1.2秒 / "
-            "_poll_host_save ×195 0.0秒）・終わった: do_after_round ×72 18.4秒・生きている: LogMonitor._run 1.4秒")
+            "_poll_host_save ×195 0.0秒）・終わった: do_after_round ×72 18.4秒・生きている: LogMonitor._run 1.4秒・未計上 ?")
 
     def test_a_single_call_still_shows_its_count(self):
         snap = dict(self.SNAP, tk_top=[("_log_memory", 1, 0.1)])
