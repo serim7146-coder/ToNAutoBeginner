@@ -124,6 +124,7 @@ class WindowState:
     continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0
     begin_done: bool = False
+    begin_accepted_at: float = 0.0  # 自分の Begin が受理された（Connecting）壁時計の時刻（FR。店の操作の見送りの判定）
     speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）
     speed_probe_done: bool = False  # このラウンドで速度検知を起動したか
     speed_strafe_done: bool = False  # このラウンドで速度検知の横移動をしたか

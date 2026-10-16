@@ -1884,6 +1884,8 @@ class ActionExecutor:
             self._restore_view_soon()
         if outcome == "ok":
             self._log("アイテム取得: 装備できました")
+        elif outcome == "late":
+            self._log("⚠ アイテム取得: 順番待ちで間に合わないため、この回は見送ります（次のラウンドでまた）")
         elif outcome != "equipped":
             why = {"failed": "取れませんでした", "timeout": f"{config.ITEM_FETCH_LIMIT_SEC:.0f}秒で間に合いません",
                    "round": "ラウンドが始まりました", "stopped": "停止しました",
@@ -1926,6 +1928,9 @@ class ActionExecutor:
         outcome = self._fetch_item(round_seq, "Event", plush, plush=True)
         if outcome == "ok":
             self._plush_retries = 0
+        elif outcome == "late":
+            self._plush_retries += 1
+            DebugLog.write(f"{head} 見送ったので回数は戻す（残り {self._plush_retries} 回）")
 
     def fetch_guidance_plush(self, extra_stop=None) -> str:
         """入室の Begin が受理された後に Guidance Plush を取りに行く（DZ）。マクロの監視中で、この窓の
@@ -1954,6 +1959,14 @@ class ActionExecutor:
         st = self._st
         with SharedState._GLOBAL_ACTION_LOCK:
             fetcher._check()                # ロックを待つ間にラウンドが始まったら押さない
+            if plush and st.begin_accepted_at:
+                # 順番待ちで持ち時間（Connecting からラウンド開始まで 12 秒）を使い切った回は、途中で打ち切られる
+                # だけなので前面を借りない（FR。移動は済んでいる。回数にも数えない）
+                since = time.time() - st.begin_accepted_at
+                if since > config.ITEM_FETCH_FRONT_LATEST_SEC:
+                    DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: Connecting から {since:.1f} 秒"
+                                   f"（上限 {config.ITEM_FETCH_FRONT_LATEST_SEC:.1f} 秒）→ この回は店の操作を見送る")
+                    return "late"
             # ロストしたアイテムを取りに行くときだけ、店でボタンを押す間は装備待ちフリーズを張る（EV。
             # 柵越え・移動の間は張らない。Equip が済んだら解く）。入室時の Guidance Plush・放置モードは張らない
             froze = st.waiting_for_equip and not self._hands_free()

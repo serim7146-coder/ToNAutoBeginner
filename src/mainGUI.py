@@ -3843,7 +3843,7 @@ class App(tk.Tk):
                 return
             outcome = action.fetch_guidance_plush(extra_stop=self._entry_stop.is_set)
             if outcome not in ("ok", "stopped"):
-                retry_later(outcome)
+                retry_later({"late": "順番待ちで間に合わない"}.get(outcome, outcome))
         except Exception:
             DebugLog.exception("mainGUI._plush_after_entry")
 

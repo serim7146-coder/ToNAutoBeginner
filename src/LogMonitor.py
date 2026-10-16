@@ -433,6 +433,7 @@ class LogMonitor:
         if not self._running or st.in_round or not st.begin_done:
             return
         st.begin_done = False
+        st.begin_accepted_at = 0.0
         self._log("Begin が通っていませんでした（定期の Verified でした）→ 押し直します")
         if self._auto_begin_active():
             self._start_daemon(self._action.do_begin_again, st.round_seq)
@@ -1543,6 +1544,7 @@ class LogMonitor:
         # 本物として採用。Everything recieved が続くかで事後確認する
         st.pending_verified_time = now
         st.begin_done = True
+        st.begin_accepted_at = time.time()      # 壁時計（log_now は読み取りの遅れが乗る。FR）
         self._debug_verified("受理（予定の外）" if off_schedule else "受理")
         self._log("✅ Connecting")
         # 速度検知そのものは Verified Round End 側で始めている（Verified は
@@ -1603,6 +1605,7 @@ class LogMonitor:
         st.eight_pages_unknown_logged  = False
         st.fog                         = False
         st.begin_done                  = False
+        st.begin_accepted_at           = 0.0
         st.speed_round_kind            = ""
         st.speed_probe_done            = False
         st.speed_strafe_done           = False
