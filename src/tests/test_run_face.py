@@ -53,7 +53,12 @@ class TestTheButtonOnRealShots(unittest.TestCase):
 
 class TestTheMarkOnRealShots(unittest.TestCase):
     """目印＝階段の上の構造の絵（scratchpad/respawn の 093311・093342・093343・093508・093511・093431・093537 の
-    高さ 8〜45% の帯）"""
+    高さ 8〜45% の帯）。FK: find_mark は先に特徴点で探すが、ここは絵の照合（保険）を確かめるので、特徴点は無しにする"""
+
+    def setUp(self):
+        patcher = patch.object(RunFace, "find_by_features", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _x(self, name):
         found = RunFace.find_mark(_frame_from_strip(name))

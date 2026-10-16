@@ -1957,7 +1957,7 @@ class ActionExecutor:
         while True:
             width = shot.shape[1]
             dx = mark[0] - width / 2
-            DebugLog.write(f"{head}: 目印 x {mark[0]:.1f}（幅 {width}・一致 {mark[1]:.3f}・倍率 {mark[2]:.2f}）"
+            DebugLog.write(f"{head}: 目印 x {mark[0]:.1f}（幅 {width}・{RunFace.describe(mark)}・倍率 {mark[2]:.2f}）"
                            f"・ずれ {dx:+.1f}")
             if abs(dx) <= width * config.RUN_FACE_TOL:
                 DebugLog.write(f"{head}: 正面（直した {fixed} 回）")
@@ -2011,13 +2011,13 @@ class ActionExecutor:
         f = RunFace.factor(mark, shot.shape[0])
         if not config.RUN_DEPTH_ENABLED:
             # EJ: 目印の大きさは距離を表していなかった。測って書くだけで動かさない
-            DebugLog.write(f"{head}: 倍率 {f:.3f}（一致 {mark[1]:.3f}）（記録だけ・動かさない）")
+            DebugLog.write(f"{head}: 倍率 {f:.3f}（{RunFace.describe(mark)}）（記録だけ・動かさない）")
             return None
         rate = None                     # 秒あたりの f の変化
         kept = []                       # 残した (向き, 秒)
         tries = 0
         while True:
-            DebugLog.write(f"{head}: 倍率 {f:.3f}（一致 {mark[1]:.3f}・{tries} 回動かした）")
+            DebugLog.write(f"{head}: 倍率 {f:.3f}（{RunFace.describe(mark)}・{tries} 回動かした）")
             if abs(f - 1.0) <= config.RUN_DEPTH_TOL:
                 break
             if tries >= config.RUN_DEPTH_TRIES:

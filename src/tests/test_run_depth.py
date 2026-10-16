@@ -27,6 +27,12 @@ def _strip_shot(name):
 
 
 class TestTheMarkSize(unittest.TestCase):
+    def setUp(self):
+        # FK: find_mark は先に特徴点で探す。ここは絵の照合（保険。倍率 0.85〜1.15）の倍率の測り方を確かめるので、特徴点は無しにする
+        patcher = patch.object(RunFace, "find_by_features", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_the_range_stays(self):
         self.assertEqual((RunFace.SCALES[0], RunFace.SCALES[-1]), (0.85, 1.15), "範囲は広げない（決定 B）")
 
