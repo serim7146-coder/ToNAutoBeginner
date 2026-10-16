@@ -959,8 +959,42 @@ class ActionExecutor:
 
     def _search_for_begin(self, round_seq: int):
         """BEGIN が見えない。後ろへ（近すぎる）→ 戻して前へ（遠すぎる）の順に探す。
-        見つかれば (文字, 照準の x)、見つからなければ動いた分を戻して None。
-        各移動の直前と撮影の後に受理・ラウンド開始・停止を見て、来ていれば「skip」（戻しもしない）"""
+        見つかれば (文字, 照準の x)、見つからなければ None（必要なら動いた分を戻す）。
+        各移動の直前と撮影の後に受理・ラウンド開始・停止を見て、来ていれば「skip」（戻しもしない）。
+
+        前への試しは、押した秒数でなく速さの受信（MotionSampler.distance_so_far。Begin 前の移動の実測と同じ積分）で
+        実際に動いた量を測る（FM）。前へ BEGIN_SEARCH_FORWARD_SEC 秒押して BEGIN_SEARCH_BLOCKED_DIST 未満しか
+        動けなければ壁（台座など）で、残りの前への試しをやめ、代わりに後ろへ BEGIN_SEARCH_BLOCKED_BACK_SEC 秒
+        動いて見る（それで無ければあきらめる。さらに戻さない）。壁でなく見つからなければ、最後に後ろへ戻すのは
+        前へ動けた量だけ（BEGIN_SEARCH_RETURN_MIN 未満なら戻さない）。速さを受け取れない窓は今までどおり
+        押した秒数で戻す。最後に実測を debug.log へ 1 行"""
+        sampler = None
+        if self._receiver is not None and self._osc is not None:
+            # 探す動きの間ずっと速さを読む。MotionSampler の実測の行はここでは書かない（下で自分の行を書く）
+            sampler = MotionSampler(self._receiver, lambda m: None)
+            sampler.start()
+        stats = {"pushes": 0, "push_sec": 0.0, "moved": 0.0, "blocked": 0,
+                 "returned": None, "wall_back": None}
+        try:
+            return self._search_for_begin_moves(
+                round_seq, sampler.distance_so_far if sampler is not None else None, stats)
+        finally:
+            if sampler is not None:
+                sampler.release()
+            if stats["pushes"]:
+                returned = stats["returned"]
+                wall = stats["wall_back"]
+                self._log(
+                    f"Begin: 探す動きの実測: 前へ {stats['pushes']} 回・押した {stats['push_sec']:.2f}秒・"
+                    + ("動いた量は測れず（速さを受信していません）" if sampler is None
+                       else f"動いた {stats['moved']:.2f}")
+                    + f"・動けなかった {stats['blocked']} 回"
+                    + (f"・後ろへ戻した {returned[0]:.2f}秒で {returned[1]:.2f}" if returned is not None else "")
+                    + (f"・壁で後ろへ {wall[0]:.2f}秒動いた {wall[1]:.2f}" if wall is not None else ""))
+
+    def _search_for_begin_moves(self, round_seq: int, distance, stats: dict):
+        """_search_for_begin の動き。distance は「今までに動いた距離」を返す関数（速さを受け取れない窓は None）。
+        stats に実測（前へ押した回数と秒数・動いた量・動けなかった回数・戻した秒数と量・壁で後ろへ動いた秒数と量）を入れる"""
         stopped = lambda: self._adjust_stopped(round_seq)
 
         def look():
@@ -983,23 +1017,92 @@ class ActionExecutor:
         if stopped():
             return "skip"
         self.move("forward", back)                  # 戻す
-        forward = 0.0
+        measured = False                            # 前へ動いた量を 1 回でも測れたか
         for i in range(config.BEGIN_SEARCH_FORWARD_TRIES):
             sec = config.BEGIN_SEARCH_FORWARD_SEC
             if stopped():
                 return "skip"
             self._log(f"Begin: BEGIN が見つかりません → 前へ {sec:.2f}秒動いて探します"
                       f"（{i + 1}/{config.BEGIN_SEARCH_FORWARD_TRIES}）")
+            before = distance() if distance is not None else None
             self.move("forward", sec)
-            forward += sec
+            stats["pushes"] += 1
+            stats["push_sec"] += sec
+            moved = None                            # この押しで動いた量（測れなければ None）
+            after = distance() if before is not None else None
+            if after is not None:
+                moved = after - before
+                measured = True
+                stats["moved"] += moved
             seen = look()
             if seen is not None:
                 return seen
+            if moved is not None and moved < config.BEGIN_SEARCH_BLOCKED_DIST:
+                # 壁（台座など）か、途中で速さが届かなくなった（区別がつかない。押しても同じなので同じに扱う）
+                stats["blocked"] += 1
+                wall_sec = config.BEGIN_SEARCH_BLOCKED_BACK_SEC
+                self._log(f"Begin: 前へ動けない（{sec:.2f}秒押して {moved:.2f} しか動かない。壁か、速さが届いていない）"
+                          f"→ 前へ探すのをやめて、後ろへ {wall_sec:.2f}秒動いて探します")
+                if stopped():
+                    return "skip"
+                wall_before = distance()
+                self.move("back", wall_sec)
+                wall_after = distance()
+                stats["wall_back"] = (wall_sec, (wall_after - wall_before)
+                                      if wall_before is not None and wall_after is not None else 0.0)
+                seen = look()
+                if seen is not None:
+                    return seen
+                self._log("Begin: 後ろへ動いても BEGIN が見つかりません → あきらめます（さらに戻しません）")
+                return None
         if stopped():
             return "skip"
-        self._log(f"Begin: 探しても BEGIN が見つかりません → 後ろへ {forward:.2f}秒戻します")
-        self.move("back", forward)                  # 動いた分を戻す
+        pushed = stats["push_sec"]
+        if not measured:
+            self._log(f"Begin: 探しても BEGIN が見つかりません → 後ろへ {pushed:.2f}秒戻します")
+            self.move("back", pushed)               # 動いた量を測れない窓は、押した秒数で戻す
+            return None
+        moved_total = stats["moved"]
+        if moved_total < config.BEGIN_SEARCH_RETURN_MIN:
+            self._log(f"Begin: 探しても BEGIN が見つかりません。前へ {moved_total:.2f} しか動けていないので戻しません")
+            return None
+        self._log(f"Begin: 探しても BEGIN が見つかりません → 前へ動いた {moved_total:.2f} だけ後ろへ戻します"
+                  f"（上限 {pushed:.2f}秒）")
+        stats["returned"] = self._press_back_distance(moved_total, pushed, distance)
         return None
+
+    def _press_back_distance(self, target: float, cap_sec: float, distance,
+                             clock=time.time, sleep=time.sleep):
+        """後ろへ、動いた距離（distance()。MotionSampler.distance_so_far）が target になるまで押す（FM）。
+        MOTION_INTERVAL_SEC ごとに見て、cap_sec 秒たったら離す。止めた・private でなくなったらすぐ離す。
+        (押した秒数, 動いた量) を返す"""
+        if not self.can_operate():
+            self._trace("[操作] 距離を決めた後ろへの移動 しない（private でない）")
+            return 0.0, 0.0
+        address = "/input/MoveBackward"
+        osc = self._osc
+        start = distance()
+        self._trace(f"[操作] 移動 back 距離 {target:.2f} まで（上限 {cap_sec:.2f}秒・OSC）")
+        osc.send(address, 0)                        # 0→1 の変化で反応する入力があるため
+        osc.send(address, 1)
+        began = last_sent = clock()
+        moved = 0.0
+        try:
+            while True:
+                now = clock()
+                here = distance()
+                if start is not None and here is not None:
+                    moved = here - start
+                if moved >= target or now - began >= cap_sec or self._move_stopped():
+                    break
+                if now - last_sent >= config.OSC_HOLD_RESEND_SEC:
+                    osc.send(address, 1)            # 途中で入力が消えても戻るように送り直す
+                    last_sent = now
+                sleep(MOTION_INTERVAL_SEC)
+        finally:
+            osc.send(address, 0)
+            osc.stop_all(repeat=1)
+        return clock() - began, moved
 
     def _adjust_gave_up(self, why: str) -> str:
         self._log(f"Begin: 位置合わせを打ち切り（{why}）→ 2回目を押します")
@@ -3032,6 +3135,18 @@ class MotionSampler:
         self._released = self._clock()
         if self.thread is None:
             self._write(summarize_motion([], 0.0) + self.suffix)
+
+    def distance_so_far(self):
+        """送り始めから今までに動いた距離（速さ × 経過の積分。summarize_motion の「距離」と同じ測り方）。
+        速さを 1 件も受け取れていなければ None。最後に読んでから今までは、最後の速さで動いたとみなす
+        （読む間隔の分を取りこぼさない。読むスレッドが止まっても増え続けないよう、延ばすのは間隔の 2 回分まで）"""
+        got = [(t, s) for t, s, _g in list(self.samples) if s is not None]
+        if not got:
+            return None
+        distance = sum(s0 * (t1 - t0) for (t0, s0), (t1, _s1) in zip(got, got[1:]))
+        last_t, last_s = got[-1]
+        gap = self._clock() - self._started - last_t
+        return distance + last_s * min(max(0.0, gap), self._interval * 2)
 
     def _read(self):
         try:
