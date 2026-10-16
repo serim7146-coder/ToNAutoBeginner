@@ -154,7 +154,8 @@ class TestPlushMissShots(unittest.TestCase):
         kept = []
         f.on_miss = lambda bgr, why: kept.append(why)
         self.assertFalse(f.buy_plush(PLUSH))
-        self.assertEqual(kept, ["Have Plush の行"], "行が見つからないときは今までどおり 1 枚")
+        self.assertEqual(kept, ["Have Plush の行", "Plush_引く前"],
+                         "行が見つからないときは今までの 1 枚＋ドラッグの引く前（FQ。途中は on_mid を受けない偽の mouse なので無い）")
 
     def test_a_failing_save_does_not_stop_the_fetch(self):
         saved = []

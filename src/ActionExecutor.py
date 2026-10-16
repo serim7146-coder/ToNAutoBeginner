@@ -3204,10 +3204,11 @@ class _FrontOnlyMouse(_FetchMouse):
     def tab_up(self):
         WindowOperator.release_tab()
 
-    def drag(self, start, end, steps: int, step_sec: float) -> bool:
+    def drag(self, start, end, steps: int, step_sec: float, on_mid=None) -> bool:
         """（Tab を押したまま）撮影の start へカーソルを置いて左ボタンを押し、steps 段で end まで
         動かして離す（DZ: 店の一覧のスクロールバー）。左ボタンは何があっても離す。前面でなくなれば
-        front_lost（離してから）"""
+        front_lost（離してから）。on_mid は真ん中の段（steps // 2）で 1 回呼ぶ（記録の撮影用。
+        例外は DebugLog に残して続ける）"""
         self._check_front()
         origin = WindowOperator.window_origin(self._hwnd)
         if origin is None:
@@ -3224,6 +3225,11 @@ class _FrontOnlyMouse(_FetchMouse):
                 t = i / steps
                 WindowOperator.set_cursor_position((int(round(sx + (ex - sx) * t)), int(round(sy + (ey - sy) * t))))
                 time.sleep(step_sec)
+                if on_mid is not None and i == steps // 2:
+                    try:
+                        on_mid()
+                    except Exception:
+                        DebugLog.exception("ActionExecutor._FrontOnlyMouse.drag.on_mid")
         finally:
             WindowOperator.mouse_up()
         return True

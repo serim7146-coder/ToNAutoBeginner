@@ -14,6 +14,7 @@
 店を開くと説明欄には直前に持っていたアイテムが出ているので、一覧から選ぶ操作はしない。
 OSC・接地・撮影・マウス・ログは差し替えられる（Fetcher の引数）。
 """
+import inspect
 import math
 import threading
 import time
@@ -108,6 +109,11 @@ PLUSH_OPEN_WAIT_SEC = 0.5           # Event を押してから一覧が出るま
 DRAG_STEPS = 20                     # つまみのドラッグ（Tab＋左ボタンを押したまま 20 段）
 DRAG_STEP_SEC = 0.03
 DRAG_SETTLE_SEC = 0.2               # ドラッグを離してから撮るまで
+# つまみのドラッグの記録（FQ。引く点・長さは変えない。debug.log に前・途中・後を残して次の失敗で決める）
+PLUSH_KNOB_WINDOW = (20, 60)        # つまみを探す範囲（見本の px。横 ±20・縦 ±60 で溝全体）
+KNOB_GRAY_MIN = 30                  # つまみとみなす明るさ（溝は 0〜10・つまみは 50〜80 だった。報告の撮影で測った値）
+KNOB_SAT_MAX = 40                   # 灰色（max-min がこれ以下）
+KNOB_MOVED_PX = 5                   # これ以上 上端が動けば「動いた」（見本の px）
 
 
 def shop_for(item_id, items) -> str | None:
@@ -228,6 +234,40 @@ def green_center(bgr, pos, scale, window=GREEN_WINDOW):
         return None
 
 
+def knob_band(bgr, pos, scale, window=PLUSH_KNOB_WINDOW):
+    """pos（画面の点。見積もりのつまみ）の周りの窓（見本の px × scale）で、明るい灰色の縦の帯の
+    (中心 x, 上端 y, 下端 y) を画面の座標で返す。無ければ None。
+    列ごとに「灰色（max-min <= KNOB_SAT_MAX）で明るい（gray >= KNOB_GRAY_MIN）画素」を数え、最大の 6 割以上の列を帯とする
+    （最大が 0 なら None）。帯の上端・下端は、帯の列で明るい画素のある行の最小・最大。green_center と同じ流儀（例外は None）"""
+    try:
+        import numpy as np
+        if not hasattr(bgr, "shape"):
+            return None
+        sx, sy = scale
+        h, w = bgr.shape[:2]
+        x0 = max(0, int(round(pos[0] - window[0] * sx)))
+        x1 = min(w, int(round(pos[0] + window[0] * sx)) + 1)
+        y0 = max(0, int(round(pos[1] - window[1] * sy)))
+        y1 = min(h, int(round(pos[1] + window[1] * sy)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        area = np.ascontiguousarray(bgr[y0:y1, x0:x1]).astype(np.int32)
+        gray = area.mean(axis=2)
+        sat = area.max(axis=2) - area.min(axis=2)
+        mask = (sat <= KNOB_SAT_MAX) & (gray >= KNOB_GRAY_MIN)
+        counts = mask.sum(axis=0)
+        peak = int(counts.max())
+        if peak <= 0:
+            return None
+        cols = np.nonzero(counts >= 0.6 * peak)[0]
+        rows = np.nonzero(mask[:, cols].any(axis=1))[0]
+        if len(cols) == 0 or len(rows) == 0:
+            return None
+        return (x0 + float(cols.mean()), y0 + int(rows.min()), y0 + int(rows.max()))
+    except Exception:
+        return None
+
+
 # ── 視点を動かす量 ──────────────────────────────
 
 def split_move(mx: float, my: float, step: int = STEP) -> list:
@@ -285,6 +325,13 @@ def panel_outside(corners, size) -> tuple:
 
 # ── 取りに行く ──────────────────────────────────
 
+def _accepts_on_mid(fn) -> bool:
+    try:
+        return "on_mid" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 class CountingMouse:
     """送ったマウスの相対移動の合計（横・縦）を数える（終わったら逆向きに送って視点を戻すため）"""
 
@@ -309,14 +356,24 @@ class CountingMouse:
         視点は回らない（数えない）"""
         return self.inner.click_at(x, y)
 
-    def drag(self, start, end, steps: int, step_sec: float) -> bool:
+    def drag(self, start, end, steps: int, step_sec: float, on_mid=None) -> bool:
         """（Tab を押したまま）撮影の start で左ボタンを押し、steps 段で end まで動かして離す。
-        カーソルで動かすので視点は回らない（数えない）"""
+        カーソルで動かすので視点は回らない（数えない）。on_mid は真ん中の段で呼ぶ（中の drag が受けるときだけ渡す）"""
+        if on_mid is not None and _accepts_on_mid(self.inner.drag):
+            return self.inner.drag(start, end, steps, step_sec, on_mid=on_mid)
         return self.inner.drag(start, end, steps, step_sec)
 
 
 class Stopped(Exception):
     """ラウンド開始・停止・時間切れ（理由は args[0]）"""
+
+
+def _knob_text(band, est) -> str:
+    """ログ「つまみ 実測（引く前）」の中身。band は knob_band の結果、est は見積もりの点"""
+    where = f"（見積もり ({est[0]:.1f}, {est[1]:.1f})）"
+    if band is None:
+        return f"見つからない{where}"
+    return f"x {band[0]:.1f}・y {band[1]}〜{band[2]}{where}"
 
 
 class Fetcher:
@@ -361,6 +418,9 @@ class Fetcher:
         # 店のボタンを押した撮影の同じホモグラフィで写した Equip: ((x, y), (横, 縦の倍率))。
         # 視点は動かさないので、店の中でもそのまま使える
         self.equip_point = None
+        # つまみのドラッグの記録（FQ）: 最後のドラッグの引く前・途中の撮影（失敗したときだけ残す）
+        self.before_shot = None
+        self.mid_shot = None
 
     def _check(self):
         reason = self.stopped()
@@ -743,6 +803,8 @@ class Fetcher:
                 if row is None:
                     self.log("アイテム取得: Have Plush の行が見つかりません")
                     self._miss("Have Plush の行")
+                    self._keep_shot(self.before_shot, "Plush_引く前")
+                    self._keep_shot(self.mid_shot, "Plush_引いている途中")
                     return False
                 self._check()
                 before = self.last_shot         # 行を押す直前の撮影（失敗したときだけ残す）
@@ -767,12 +829,27 @@ class Fetcher:
             if self.knob_at is not None:
                 self._drag(self.knob_at, top, "一番上へ戻す")
                 self.knob_at = None
-            self._drag(top, target, f"ずらし {shift:+d}")
+            # 引く前のつまみを測る（記録だけ。振る舞いは変えない）
+            first = self.capture()
+            self.before_shot = first[0] if first else None
+            self.mid_shot = None
+            _tx, _ty, ksx, ksy = project(PLUSH_KNOB_TOP)
+            before = knob_band(first[0], top, (ksx, ksy)) if first else None
+            self.log(f"アイテム取得: つまみ 実測（引く前）: " + _knob_text(before, top))
+            self._drag(top, target, f"ずらし {shift:+d}",
+                       on_mid=lambda: setattr(self, "mid_shot", self._capture_bgr()))
             self.knob_at = target
             self._wait(DRAG_SETTLE_SEC)
             shot = self.capture()
             if shot is not None:
                 self.last_shot = shot[0]
+            after = knob_band(shot[0], top, (ksx, ksy)) if shot is not None else None
+            if before is None or after is None:
+                self.log("アイテム取得: つまみ 実測（引いた後）: 比べられない")
+            else:
+                moved = abs(after[1] - before[1])
+                self.log(f"アイテム取得: つまみ 実測（引いた後）: y {after[1]}〜{after[2]}（"
+                         + (f"動いた {moved} px" if moved >= KNOB_MOVED_PX * ksy else "動いていない") + "）")
             rx, ry, sx, sy = project(PLUSH_ROW)
             center = (green_center(shot[0], (rx, ry), (sx, sy), PLUSH_ROW_WINDOW)
                       if shot is not None else None)
@@ -809,9 +886,9 @@ class Fetcher:
         except Exception:
             return None
 
-    def _drag(self, start, end, what: str):
+    def _drag(self, start, end, what: str, on_mid=None):
         self._check()
-        if not self.mouse.drag(start, end, DRAG_STEPS, DRAG_STEP_SEC):
+        if not self.mouse.drag(start, end, DRAG_STEPS, DRAG_STEP_SEC, on_mid=on_mid):
             raise Stopped("front_lost")
         self.log(f"アイテム取得: つまみをドラッグ（{what}） ({start[0]:.1f}, {start[1]:.1f}) → "
                  f"({end[0]:.1f}, {end[1]:.1f})")
