@@ -79,7 +79,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `BeginAdjustShots.py` | Begin の位置合わせの各段の撮影を、見つかった四角と照準を描いて残す（1/2 の JPEG。新しい 10 組）。 |
 | `BeginDetect.py` / `BeginMiss.py` / `ScreenCapture.py` | 画像で `[ BEGIN ]` を探す（PrintWindow で背面の窓も撮る）、見つからなかった撮影を残す。 |
 | `ItemFetch.py` | アイテム自動取得。OSC で店へ移動し（柵は速さで当たったのを見て跳び、跳んだ後の着地 2 回で越えた。速さを受け取れない窓は決め打ち）、SIFT＋ホモグラフィで店のボタンを見つけ、視点を回してクリックする。HUD に掛かるなら店の画面を真ん中へ寄せる。 |
-| `FetchMiss.py` | アイテム取得で「店の画面」「Have Plush の行」が見つからなかったときの撮影を残す（不具合の報告には撮影のチェックがあるときだけ）。 |
+| `FetchMiss.py` | アイテム取得で「店の画面」「Have Plush の行」が見つからなかったとき、と Guidance Plush の装備を確かめられなかったとき（行を押す前と Equip を待った後の 2 枚）の撮影を残す（不具合の報告には撮影のチェックがあるときだけ）。 |
 | `RespawnButton.py` | Esc のメニューの「リスポーン」のボタンを撮影から絵で探す（Run のリスポーン）。 |
 | `RunFace.py` | Run のリスポーンの後、玉座＋階段の切り出し（`assets/templates/run/throne.png`）を特徴点（SIFT＋ホモグラフィ）で撮影から探し、玉座の軸の x（真正面からのずれ）と大きさ（倍率）を測る（FOV・解像度が違っても見つかる。閾値の根拠は `config.RUN_FACE_FEATURE_*`）。受け入れなかったときだけ、階段の上の構造の絵の照合（倍率 0.85〜1.15）を保険に使う。 |
 | `RunPos.py` | Run の位置合わせのためのデータ集め（撮って残すだけ）。止まっているときの基準の撮影と、Run の後の撮影を等倍の PNG で残す。 |
@@ -238,7 +238,7 @@ LogMonitor._process(line)
 ## 9. そのほかの機能
 
 - **霧の看破**: `--enable-sdk-log-levels` 付きで起動した窓だけ。画面のボタンが ON で Invite・Invite+・Friends のときだけ判定・表示に使う。それ以外は DB にだけ黙って送る。名前ごとに公開と答え合わせし、一度でも食い違った名前は使わない。看破できる起動で5秒たってもオブジェクトの名前が出なければ DTM と判断する。「Transferred ownership of … to 0」の行は持ち主の移動で、看破には使わない。
-- **速度検知**: OSC で VelocityMagnitude を受ける窓だけ。Verified Round End から速度を見て、張り付いた値で 8 Pages（6.5）・Punished（4.0）を先読みする。
+- **速度検知**: OSC で VelocityMagnitude を受ける窓だけ。Verified Round End から速度を見て、張り付いた値で 8 Pages（6.5）・Punished（4.0）を先読みする。入室時の Guidance Plush のやり直しが控えている窓（`_plush_retries > 0`）では、アイテムロスト後と同じく横移動をしない（やり直しの移動が横移動と重なって柵を越えられないため。速度の受信は今どおり）。
 - **速さの受信**: まずツールに1つの OSCQuery のサービス（mDNS で広告）で待つ。`OSCQUERY_CONNECT_WAIT_SEC` たってもその窓から届かなければ、固定ポート（VRChat の送信ポート）を開く。固定ポートは先に開いたアプリだけが受け取れるので、ほかのアプリ（ToN Utils など）と取り合わないように OSCQuery を先にする。
 - **アイテム**: `item_id`（ロストの判定）と `held_item_id`（所持）を別に持つ。8 Pages でページを取ったとき、持ち込めないアイテム（item.json の 0）をなくす。アイテム自動取得は Begin が通った後、最後にロストしたアイテムを店で装備する（OSC・自動 Begin の窓だけ。完全放置モードでは Guidance Plush だけ（`RoundDecision.guidance_plush_id`）。合計 `ITEM_FETCH_LIMIT_SEC` まで）。取得で動かした縦の視点は、どの終わり方でも戻す。前面を取られて戻せなかった分は、裏で見張って、この窓が前面になったら・ほかの窓が誰もフリーズしていなければ前面を借りて戻す（`_restore_view_soon`）。
   - 押す文字（店のボタン・Equip）が照準の左下の HUD に掛かるなら、店の画面の真ん中を照準へ寄せてから押す。重なりは「横は押す点・縦は文字の箱（`GREEN_WINDOW` の縦 × 倍率）の上下」で見る（`ItemFetch.button_box`）。範囲 `HUD_X`・`HUD_Y` は照準からの位置を高さで割った割合。
@@ -271,7 +271,7 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\begin_adjust\` | Begin の位置合わせの各段の撮影（1 回ごとに「時刻_窓N」の組。見つかった段は四角と照準を描く。1/2 の JPEG。新しい 10 組。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToNAutoBeginner\run_face\` | Run の向き・前後でうまくいかなかったときの撮影（1/2 の JPEG。最新 `SHOT_KEEP` 枚） |
 | `%APPDATA%\ToNAutoBeginner\run_pos\` | Run の位置合わせのためのデータ（等倍の PNG。基準は窓ごとに 3 枚（暗い画面は基準にしない）・Run の後は 30 枚。不具合の報告には入れない） |
-| `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
+| `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかった・Guidance Plush の装備を確かめられなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
 | `%APPDATA%\ton-syncskip\ton-utils.log`・`save-history.sqlite` | ToN Utils のログと記録（読むだけ。sqlite は `file:…?mode=ro` で開き、`logs` の source・started だけを読む。写しも取らない） |
 | リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |

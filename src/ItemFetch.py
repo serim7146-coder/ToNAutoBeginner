@@ -745,12 +745,15 @@ class Fetcher:
                     self._miss("Have Plush の行")
                     return False
                 self._check()
+                before = self.last_shot         # 行を押す直前の撮影（失敗したときだけ残す）
                 if not self.mouse.click_at(*row):
                     return False
                 self.log(f"アイテム取得: Have Plush の行を押した ({row[0]:.1f}, {row[1]:.1f})")
                 if self._equip_once(target_id, first=attempt == 1):
                     return True
                 self.log(f"アイテム取得: Have Plush の装備を確かめられません（{attempt}/{PLUSH_ROUNDS}回目）")
+                self._keep_shot(before, "Plush_押す前")
+                self._keep_shot(self._capture_bgr(), "Plush_押した後")
             return False
         finally:
             self.mouse.tab_up()
@@ -786,6 +789,25 @@ class Fetcher:
                 self.on_miss(self.last_shot, why)
             except Exception:
                 pass
+
+    def _keep_shot(self, bgr, why: str):
+        """装備を確かめられなかったときの撮影を残す（FN。店の画面なので名前は写らない。残すのは on_miss）。
+        保存に失敗しても取得は止めない"""
+        if self.on_miss is not None and bgr is not None:
+            try:
+                self.on_miss(bgr, why)
+            except Exception:
+                pass
+
+    def _capture_bgr(self):
+        """今の画面を撮る。撮れなければ None（残すだけの撮影なので、失敗しても取得は止めない）"""
+        if self.on_miss is None:
+            return None
+        try:
+            shot = self.capture()
+            return shot[0] if shot is not None else None
+        except Exception:
+            return None
 
     def _drag(self, start, end, what: str):
         self._check()

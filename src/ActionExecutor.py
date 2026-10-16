@@ -2690,7 +2690,8 @@ class ActionExecutor:
 
         右 → 左 の1往復だけ。繰り返さない。
         OSCなのでフォーカスもロックも要らず、他窓を妨げない。
-        アイテムロスト後は動かさない（拾いに行く操作の邪魔をしないため）。
+        アイテムロスト後・入室時の Plush のやり直しが控えているときは動かさない
+        （拾いに行く操作の邪魔をしないため。やり直しが横移動と重なると柵を越えられない。FN）。
         """
         st = self._st
         if (not SharedState.get_speed_detect() or not self._cfg.osc_port or self._hands_free()
@@ -2698,6 +2699,9 @@ class ActionExecutor:
             return
         if st.waiting_for_equip:
             self._log("アイテムロスト後のため速度検知の横移動はしません")
+            return
+        if self._plush_retries > 0:
+            self._log("Plush のやり直しのため速度検知の横移動はしません")
             return
         # 受信の準備が済むまで待つ
         if not self._speed_ready.wait(timeout=config.SPEED_READY_TIMEOUT_SEC):
