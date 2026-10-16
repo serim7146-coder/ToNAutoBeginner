@@ -746,6 +746,7 @@ class ReportDialog(tk.Toplevel):
         """窓のチェックが全部入っていれば「すべて」も入る"""
         self.v_all_windows.set(bool(self.v_windows) and all(v.get() for v in self.v_windows.values()))
 
+    @TaskStats.tk_timed
     def _refresh_cooldown(self):
         """送れてから REPORT_COOLDOWN_SEC は送信を押せない"""
         remain = self.app._report_cooldown_remaining()
@@ -862,6 +863,8 @@ class App(tk.Tk):
         # 別のスレッドからの画面の更新はここへ（FC。Tk はこのスレッドでだけ呼ぶ）。何かがログを書く前に作る
         self._inbox = UiInbox.UiInbox(self)
         self._inbox.start()
+        # プロセスの一覧は 2 つの見張り（主催リストの元・外部ツールのボタン）で共有する（FO）
+        self._process_cache = ProcessCheck.RunningNamesCache()
 
         icon_path = resource_path("assets/ToNAutoBeginnerIcon.ico")
         if icon_path.exists():
@@ -935,6 +938,7 @@ class App(tk.Tk):
         self._start_tool_poll()
         self._log_memory()
 
+    @TaskStats.tk_timed
     def _log_memory(self):
         """MEMORY_LOG_SEC ごとに debug.log へ WS・Private・ハンドル数・スレッド数（FC。起動時にも）と、
         その間に CPU を使った仕事（FI。画面のスレッド・終わった仕事・生きているスレッド。起動時は「計測開始」だけ）"""
@@ -2524,6 +2528,7 @@ class App(tk.Tk):
     def _start_host_save_polling(self):
         self.after(int(config.HOST_SAVE_POLL_SEC * 1000), self._poll_host_save)
 
+    @TaskStats.tk_timed
     def _poll_host_save(self):
         """HOST_SAVE_POLL_SEC ごと。プロセスとファイルを読むのは裏のスレッド、結果を当てるのは
         Tk のスレッド（緊急停止・画面を止めない）。次の予約は当て終えてから（読みが重なる
@@ -2624,7 +2629,7 @@ class App(tk.Tk):
         （裏のスレッドで呼んでよい）。戻り値は (種類, 中身):
         ("lost", 理由) / ("same", None) / ("error", 文言) / ("loaded", (keep_on, meta, wishes, stamp))
         """
-        if not ProcessCheck.is_process_running(config.TON_LISTTOOL_PROCESS):
+        if not self._process_cache.watch(config.TON_LISTTOOL_PROCESS):
             return "lost", "ToN ListTool が起動していません"
 
         path, load = config.HOST_STATE_PATH, MatchTNL.load_host_state
@@ -3490,15 +3495,17 @@ class App(tk.Tk):
     def _start_tool_poll(self):
         self.after(int(config.TOOL_LAUNCH_POLL_SEC * 1000), self._poll_tool_buttons)
 
+    @TaskStats.tk_timed
     def _poll_tool_buttons(self):
-        """TOOL_LAUNCH_POLL_SEC ごと。プロセスの一覧は裏のスレッドで1回だけ取り
-        （ツールの数だけ取らない）、ボタンは Tk のスレッドで合わせる"""
+        """TOOL_LAUNCH_POLL_SEC ごと。プロセスの一覧は裏のスレッドで、主催リストの元の見張りと共有の
+        取りまとめから取り（ツールの数だけ・見張りの数だけ取らない。PROCESS_LIST_MIN_SEC 以内なら前回の一覧。
+        ボタンの「起動中」は最大でその秒数遅れる）、ボタンは Tk のスレッドで合わせる"""
         rows = [(row, row.v_path.get().strip()) for row in list(self.tool_rows)]
 
         def work():
             states = {}
             try:
-                names = ProcessCheck.running_names()
+                names = self._process_cache.names(max_age=config.PROCESS_LIST_MIN_SEC)
                 states = {row: bool(exe) and ToolLauncher.is_running(exe, names)
                           for row, exe in rows}
             except Exception:

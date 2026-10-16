@@ -1079,6 +1079,7 @@ class TestHostListGrace(unittest.TestCase):
         app._host_save_stamp = None
         app._host_save_warned = False
         app._host_loss_since = None
+        app._process_cache = FakeProcessCache()
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
@@ -1103,7 +1104,7 @@ class TestHostListGrace(unittest.TestCase):
             if stat_fails else patch.object(mainGUI.os, "stat", wraps=os.stat)
         with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
-             patch.object(ProcessCheck, "is_process_running", return_value=running), \
+             patch.object(self.app._process_cache, "running", running), \
              patch.object(mainGUI.time, "monotonic", side_effect=lambda: self.now), \
              patch.object(mainGUI, "save_settings"), \
              patch.object(mainGUI, "load_settings", return_value={}), \
@@ -1600,6 +1601,7 @@ class TestHostListSource(unittest.TestCase):
         app._host_save_stamp = None
         app._host_save_warned = False
         app._host_loss_since = None
+        app._process_cache = FakeProcessCache()
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
@@ -1625,7 +1627,7 @@ class TestHostListSource(unittest.TestCase):
         # 主催者自身のリストは既定では使わない（実ファイルに引きずられないため）
         with patch.object(config, "HOST_STATE_PATH", self.db), \
              patch.object(config, "USER_SAVE_PATH", self.user_save), \
-             patch.object(ProcessCheck, "is_process_running", return_value=running), \
+             patch.object(app._process_cache, "running", running), \
              patch.object(mainGUI, "save_settings"), \
              patch.object(mainGUI, "load_settings", return_value={}):
             mainGUI.App._refresh_host_source(app)
@@ -1969,7 +1971,7 @@ class TestHostListSource(unittest.TestCase):
         app._poll_host_save = lambda: None
 
         with patch.object(config, "HOST_STATE_PATH", self.db), \
-             patch.object(ProcessCheck, "is_process_running", return_value=True), \
+             patch.object(app._process_cache, "running", True), \
              patch.object(mainGUI.os, "stat", side_effect=RuntimeError("boom")):
             self._tick(app)
 
@@ -2000,7 +2002,7 @@ class TestHostListSource(unittest.TestCase):
         self._refresh(app)
 
         with patch.object(config, "HOST_STATE_PATH", self.db), \
-             patch.object(ProcessCheck, "is_process_running", return_value=True), \
+             patch.object(app._process_cache, "running", True), \
              patch.object(mainGUI.os, "stat", side_effect=OSError("gone")), \
              patch.object(mainGUI, "save_settings"), \
              patch.object(mainGUI, "load_settings", return_value={}):

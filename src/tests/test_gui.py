@@ -2788,7 +2788,7 @@ class TestToolLauncherRows(unittest.TestCase):
         first = self._add("D:/tools/ToN_ListTool.exe")
         second = self._add("D:/tools/SaveManager.exe")
         calls = []
-        with patch.object(ProcessCheck, "running_names",
+        with patch.object(self.app._process_cache, "names",
                           return_value=frozenset({"ton_listtool.exe"})) as names, \
              patch.object(ProcessCheck, "is_process_running") as single:
             self._poll_now(calls)

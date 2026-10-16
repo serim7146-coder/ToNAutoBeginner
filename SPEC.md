@@ -44,14 +44,14 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `mainGUI.py` | 画面。窓タブ・設定の保存（settings.json）・監視の開始/停止（1つのボタン）・VRChat の起動 UI と入室操作・主催リストの追従・キー（停止・開始・自爆キャンセル・チェイス。キーの設定の画面）・窓の整列と配置を覚える・外部ツール・OBS・音量・不具合の報告・自動アップデート。 |
 | `UiInbox.py` | 別のスレッドから Tk のスレッドへ関数を渡す受付箱（`call_soon`）。別のスレッドは Python の queue に入れるだけで、Tk のスレッドが 50ms ごとに取り出して実行する。Tk のスレッドでないスレッドが Tk を呼ぶと、スレッド 1 本ごとに Tcl の Event とスレッドごとのデータ（約 17KB）が残るため（FC）。閉じるときは残りを実行してから。 |
 | `ProcStats.py` | このプロセスの WS・Private・ハンドル数・スレッド数（ctypes）。debug.log に 10 分ごと（`MEMORY_LOG_SEC`）と起動時に 1 行。 |
-| `TaskStats.py` | CPU の使い道を仕事ごとに記録する（FI）。スレッドを立てる所は `TaskStats.thread(名前, target, …)` で、終わるときにそのスレッドの CPU を名前ごとに足す（長生きのスレッドは立っている間の CPU を `ProcStats.thread_cpu` で読んだ前回との差）。`mainGUI._log_memory` が 10 分ごとに `snapshot()` で前回からの差（プロセス全体・画面のスレッド・終わった仕事・生きているスレッド・最大 WS の増え）をまとめ、`line()` が debug.log に `[CPU]` の 1 行を書く（上位 `MEMORY_LOG_TOP` 個）。 |
+| `TaskStats.py` | CPU の使い道を仕事ごとに記録する（FI）。スレッドを立てる所は `TaskStats.thread(名前, target, …)` で、終わるときにそのスレッドの CPU を名前ごとに足す（長生きのスレッドは立っている間の CPU を `ProcStats.thread_cpu` で読んだ前回との差）。`mainGUI._log_memory` が 10 分ごとに `snapshot()` で前回からの差（プロセス全体・画面のスレッド・終わった仕事・生きているスレッド・最大 WS の増え）をまとめ、`line()` が debug.log に `[CPU]` の 1 行を書く（上位 `MEMORY_LOG_TOP` 個）。画面のスレッドの内訳（FO）は、UiInbox が取り出して実行した関数と、`@TaskStats.tk_timed` を付けた定期の関数（`_poll_host_save`・`_poll_tool_buttons`・`_log_memory`・`_refresh_cooldown`・`_draw_round_chart`）を、名前ごとに `time.thread_time()` の差で `tk_account` へ足し、`[CPU]` の行の「画面 n秒」の後ろに「（上位: 名前 ×回数 n秒 / …）」で出す（ユーザー操作のコールバックは対象外）。 |
 | `config.py` | 定数（パス・GUI の色・待ち時間・ID・ラウンドの集合など）。`resource_path()` で開発実行と Nuitka の exe の両方から同梱データ（`assets/…`）を引く。 |
 | `State.py` | `WindowConfig`（窓ごとの設定）と `WindowState`（窓ごとの実行時の状態）。ロジックは持たない。 |
 | `SharedState.py` | 窓をまたぐ状態。`_GLOBAL_ACTION_LOCK`・全窓フリーズ4種（`_Freeze`）・全窓共通の設定（`_Setting`）・前面の貸し借り・掴んでいる窓の一覧。 |
 | `HotKey.py` | キー名の検証・表記・捕捉。 |
 | `UIFont.py` | 日本語を持つフォントを PC にあるものから選ぶ。 |
 | `SecretStore.py` | OBS のパスワードを DPAPI で暗号化して保存する。 |
-| `ToolLauncher.py` / `ProcessCheck.py` | 外部ツールの起動、プロセスの生死（ToolHelp スナップショット）。 |
+| `ToolLauncher.py` / `ProcessCheck.py` | 外部ツールの起動、プロセスの生死（ToolHelp スナップショット）。一覧は `RunningNamesCache`（App が 1 つ持ち、主催リストの元とツールのボタンで共有。FO）で取る: `names()` は前回から `PROCESS_LIST_MIN_SEC`（10 秒）以内なら前回の一覧、`watch(名前)` は前回の一覧で見つけた PID の生死だけを `is_pid_alive` （PID を開いて終了コードと exe 名を見る。数 µs）で見て、消えた・未発見のときだけ（10 秒に 1 回まで）一覧を取り直す。 |
 | `WindowArrange.py` | 窓の整列の升の割り方と矩形の計算だけ（Win32 は呼ばない。動かすのは `WindowOperator`）。 |
 
 ### ログと判定
@@ -74,7 +74,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 |---|---|
 | `ActionExecutor.py` | 実際の操作。自爆（背面へキー）、Begin（移動・押し方・押し直し・位置合わせ）、DTM/Waldo の AFK 対策、速度検知、チェイス、アイテム自動取得、アイテムロストの前面化と音声、死んだ・生き残ったときにアイテムを落とす、Run のリスポーン。移動の実測（`MotionSampler`）。 |
 | `WindowOperator.py` | Win32 の操作。前面化・背面へのキー・クリック・カーソル・窓の矩形と移動・前面の貸し借り（`FrontLoan`）。VRChat を前に出すたびに `config.CURSOR_LOCK_KEY`（Tab）を押して離し、カーソルを中央に固定する（`lock_cursor`。依頼者の実測。浮いているかは見ない。その窓が前面のときだけ押す）。 |
-| `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight・Drop）と、速度（VelocityMagnitude）の受信。受け方は窓ごとに「OSCQuery → 届かなければ固定ポート」。 |
+| `OSCClient.py` / `OSCReceiver.py` | VRChat への OSC 送信（移動・視点・UseRight・Drop）と、速度（VelocityMagnitude）の受信。受け方は窓ごとに「OSCQuery → 届かなければ固定ポート」。固定ポートの受信（`_run`）は、先頭が `/avatar/parameters/VelocityMagnitude` か `/avatar/parameters/Grounded`（NUL 終端込み）でないデータを `parse_message` せずに捨てる（FO）。 |
 | `OSCQuery.py` | ツールに1つの OSCQuery のサービス（HTTP＋mDNS）。VRChat が送ってきた値を、送り元のポート → プロセス → 窓で振り分ける。 |
 | `BeginAdjustShots.py` | Begin の位置合わせの各段の撮影を、見つかった四角と照準を描いて残す（1/2 の JPEG。新しい 10 組）。 |
 | `BeginDetect.py` / `BeginMiss.py` / `ScreenCapture.py` | 画像で `[ BEGIN ]` を探す（PrintWindow で背面の窓も撮る）、見つからなかった撮影を残す。 |

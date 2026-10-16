@@ -841,6 +841,7 @@ class StatisticsWindow(tk.Toplevel):
             points.append((cx + radius * math.cos(angle), cy - radius * math.sin(angle)))
         canvas.create_polygon(*points, fill=color, outline=BG, width=1)
 
+    @TaskStats.tk_timed
     def _draw_round_chart(self):
         self._round_chart_job = None
         canvas = self.round_chart

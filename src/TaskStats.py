@@ -10,6 +10,7 @@ v1.2.0 の 12 時間で、本体の CPU は合計 5,668 秒。名前の分かる
 
 どのスレッドから呼んでもよい。2 つの辞書は _lock で守る（仕事 1 つあたり、終わるときにロックを 1 回）。
 """
+import functools
 import threading
 import time
 
@@ -23,6 +24,7 @@ _last_wall = None           # 前回の行の時刻（time.monotonic()）
 _last_process_cpu = None
 _last_tk_cpu = None
 _last_peak_ws = None
+_tk: dict = {}              # 名前 → [回数, CPU 秒]。前回の行からの、画面（Tk）のスレッドで走った関数の集計（FO）
 
 
 def register_live(name: str):
@@ -89,10 +91,34 @@ def thread(name: str, target, *args, daemon: bool = True, thread_name: str = Non
     return threading.Thread(target=_Tracked(name, target, kwargs), **options)
 
 
+def tk_account(name: str, cpu_sec: float):
+    """画面（Tk）のスレッドで走った関数の CPU を名前に足す（FO）。Tk のスレッドだけが呼ぶ（書くのはそこだけなのでロックは
+    取らない。snapshot が別のスレッドから読んでも _lock の中で写す）"""
+    counted = _tk.get(name)
+    if counted is None:
+        counted = _tk[name] = [0, 0.0]
+    counted[0] += 1
+    counted[1] += max(0.0, cpu_sec)
+
+
+def tk_timed(func):
+    """画面（Tk）のスレッドで走る関数に付ける。関数の先頭と末尾の time.thread_time() の差を tk_account へ（FO）。
+    after で予約して Tk のスレッドが呼ぶ定期の関数用（UiInbox が取り出す関数は UiInbox 側で測る。両方に付けると二重になる）。
+    例外はそのまま外へ出す"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.thread_time()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            tk_account(func.__name__, time.thread_time() - start)
+    return wrapper
+
+
 def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> dict:
     """前回の行からの差をまとめて返し、集計をリセットする。
     {first, elapsed, process_delta, tk_delta, finished: [(名前, 回数, CPU)], live: [(名前, 本数, CPU)],
-     peak_ws, peak_delta}。finished・live は CPU の多い順。取れなかった値・初回の差は None。
+     tk_top: [(名前, 回数, CPU)], peak_ws, peak_delta}。finished・live・tk_top は CPU の多い順。取れなかった値・初回の差は None。
     初回（前回が無い）は差が取れないので first=True。終わった仕事は捨て、生きているスレッドは今の値を土台にする"""
     global _last_wall, _last_process_cpu, _last_tk_cpu, _last_peak_ws
     wall_now = time.monotonic() if wall_now is None else wall_now
@@ -100,6 +126,8 @@ def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> di
         first = _last_wall is None
         done = dict(_finished)
         _finished.clear()
+        tk_done = {name: list(counted) for name, counted in _tk.items()}
+        _tk.clear()
         live = {}
         for entry in _live.values():
             cpu = ProcStats.thread_cpu(entry[1])
@@ -119,6 +147,7 @@ def snapshot(tk_cpu_now, process_cpu_now, peak_ws, wall_now: float = None) -> di
             "tk_delta": diff(tk_cpu_now, _last_tk_cpu),
             "finished": [] if first else _ranked(done),
             "live": [] if first else _ranked(live),
+            "tk_top": [] if first else _ranked(tk_done),
             "peak_ws": peak_ws,
             "peak_delta": None if peak_ws is None or _last_peak_ws is None else peak_ws - _last_peak_ws,
         }
@@ -152,5 +181,7 @@ def line(snap: dict) -> str:
         return "?" if value is None else f"{value:.1f}秒"
     process = snap["process_delta"]
     percent = "?" if process is None or elapsed <= 0 else f"{process / elapsed * 100:.1f}%"
-    return (f"[CPU] {span}で {seconds(process)}（{percent}）・画面 {seconds(snap['tk_delta'])}"
+    tk_top = snap.get("tk_top")
+    screen = f"画面 {seconds(snap['tk_delta'])}" + (f"（上位: {_top(tk_top, True)}）" if tk_top else "")
+    return (f"[CPU] {span}で {seconds(process)}（{percent}）・{screen}"
             f"・終わった: {_top(snap['finished'], True)}・生きている: {_top(snap['live'], False)}")

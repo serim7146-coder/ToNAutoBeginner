@@ -11,7 +11,7 @@ from tests.test_oscquery import _Case as _OSCQueryCase
 
 def _fresh_state(test):
     """TaskStats の持ち物を空にする（テストが終われば元に戻す）"""
-    p = patch.multiple(TaskStats, _finished={}, _live={}, _last_wall=None, _last_process_cpu=None,
+    p = patch.multiple(TaskStats, _finished={}, _live={}, _tk={}, _last_wall=None, _last_process_cpu=None,
                        _last_tk_cpu=None, _last_peak_ws=None)
     p.start()
     test.addCleanup(p.stop)
@@ -393,7 +393,7 @@ class TestLogMemory(unittest.TestCase):
             mainGUI.App._log_memory(self.app)
         self.assertEqual(len(self.written), 4)
         self.assertTrue(self.written[2].endswith("・最大 WS 160MB（前回から +60）"), self.written[2])
-        self.assertRegex(self.written[3], r"^\[CPU\] \d+秒で \d+\.\d秒（[\d.]+%）・画面 \d+\.\d秒・終わった: .*・生きている: ")
+        self.assertRegex(self.written[3], r"^\[CPU\] \d+秒で \d+\.\d秒（[\d.]+%）・画面 \d+\.\d秒(（上位: .*）)?・終わった: .*・生きている: ")
         self.assertEqual(self.app.after.call_count, 2)
 
     def test_a_failure_is_logged_and_the_next_one_is_still_booked(self):

@@ -70,6 +70,23 @@ _ORIGINAL_WM_ATTRIBUTES = tk.Wm.wm_attributes
 _HIDDEN_WINDOWS: list = []          # 隠した窓（確かめるテストが使う）
 
 
+class FakeProcessCache:
+    """ProcessCheck.RunningNamesCache の偽物（FO。プロセスの一覧を本物で取らない）。watch は running を返し、
+    names は names_value を返す。呼ばれた中身は watched・names_asked に貯める"""
+
+    def __init__(self, running=True, names_value=frozenset()):
+        self.running, self.names_value = running, names_value
+        self.watched, self.names_asked = [], []
+
+    def watch(self, exe_name):
+        self.watched.append(exe_name)
+        return self.running
+
+    def names(self, max_age=None):
+        self.names_asked.append(max_age)
+        return self.names_value
+
+
 def _hidden_tk_init(self, *args, **kwargs):
     _ORIGINAL_TK_INIT(self, *args, **kwargs)
     self.withdraw()

@@ -10,9 +10,11 @@ close() は残りを実行してから止める（停止の直前のログが画
 """
 import queue
 import threading
+import time
 import tkinter as tk
 
 import DebugLog
+import TaskStats
 
 INTERVAL_MS = 50
 
@@ -65,10 +67,13 @@ class UiInbox:
                 func, args = self._queue.get_nowait()
             except queue.Empty:
                 return
+            start = time.thread_time()
             try:
                 func(*args)
             except Exception:
                 DebugLog.exception(f"UiInbox: {getattr(func, '__qualname__', func)}")
+            # 画面のスレッドで何が CPU を使ったか（FO）。名前は関数の名前（lambda は「<lambda>」）
+            TaskStats.tk_account(getattr(func, "__name__", None) or type(func).__name__, time.thread_time() - start)
 
     def close(self):
         """Tk のスレッドから。残りを実行してから止める"""

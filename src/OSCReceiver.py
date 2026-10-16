@@ -35,6 +35,10 @@ MODE_NONE = "none"                  # 受け取れない（固定ポートもほ
 # VelocityMagnitude は間引かれる代わりに、きっちり定数値（6.6 等）へ到達する。
 VELOCITY_MAGNITUDE = "/avatar/parameters/VelocityMagnitude"
 GROUNDED = "/avatar/parameters/Grounded"
+# OSC の住所は NUL で終わる。NUL まで含めて前方一致にして、/avatar/parameters/VelocityMagnitudeX のような
+# 別の名前を同じものとして通さない（FO: 速さと接地以外は解析しない）
+_VEL_PREFIX = VELOCITY_MAGNITUDE.encode() + b"\0"
+_GND_PREFIX = GROUNDED.encode() + b"\0"
 
 
 def port_owner(port: int) -> str:
@@ -198,6 +202,8 @@ class VelocityReceiver:
                 continue
             except OSError:
                 break
+            if not (data.startswith(_VEL_PREFIX) or data.startswith(_GND_PREFIX)):
+                continue            # 速さと接地以外は解析しない（FO。VRChat は全パラメータを送ってくる）
             parsed = parse_message(data)
             if parsed is None:
                 continue
