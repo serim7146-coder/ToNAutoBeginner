@@ -223,8 +223,12 @@ class TestGiveUpRetry(_Case):
     def _ex(self):
         ex, st = self._executor(fetch=False)
         del ex._retry_after_giving_up             # 本物を使う
+        ex._begin_gave_up_round = 7               # 3 回押して受理されなかった（BEGIN が見つからない場合は test_begin_giveup_retry.py）
         again = []
-        ex.do_begin_again = lambda seq: again.append((seq, self.now[0]))
+        def do_begin_again(seq):
+            again.append((seq, self.now[0]))
+            st.begin_done = True                  # 通った（通らない場合のやり直しの繰り返しは test_begin_giveup_retry.py で見る）
+        ex.do_begin_again = do_begin_again
         self.again = again
         return ex, st
 
@@ -258,7 +262,8 @@ class TestGiveUpRetry(_Case):
 
     def test_called_only_after_giving_up(self):
         src = inspect.getsource(ActionExecutor.ActionExecutor.do_after_round)
-        self.assertIn("if self._begin_gave_up_round == round_seq:\n                self._retry_after_giving_up(round_seq)", src)
+        self.assertIn("if self._gave_up_begin(round_seq):", src)
+        self.assertIn("self._retry_after_giving_up(round_seq)", src)
         src = inspect.getsource(ActionExecutor.ActionExecutor._confirm_begin)
         self.assertIn("self._begin_gave_up_round = round_seq", src)
 

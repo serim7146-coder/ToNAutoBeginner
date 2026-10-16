@@ -199,6 +199,8 @@ class TestNotGivingUpAfterPressingAgain(_Case):
 
         def press(again=False, click_only=False):
             presses.append(self.now[0])
+            if len(presses) >= 2:
+                st.begin_done = True               # 30 秒後の押し直しで通った（通らない場合の繰り返しは test_begin_giveup_retry.py）
             return True
 
         def confirm(seq):

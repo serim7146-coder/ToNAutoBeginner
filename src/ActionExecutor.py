@@ -120,7 +120,9 @@ class ActionExecutor:
         self._spam_paused_round = -1      # 連打の休止を告げたラウンド
         self._begin_given_up_round = -1   # BEGIN が見つからずあきらめたラウンド
         self._begin_gave_up_round = -1    # 3 回押して受理されなかったラウンド（EV）
-        self._give_up_retry_round = -1    # 3 回押して受理されず、30 秒後に押し直したラウンド（EV）
+        self._give_up_retry_round = -1    # あきらめて、30 秒後の最初のやり直しに入ったラウンド（EV・FL）
+        self._give_up_loop_round = -1     # あきらめた後のやり直しのループが回っているラウンド（FL。二重に回さない）
+        self._give_up_retries = 0         # そのラウンドで、あきらめた後にやり直した回数（FL）
         self._fetched_round = -1          # アイテム取得で店へ行ったラウンド（EY: 押し直しは Begin の前へ戻ってから）
         self._last_press = "click"        # 直前の回で何で押したか（"dip" / "click"）
         self._dip_landed = False          # 直前の差し込みでカーソルを置けたか
@@ -682,23 +684,108 @@ class ActionExecutor:
                 return
         if not self._accepted_after_press(round_seq) and self._should_retry_begin(round_seq):
             self._log(f"⚠ Begin を{limit}回押しましたが受理されませんでした")
-            self._begin_gave_up_round = round_seq      # do_after_round が 30 秒後に 1 回押し直す（EV）
+            self._begin_gave_up_round = round_seq      # do_after_round が 30 秒後に押し直す（EV）
+
+    def _gave_up_begin(self, round_seq: int) -> bool:
+        """このラウンドの Begin をあきらめたか（BEGIN が見つからない・BEGIN_RETRY_MAX 回押して受理されない）"""
+        return round_seq in (self._begin_gave_up_round, self._begin_given_up_round)
 
     def _retry_after_giving_up(self, round_seq: int):
-        """Begin を BEGIN_RETRY_MAX 回押して受理されなかった窓（EV）: BEGIN_GIVE_UP_RETRY_SEC おいて、押し直しの
-        流れ（do_begin_again。位置合わせ・特徴点を含む）を 1 ラウンドに 1 回だけ。受理・ラウンド開始・停止でやめる"""
-        if self._give_up_retry_round == round_seq:
+        """Begin をあきらめた窓のやり直し。受理・ラウンド開始・停止でやめる。
+
+        3 回押して受理されなかった窓（EV）: BEGIN_GIVE_UP_RETRY_SEC おいて、押し直しの流れ
+        （do_begin_again。位置合わせ・特徴点を含む）を 1 回。通らなければ BEGIN_GIVE_UP_REPEAT_SEC おきの繰り返しへ。
+        BEGIN が見つからずあきらめた窓（FL）: 繰り返しの 1 回目（BEGIN_GIVE_UP_RETRY_SEC 後）から。
+        繰り返しは 1 つのラウンドに 1 本だけ（押し直しの流れの中で、またあきらめても入れ子にしない）"""
+        if self._give_up_loop_round == round_seq:
             return
-        self._give_up_retry_round = round_seq
-        deadline = time.time() + config.BEGIN_GIVE_UP_RETRY_SEC
+        self._give_up_loop_round = round_seq
+        try:
+            first = True
+            if self._give_up_retry_round != round_seq:
+                self._give_up_retry_round = round_seq
+                self._give_up_retries = 0
+                if self._begin_gave_up_round == round_seq:
+                    first = False
+                    if not self._wait_give_up(round_seq, config.BEGIN_GIVE_UP_RETRY_SEC):
+                        return
+                    self._give_up_retries += 1
+                    self._log(f"Begin をもう一度押します（あきらめてから {config.BEGIN_GIVE_UP_RETRY_SEC:.0f} 秒）")
+                    self.do_begin_again(round_seq)
+            else:
+                first = False           # 30 秒後の分はこのラウンドでもう使った（受理と取り違えた後にまたあきらめた）
+            self._retry_loop_after_giving_up(round_seq, first)
+        finally:
+            if self._give_up_loop_round == round_seq:
+                self._give_up_loop_round = -1
+
+    def _begin_retry_pending(self, round_seq: int) -> bool:
+        """あきらめた後のやり直しを続けてよいか（あきらめた印は見ない。_should_retry_begin との違い）"""
+        st = self._st
+        return (self._is_running() and not st.in_round and not st.begin_done
+                and st.round_seq == round_seq and self.can_operate())
+
+    def _wait_give_up(self, round_seq: int, sec: float) -> bool:
+        """sec 待つ（BEGIN_GIVE_UP_POLL_SEC ごとに続けてよいか見る）。待ち終えたら True、
+        受理・ラウンド開始・停止などで続ける意味が無くなったら False"""
+        deadline = time.time() + sec
         while time.time() < deadline:
-            if not self._should_retry_begin(round_seq):
-                return
+            if not self._begin_retry_pending(round_seq):
+                return False
             time.sleep(config.BEGIN_GIVE_UP_POLL_SEC)
-        if not self._should_retry_begin(round_seq):
-            return
-        self._log(f"Begin をもう一度押します（あきらめてから {config.BEGIN_GIVE_UP_RETRY_SEC:.0f} 秒）")
-        self.do_begin_again(round_seq)
+        return self._begin_retry_pending(round_seq)
+
+    def _retry_loop_after_giving_up(self, round_seq: int, first: bool):
+        """あきらめた窓のやり直し（FL）: リスポーン → Begin 前の移動 → 押す（do_begin_again）を、1 回目は
+        BEGIN_GIVE_UP_RETRY_SEC 後、それからは BEGIN_GIVE_UP_REPEAT_SEC おきに、通る・ラウンドが始まる・止めるまで
+        繰り返す。回数の上限は無い（1 窓だとほかにラウンドを始める窓が無く、止まり続けるため）。
+        他窓のフリーズ中は待つ（_wait_other_windows）。Run リスポーンの設定が OFF でもリスポーンする（EY と同じ）"""
+        while True:
+            wait = config.BEGIN_GIVE_UP_RETRY_SEC if first else config.BEGIN_GIVE_UP_REPEAT_SEC
+            if not self._wait_give_up(round_seq, wait):
+                return
+            self._give_up_retries += 1
+            if first:
+                self._log(f"Begin: あきらめてから {config.BEGIN_GIVE_UP_RETRY_SEC:.0f} 秒 → "
+                          "リスポーンして Begin 前からやり直します")
+            else:
+                self._log(f"Begin: {config.BEGIN_GIVE_UP_REPEAT_SEC / 60:.0f} 分おきにやり直します"
+                          f"（{self._give_up_retries} 回目）")
+            # あきらめた印は「次のやり直しまで」の印。戻さないと _should_retry_begin が偽のままで、押し直しが動かない
+            self._begin_given_up_round = -1
+            self._begin_gave_up_round = -1
+            if not self._wait_other_windows():
+                return
+            if not self._begin_retry_pending(round_seq):
+                return
+            if not self._respawn_and_move_for_retry(round_seq):
+                return
+            self.do_begin_again(round_seq)
+            first = False
+
+    def _respawn_and_move_for_retry(self, round_seq: int) -> bool:
+        """あきらめた後のやり直し（FL）: リスポーン → Begin 前の移動（_back_to_begin_after_fetch と同じ流れ）。
+        リスポーンできなければ移動しない（押す所の位置合わせ・探すに任せる）。OSC が使えない窓はリスポーンできない
+        ので、その場から押す。止めた・ラウンドが始まった・Begin が通った → False"""
+        st = self._st
+        if self._osc is None:
+            self._log("Begin: OSC が使えない窓なのでリスポーンしません → その場から押します")
+            return True
+        self._respawn_lobby = True
+        try:
+            faced = self._respawn_and_face(round_seq, "Begin のやり直し")
+        finally:
+            self._respawn_lobby = False
+        self._fetched_round = -1        # do_begin_again が店の後のリスポーンをもう一度しない
+        if not self._is_running() or st.in_round or st.round_seq != round_seq or st.begin_done:
+            return False
+        if faced:
+            if not self._begin_precheck(check_freeze=False):
+                return False
+            self._begin_move()
+        else:
+            self._log("Begin: リスポーンできなかった → その場から押します")
+        return True
 
     def _accepted_after_press(self, round_seq: int) -> bool:
         """直前の回が受理されたか。差し込みは中で受理を待ち終えているので待たない。
@@ -1430,8 +1517,8 @@ class ActionExecutor:
             return
         if self._press_begin(again=True):
             self._confirm_begin(round_seq)
-            if self._begin_gave_up_round == round_seq:
-                # 押し直しの流れであきらめたときも、30 秒おいて 1 回（EY。1 ラウンドに 1 回は今どおり）
+            if self._gave_up_begin(round_seq):
+                # 押し直しの流れであきらめたときも、30 秒おいてやり直す（EY・FL）
                 self._retry_after_giving_up(round_seq)
 
     def _back_to_begin_after_fetch(self, round_seq: int) -> bool:
@@ -1521,7 +1608,10 @@ class ActionExecutor:
 
         if clicked:
             self._confirm_begin(round_seq)
-            if self._begin_gave_up_round == round_seq:
+            if self._gave_up_begin(round_seq):
+                if spam is not None:
+                    spam.set()      # やり直しは何時間も続きうる。その間 UseRight を送り続けない（リスポーンのメニューにも当たる）
+                    spam = None
                 self._retry_after_giving_up(round_seq)
         if spam is not None:
             spam.set()      # 連打を止める（条件が変われば自分でも終わる）

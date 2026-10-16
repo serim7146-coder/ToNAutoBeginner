@@ -708,7 +708,8 @@ def _single_attempt(test):
         patcher = patch.object(config, name, value)
         patcher.start()
         test.addCleanup(patcher.stop)
-    # あきらめた窓の 30 秒後の押し直し（EV）も止める。見るのは TestGiveUpRetry
+    # あきらめた窓の 30 秒後・3 分おきのやり直し（EV・FL）も止める（ループの入口を止めれば動かない）。
+    # 見るのは TestGiveUpRetry（test_equip_freeze_timing）と test_begin_giveup_retry
     patcher = patch.object(ActionExecutor.ActionExecutor, "_retry_after_giving_up", lambda self, seq: None)
     patcher.start()
     test.addCleanup(patcher.stop)
