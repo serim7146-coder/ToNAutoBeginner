@@ -755,12 +755,12 @@ class TestBeginAdjust(unittest.TestCase):
         self.assertEqual(self.moves, [("left", 0.1)])
 
     def test_the_second_step_uses_the_measured_speed(self):
-        """1回目 0.1秒で 100px → 1000px/秒 → 残り 200px は 0.2秒"""
-        self.hits = [300, 200, 0]
+        """1回目 0.1秒で 100px → 10 文字幅/秒 → 残り 60px は 0.06秒（1歩目以下なので上限に掛からない。FU）"""
+        self.hits = [160, 60, 0]
 
         self.ex._adjust_to_begin(1)
 
-        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.2)])
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.06)])
 
     def test_within_the_tolerance_it_does_not_move(self):
         self.hits = [30]          # 許容 = 100 * 0.3 = 30px
@@ -778,14 +778,79 @@ class TestBeginAdjust(unittest.TestCase):
         self.assertTrue(any("打ち切り" in m for m in self.logs))
 
     def test_the_total_time_is_capped(self):
-        """0.1秒で 10px（100px/秒）→ 以後は上限 0.4秒ずつ → 合計 1.2秒で止まる"""
-        self.hits = [5000, 4990, 4950, 4910, 4870, 4830]
+        """遠いまま少しずつしか動かない → 1歩は上限 0.10秒 → 合計 1.2秒（12歩）で止まる（FU）"""
+        self.hits = [5000 - 20 * i for i in range(14)]
         with patch.object(config, "BEGIN_ADJUST_MAX_STEPS", 100):
             self.ex._adjust_to_begin(1)
-        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.4), ("right", 0.4),
-                                      ("right", 0.3)])
+        self.assertEqual(self.moves, [("right", 0.1)] * 12)
         self.assertAlmostEqual(sum(s for _d, s in self.moves),
                                config.BEGIN_ADJUST_MAX_TOTAL_SEC)
+
+    # ── FU: 横の1歩は1歩目より長くしない・横の速さに下限 ──
+    def _find_wide(self, _bits, _w, _h):
+        """文字の幅が 155px の偽の検出（不具合報告 窓6 と同じ幅）"""
+        if not self.hits:
+            return None
+        dx = self.hits.pop(0)
+        return None if dx is None else self._hit(dx, w=155)
+
+    def _run_logged(self, hits, wide=True):
+        """位置合わせを回し、debug.log への書き込みの一覧を返す"""
+        self.hits = list(hits)
+        written = []
+        with patch.object(DebugLog, "write", side_effect=written.append):
+            if wide:
+                with patch.object(BeginDetect, "find", side_effect=self._find_wide):
+                    self.ex._adjust_to_begin(1)
+            else:
+                self.ex._adjust_to_begin(1)
+        return written
+
+    def test_slow_first_step_uses_the_rate_floor_and_stays_at_one_step_length(self):
+        """FU 窓6: 0.10秒で 78px（265→187、w155 → 実測 5.0）→ 2歩目は 0.27秒でなく 0.10秒・下限を使う行"""
+        written = self._run_logged([265, 187, 20])
+
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.1)])
+        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速さ 実測 5.0 文字幅/秒"
+                      " → 下限 8.0 を使う", written)
+
+    def test_the_rate_floor_shortens_the_next_step(self):
+        """実測 5.0 → 下限 8.0 で残り 0.6 文字幅は 0.075秒（下限が無いと 0.12 → 0.10秒になる）"""
+        written = self._run_logged([110, 60, 0], wide=False)
+
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.075)])
+        self.assertTrue(any("実測 5.0 文字幅/秒 → 下限 8.0 を使う" in m for m in written), written)
+
+    def test_fast_first_step_uses_the_measured_rate_without_the_floor(self):
+        """1歩目で 160px（実測 10.3）→ 2歩目は |dx|/w/実測 秒・下限は効かない・「→ 下限」の行が無い"""
+        written = self._run_logged([265, 105, 10])
+
+        measured = (160 / 155) / 0.1
+        self.assertEqual(self.moves, [("right", 0.1), ("right", round(105 / 155 / measured, 3))])
+        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速さ 実測 10.3 文字幅/秒", written)
+        self.assertFalse(any("下限" in m for m in written), written)
+
+    def test_the_rate_line_goes_to_the_debug_log_only(self):
+        """横の速さの行は debug.log だけ（画面のログには出さない）"""
+        self._run_logged([265, 187, 20])
+
+        self.assertFalse(any("横の速さ" in m for m in self.logs), self.logs)
+
+    def test_no_horizontal_step_is_longer_than_the_first_step(self):
+        """遅い・速いどちらでも、どの歩も BEGIN_ADJUST_MAX_SEC（0.10）以下"""
+        for hits in ([5000 - 20 * i for i in range(14)],       # 遅い（実測は下限）
+                     [900, 740, 600, 470, 340, 200, 80]):      # 速い（実測 10.3）
+            self.moves.clear()
+            with patch.object(config, "BEGIN_ADJUST_MAX_STEPS", 100):
+                self._run_logged(hits)
+            sides = [(d, sec) for d, sec in self.moves if d in ("left", "right")]
+            self.assertGreaterEqual(len(sides), 5, self.moves)
+            self.assertTrue(all(sec <= config.BEGIN_ADJUST_MAX_SEC for _d, sec in sides), sides)
+
+    def test_the_new_constants(self):
+        self.assertEqual(config.BEGIN_ADJUST_MAX_SEC, 0.10)
+        self.assertEqual(config.BEGIN_ADJUST_RATE_MIN, 8.0)
+        self.assertEqual(config.BEGIN_ADJUST_PROBE_SEC, 0.1, "1歩目の長さは今のまま")
 
     def test_it_stops_when_nothing_moved(self):
         self.hits = [200, 196]            # 4px しか変わらない（OSC が届いていない等）
@@ -1149,10 +1214,10 @@ class TestBeginAdjustDepth(unittest.TestCase):
         self.assertEqual([d for d, _s in self.moves], ["right", "right", "back", "back", "right"])
 
     def test_the_horizontal_rate_is_in_text_widths(self):
-        """横の速さは文字幅/秒: 1回目 0.1秒で 1.04 減 → 残り 1.54 は 0.148秒"""
-        self.hits = [(2.58, 0.12), (1.54, 0.12), (0.05, 0.12)]
+        """横の速さは文字幅/秒: 1回目 0.1秒で 1.04 減 → 残り 0.76 は 0.073秒（1歩目以下なので上限に掛からない。FU）"""
+        self.hits = [(1.80, 0.12), (0.76, 0.12), (0.05, 0.12)]
         self.ex._adjust_to_begin(1)
-        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.148)])
+        self.assertEqual(self.moves, [("right", 0.1), ("right", 0.073)])
 
     def test_the_depth_step_count_and_total_are_capped(self):
         self.hits = [(0.0, 0.010 + 0.004 * i) for i in range(20)]

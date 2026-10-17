@@ -948,7 +948,13 @@ class ActionExecutor:
                 moved = abs(dx - new_dx)
                 if moved <= config.BEGIN_ADJUST_MIN_MOVE_PX:
                     return self._adjust_gave_up(f"動いていない（{moved:.0f}px）")
-                x_rate = abs(dx / hit["w"] - new_dx / new_hit["w"]) / sec
+                measured = abs(dx / hit["w"] - new_dx / new_hit["w"]) / sec
+                # 遅く見積もるほど長く押して行き過ぎるので、遅い側だけ切る（FU）
+                x_rate = max(measured, config.BEGIN_ADJUST_RATE_MIN)
+                DebugLog.write(
+                    f"[窓{self._st.window_idx}] Begin: 横の速さ 実測 {measured:.1f} 文字幅/秒"
+                    + (f" → 下限 {config.BEGIN_ADJUST_RATE_MIN:.1f} を使う"
+                       if measured < config.BEGIN_ADJUST_RATE_MIN else ""))
             else:
                 new_ratio = _width_ratio(new_hit)
                 change = abs(new_ratio - ratio) if new_ratio is not None else 0.0

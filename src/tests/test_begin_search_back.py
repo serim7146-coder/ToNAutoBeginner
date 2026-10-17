@@ -208,9 +208,9 @@ class TestBeginSearchBack(unittest.TestCase):
         self.assertTrue(_FakeSampler.made[0].released)
         self.assertIn("前へ 3 回", self._measure_log())
 
-    # ── 前へ動けない（壁）→ 後ろへ 0.7 秒 ───────────────────────────
+    # ── 前へ動けない（壁）→ 後ろへ 0.3 秒 ───────────────────────────
     def test_a_wall_on_the_first_push_stops_forward_and_goes_back_for_a_fixed_time(self):
-        """報告者 05:41: 前へ押しても 0。残りの前を押さず、後ろへ 0.7 秒動いて見る。無ければあきらめる（戻さない）"""
+        """報告者 05:41: 前へ押しても 0。残りの前を押さず、後ろへ 0.3 秒動いて見る。無ければあきらめる（戻さない）"""
         self.pushes = [0.0]
         self.gain[("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC)] = 3.5
         self.assertIsNone(self._search())
@@ -218,16 +218,16 @@ class TestBeginSearchBack(unittest.TestCase):
                                       ("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC)])
         self.assertEqual(self.pressed, [], "さらに戻さない")
         self.assertEqual(self.osc.sent, [])
-        self.assertTrue(any("前へ動けない" in m and "後ろへ 0.70秒動いて探します" in m for m in self.logs), self.logs)
+        self.assertTrue(any("前へ動けない" in m and "後ろへ 0.30秒動いて探します" in m for m in self.logs), self.logs)
         self.assertTrue(any("あきらめます（さらに戻しません）" in m for m in self.logs), self.logs)
         line = self._measure_log()
         self.assertIn("前へ 1 回", line)
         self.assertIn("動けなかった 1 回", line)
-        self.assertIn("壁で後ろへ 0.70秒動いた 3.50", line)
+        self.assertIn("壁で後ろへ 0.30秒動いた 3.50", line)
 
     def test_after_the_wall_it_looks_once_more_and_returns_what_it_sees(self):
         self.pushes = [0.0]
-        self.hits = [None, None, (0.0, 0.12)]       # 後ろ 0.15・前へ 1 回目（壁）・後ろへ 0.7 秒の後に見つかる
+        self.hits = [None, None, (0.0, 0.12)]       # 後ろ 0.15・前へ 1 回目（壁）・後ろへ 0.3 秒の後に見つかる
         hit, aim_x = self._search()
         self.assertAlmostEqual(hit["w"], 0.12 * self.H)
         self.assertEqual(aim_x, self.AIM[0])
@@ -236,7 +236,7 @@ class TestBeginSearchBack(unittest.TestCase):
         self.assertFalse(any("あきらめ" in m for m in self.logs), self.logs)
 
     def test_a_wall_on_the_third_push_does_not_return_by_the_distance(self):
-        """2 回動いて 3 回目が壁 → 3 回目で前をやめ、後ろへ 0.7 秒。動いた 3.0 ぶんの戻しはしない（壁の後ろへで足りる）"""
+        """2 回動いて 3 回目が壁 → 3 回目で前をやめ、後ろへ 0.3 秒。動いた 3.0 ぶんの戻しはしない（壁の後ろへで足りる）"""
         self.pushes = [1.5, 1.5, 0.0]
         self.assertIsNone(self._search())
         self.assertEqual(self.moves, [("back", 0.15), ("forward", 0.15)] + [("forward", 0.3)] * 3
@@ -338,7 +338,7 @@ class TestBeginSearchBack(unittest.TestCase):
 
     def test_an_acceptance_while_going_back_for_the_fixed_time_is_a_skip(self):
         self.pushes = [0.0]
-        self._accept_on_move(4)             # 壁の後ろへ 0.7 秒の間に受理
+        self._accept_on_move(4)             # 壁の後ろへ 0.3 秒の間に受理
         self.assertEqual(self._search(), "skip")
         self.assertEqual(self.moves[-1], ("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC))
         self.assertFalse(any("あきらめ" in m for m in self.logs), self.logs)
@@ -395,6 +395,7 @@ class TestBeginSearchBack(unittest.TestCase):
     def test_the_config_values_are_used_and_ordered(self):
         self.assertLess(config.BEGIN_SEARCH_BLOCKED_DIST, config.BEGIN_SEARCH_RETURN_MIN)
         self.assertGreater(config.BEGIN_SEARCH_BLOCKED_BACK_SEC, 0)
+        self.assertEqual(config.BEGIN_SEARCH_BLOCKED_BACK_SEC, 0.3)
 
 
 class TestMotionSamplerDistance(unittest.TestCase):
