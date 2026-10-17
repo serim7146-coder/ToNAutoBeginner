@@ -214,6 +214,7 @@ LogMonitor._process(line)
 
 1. 続行リストの供給元: ToN ListTool が動いていて、参加者・待機の誰かが続行リストを持っていれば主催リスト（`host_state.sqlite3`）、それ以外は .tnl。取れない状態が `HOST_LIST_LOSS_GRACE_SEC` 続いたら .tnl へ。
    主催リストの複窓対応のタブは、その窓にいる人の名前の重なりで窓に対応づける。参加者別の希望は、その窓にいる人の分だけを使う。
+   主催リストは `HOST_SAVE_IGNORED_KEYS`（Fog (Alternate)・Ghost (Alternate) の枠）を読み飛ばす（ログの Fog (Alternate) は通常の Fog の枠で照合するため、畳むと判定が変わる）。tnl の読み込みでも同じ 2 つの枠を読み飛ばす（件数が主催リストと一致する。FV）。
 2. ログのテラーIDを続行リストのIDへ（`RoundDecision.normalize_killer_ids`: Alternate 枠 +134、Unbound +200。8 Pages は terrors.json の `list_id`）。
 3. インスタンスの種類で分ける:
    - private（Invite・Invite+・Friends・Friends+）: 自爆・Begin・放置モード・ラウンドごとの指定を使う。移動・クリック・カーソル・チェイスなどの操作（OSC・マウス）は private の窓だけ（`ActionExecutor.can_operate`。種類が分からない窓もしない）。前面化・音・判定・グループの自爆（キー）は見ない。

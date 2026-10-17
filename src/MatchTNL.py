@@ -102,7 +102,7 @@ def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
     data = raw.get("data", {})
     keepOn_set: dict[str, set[int]] = {}
     for round_key, slots in data.items():
-        if not isinstance(slots, dict):
+        if not isinstance(slots, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = {int(k) for k, v in slots.items() if isinstance(v, int) and v != 0}
         if ids:
@@ -113,6 +113,7 @@ def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
 
 # host_save 側にだけ存在するラウンドキー。ログ側は LOG_TO_TNL で通常の
 # Fog/Ghost に寄せているので、ここで畳むと既存の判定が変わる。無視する。
+# tnl の読み込みでも同じ（FV。件数・ラウンド数を主催リストと合わせる）。
 HOST_SAVE_IGNORED_KEYS = frozenset({
     "Fog (Alternate)/霧 (Alternate)",
     "Ghost (Alternate)/ゴースト (Alternate)",
