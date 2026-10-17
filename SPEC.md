@@ -217,7 +217,7 @@ LogMonitor._process(line)
    主催リストは `HOST_SAVE_IGNORED_KEYS`（Fog (Alternate)・Ghost (Alternate) の枠）を読み飛ばす（ログの Fog (Alternate) は通常の Fog の枠で照合するため、畳むと判定が変わる）。tnl の読み込みでも同じ 2 つの枠を読み飛ばす（件数が主催リストと一致する。FV）。
 2. ログのテラーIDを続行リストのIDへ（`RoundDecision.normalize_killer_ids`: Alternate 枠 +134、Unbound +200。8 Pages は terrors.json の `list_id`）。
 3. インスタンスの種類で分ける:
-   - private（Invite・Invite+・Friends・Friends+）: 自爆・Begin・放置モード・ラウンドごとの指定を使う。移動・クリック・カーソル・チェイスなどの操作（OSC・マウス）は private の窓だけ（`ActionExecutor.can_operate`。種類が分からない窓もしない）。前面化・音・判定・グループの自爆（キー）は見ない。
+   - private（Invite・Invite+・Friends・Friends+）: 自爆・Begin・放置モード・ラウンドごとの指定を使う。Run は判定を通らず、全続行で選んでいればラウンド開始の時点で全続行（リスポーンしない）として扱う。移動・クリック・カーソル・チェイスなどの操作（OSC・マウス）は private の窓だけ（`ActionExecutor.can_operate`。種類が分からない窓もしない）。前面化・音・判定・グループの自爆（キー）は見ない。
    - 干し芋・焼き芋: `GroupRound.decide`（Classic・Bloodbath など問答無用の自爆、Moon、Fog、Sabotage）。`NORMAL` なら続行リストへ。
    - それ以外: 操作しない（判定のログだけ）。
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
@@ -246,7 +246,7 @@ LogMonitor._process(line)
 - **アイテムを落とす**（「アイテムを落とす」）: 死んだ・生き残った行が来たとき、ラウンドごとに 1 回 `/input/DropRight` を押して離す（続行ラウンドも同じ。RoundOver・続行の終わりでは落とさない。死んだ・生き残った行が来ない Run のリスポーンでは落とさない。落としたことはログの出来事にならないので、アイテムロストと数えない）。
 - **続行ラウンドの後に窓を戻す**（「窓位置リセット」）: 続行フリーズを張ったときに窓の矩形を覚え（最大化なら通常の矩形。全画面・最小化は覚えない）、解いたら位置を戻す（全画面は前面を借りて Alt+Enter で窓に、最大化は前面を取らずに戻す）。設定で切れる。
 - **チェイス**: キー（既定 F1 時計回り・F2 反時計回り）で前面の窓が回り続ける（OSC の移動＋視点）。同じキーでもう一度押すと止まり、反対のキーで向きを変える。設定で使わないようにできる（キーを拾わない）。private の窓だけ。
-- **Run のリスポーン**（「Runリスポーン」）: Run のラウンドに入ったら、ほかの窓のフリーズが無いときに前面を借りて Esc のメニューからリスポーンし（`RespawnButton`。鍵と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけで、「Player respawned」の行は前面を返してから鍵の外で待つ。来なければ借り直して 1 回押し直す）、背面の OSC で後ろへ 2.85 秒（動き出しから数える。上限 `RUN_EXTEND_MAX_SEC` 1.0 秒・押し直しは Begin と同じ）→ 左へ 0.9 秒 → 撮影で目印（`RunFace`）を探して向きを直す（`RUN_FACE_TRIES` まで。ずれが大きくなったら戻して止める）。**前後の位置は直さない**（`RUN_DEPTH_ENABLED = False`。目印の倍率は debug.log に書くだけ。理由は §13）。
+- **Run のリスポーン**（「Runリスポーン」）: Run のラウンドに入ったら、ほかの窓のフリーズが無いときに前面を借りて Esc のメニューからリスポーンし（`RespawnButton`。鍵と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけで、「Player respawned」の行は前面を返してから鍵の外で待つ。来なければ借り直して 1 回押し直す）、背面の OSC で後ろへ 2.85 秒（動き出しから数える。上限 `RUN_EXTEND_MAX_SEC` 1.0 秒・押し直しは Begin と同じ）→ 左へ 0.9 秒 → 撮影で目印（`RunFace`）を探して向きを直す（`RUN_FACE_TRIES` まで。ずれが大きくなったら戻して止める）。**前後の位置は直さない**（`RUN_DEPTH_ENABLED = False`。目印の倍率は debug.log に書くだけ。理由は §13）。全続行（ラウンド指定 `continue_rounds`）で Run を選んだ private 系の窓は、Run でリスポーンしない（`LogMonitor._on_round_start` が判定より前に決める。ログは「Round: Run 【全続行（リスポーンしない）】」・`all_continue_round = True`。音量は Run のまま「その他」（`WindowVolume._live_category` が Run を先に返す）。アナウンス・他窓フリーズ・録画は無し。Run は続行リストの対象外）。「Runリスポーン」が OFF の窓は全続行に関係なくリスポーンしない。
 - **ToN Utils の判断に従う**（「Utilsの判断に従う」）: Utils が判断している窓では、このツールは自爆の判断をせず、Utils の press（自爆する）・hold（その窓では自爆しない → このツールが判定）・何も無い（続行）に従う。起点は VRChat のログの killers_set・killers_revealed の行の時刻。数えるのは Utils の行の時刻が 起点 − `UTILS_EARLY_SEC` 以後のもの（理由は §13）。待つ上限は `UTILS_WAIT_SEC`。Utils が動いていない・窓が対応づかないときは、このツールが判定する（理由を画面に1回）。
 - **VRChat の起動**: 窓ごとに `--profile=N`・`--osc=<受信>:127.0.0.1:<送信>`（窓 i は 9000+10i と +1）。窓が出てから `LAUNCH_STAGGER_SEC` 置いて次を起動する（VRChat API の 429 を避けるため）。
 - **入室操作**（`ToNEntry`）: 入室後の選択画面を突破する。設定で、Begin の前に Save/Load のコード欄へクリップボードのセーブコードを貼る（`SaveLoad`。貼った後 1 秒置いて Enter、入力欄が開いたままなら Enter を押し直す）。Begin の受理の後に Guidance Plush を取りに行く（窓ごとのスレッド）。「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方 ON でマクロが止まっていれば、ログを割り当てた後・入室の前にマクロを自動で開始する（Guidance Plush の取得にマクロの速さの受信器が要るため。開始したばかりの監視は入室の Begin の Verified を受理と扱わない）。**セーブコードは画面のログ・debug.log・撮影・テストの出力のどこにも出さない（長さも出さない）。**

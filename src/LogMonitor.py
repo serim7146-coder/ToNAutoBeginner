@@ -1579,7 +1579,9 @@ class LogMonitor:
         st.round_start_time            = st.log_now   # この行の時刻（DB v1 の time）
         st.round_end_seen              = False
         st.round_type                  = event.round_type
-        if st.round_type == "Run" and SharedState.get_run_respawn():
+        # FW: 全続行で Run を選んだ窓は、Run でリスポーンしない（ラウンド開始の時点のチェックで決める）
+        run_continue = st.round_type == "Run" and self._is_all_continue_round()
+        if st.round_type == "Run" and SharedState.get_run_respawn() and not run_continue:
             # リスポーン → 後ろへ → 正面を向く。private・OSC の窓かは中で見る
             self._start_daemon(self._action.do_run_respawn, st.round_seq)
         # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
@@ -1670,7 +1672,13 @@ class LogMonitor:
         if st.round_type == "Run":
             st.is_continue_round = False
             st.open_special_continue = False
-            self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
+            if run_continue:
+                self._log("Round: Run 【全続行（リスポーンしない）】")
+                self._clear_stale_continue_round()      # ("continue_rounds",) の経路と同じ後始末
+                # 音量は Run のまま「その他」（WindowVolume が Run を先に返す。依頼者 2026-10-17）
+                st.all_continue_round = True
+            else:
+                self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
             return
 
         if st.round_type == "Fog":
