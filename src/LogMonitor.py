@@ -2187,6 +2187,9 @@ class LogMonitor:
             return ("restricted",)
         # 放置モードの自動操作はprivateのみ（_hands_free が種別を見ている）。
         if self._hands_free():
+            keep = self._hands_free_keep_reason(ids)
+            if keep:
+                return ("hands_free_keep", keep)        # 自爆の理由より前（FX）
             reason = self._hands_free_skip_reason(ids)
             if reason:
                 return ("hands_free", reason)
@@ -2239,7 +2242,7 @@ class LogMonitor:
             return "skip"
         if kind in ("restricted", "continue_rounds"):
             return "quiet"
-        if kind == "glorbo":
+        if kind in ("glorbo", "hands_free_keep"):
             return "continue"
         _kind, is_continue, open_special = plan
         if not is_continue:
@@ -2261,6 +2264,20 @@ class LogMonitor:
         if not plush:
             return None
         return self.st.held_item_id == plush
+
+    def _hands_free_keep_reason(self, ids) -> str | None:
+        """放置モードで問答無用に続行するテラー（FX）。Glorbo／Bloodbath EX の 3 体 DTM／
+        Bloodbath EX の 3 体 Waldo（Plush あり）。無ければ None"""
+        st = self.st
+        if config.GLORBO_ID in ids:
+            return "Glorbo"
+        if st.round_type == LogParser.BLOODBATH_EX and ids and all(t == DTM_TERROR_ID for t in ids):
+            return "EX の DTM"
+        if (st.round_type == LogParser.BLOODBATH_EX and ids
+                and all(t == config.WALDO_ID for t in ids)
+                and self._holds_plush() is not False):
+            return "EX の Waldo（Plush あり）"
+        return None
 
     def _hands_free_skip_reason(self, ids) -> str | None:
         """放置モードで即自爆するならその理由。DTM/Waldo は例外"""
@@ -2320,6 +2337,9 @@ class LogMonitor:
             return
         if kind == "glorbo":
             self._start_glorbo_continue(round_type)
+            return
+        if kind == "hands_free_keep":
+            self._start_glorbo_continue(round_type, label=plan[1], tag="【プレイ(放置: 問答無用)】")
             return
         self._decide_with_keep_on_set(round_type, plan)
 
@@ -2391,19 +2411,22 @@ class LogMonitor:
         self._log("Utils: 続行")
         if plan[0] == "glorbo":
             self._start_glorbo_continue(round_type)
+        elif plan[0] == "hands_free_keep":
+            self._start_glorbo_continue(round_type, label=plan[1], tag="【プレイ(放置: 問答無用)】")
         elif plan[0] == "list" and plan[1]:
             self._decide_with_keep_on_set(round_type, plan)     # DTM/Waldo の続行もそのまま
         else:
             self._decide_with_keep_on_set(round_type, ("list", True, False))
 
-    def _start_glorbo_continue(self, round_type: str):
+    def _start_glorbo_continue(self, round_type: str, label: str = "Glorbo",
+                               tag: str = "【プレイ(Glorbo)】"):
         """Glorbo の続行: 普通の続行と同じくフリーズ・アナウンス・録画（放置モードでは
         アナウンスと録画なし）。AFK 対策の移動は 3 勝・cancel_afk に関係なく回す"""
         st = self.st
         was_continue_round = st.is_continue_round
         st.is_continue_round = True
         st.open_special_continue = False         # 音量は普通の続行
-        self._log(f"判定: Glorbo / {round_type} 【プレイ(Glorbo)】")
+        self._log(f"判定: {label} / {round_type} {tag}")
         if not was_continue_round:
             if not self._hands_free():
                 PlaySound.play_sound(self.cfg.voice_continue, kind="continue")

@@ -810,8 +810,8 @@ class TestGlorboContinue(unittest.TestCase):
         monitor = self._monitor(glorbo_on_list=False)
         monitor._on_killers([config.ARKUS_ID], "Punished", revealed=False)
         names = [n for n, _a in self._started()]
-        self.assertIn("do_skip", names, "放置モードは待たずに即自爆")
-        self.assertNotIn("_delayed_decision", names)
+        self.assertNotIn("do_skip", names, "FX: 放置モードは続行リストに無くても Glorbo を続行する（自爆しない）")
+        self.assertIn("_delayed_decision", names, "Glorbo の行を待つ")
         SharedState.set_hands_free(False)
         for skip in ((), {"Punished"}):
             self.thread.reset_mock()

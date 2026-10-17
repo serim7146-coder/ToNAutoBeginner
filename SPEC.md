@@ -223,7 +223,7 @@ LogMonitor._process(line)
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
 4. `RoundDecision.decide_killers`: 続行リスト（Classic と Moon では Special/Moon 枠も見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
    DTM/Waldo は3勝まで（窓の設定 `cancel_afk_after_unlock` で3勝の後も）。Waldo は Guidance Plush を持っているときだけ（番号は item.json の名前から。分からなければ前と同じく続行）。
-   テラーが複数体出るラウンド（`config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS`: Double Trouble・Bloodbath・Midnight）では DTM/Waldo でも続行しない。Bloodbath EX・Cracked などほかの特殊ラウンドは続行する（完全放置モードも同じ）。
+   テラーが複数体出るラウンド（`config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS`: Double Trouble・Bloodbath・Midnight）では DTM/Waldo でも続行しない。Bloodbath EX・Cracked などほかの特殊ラウンドは続行する（完全放置モードも同じ）。完全放置モードの private の窓では、Glorbo・Bloodbath EX の 3 体 DTM・Guidance Plush を持っているときの Bloodbath EX の 3 体 Waldo は、3 クラの状態・「DTM/Waldo続行」・続行リストに関係なく続行する（`LogMonitor._hands_free_keep_reason` → plan `hands_free_keep` → `_start_glorbo_continue`。他窓フリーズ・AFK 解除ループ `glorbo=True`。アナウンス・録画なし。FX）。
    Bloodbath EX はラウンド開始の行では「Bloodbath」と出る。`LogParser` が Killers 行で3つの番号がそろった Bloodbath を「Bloodbath EX」に読み替える（「EX」とだけ出た場合も同じ名前にそろえる。実ログでは未確認）。判断はすべて Killers 行の後なので、続行リスト・ラウンド指定・DTM/Waldo・統計（番号 8）は EX として扱う。干し芋/焼き芋では自爆しない（`GroupRound.ALWAYS_CONTINUE_ROUNDS`。8 Pages・Run と同じ）。
 5. 選んだ Fog・Ghost・8 Pages のラウンド（音声・突入フリーズ）は、`(Alternate)` の付いた Killers 行でも同じラウンドとして扱う。
 
