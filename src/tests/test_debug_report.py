@@ -75,6 +75,8 @@ class TestDebugLogRich(unittest.TestCase):
     def test_every_screen_line_goes_to_the_debug_log(self):
         app = type("FakeApp", (), {})()
         app.after = lambda _ms, _fn=None: None
+        app._log_pending, app._log_pending_lock, app._log_flush_queued = [], threading.Lock(), False
+        app._flush_log_lines = lambda: None   # FT: 行はためて流す
         mainGUI.App._log(app, "[窓2] ✅ Connecting")
         self.assertIn("] [画面] [窓2] ✅ Connecting", self._text())
 

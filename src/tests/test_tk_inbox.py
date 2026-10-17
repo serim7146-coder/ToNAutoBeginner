@@ -116,6 +116,7 @@ class TestTheApp(unittest.TestCase):
         self.watch = _Watch(self)
 
     def test_log_from_another_thread(self):
+        self.app._flush_log_lines()      # FT: 起動中の _log の「流す」依頼を先に流す（本物はメインループが流す）
         _in_thread(self.app._log, "別のスレッドから FC")
         self.assertEqual(self.watch.off_thread(), [], "別のスレッドから Tk を呼ばない")
         self.app._inbox.drain()
@@ -151,6 +152,7 @@ class TestClosingTheApp(unittest.TestCase):
     def test_the_last_logs_are_shown_before_it_closes(self):
         app = mainGUI.App()
         app.withdraw()
+        app._flush_log_lines()           # FT: 起動中の _log の「流す」依頼を先に流す（本物はメインループが流す）
         shown = []
         real_destroy = app.destroy
 

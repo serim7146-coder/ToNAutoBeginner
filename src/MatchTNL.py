@@ -1,3 +1,4 @@
+import functools
 import json
 import shutil
 import sqlite3
@@ -138,12 +139,16 @@ HOST_STATE_SIDECARS = ("-wal", "-shm")
 PARTICIPANT_SECTION = 0        # 1 は待機
 
 
-def _wish_ids(bits) -> set:
-    """ビット列をテラーIDの集合へ。下位ビットから順に id = i*8 + j"""
+@functools.lru_cache(maxsize=16384)
+def _wish_ids_cached(bits: bytes) -> frozenset:
+    return frozenset(i * 8 + j for i, byte in enumerate(bits) for j in range(8) if byte >> j & 1)
+
+
+def _wish_ids(bits) -> frozenset:
+    """ビット列をテラーIDの集合へ。下位ビットから順に id = i*8 + j。同じビット列は覚えた結果（FT）"""
     if not isinstance(bits, (bytes, bytearray)):
-        return set()
-    return {i * 8 + j for i, byte in enumerate(bits)
-            for j in range(8) if byte >> j & 1}
+        return frozenset()
+    return _wish_ids_cached(bytes(bits))
 
 
 def load_host_state(path: str,

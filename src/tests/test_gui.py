@@ -647,6 +647,7 @@ class TestAppLogLimit(unittest.TestCase):
         app = type("FakeApp", (), {})()
         app.log_text = FakeLogText()
         app._log_line_count = 0
+        app._append_log_lines = lambda lines: mainGUI.App._append_log_lines(app, lines)   # FT: 1 行も複数行の道を通る
 
         with patch.object(config, "GUI_LOG_MAX_LINES", 3):
             for i in range(5):

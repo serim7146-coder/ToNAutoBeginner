@@ -1028,6 +1028,8 @@ class TestOptimization(unittest.TestCase):
     def test_the_screen_tag_is_not_doubled(self):
         app = type("FakeApp", (), {})()
         app.after = lambda _ms, _fn=None: None
+        app._log_pending, app._log_pending_lock, app._log_flush_queued = [], threading.Lock(), False
+        app._flush_log_lines = lambda: None   # FT: 行はためて流す
         written = []
         with patch.object(DebugLog, "write", side_effect=written.append):
             mainGUI.App._log(app, "[画面] フォント: Meiryo UI")

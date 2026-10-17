@@ -1,4 +1,5 @@
 import os
+import hashlib
 import json
 import platform
 import sys
@@ -57,6 +58,19 @@ def _file_stamp(path):
     except OSError:
         return None
     return (stat.st_mtime, stat.st_size)
+
+
+def _user_save_digest(path):
+    """user_save.json の、読んでいる中身（last_active・accounts）のダイジェスト。ToN ListTool は数秒おきに
+    updated_at だけ書き直すので、時刻では毎回「変わった」になる（FT）。読めない・壊れている → _file_stamp(path)"""
+    try:
+        with open(path, "rb") as f:
+            raw = json.load(f)
+        picked = json.dumps({"last_active": raw.get("last_active"), "accounts": raw.get("accounts")},
+                            sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return ("digest", hashlib.sha1(picked.encode("utf-8")).hexdigest())
+    except Exception:
+        return _file_stamp(path)
 
 
 def exclusive_check(checked, other):
@@ -602,11 +616,15 @@ class LogOverlay(tk.Toplevel):
         self._closed = False
 
     def append(self, msg: str):
+        self.append_many([msg])
+
+    def append_many(self, msgs: list[str]):
+        """まとめて足して、全文書き直しは 1 回（FT）"""
         if self._closed:
             return
-        self._lines.append(msg)
+        self._lines.extend(msgs)
         if len(self._lines) > self.MAX_LINES:
-            self._lines.pop(0)
+            del self._lines[:len(self._lines) - self.MAX_LINES]
         self.text.config(state="normal")
         self.text.delete("1.0", "end")
         self.text.insert("end", "\n".join(self._lines))
@@ -897,6 +915,9 @@ class App(tk.Tk):
         self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
         self._log_line_count = 0
+        self._log_pending: list[tuple[str, str]] = []     # (テキストに足す行, オーバーレイの行)
+        self._log_pending_lock = threading.Lock()
+        self._log_flush_queued = False                     # 受付箱に「流す」が入っているか（ロックの中で触る）
         self._emergency_stop_key_pressed = False
         self._start_key_pressed = False
         # config の定数は既定値として読むだけ。実行時の値はこちらで持つ
@@ -2644,7 +2665,7 @@ class App(tk.Tk):
         # 自分のリストだけ更新されたときも読み直す。SQLite は本体を触らずに
         # -wal だけ伸びることがあるので、そちらも見る
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
-                 _file_stamp(config.USER_SAVE_PATH),
+                 _user_save_digest(config.USER_SAVE_PATH),
                  _file_stamp(path + "-wal"))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return "same", None
@@ -3258,23 +3279,37 @@ class App(tk.Tk):
         DebugLog.write(msg if msg.startswith("[画面]") else f"[画面] {msg}")
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         line = f"[{ts}] {msg}\n"
-        def _a():
+        with self._log_pending_lock:
+            self._log_pending.append((line, f"[{ts}] {msg}"))
+            queue_it = not self._log_flush_queued
+            if queue_it:
+                self._log_flush_queued = True
+        if queue_it:
             try:
-                self._append_log_text(line)
-                if self._overlay and not self._overlay._closed:
-                    self._overlay.append(f"[{ts}] {msg}")
+                UiInbox.call_soon(self, self._flush_log_lines)
             except tk.TclError:
-                pass
+                with self._log_pending_lock:
+                    self._log_flush_queued = False
+
+    def _flush_log_lines(self):
+        """Tk のスレッド。たまった行を 1 回の差し込みで表示する（FT）"""
+        with self._log_pending_lock:
+            pending, self._log_pending = self._log_pending, []
+            self._log_flush_queued = False
+        if not pending:
+            return
         try:
-            UiInbox.call_soon(self, _a)
+            self._append_log_lines([line for line, _o in pending])
+            if self._overlay and not self._overlay._closed:
+                self._overlay.append_many([o for _l, o in pending])
         except tk.TclError:
             pass
 
-    def _append_log_text(self, line: str):
+    def _append_log_lines(self, lines: list[str]):
         self.log_text.config(state="normal")
         try:
-            self.log_text.insert("end", line)
-            self._log_line_count += max(1, line.count("\n"))
+            self.log_text.insert("end", "".join(lines))
+            self._log_line_count += sum(max(1, l.count("\n")) for l in lines)
             excess = self._log_line_count - max(1, config.GUI_LOG_MAX_LINES)
             if excess > 0:
                 self.log_text.delete("1.0", f"{excess + 1}.0")
@@ -3282,6 +3317,9 @@ class App(tk.Tk):
             self.log_text.see("end")
         finally:
             self.log_text.config(state="disabled")
+
+    def _append_log_text(self, line: str):
+        self._append_log_lines([line])
 
     # ── 自動アップデート ──────────────────────
     def _start_update_check(self):
