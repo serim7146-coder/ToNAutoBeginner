@@ -30,12 +30,12 @@ class _Case(_timing._Case):
 
 
 class TestHandleItemLostInTheItemBeginMode(_Case):
-    def test_after_equipping_it_returns_manual_with_the_two_lines(self):
+    def test_after_equipping_it_returns_manual_with_the_one_line(self):
         ex, st = self._manual_executor()
         with patch.object(ActionExecutor.time, "sleep", side_effect=self._equip(st)):
             self.assertEqual(ex._handle_item_lost(), "manual")
         self.assertIn("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）", self.logs)
-        self.assertIn("✅ アイテム装備確認 → Beginも押してください。", self.logs)
+        self.assertFalse(any("装備確認" in m for m in self.logs), "装備の確認はログに出さない（1 行で足りる）")
         self.assertFalse(any("Beginへ向かいます" in m for m in self.logs), self.logs)
         self.assertTrue(st.equip_freeze_held, "装備待ちフリーズは Begin の受理まで解かない（ここでは解かない）")
 
@@ -78,7 +78,8 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
         ex._confirm_begin.assert_not_called()
         ex._retry_after_giving_up.assert_not_called()
         self.assertNotEqual(getattr(ex, "_begin_gave_up_round", None), st.round_seq)
-        self.assertIn("✅ アイテム装備確認 → Beginも押してください。", self.logs)
+        self.assertIn("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）", self.logs)
+        self.assertFalse(any("装備確認" in m for m in self.logs))
 
     def test_a_loss_found_only_at_verified_round_end_stops_the_spam_it_started(self):
         """ロストが Verified Round End で初めて分かる回は、連打を先に始めている。manual で終わるときに止める"""

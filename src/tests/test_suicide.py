@@ -867,7 +867,8 @@ class TestActionExecutorSkip(unittest.TestCase):
 
         # FY: 装備確認まで届く（デッドロックしない）。Begin は利用者が押すのでツールはクリックしない
         mock_click.assert_not_called()
-        self.assertTrue(any("装備確認 → Beginも押してください。" in m for m in logs))
+        self.assertTrue(any("装備+Beginをしてください" in m for m in logs))
+        self.assertFalse(any("装備確認" in m for m in logs))
 
     def test_do_after_round_item_begin_mode_waits_for_equip_then_begins(self):
         """アイテム取得→Beginモード: 未装備なら装備を待ち、装備を確認したら止まる（Begin は利用者。FY）"""
@@ -901,7 +902,8 @@ class TestActionExecutorSkip(unittest.TestCase):
 
         # FY: 装備を確認したら、Begin は利用者が押す（ツールはクリックしない）
         mock_click.assert_not_called()
-        self.assertTrue(any("装備確認 → Beginも押してください。" in msg for msg in logs))
+        self.assertTrue(any("装備+Beginをしてください" in msg for msg in logs))
+        self.assertFalse(any("装備確認" in msg for msg in logs))
 
 
     def _run_late_item_lost(self, osc_port: int):

@@ -1536,8 +1536,7 @@ class ActionExecutor:
             if st.in_round:
                 # 手動Begin等でラウンド開始 → ROUND_START側で解除済み
                 return False
-            self._log("✅ アイテム装備確認 → Beginも押してください。")
-            return "manual"
+            return "manual"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
         else:
             # ここでは張らない（EV: 23:12 窓1・09:47 窓2 は Begin を押す前に張り、Begin が通らずに取りに
             # 行けず、全窓が止まり続けた）。取りに行く窓は店でボタンを押す間だけ（_fetch_in_front）、
