@@ -837,7 +837,7 @@ class TestActionExecutorSkip(unittest.TestCase):
 
     def test_do_after_round_item_begin_mode_no_deadlock_when_already_equipped(self):
         """アイテム取得→Beginモード: 自窓がクリアしたEQUIP_WAIT_EVENTを
-        自分で待つデッドロックにならず、Beginクリックまで到達する"""
+        自分で待つデッドロックにならず、装備確認まで到達する（Begin は利用者が押す。FY）"""
         SharedState.set_item_begin_mode(True)
         cfg = WindowConfig(hwnd=123)
         st = WindowState(
@@ -854,7 +854,8 @@ class TestActionExecutorSkip(unittest.TestCase):
             calls["n"] += 1
             return calls["n"] < 30
 
-        executor = ActionExecutor.ActionExecutor(cfg, st, is_running, lambda _m: None)
+        logs: list[str] = []
+        executor = ActionExecutor.ActionExecutor(cfg, st, is_running, logs.append)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
@@ -864,10 +865,12 @@ class TestActionExecutorSkip(unittest.TestCase):
              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
-        mock_click.assert_called()
+        # FY: 装備確認まで届く（デッドロックしない）。Begin は利用者が押すのでツールはクリックしない
+        mock_click.assert_not_called()
+        self.assertTrue(any("装備確認 → Beginも押してください。" in m for m in logs))
 
     def test_do_after_round_item_begin_mode_waits_for_equip_then_begins(self):
-        """アイテム取得→Beginモード: 未装備なら装備を待ち、装備後にBeginへ進む"""
+        """アイテム取得→Beginモード: 未装備なら装備を待ち、装備を確認したら止まる（Begin は利用者。FY）"""
         SharedState.set_item_begin_mode(True)
         cfg = WindowConfig(hwnd=123)
         st = WindowState(
@@ -896,8 +899,9 @@ class TestActionExecutorSkip(unittest.TestCase):
              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
-        mock_click.assert_called()
-        self.assertTrue(any("装備確認" in msg for msg in logs))
+        # FY: 装備を確認したら、Begin は利用者が押す（ツールはクリックしない）
+        mock_click.assert_not_called()
+        self.assertTrue(any("装備確認 → Beginも押してください。" in msg for msg in logs))
 
 
     def _run_late_item_lost(self, osc_port: int):

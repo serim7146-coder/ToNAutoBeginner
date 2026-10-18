@@ -213,7 +213,7 @@ class TestItemBeginModeIsAsBefore(_Case):
         def equip(_sec):
             st.item_id = 29                       # 装備した
         with patch.object(ActionExecutor.time, "sleep", side_effect=equip):
-            self.assertTrue(ex._handle_item_lost())
+            self.assertEqual(ex._handle_item_lost(), "manual")  # FY: 装備の後の Begin は利用者が押す
         self.assertTrue(st.equip_freeze_held, "アイテム取得→Begin モードは今どおり Begin の前に張る")
 
 

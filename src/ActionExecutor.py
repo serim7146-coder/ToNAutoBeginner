@@ -1505,8 +1505,11 @@ class ActionExecutor:
                     event.wait(timeout=1.0)
         return False
 
-    def _handle_item_lost(self) -> bool:
+    def _handle_item_lost(self) -> bool | str:
         """アイテムロスト時のフリーズ処理。続行してよければTrue。
+
+        戻り値: True（続けてよい）／False（止めた・ラウンド開始）／"manual"（アイテム取得→Beginモードで
+        装備を確認した。Begin は利用者が押すので、この回のツールの Begin はここで終わり。FY）
 
         ロストの判定は Verified Round End で行われるため、必ず
         _wait_round_end() を通してから呼ぶこと。RoundOver時点では
@@ -1524,7 +1527,7 @@ class ActionExecutor:
             # フリーズ・前面化・音声は RoundOver の _attend_to_item_loss() で
             # 済ませている（張るのは冪等なので念のため残す）
             SharedState.equip_freeze_start(st)
-            self._log("⚠ アイテムロスト → 全窓フリーズ（装備するとBeginへ進みます）")
+            self._log("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）")
             while self._is_running() and not st.item_id and not st.in_round:
                 time.sleep(0.3)
             if not self._is_running():
@@ -1533,7 +1536,8 @@ class ActionExecutor:
             if st.in_round:
                 # 手動Begin等でラウンド開始 → ROUND_START側で解除済み
                 return False
-            self._log("✅ アイテム装備確認 → Beginへ向かいます")
+            self._log("✅ アイテム装備確認 → Beginも押してください。")
+            return "manual"
         else:
             # ここでは張らない（EV: 23:12 窓1・09:47 窓2 は Begin を押す前に張り、Begin が通らずに取りに
             # 行けず、全窓が止まり続けた）。取りに行く窓は店でボタンを押す間だけ（_fetch_in_front）、
@@ -1698,13 +1702,21 @@ class ActionExecutor:
             # Verified Round End が出た瞬間には、もう Begin が押せる。
             # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
             # 差し込むだけにする（カーソルを奪う時間を最小にする）
-            spam = self._start_use_spam(round_seq)
+            # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
+            manual = (SharedState.get_item_begin_mode() and st.waiting_for_equip
+                      and self._auto_begin_active())
+            spam = None if manual else self._start_use_spam(round_seq)
             # ロスト判定は Verified Round End で行われるので、必ず
             # 待ってからフリーズ処理をする。RoundOver時点で判定すると
             # まだ立っておらずフリーズが張られない。
             if not self._wait_round_end():
                 return
-            if not self._handle_item_lost():
+            lost = self._handle_item_lost()
+            if lost == "manual":
+                if spam is not None:
+                    spam.set()      # ロストが Verified Round End で初めて分かった回は、連打を先に始めている。止める
+                return              # FY: Begin は利用者が押す。あきらめのやり直しも動かない
+            if not lost:
                 return
             # ここから先はフォーカスを要するので他窓の解除を待つ
             if not self._wait_other_windows():

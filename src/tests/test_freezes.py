@@ -2522,7 +2522,7 @@ class TestItemLostAnnounceTiming(unittest.TestCase):
             with patch.object(executor, "move"), patch.object(executor, "move_forward_left"):
                 executor.do_after_round()
 
-        self.assertEqual(order, ["click"], "装備待ちからは鳴らさない")
+        self.assertEqual(order, [], "装備待ちからは鳴らさない（FY: 装備の後の Begin は利用者が押すのでクリックもしない）")
 
 
 
