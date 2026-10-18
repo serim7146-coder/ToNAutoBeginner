@@ -334,6 +334,10 @@ CONTINUE_WINDOWED_WAIT_SEC = 2.0  # Alt+Enter の後、窓に戻るのを待つ�
 CONTINUE_WINDOWED_POLL_SEC = 0.1
 # 速さの受信（DS）: まず OSCQuery で待ち、この秒数でその窓から届かなければ固定ポート（VRChat の送信ポート）を開く
 OSCQUERY_CONNECT_WAIT_SEC = 15.0
+# mDNS（OSCQuery の名乗り）を 127.0.0.1 だけで開く（GB）。0.0.0.0 で開くと Windows のファイアウォールが
+# ビルドのたび（onefile の展開先が変わるたび）に確認を出す。同じ PC の VRChat はループバックのマルチキャストで
+# 見つけられる（手元の実験）。見つけられない PC があれば False に戻す（今までどおり全インターフェース）
+OSCQUERY_MDNS_LOOPBACK_ONLY = True
 
 # Run のラウンドに入ったら、リスポーン → 後ろへ → 正面を向く（依頼者 2026-10-10。窓2 で詰めた値）
 RESPAWN_MENU_WAIT_SEC = 1.0       # Esc を押してからメニューを撮るまで

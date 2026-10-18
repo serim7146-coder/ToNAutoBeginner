@@ -85,10 +85,38 @@ def _http_server(handler):
     return ThreadingHTTPServer((HOST, 0), handler)
 
 
+# bind 先の差し替えは Zeroconf を作る間だけ。同時に作らない
+_ADVERTISE_LOCK = threading.Lock()
+
+
+def _loopback_zeroconf(IPVersion, Zeroconf):
+    """mDNS を 127.0.0.1 だけで開く（GB）。python-zeroconf は `interfaces` を渡しても受信用のソケットを
+    必ず 0.0.0.0:5353 に bind する（`new_listen_socket` が `new_socket(bind_addr=("",))` を呼ぶ）ので、
+    作る間だけ `new_socket` の bind 先を HOST に差し替える（Windows のファイアウォールの確認を出さない）。
+    zeroconf の内部名（`zeroconf._utils.net.new_socket`）に依存する。requirements.txt は 0.151.5 に固定。
+    版を上げるときは、`new_listen_socket` が `new_socket(bind_addr=("",))` を呼ぶこと・この差し替えが効くことを見る"""
+    import zeroconf._utils.net as znet
+    original = znet.new_socket
+
+    def to_loopback(bind_addr, *args, **kwargs):
+        if bind_addr and bind_addr[0] == "":
+            bind_addr = (HOST,) + tuple(bind_addr[1:])
+        return original(bind_addr, *args, **kwargs)
+    with _ADVERTISE_LOCK:
+        znet.new_socket = to_loopback
+        try:
+            return Zeroconf(ip_version=IPVersion.V4Only, interfaces=[HOST])
+        finally:
+            znet.new_socket = original
+
+
 def _advertise(name: str, http_port: int, osc_port: int):
     """mDNS で広告する。止めるための (zeroconf, [ServiceInfo]) を返す"""
     from zeroconf import IPVersion, ServiceInfo, Zeroconf
-    zc = Zeroconf(ip_version=IPVersion.V4Only)
+    if config.OSCQUERY_MDNS_LOOPBACK_ONLY:
+        zc = _loopback_zeroconf(IPVersion, Zeroconf)
+    else:
+        zc = Zeroconf(ip_version=IPVersion.V4Only)
     addresses = [socket.inet_aton(HOST)]
     infos = [ServiceInfo("_oscjson._tcp.local.", f"{name}._oscjson._tcp.local.", addresses=addresses,
                          port=http_port, properties={"txtvers": "1"}, server=f"{name}.oscjson.local."),
@@ -201,8 +229,9 @@ class Service:
         if stale is not None:
             _withdraw(stale)
             return
+        loopback = "（127.0.0.1 だけで待つ）" if config.OSCQUERY_MDNS_LOOPBACK_ONLY else ""
         DebugLog.write(f"[OSCQuery] mDNS で広告した: {self.name}（_oscjson._tcp {self.http_port}・"
-                       f"_osc._udp {self.osc_port}・127.0.0.1）")
+                       f"_osc._udp {self.osc_port}・127.0.0.1）{loopback}")
 
     def stop(self):
         with self._lock:
