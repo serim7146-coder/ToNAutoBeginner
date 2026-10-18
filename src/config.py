@@ -489,6 +489,11 @@ BEGIN_ADJUST_DEPTH_MAX_SEC   = 0.4
 BEGIN_ADJUST_DEPTH_MAX_STEPS = 4      # 前後移動の回数の上限
 BEGIN_ADJUST_DEPTH_MAX_TOTAL_SEC = 1.2  # 1回の位置合わせで前後に動いてよい合計
 BEGIN_ADJUST_DEPTH_MIN_CHANGE = 0.003 # 前後に動いてこれ以下しか w/H が変わらなければ打ち切る
+# 高さ（視点の上下）。OSC では上下に振れないので、この窓が前面のときだけマウスの相対移動で合わせる（戻さない）。
+# 前面でない窓には相対移動が届かないので、今までどおり縦は見ない
+BEGIN_PITCH_TOL         = 0.25   # 許容: 文字幅に対する縦のずれの割合
+BEGIN_PITCH_PROBE_UNITS = 24     # 縦の感度が保存されていないときの 1 歩目（マウスの単位。アイテム取得の CALIB_UNITS と同じ）
+BEGIN_PITCH_MAX_STEPS   = 3      # 高さ合わせの回数の上限
 # BEGIN が見つからないときの探し方（実機 2026-10-02）: 近すぎる（文字が視界の下に外れる）→
 # 後ろへ 0.15秒。遠すぎる（文字が小さすぎる）→ 前へ 0.3秒ずつ最大4回
 BEGIN_SEARCH_BACK_SEC       = 0.15

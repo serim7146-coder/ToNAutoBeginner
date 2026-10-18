@@ -833,10 +833,12 @@ class ActionExecutor:
         最初の撮影で BEGIN が無ければ、後ろ→前の順に探す（_search_for_begin）。動いた後に
         見失ったら、もう1回撮り直し、それでも無ければ探し直す（1回の位置合わせで1度だけ）。
         移動の直前と撮影の後に、受理・ラウンド開始・停止を見て、来ていればその場で終わる。
+        横・前後が済んだ後、この窓が前面のときだけ、BEGIN が照準より上や下にあればマウスの相対移動で
+        視点の高さも合わせる（_pitch_to_begin。戻さない）。
 
         "aimed": 許容内にした・動かずに済んだ・途中で打ち切った（BEGIN は見えていた）／
         "not_found": 探しても BEGIN が無い／"skip": 使えない・撮れない・中止。
-        視点は回さない。_GLOBAL_ACTION_LOCK は取らない（撮影も移動も前面を奪わない）
+        視点は左右には回さない。_GLOBAL_ACTION_LOCK は取らない（撮影も移動も前面を奪わない）
         """
         # 各段の撮影を残す組（EW）。_look_for_begin が使う
         self._adjust_group = BeginAdjustShots.new_group(self._st.window_idx)
@@ -858,24 +860,47 @@ class ActionExecutor:
         seen = self._look_for_begin("最初")
         if seen is None:
             return "skip"
-        hit, aim_x = seen
+        hit, aim = seen
         if hit is None:
             seen = self._search_for_begin(round_seq)
             if seen == "skip":
                 return "skip"
             if seen is None:
                 return "not_found"
-            hit, aim_x = seen
+            hit, aim = seen
         researched = False      # 見失って探し直したか（1度だけ）
+        pitched = False         # 高さ合わせを済ませたか（1回の位置合わせで1度だけ）
+        pitch_lost = False      # 高さ合わせの後に見失ったか
         x_rate = None           # 横の速さ（文字幅/秒）
         d_rate = None           # 前後の速さ（w/H 毎秒）
         x_total = d_total = 0.0
         x_steps = d_steps = 0
         while True:
-            dx = hit["cx"] - aim_x
+            dx = hit["cx"] - aim[0]
             x_ok = abs(dx) <= hit["w"] * config.BEGIN_ADJUST_TOL
             ratio = _width_ratio(hit)
             depth = depth_direction(ratio)
+            if x_ok and depth is None and not pitched:
+                # 横・前後が済んだ。前面の窓だけ、視点の高さも合わせる（戻さない）
+                leveled = self._pitch_to_begin(round_seq, hit, aim)
+                if self._adjust_stopped(round_seq):
+                    return "skip"
+                if leveled is None:
+                    if pitch_lost:
+                        pitched = True      # 高さ合わせの後に2度見失った: 3度目はしない
+                    pitch_lost = True
+                    kind, value = self._reacquire_begin(round_seq, researched)
+                    if kind == "result":
+                        return value
+                    if kind == "searched":
+                        researched = True
+                        x_rate = d_rate = None
+                    hit, aim = value
+                    continue
+                pitched = True
+                if leveled is not hit:
+                    hit = leveled       # 動いて撮り直した: 横・前後をもう一度見る
+                    continue
             if x_ok and depth is None:
                 if x_steps or d_steps:
                     self._log(f"Begin: 位置合わせ済み（横 {dx:+.0f}px"
@@ -926,25 +951,18 @@ class ActionExecutor:
                 return "skip"
             if seen is None or seen[0] is None:
                 # 見失った: 同じ位置でもう1回撮る。それでも無ければ探し直す（1度だけ）
-                seen = self._look_for_begin("撮り直し")
-                if self._adjust_stopped(round_seq):
-                    return "skip"
-                if seen is None or seen[0] is None:
-                    if researched:
-                        return self._adjust_gave_up("BEGIN を見失った")
+                kind, value = self._reacquire_begin(round_seq, researched)
+                if kind == "result":
+                    return value
+                if kind == "searched":
                     researched = True
-                    self._log("Begin: BEGIN を見失いました → 探し直します")
-                    seen = self._search_for_begin(round_seq)
-                    if seen == "skip":
-                        return "skip"
-                    if seen is None:
-                        return "not_found"
-                    hit, aim_x = seen       # 探し直した位置から合わせ直す（速さは測り直す）
+                    hit, aim = value        # 探し直した位置から合わせ直す（速さは測り直す）
                     x_rate = d_rate = None
                     continue
-            new_hit, aim_x = seen
+                seen = value
+            new_hit, aim = seen
             if move == "x":
-                new_dx = new_hit["cx"] - aim_x
+                new_dx = new_hit["cx"] - aim[0]
                 moved = abs(dx - new_dx)
                 if moved <= config.BEGIN_ADJUST_MIN_MOVE_PX:
                     return self._adjust_gave_up(f"動いていない（{moved:.0f}px）")
@@ -963,9 +981,100 @@ class ActionExecutor:
                 d_rate = change / sec
             hit = new_hit
 
+    def _reacquire_begin(self, round_seq: int, researched: bool):
+        """動いた後・高さ合わせの後に BEGIN を見失った。同じ位置でもう1回撮り、それでも無ければ探し直す
+        （1回の位置合わせで1度だけ）。(種類, 値) を返す: "found"＝撮り直しで見つかった・"searched"＝探し直して
+        見つかった（値は (文字, 照準)）／"result"＝位置合わせの結果の文字列（skip・not_found・aimed）"""
+        seen = self._look_for_begin("撮り直し")
+        if self._adjust_stopped(round_seq):
+            return "result", "skip"
+        if seen is not None and seen[0] is not None:
+            return "found", seen
+        if researched:
+            return "result", self._adjust_gave_up("BEGIN を見失った")
+        self._log("Begin: BEGIN を見失いました → 探し直します")
+        seen = self._search_for_begin(round_seq)
+        if seen == "skip":
+            return "result", "skip"
+        if seen is None:
+            return "result", "not_found"
+        return "searched", seen
+
+    def _pitch_to_begin(self, round_seq: int, hit: dict, aim: tuple):
+        """この窓が前面のときだけ、BEGIN の中心の縦（hit["cy"]）を照準の縦（aim[1]）へ、マウスの相対移動で
+        視点を上下に動かして寄せる。戻さない（_pending_view_dy にも足さない）。最後に撮った文字を返す
+        （前面でない・許容内・感度が測れない・動いていない・止まった → 渡された文字か、その時に撮った文字）。
+        見失ったら None（呼び出し側が撮り直し・探し直す）。
+
+        マウスを下へ（+）動かすと視点が下を向き、物は画面の上へ動く。感度（画面 px / マウス 1）は保存した縦の
+        感度。無ければ 1 歩目を BEGIN_PITCH_PROBE_UNITS 動かして撮り直し、動いた px から感度と向きを決める
+        （保存しない）。保存した感度で向きが逆だった（BEGIN が照準から遠ざかった）ときは、符号を反転して
+        やり直し、それでも逆ならやめる。動かす直前に毎回、前面かを確かめる"""
+        hwnd = self._cfg.hwnd
+        dy = hit["cy"] - aim[1]
+        if abs(dy) <= hit["w"] * config.BEGIN_PITCH_TOL:
+            return hit
+        if WindowOperator.foreground_hwnd() != hwnd:
+            self._log(f"Begin: 高さ合わせは前面のときだけ（縦 {dy:+.0f}px のまま）")
+            return hit
+        gain = self._saved_fetch_gain()
+        gy = gain[1] if gain else None
+        label = f"保存値 {gy:.2f}" if gy is not None else "測る"
+        sign = 1                # 画面の物が上へ動く向きがマウスの +（下）のとき 1
+        flipped = False
+        for _ in range(config.BEGIN_PITCH_MAX_STEPS):
+            if self._adjust_stopped(round_seq):
+                return hit
+            if WindowOperator.foreground_hwnd() != hwnd:
+                self._log("Begin: 高さ合わせ: 前面でなくなった → やめる")
+                return hit
+            if gy is None:
+                units = config.BEGIN_PITCH_PROBE_UNITS * (1 if dy > 0 else -1)
+            else:
+                units = sign * dy / gy
+            units = max(-ItemFetch.MOVE_CAP, min(ItemFetch.MOVE_CAP, units))
+            self._log(f"Begin: 高さ合わせ（照準から縦 {dy:+.0f}px・感度 {label}）→ マウス {units:+.0f}")
+            for mx, my in ItemFetch.split_move(0, units):
+                _FetchMouse.move_rel(mx, my)
+                time.sleep(ItemFetch.STEP_SEC)
+            time.sleep(config.BEGIN_ADJUST_SETTLE_SEC)
+            seen = self._look_for_begin("高さ合わせ")
+            if self._adjust_stopped(round_seq):
+                return hit
+            if seen is None or seen[0] is None:
+                return None
+            new_hit, aim = seen
+            new_dy = new_hit["cy"] - aim[1]
+            moved = new_dy - dy
+            if abs(moved) <= config.BEGIN_ADJUST_MIN_MOVE_PX:
+                self._log("Begin: 高さ合わせ: 動いていない → やめる")
+                return new_hit
+            wrong_way = moved * dy > 0          # 照準から遠ざかる向きに動いた（向きが逆）
+            if gy is None:
+                measured = abs(moved) / abs(units)
+                if not ItemFetch.GAIN_SANE[0] <= measured <= ItemFetch.GAIN_SANE[1]:
+                    self._log(f"Begin: 高さ合わせ: 感度が測れない（{measured:.2f}）→ やめる")
+                    return new_hit
+                gy = measured
+                label = f"測定値 {gy:.2f}"
+                sign = -1 if wrong_way else 1
+            elif wrong_way:
+                if flipped:
+                    self._log("Begin: 高さ合わせ: 向きが合わない → やめる")
+                    return new_hit
+                flipped = True
+                sign = -sign
+                self._log("Begin: 高さ合わせ: 向きが逆 → 反転して動かす")
+            hit, dy = new_hit, new_dy
+            if abs(dy) <= hit["w"] * config.BEGIN_PITCH_TOL:
+                self._log(f"Begin: 高さ合わせ済み（縦 {dy:+.0f}px）")
+                return hit
+        self._log(f"Begin: 高さ合わせ: {config.BEGIN_PITCH_MAX_STEPS}歩で収まらない（縦 {dy:+.0f}px）→ そのまま押す")
+        return hit
+
     def _search_for_begin(self, round_seq: int):
         """BEGIN が見えない。後ろへ（近すぎる）→ 戻して前へ（遠すぎる）の順に探す。
-        見つかれば (文字, 照準の x)、見つからなければ None（必要なら動いた分を戻す）。
+        見つかれば (文字, 照準の (x, y))、見つからなければ None（必要なら動いた分を戻す）。
         各移動の直前と撮影の後に受理・ラウンド開始・停止を見て、来ていれば「skip」（戻しもしない）。
 
         前への試しは、押した秒数でなく速さの受信（MotionSampler.distance_so_far。Begin 前の移動の実測と同じ積分）で
@@ -1120,7 +1229,7 @@ class ActionExecutor:
                 or st.begin_done)
 
     def _look_for_begin(self, stage: str = ""):
-        """撮って BEGIN を探す。(見つけた文字 or None, 照準の x)。撮れなければ None。
+        """撮って BEGIN を探す。(見つけた文字 or None, 照準の (x, y))。撮れなければ None。
         見つからなかった撮影は窓ごとに最新2枚を残す（stage はどの段の撮影か）"""
         hwnd = self._cfg.hwnd
         aim = WindowOperator.aim_in_window_image(hwnd)
@@ -1140,7 +1249,7 @@ class ActionExecutor:
         else:
             BeginMiss.save(self._st.window_idx, bits, w, h, stage or "位置合わせ")
         self._keep_adjust_shot(stage, bits, w, h, hit, aim)
-        return hit, aim[0]
+        return hit, aim
 
     def _keep_adjust_shot(self, stage, bits, w, h, hit, aim):
         """位置合わせの各段の撮影を、見つかった・見つからなかったに関係なく残す（EW）。位置合わせの外では残さない"""

@@ -124,10 +124,10 @@ class TestItGoesOnToTheAdjust(unittest.TestCase):
         with patch.object(WindowOperator, "aim_in_window_image", return_value=(426, 330)), \
              patch.object(ScreenCapture, "capture_window", return_value=(bits, 852, 660)), \
              patch.object(BeginMiss, "save"):
-            hit, aim_x = self.ex._look_for_begin("最初")
+            hit, aim = self.ex._look_for_begin("最初")
         self.assertEqual(hit["rule"], "features")
         self.assertEqual(hit["H"], 660)
-        self.assertEqual(aim_x, 426)
+        self.assertEqual(aim, (426, 330))
         self.assertTrue(any("[窓6] Begin: 斜めの BEGIN を特徴点で見つけた（最初・中心 (" in m for m in self.written),
                         self.written)
 
@@ -140,7 +140,7 @@ class TestItGoesOnToTheAdjust(unittest.TestCase):
 
         def look(*_a):
             # 1 回目は右寄り。動いた後は照準の上・幅も押せる範囲（0.12）
-            return (seen.pop(0) if seen else {**hit, "cx": 428.0, "w": 0.12 * 660}), 426
+            return (seen.pop(0) if seen else {**hit, "cx": 428.0, "w": 0.12 * 660}), (426, 330)
         with patch.object(BeginDetect, "available", return_value=True), \
              patch.object(self.ex, "_look_for_begin", side_effect=look), \
              patch.object(self.ex, "_adjust_stopped", return_value=False), \

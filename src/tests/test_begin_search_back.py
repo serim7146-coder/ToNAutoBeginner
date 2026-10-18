@@ -228,9 +228,9 @@ class TestBeginSearchBack(unittest.TestCase):
     def test_after_the_wall_it_looks_once_more_and_returns_what_it_sees(self):
         self.pushes = [0.0]
         self.hits = [None, None, (0.0, 0.12)]       # 後ろ 0.15・前へ 1 回目（壁）・後ろへ 0.3 秒の後に見つかる
-        hit, aim_x = self._search()
+        hit, aim = self._search()
         self.assertAlmostEqual(hit["w"], 0.12 * self.H)
-        self.assertEqual(aim_x, self.AIM[0])
+        self.assertEqual(aim, self.AIM)
         self.assertEqual(self.moves[-1], ("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC))
         self.assertEqual(self.pressed, [])
         self.assertFalse(any("あきらめ" in m for m in self.logs), self.logs)

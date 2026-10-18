@@ -1131,6 +1131,7 @@ class TestBeginAdjustDepth(unittest.TestCase):
                   patch.object(BeginDetect, "find", side_effect=self._find),
                   patch.object(WindowOperator, "aim_in_window_image", return_value=self.AIM),
                   patch.object(ScreenCapture, "capture_window", return_value=(b"\0" * 16, 2, self.H)),
+                  patch.object(WindowOperator, "foreground_hwnd", return_value=0),   # 前面でない窓（高さ合わせは見ない）
                   patch.object(ActionExecutor.time, "sleep"),
                   patch.object(self.ex, "move", side_effect=self._move)):
             p.start()
@@ -3869,7 +3870,7 @@ class TestBeginMiss(unittest.TestCase):
 
     def test_a_miss_is_saved_with_its_stage(self):
         seen, save = self._look(self._executor(), None, "撮り直し")
-        self.assertEqual(seen, (None, 2.0))
+        self.assertEqual(seen, (None, (2.0, 1.5)))
         save.assert_called_once()
         self.assertEqual(save.call_args.args[0], 2)
         self.assertEqual(save.call_args.args[4], "撮り直し")
@@ -3884,7 +3885,7 @@ class TestBeginMiss(unittest.TestCase):
         (self.dir / "begin_miss").write_text("x")
         with patch.object(DebugLog, "exception"):
             seen, _save = self._look(self._executor(), None)
-        self.assertEqual(seen, (None, 2.0))
+        self.assertEqual(seen, (None, (2.0, 1.5)))
 
     def test_every_look_names_its_stage(self):
         src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
