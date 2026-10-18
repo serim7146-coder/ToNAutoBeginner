@@ -1654,6 +1654,11 @@ class ActionExecutor:
 
     # ── Begin自動操作 ─────────────────────────
 
+    def _item_begin_manual(self) -> bool:
+        """アイテム取得→Begin モードでロストした回か（Begin も移動も利用者がする。FY・FZ）"""
+        st = self._st
+        return bool(SharedState.get_item_begin_mode() and st.waiting_for_equip and self._auto_begin_active())
+
     def do_after_round(self):
         """
         ラウンド終了後: 待機 → [Begin前移動] → Beginクリック
@@ -1668,6 +1673,11 @@ class ActionExecutor:
             return
         # アイテムを落とすのは死んだ・生き残ったとき（EU。LogMonitor → drop_at_round_end）。ここでは落とさない
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
+        if self._item_begin_manual():
+            # FZ: アイテム取得→Begin モードでロストした回は、ツールは何もしない（操作は利用者）。
+            # フリーズ・前面化・音声は RoundOver で済んでいる。解除は装備＋利用者の Begin の受理か、ラウンド開始
+            self._log("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）")
+            return
         spam = None             # UseRight を連打しているスレッドの停止フラグ
         # RoundOver から一定時間待ってから移動を始める。移動し終える頃に
         # Verified Round End が出てクリックできる状態になる想定。
@@ -1702,9 +1712,7 @@ class ActionExecutor:
             # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
             # 差し込むだけにする（カーソルを奪う時間を最小にする）
             # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
-            manual = (SharedState.get_item_begin_mode() and st.waiting_for_equip
-                      and self._auto_begin_active())
-            spam = None if manual else self._start_use_spam(round_seq)
+            spam = None if self._item_begin_manual() else self._start_use_spam(round_seq)
             # ロスト判定は Verified Round End で行われるので、必ず
             # 待ってからフリーズ処理をする。RoundOver時点で判定すると
             # まだ立っておらずフリーズが張られない。

@@ -855,18 +855,19 @@ class TestActionExecutorSkip(unittest.TestCase):
             return calls["n"] < 30
 
         logs: list[str] = []
-        executor = ActionExecutor.ActionExecutor(cfg, st, is_running, logs.append)
+        executor = ActionExecutor.ActionExecutor(cfg, st, is_running, logs.append, auto_begin_active=lambda: True)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window"), \
-             patch.object(WindowOperator, "hold_key"), \
+             patch.object(WindowOperator, "hold_key") as mock_hold, \
              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
-        # FY: 装備確認まで届く（デッドロックしない）。Begin は利用者が押すのでツールはクリックしない
+        # FY・FZ（Begin 前の移動もしない）: 装備確認まで届く（デッドロックしない）。Begin は利用者が押すのでツールはクリックしない
         mock_click.assert_not_called()
+        mock_hold.assert_not_called()
         self.assertTrue(any("装備+Beginをしてください" in m for m in logs))
         self.assertFalse(any("装備確認" in m for m in logs))
 
@@ -890,18 +891,19 @@ class TestActionExecutorSkip(unittest.TestCase):
             if sleep_count["n"] >= 3:
                 st.item_id = 5
 
-        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append)
+        executor = ActionExecutor.ActionExecutor(cfg, st, lambda: True, logs.append, auto_begin_active=lambda: True)
 
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep", side_effect=fake_sleep), \
              patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window"), \
-             patch.object(WindowOperator, "hold_key"), \
+             patch.object(WindowOperator, "hold_key") as mock_hold, \
              patch.object(WindowOperator, "click") as mock_click:
             executor.do_after_round()
 
-        # FY: 装備を確認したら、Begin は利用者が押す（ツールはクリックしない）
+        # FY・FZ（Begin 前の移動もしない）: 装備を確認したら、Begin は利用者が押す（ツールはクリックしない）
         mock_click.assert_not_called()
+        mock_hold.assert_not_called()
         self.assertTrue(any("装備+Beginをしてください" in msg for msg in logs))
         self.assertFalse(any("装備確認" in msg for msg in logs))
 

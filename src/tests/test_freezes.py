@@ -2335,7 +2335,8 @@ class TestItemLossVoice(unittest.TestCase):
                           side_effect=lambda: setattr(monitor.st, "waiting_for_equip", False)) as attend:
             self._after_round(monitor, "ok")
         fetch.assert_not_called()
-        attend.assert_called_once_with()
+        # FZ: このモードのロストした回は do_after_round の先頭で終わる（案内は RoundOver で済んでいる）
+        attend.assert_not_called()
 
     def test_the_default_mode_is_silent_at_round_over(self):
         """既定のモードは RoundOver では鳴らさない（続行ラウンドの途中で鳴らないように。今どおり）"""
