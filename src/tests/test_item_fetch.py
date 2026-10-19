@@ -1646,13 +1646,13 @@ class TestSuicideCancel(unittest.TestCase):
         self.assertEqual(st1.suicide_cancelled_round, 7)
         self.assertEqual(st2.suicide_cancelled_round, 7, "自爆していない窓もこのラウンドは自爆しない")
         self.assertEqual(st3.suicide_cancelled_round, -1, "ロビーの窓は何もしない")
-        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → 1窓の自爆を止めました"])
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^ が押されました → 1窓の自爆を止めました"])
 
     def test_no_window_suiciding_is_said(self):
         idle, _st, _ = self._executor()
         app = self._app([self._monitor(idle)])
         mainGUI.App._on_suicide_cancel_key(app, "^")
-        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → "
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^ が押されました → "
                                     "自爆中の窓はありません（このラウンドは自爆しません）"])
 
     def test_only_the_lobby_does_nothing(self):
@@ -1660,7 +1660,7 @@ class TestSuicideCancel(unittest.TestCase):
         app = self._app([self._monitor(lobby)])
         mainGUI.App._on_suicide_cancel_key(app, "^")
         self.assertEqual(st.suicide_cancelled_round, -1)
-        self.assertEqual(app.logs, ["[自爆キャンセル] ^キーが押されました → ラウンド中の窓はありません（何もしません）"])
+        self.assertEqual(app.logs, ["[自爆キャンセル] ^ が押されました → ラウンド中の窓はありません（何もしません）"])
 
     def test_nothing_when_not_running(self):
         ex, st, _ = self._executor()
@@ -1850,7 +1850,7 @@ os._exit(0)
         mainGUI.App._finish_capture_cancel_key(app, "f8")
         self.assertEqual(app.v_suicide_cancel_key.get(), "f8")
         app._hook_suicide_cancel_key.assert_called_once_with()
-        self.assertEqual(app.logs[-1], "[自爆キャンセル] F8キーに変更しました")
+        self.assertEqual(app.logs[-1], "[自爆キャンセル] F8 に変更しました")
 
     def test_the_other_keys_cannot_take_the_cancel_key(self):
         app = self._capture_app()

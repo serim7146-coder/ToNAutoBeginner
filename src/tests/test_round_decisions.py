@@ -3213,7 +3213,7 @@ class TestOpenSpecialAfterUnlock(unittest.TestCase):
     def test_the_gui_has_the_switch(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('"cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get()', src)
-        self.assertIn('text="3クラ解放後も続行"', src)
+        self.assertIn('text="3クラ後もDTM/Waldo続行"', src)
 
     def test_special_rounds_continue_except_multi_terror_ones(self):
         """3クラ解放後は Cracked などでも続行。複数体のラウンド（Double Trouble・Bloodbath・

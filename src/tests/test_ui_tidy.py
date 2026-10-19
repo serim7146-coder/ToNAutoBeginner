@@ -230,7 +230,7 @@ class TestKeybindDialog(_AppCase):
         self.app.v_emergency_key.set("ctrl+p")
         self.app._refresh_emergency_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定・停止: Ctrl+Pキー・自爆キャンセル: ^キー・チェイス: F1/F2キー")
+                         "マクロ開始: 未設定   停止: Ctrl+P   自爆キャンセル: ^   チェイス: F1/F2")
 
     def test_the_button_opens_the_dialog_once(self):
         button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
@@ -247,10 +247,10 @@ class TestKeybindDialog(_AppCase):
         self._dialog()
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"),
-                         f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー")
-        self.assertEqual(self.app.lbl_suicide_cancel_key.cget("text"), "自爆キャンセル: ^キー")
-        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1キー")
-        self.assertEqual(self.app.lbl_chase_ccw_key.cget("text"), "チェイス（反時計回り）: F2キー")
+                         f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}")
+        self.assertEqual(self.app.lbl_suicide_cancel_key.cget("text"), "自爆キャンセル: ^")
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1")
+        self.assertEqual(self.app.lbl_chase_ccw_key.cget("text"), "チェイス（反時計回り）: F2")
         for row, target in enumerate(("start", "stop", "cancel", "cw", "ccw")):
             names = mainGUI.App.KEY_BUTTONS[target]
             capture, clear = getattr(self.app, names["capture"]), getattr(self.app, names["clear"])
@@ -263,8 +263,8 @@ class TestKeybindDialog(_AppCase):
         with patch.object(HotKey, "capture", return_value="f9"):
             self.app.btn_capture_start_key.invoke()          # 画面の「変更」
         self.assertEqual(self.app.v_start_key.get(), "f9")
-        self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: F9キー")
-        self.assertIn("マクロ開始: F9キー", self.app.lbl_keys.cget("text"))
+        self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: F9")
+        self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
         self.assertEqual(self.app.btn_capture_start_key.cget("text"), "変更")
         self.assertEqual(str(self.app.btn_capture_start_key.cget("state")), "normal")
 
@@ -279,7 +279,7 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
         self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定・停止: F8キー・自爆キャンセル: F7キー・チェイス: F1/F2キー")
+                         "マクロ開始: 未設定   停止: F8   自爆キャンセル: F7   チェイス: F1/F2")
 
     def test_the_overlap_check_is_the_same(self):
         self._dialog()
@@ -305,7 +305,7 @@ class TestKeybindDialog(_AppCase):
         self._close_dialog()
         self.app._finish_capture_key("f9", "start")
         self.assertEqual(self.app.v_start_key.get(), "f9")
-        self.assertIn("マクロ開始: F9キー", self.app.lbl_keys.cget("text"))
+        self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
 
     def test_the_chase_check_is_here(self):
         """「チェイスを使う」のチェックはキーバインドの画面だけ（DV2 で名前を短く）"""
@@ -409,7 +409,7 @@ class TestFreezeFrame(_AppCase):
         self.assertEqual({n for n, v in self.app.v_freeze_rounds.items() if v.get()}, {"Fog", "Ghost"})
         self.assertEqual(self.app.v_start_key.get(), "f9")
         self.assertFalse(self.app.v_chase_enabled.get())
-        self.assertIn("マクロ開始: F9キー", self.app.lbl_keys.cget("text"))
+        self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
         stored = {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
@@ -503,8 +503,8 @@ class TestDv2Keys(_AppCase):
         self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
                          ("f6", "f5"))
         self.assertEqual(self.hook_chase.call_count, 2, "変えるたびにフックし直す")
-        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F6キー")
-        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F6/F5キー"),
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F6")
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F6/F5"),
                         self.app.lbl_keys.cget("text"))
         self.assertEqual(self._hooked_chase_keys(), ["f6", "f5"])
 
@@ -542,7 +542,7 @@ class TestDv2Keys(_AppCase):
                                             self.app.v_suicide_cancel_key, self.app.v_chase_cw_key,
                                             self.app.v_chase_ccw_key)], [""] * 5)
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定・停止: 未設定・自爆キャンセル: 未設定・チェイス: 未設定")
+                         "マクロ開始: 未設定   停止: 未設定   自爆キャンセル: 未設定   チェイス: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"), "停止: 未設定")
         self.hook_cancel.assert_called_once_with()
         self.assertEqual(self.hook_chase.call_count, 2, "チェイスは解除のたびにフックし直す")
@@ -611,7 +611,7 @@ class TestDv2Keys(_AppCase):
         self._load({})
         self.assertEqual((self.app.v_chase_cw_key.get(), self.app.v_chase_ccw_key.get()),
                          ("f1", "f2"))
-        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1キー")
+        self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F1")
 
     def test_broken_cleared_and_overlapping_values(self):
         self._load({"chase_cw_key": "zzz", "chase_ccw_key": ""})
@@ -645,10 +645,10 @@ class TestDv3(_AppCase):
         labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
                         for w in grid.grid_slaves() if isinstance(w, ttk.Label))
         self.assertEqual(labels, [((0, 0), "マクロ開始: 未設定"),
-                                  ((1, 0), f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー"),
-                                  ((2, 0), "自爆キャンセル: ^キー"),
-                                  ((3, 0), "チェイス（時計回り）: F1キー"),
-                                  ((4, 0), "チェイス（反時計回り）: F2キー")])
+                                  ((1, 0), f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}"),
+                                  ((2, 0), "自爆キャンセル: ^"),
+                                  ((3, 0), "チェイス（時計回り）: F1"),
+                                  ((4, 0), "チェイス（反時計回り）: F2")])
         texts = [w.cget("text") for w in _all_widgets(self.app._keybind_dialog)
                  if isinstance(w, ttk.Label)]
         self.assertFalse(any("緊急" in t for t in texts), texts)
@@ -657,11 +657,11 @@ class TestDv3(_AppCase):
         self.app.v_start_key.set("f9")
         self.app._refresh_start_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         f"マクロ開始: F9キー・停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}キー"
-                         "・自爆キャンセル: ^キー・チェイス: F1/F2キー")
+                         f"マクロ開始: F9   停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}"
+                         "   自爆キャンセル: ^   チェイス: F1/F2")
         self.app.v_chase_ccw_key.set("")
         self.app._refresh_chase_key_labels()
-        self.assertTrue(self.app.lbl_keys.cget("text").endswith("・チェイス: F1キー/未設定"),
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F1/未設定"),
                         self.app.lbl_keys.cget("text"))
 
     def test_no_emergency_word_on_the_screens(self):
@@ -674,7 +674,116 @@ class TestDv3(_AppCase):
     def test_the_log_words_and_saved_names_stay(self):
         """ログの [緊急停止] と保存の名前は変えない"""
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertIn('self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")', gui)
+        self.assertIn('self._log(f"[緊急停止] {HotKey.display(key)} が押されました")', gui)
         for name in ("emergency_stop_key", "continue_drop_item", "continue_restore_window",
                      "run_respawn", "fog_early_read_enabled"):
             self.assertIn(f'"{name}"', gui, name)
+
+
+class TestLaunchDetailRows(_AppCase):
+    """起動の詳細設定: 1 行目 インスタンスタイプ・2 行目 4 つのチェック・3 行目 起動オプション。米印の注意書きは無い"""
+
+    def _rows(self):
+        return self.app.chk_ton_entry_plush.master.master.pack_slaves()
+
+    def test_the_second_row_has_the_four_checks_in_order(self):
+        rows = self._rows()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].pack_slaves()[0].cget("text"), "インスタンスタイプ:")
+        self.assertEqual([w.cget("text") for w in rows[1].pack_slaves()],
+                         ["ToNへ自動Join", "入室後の選択画面を自動突破", "自動でBeginを押す",
+                          "Guidance Plushを自動取得"])
+        self.assertIs(rows[1], self.app.chk_ton_entry_plush.master)
+        self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "起動オプション:")
+
+    def test_no_yellow_note_labels(self):
+        texts = [str(w.cget("text")) for w in _all_widgets(self.app.chk_ton_entry_plush.master.master)
+                 if "text" in w.keys()]
+        self.assertTrue(texts)
+        self.assertFalse([t for t in texts if "※" in t], texts)
+
+    def test_defaults_are_all_on_when_nothing_is_saved(self):
+        for var in (self.app.v_join_world, self.app.v_ton_entry, self.app.v_ton_begin,
+                    self.app.v_ton_entry_plush):
+            var.set(False)
+        with patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._load_saved_settings()
+        self.assertEqual([v.get() for v in (self.app.v_join_world, self.app.v_ton_entry,
+                                            self.app.v_ton_begin, self.app.v_ton_entry_plush)],
+                         [True, True, True, True])
+
+    def test_a_saved_off_stays_off(self):
+        data = {"join_world": False, "ton_entry": False, "ton_begin": False, "ton_entry_plush": False}
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+        self.assertEqual([v.get() for v in (self.app.v_join_world, self.app.v_ton_entry,
+                                            self.app.v_ton_begin, self.app.v_ton_entry_plush)],
+                         [False, False, False, False])
+        with patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._load_saved_settings()      # 後のテストのために既定へ戻す
+
+
+class TestCarryOverToggles(_AppCase):
+    """速度検知・完全放置モード・アイテム取得→Begin を settings.json に保存し、起動時に戻す"""
+
+    def setUp(self):
+        super().setUp()
+        for getter, setter in ((SharedState.get_speed_detect, SharedState.set_speed_detect),
+                               (SharedState.get_hands_free, SharedState.set_hands_free),
+                               (SharedState.get_item_begin_mode, SharedState.set_item_begin_mode)):
+            self.addCleanup(setter, getter())
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def test_saved_and_restored_with_the_buttons(self):
+        SharedState.set_speed_detect(not config.SPEED_DETECT_ENABLED)
+        SharedState.set_hands_free(True)
+        SharedState.set_item_begin_mode(True)
+        stored = self._save()
+        self.assertIs(stored["speed_detect"], not config.SPEED_DETECT_ENABLED)
+        self.assertIs(stored["hands_free"], True)
+        self.assertIs(stored["item_begin_mode"], True)
+        SharedState.set_speed_detect(config.SPEED_DETECT_ENABLED)
+        SharedState.set_hands_free(False)
+        SharedState.set_item_begin_mode(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_speed_detect(), not config.SPEED_DETECT_ENABLED)
+        self.assertIs(SharedState.get_hands_free(), True)
+        self.assertIs(SharedState.get_item_begin_mode(), True)
+        self.assertEqual(self.app.btn_hands_free.cget("text"), "完全放置モード: ON")
+        self.assertEqual(self.app.btn_item_get_begin.cget("text"), "アイテム取得→Begin: ON")
+        self.assertEqual(self.app.btn_speed_detect.cget("text"),
+                         f"速度検知: {'OFF' if config.SPEED_DETECT_ENABLED else 'ON'}")
+        stored = dict(stored, hands_free=False, item_begin_mode=False)
+        self._load(stored)
+        self.assertEqual(self.app.btn_hands_free.cget("text"), "完全放置モード: OFF")
+        self.assertEqual(self.app.btn_item_get_begin.cget("text"), "アイテム取得→Begin: OFF")
+
+    def test_an_old_settings_file_gives_the_defaults(self):
+        SharedState.set_speed_detect(not config.SPEED_DETECT_ENABLED)
+        SharedState.set_hands_free(True)
+        SharedState.set_item_begin_mode(True)
+        self._load({})
+        self.assertIs(SharedState.get_speed_detect(), config.SPEED_DETECT_ENABLED)
+        self.assertIs(SharedState.get_hands_free(), False)
+        self.assertIs(SharedState.get_item_begin_mode(), False)
+        self._load({"speed_detect": "yes", "hands_free": "yes", "item_begin_mode": 1})
+        self.assertIs(SharedState.get_speed_detect(), config.SPEED_DETECT_ENABLED)
+        self.assertIs(SharedState.get_hands_free(), False)
+        self.assertIs(SharedState.get_item_begin_mode(), False)
+
+    def test_each_toggle_schedules_a_save(self):
+        for name in ("_toggle_speed_detect", "_toggle_hands_free", "_toggle_item_get_begin"):
+            with patch.object(self.app, "_schedule_settings_save") as save:
+                getattr(self.app, name)()
+                getattr(self.app, name)()
+            self.assertEqual(save.call_count, 2, name)

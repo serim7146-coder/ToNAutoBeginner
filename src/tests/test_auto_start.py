@@ -189,3 +189,83 @@ class TestTheReadme(unittest.TestCase):
     def test_line(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("入室操作の前にマクロを自動で開始します", readme)
+
+
+class TestFullAutoSettings(unittest.TestCase):
+    """4 つ（自動Join・自動突破・自動でBegin・Guidance Plushを自動取得）が全部 ON なら、開始の前に
+    完全放置モード ON・アイテム自動取得 ON・速度検知 OFF にする。1 つでも OFF なら触らない"""
+
+    def setUp(self):
+        for getter, setter in ((SharedState.get_hands_free, SharedState.set_hands_free),
+                               (SharedState.get_item_fetch, SharedState.set_item_fetch),
+                               (SharedState.get_speed_detect, SharedState.set_speed_detect)):
+            self.addCleanup(setter, getter())
+        SharedState.set_hands_free(False)
+        SharedState.set_item_fetch(False)
+        SharedState.set_speed_detect(True)
+
+    def _full_app(self, join=True, entry=True, begin=True, plush=True):
+        app = _app(entry=entry, begin=begin)
+        app.v_join_world = _Var(join)
+        app.v_ton_entry_plush = _Var(plush)
+        app.saves = []
+        app._schedule_settings_save = lambda: app.saves.append(1)
+        for name in ("_refresh_hands_free_button", "_refresh_item_fetch_button", "_refresh_speed_detect_button"):
+            setattr(app, name, (lambda n: lambda: app.calls.append(n))(name))
+        for name in ("_all_auto_checks_on", "_apply_full_auto_settings"):
+            setattr(app, name, getattr(mainGUI.App, name).__get__(app))
+
+        def start():
+            app.calls.append(("start", SharedState.get_hands_free(), SharedState.get_item_fetch(),
+                              SharedState.get_speed_detect()))
+            app._running = True
+        app._start = start
+        return app
+
+    def test_all_four_on_sets_the_modes_before_start(self):
+        app = self._full_app()
+        app._auto_start_before_entry()
+        self.assertEqual(app.calls[-1], ("start", True, True, False), "_start() が読む前に変わっている")
+        self.assertIn("_refresh_hands_free_button", app.calls)
+        self.assertIn("_refresh_item_fetch_button", app.calls)
+        self.assertIn("_refresh_speed_detect_button", app.calls)
+        self.assertEqual(app.saves, [1], "設定を保存する")
+        line = "[起動] 全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF"
+        self.assertIn(line, app.logs)
+        self.assertLess(app.logs.index(line), app.logs.index("[起動] 入室操作の前にマクロを自動で開始しました"))
+
+    def test_already_that_value_still_logs(self):
+        SharedState.set_hands_free(True)
+        SharedState.set_item_fetch(True)
+        SharedState.set_speed_detect(False)
+        app = self._full_app()
+        app._auto_start_before_entry()
+        self.assertEqual(app.calls[-1], ("start", True, True, False))
+        self.assertIn("[起動] 全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF", app.logs)
+
+    def test_any_one_off_leaves_the_settings_alone_but_still_starts(self):
+        for kwargs in ({"join": False}, {"plush": False}, {"entry": False}, {"begin": False}):
+            SharedState.set_hands_free(False)
+            SharedState.set_item_fetch(False)
+            SharedState.set_speed_detect(True)
+            app = self._full_app(**kwargs)
+            app._auto_start_before_entry()
+            self.assertEqual((SharedState.get_hands_free(), SharedState.get_item_fetch(),
+                              SharedState.get_speed_detect()), (False, False, True), kwargs)
+            self.assertEqual(app.saves, [], kwargs)
+            self.assertFalse([m for m in app.logs if "全自動の設定" in m], kwargs)
+            started = [c for c in app.calls if isinstance(c, tuple) and c[0] == "start"]
+            if "entry" in kwargs or "begin" in kwargs:
+                self.assertEqual(started, [], kwargs)       # 今までどおり: 自動突破かBeginが OFF なら開始しない
+            else:
+                self.assertEqual(started, [("start", False, False, True)], kwargs)
+
+    def test_already_running_or_busy_does_not_touch_the_settings(self):
+        app = self._full_app()
+        app._running = True
+        app._auto_start_before_entry()
+        app = self._full_app()
+        app._start_stop_busy = True
+        app._auto_start_before_entry()
+        self.assertEqual((SharedState.get_hands_free(), SharedState.get_item_fetch(),
+                          SharedState.get_speed_detect()), (False, False, True))

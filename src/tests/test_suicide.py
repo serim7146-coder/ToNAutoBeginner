@@ -1060,8 +1060,10 @@ class TestHandsFreePerWindow(unittest.TestCase):
         app.logs = []
         app._log = app.logs.append
         app.btn_hands_free = MagicMock()
+        app._schedule_settings_save = MagicMock()
 
         mainGUI.App._toggle_hands_free(app)
+        app._schedule_settings_save.assert_called_once_with()
 
         self.assertTrue(SharedState.get_hands_free())
 

@@ -426,7 +426,7 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="3クラ解放後も続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
+        ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
@@ -436,11 +436,11 @@ class WindowTab(ttk.Frame):
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
 
-        self._round_grid(rounds.content, "■ 自爆する", self.v_skip_rounds,
+        self._round_grid(rounds.content, "■ 全自爆", self.v_skip_rounds,
                          self.v_continue_rounds)
         # Variant（置き換え後のテラー）はいつもリストで判定する。
         # 以前ここにあった切り替えは廃止した
-        self._round_grid(rounds.content, "■ 全続行する（続行リストを見ずに生き残る）",
+        self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0))
 
@@ -1092,7 +1092,7 @@ class App(tk.Tk):
             pass                    # 閉じた後に通知が来た
 
     def _on_stop_key(self, key: str):
-        self._log(f"[緊急停止] {HotKey.display(key)}キーが押されました")
+        self._log(f"[緊急停止] {HotKey.display(key)} が押されました")
         self._stop_reason = "緊急停止キー"      # debug.log の停止の理由
         self._stop()
 
@@ -1102,7 +1102,7 @@ class App(tk.Tk):
             # 出すので、押し続けても増えない
             self._log("[マクロ開始] いま押せません（動作中か起動中）")
             return
-        self._log(f"[マクロ開始] {HotKey.display(key)}キーが押されました")
+        self._log(f"[マクロ開始] {HotKey.display(key)} が押されました")
         self._start()
 
     def _disable_broken_start_key(self, key: str):
@@ -1138,7 +1138,7 @@ class App(tk.Tk):
                 self._chase_hooks.append(keyboard.hook_key(key, on_key, suppress=False))
             except Exception as e:
                 DebugLog.exception("mainGUI._hook_chase_keys")
-                self._log(f"[チェイス] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
+                self._log(f"[チェイス] ⚠ {HotKey.display(key)} を登録できません（{e}）")
 
     def _chase_key_down(self, direction: str, key: str):
         """keyboard のスレッドから呼ばれる。押しっぱなしの繰り返しは離すまで1回。
@@ -1171,7 +1171,7 @@ class App(tk.Tk):
             self._suicide_cancel_hook = keyboard.hook_key(key, on_key, suppress=False)
         except Exception as e:
             DebugLog.exception("mainGUI._hook_suicide_cancel_key")
-            self._log(f"[自爆キャンセル] ⚠ {HotKey.display(key)}キーを登録できません（{e}）")
+            self._log(f"[自爆キャンセル] ⚠ {HotKey.display(key)} を登録できません（{e}）")
 
     def _unhook_suicide_cancel_key(self):
         hook, self._suicide_cancel_hook = getattr(self, "_suicide_cancel_hook", None), None
@@ -1203,7 +1203,7 @@ class App(tk.Tk):
             return
         results = [monitor.cancel_suicide() for monitor in self.monitors]
         stopped = results.count("stopped")
-        head = f"[自爆キャンセル] {HotKey.display(key)}キーが押されました"
+        head = f"[自爆キャンセル] {HotKey.display(key)} が押されました"
         if stopped:
             self._log(f"{head} → {stopped}窓の自爆を止めました")
         elif "marked" in results:
@@ -1285,12 +1285,12 @@ class App(tk.Tk):
         self._emergency_stop_key_pressed = False
         self._log(reason)
         self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
-                  "キーに戻しました")
+                  " に戻しました")
 
     def _emergency_key_text(self) -> str:
         key = self.v_emergency_key.get()
         # 画面では「停止」（DV3）。ログの [緊急停止] は今のまま
-        return "停止: 未設定" if not key else f"停止: {HotKey.display(key)}キー"
+        return "停止: 未設定" if not key else f"停止: {HotKey.display(key)}"
 
     @staticmethod
     def _chase_name(direction: str) -> str:
@@ -1299,27 +1299,27 @@ class App(tk.Tk):
     def _chase_key_text(self, direction: str) -> str:
         name = self._chase_name(direction)
         key = self._chase_key_var(direction).get()
-        return f"{name}: 未設定" if not key else f"{name}: {HotKey.display(key)}キー"
+        return f"{name}: 未設定" if not key else f"{name}: {HotKey.display(key)}"
 
     def _chase_keys_summary(self) -> str:
-        """「チェイス: F1/F2キー」。ほかのキーと同じく「キー」を付ける（DV3）"""
+        """「チェイス: F1/F2」"""
         keys = [self._chase_key_var(d).get() for d in ("cw", "ccw")]
         if not any(keys):
             return "チェイス: 未設定"
         if all(keys):
-            return "チェイス: " + "/".join(HotKey.display(k) for k in keys) + "キー"
-        return "チェイス: " + "/".join(f"{HotKey.display(k)}キー" if k else "未設定" for k in keys)
+            return "チェイス: " + "/".join(HotKey.display(k) for k in keys)
+        return "チェイス: " + "/".join(HotKey.display(k) if k else "未設定" for k in keys)
 
     def _chase_key_var(self, direction: str):
         return self.v_chase_cw_key if direction == "cw" else self.v_chase_ccw_key
 
     def _suicide_cancel_key_text(self) -> str:
         key = self.v_suicide_cancel_key.get()
-        return "自爆キャンセル: 未設定" if not key else f"自爆キャンセル: {HotKey.display(key)}キー"
+        return "自爆キャンセル: 未設定" if not key else f"自爆キャンセル: {HotKey.display(key)}"
 
     def _start_key_text(self) -> str:
         key = self.v_start_key.get()
-        return "マクロ開始: 未設定" if not key else f"マクロ開始: {HotKey.display(key)}キー"
+        return "マクロ開始: 未設定" if not key else f"マクロ開始: {HotKey.display(key)}"
 
     def _set_key_label(self, name: str, text: str):
         """キーバインドの画面の行（開いていれば）と、メインの画面の1行を今のキーに合わせる"""
@@ -1333,10 +1333,10 @@ class App(tk.Tk):
         """メインの画面の1行（表示だけ。変えるのは「⌨ キーバインド」の画面）"""
         try:
             # 並びはマクロ開始 → 停止 → 自爆キャンセル → チェイス（DV3）
-            self.lbl_keys.config(text="・".join((self._start_key_text(),
-                                                 self._emergency_key_text(),
-                                                 self._suicide_cancel_key_text(),
-                                                 self._chase_keys_summary())))
+            self.lbl_keys.config(text="   ".join((self._start_key_text(),
+                                                   self._emergency_key_text(),
+                                                   self._suicide_cancel_key_text(),
+                                                   self._chase_keys_summary())))
         except (tk.TclError, AttributeError):
             pass
 
@@ -1546,7 +1546,7 @@ class App(tk.Tk):
             self.v_emergency_key.set(config.EMERGENCY_STOP_KEY)
             self._refresh_emergency_key_label()
             self._log(f"[緊急停止] {HotKey.display(config.EMERGENCY_STOP_KEY)}"
-                      "キーに戻しました")
+                      " に戻しました")
             return
         if key == self.v_start_key.get():
             self._log("[緊急停止] ⚠ マクロ開始キーと同じキーは使えません。"
@@ -1561,7 +1561,7 @@ class App(tk.Tk):
             return
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
-        self._log(f"[緊急停止] {HotKey.display(key)}キーに変更しました")
+        self._log(f"[緊急停止] {HotKey.display(key)} に変更しました")
 
     def _finish_capture_start_key(self, key):
         """マクロ開始のキーを設定する。
@@ -1590,7 +1590,7 @@ class App(tk.Tk):
         self.v_start_key.set(key)
         self._start_key_pressed = False
         self._refresh_start_key_label()
-        self._log(f"[マクロ開始] {HotKey.display(key)}キーに変更しました")
+        self._log(f"[マクロ開始] {HotKey.display(key)} に変更しました")
 
     def _finish_capture_cancel_key(self, key):
         """自爆キャンセルのキーを設定する。取れない・不正・ほかのキーと同じなら今のまま"""
@@ -1608,7 +1608,7 @@ class App(tk.Tk):
         self.v_suicide_cancel_key.set(key)
         self._refresh_suicide_cancel_key_label()
         self._hook_suicide_cancel_key()
-        self._log(f"[自爆キャンセル] {HotKey.display(key)}キーに変更しました")
+        self._log(f"[自爆キャンセル] {HotKey.display(key)} に変更しました")
 
     def _finish_capture_chase_key(self, key, direction: str):
         """チェイスのキーを設定する（DV2）。取れない・不正・ほかのキーと同じなら今のまま。
@@ -1627,7 +1627,7 @@ class App(tk.Tk):
         self._chase_key_var(direction).set(key)
         self._refresh_chase_key_labels()
         self._hook_chase_keys()
-        self._log(f"[チェイス] {name}を{HotKey.display(key)}キーに変更しました")
+        self._log(f"[チェイス] {name}を {HotKey.display(key)} に変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -1712,16 +1712,8 @@ class App(tk.Tk):
         f2_launch.pack(fill="x", pady=(6, 0))
         f2_launch = f2_launch.content
 
-        lf2 = ttk.Frame(f2_launch)
-        lf2.pack(fill="x")
-        self.v_join_world = tk.BooleanVar(value=False)
-        ttk.Checkbutton(lf2, text="ToNへ自動的にJoin",
-                        variable=self.v_join_world).pack(side="left")
-        ttk.Label(lf2, text="※ 外すとホームで起動します（立っているインスタンスへ自分で入る用）",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(8, 0))
-
         lf22 = ttk.Frame(f2_launch)
-        lf22.pack(fill="x", pady=(4, 0))
+        lf22.pack(fill="x")
         ttk.Label(lf22, text="インスタンスタイプ:").pack(side="left")
         self.v_ton_access = tk.StringVar(value=config.TON_INSTANCE_ACCESS_DEFAULT)
         ttk.Radiobutton(lf22, text="インバイト", variable=self.v_ton_access,
@@ -1732,25 +1724,25 @@ class App(tk.Tk):
                         value=config.TON_INSTANCE_ACCESS_FRIENDS).pack(side="left", padx=(6, 0))
         ttk.Radiobutton(lf22, text="フレンド+", variable=self.v_ton_access,
                         value=config.TON_INSTANCE_ACCESS_FRIENDS_PLUS).pack(side="left", padx=(6, 0))
-        ttk.Label(lf22, text="※ 窓ごとにToNの新規インスタンスを作ります",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
-        lf25 = ttk.Frame(f2_launch)
-        lf25.pack(fill="x", pady=(4, 0))
+        # 2 行目: 自動Join → 選択画面の自動突破 → 自動でBegin → Guidance Plush（1 行に横並び）
+        lf2 = ttk.Frame(f2_launch)
+        lf2.pack(fill="x", pady=(4, 0))
+        self.v_join_world = tk.BooleanVar(value=False)
+        ttk.Checkbutton(lf2, text="ToNへ自動Join",
+                        variable=self.v_join_world).pack(side="left")
         self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
-        ttk.Checkbutton(lf25, text="入室後の選択画面を自動突破",
-                        variable=self.v_ton_entry).pack(side="left")
+        ttk.Checkbutton(lf2, text="入室後の選択画面を自動突破",
+                        variable=self.v_ton_entry).pack(side="left", padx=(12, 0))
         self.v_ton_begin = tk.BooleanVar(value=config.TON_ENTRY_BEGIN)
-        ttk.Checkbutton(lf25, text="続けてBeginまで押す", variable=self.v_ton_begin,
+        ttk.Checkbutton(lf2, text="自動でBeginを押す", variable=self.v_ton_begin,
                         command=self._refresh_plush_check).pack(side="left", padx=(12, 0))
-        # Begin が受理された後に Guidance Plush を取りに行く（DZ・既定 OFF）。続けて Begin が ON のときだけ
-        self.v_ton_entry_plush = tk.BooleanVar(value=False)
-        self.chk_ton_entry_plush = ttk.Checkbutton(lf25, text="Guidance Plush",
+        # Begin が受理された後に Guidance Plush を取りに行く（DZ）。自動でBeginを押すが ON のときだけ
+        self.v_ton_entry_plush = tk.BooleanVar(value=True)
+        self.chk_ton_entry_plush = ttk.Checkbutton(lf2, text="Guidance Plushを自動取得",
                                                    variable=self.v_ton_entry_plush)
         self.chk_ton_entry_plush.pack(side="left", padx=(12, 0))
         self._refresh_plush_check()
-        ttk.Label(lf25, text="※ 警告同意→Casual→BGMあり→LET ME PLAY の順に押します",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
 
         # 起動オプション（config.LAUNCH_OPTION の後ろに足す。空白で区切る。既定は空）
         lf26 = ttk.Frame(f2_launch)
@@ -1861,7 +1853,7 @@ class App(tk.Tk):
         # 音量スライダー
         volf = ttk.Frame(fv)
         volf.pack(fill="x", pady=(6, 0))
-        ttk.Label(volf, text="ツールの声の音量:").pack(side="left")
+        ttk.Label(volf, text="ツールの音量:").pack(side="left")
         self.v_volume = tk.DoubleVar(value=1.0)
         ttk.Scale(volf, from_=0.0, to=1.0, variable=self.v_volume,
                   orient="horizontal", length=160,
@@ -2284,29 +2276,40 @@ class App(tk.Tk):
     def _toggle_item_get_begin(self):
         val = not SharedState.get_item_begin_mode()
         SharedState.set_item_begin_mode(val)
+        App._refresh_item_begin_button(self)
         if val:
-            self.btn_item_get_begin.config(
-                text="アイテム取得→Begin: ON",
-                bg="#1a3a5a", fg="#89b4fa", relief="sunken")
             self._log("[アイテム取得→Begin] ON: ラウンド開始時にフォーカス＆フリーズ")
         else:
-            self.btn_item_get_begin.config(
-                text="アイテム取得→Begin: OFF",
-                bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[アイテム取得→Begin] OFF")
+        self._schedule_settings_save()
+
+    def _refresh_item_begin_button(self):
+        """ボタンの表示を SharedState の今の値に合わせる（トグルと起動時の復元の両方から）"""
+        on = SharedState.get_item_begin_mode()
+        try:
+            if on:
+                self.btn_item_get_begin.config(
+                    text="アイテム取得→Begin: ON",
+                    bg="#1a3a5a", fg="#89b4fa", relief="sunken")
+            else:
+                self.btn_item_get_begin.config(
+                    text="アイテム取得→Begin: OFF",
+                    bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
+        except (tk.TclError, AttributeError):
+            pass
 
     # ── VRChat の窓の音量 ──────────────────────
     def _build_window_volume(self, parent):
-        """枠「VRChat の窓の音量」。変えたらその場で見張りへ渡し、保存する"""
+        """枠「VRChatの音量」。変えたらその場で見張りへ渡し、保存する"""
         self._window_volume = None
-        box = ttk.LabelFrame(parent, text="VRChat の窓の音量")
+        box = ttk.LabelFrame(parent, text="VRChatの音量")
         box.pack(fill="x", pady=(6, 0))
         self.v_wvol_enabled = tk.BooleanVar(value=config.DEFAULT_WINDOW_VOLUME_ENABLED)
         ttk.Checkbutton(box, text="窓の状態で VRChat の音量を変える",
                         variable=self.v_wvol_enabled,
                         command=self._on_window_volume_changed).pack(anchor="w")
-        ttk.Label(box, text="続行ラウンドの窓・フリーズを張った窓・それ以外で、Windows の"
-                            "音量ミキサーの音量を切り替えます。停止で元に戻します",
+        ttk.Label(box, text="続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。"
+                            "マクロを停止すると元の音量に戻ります。",
                   wraplength=420).pack(anchor="w")
         self.v_wvol = {}
         for key, label, default in (
@@ -2469,11 +2472,29 @@ class App(tk.Tk):
 
     def _refresh_speed_detect_button(self):
         on = SharedState.get_speed_detect()
-        self.btn_speed_detect.config(
-            text=f"速度検知: {'ON' if on else 'OFF'}",
-            bg="#1a3a2a" if on else config.GUI_SUB,
-            fg="#a6e3a1" if on else config.GUI_FG,
-            relief="sunken" if on else "raised")
+        try:
+            self.btn_speed_detect.config(
+                text=f"速度検知: {'ON' if on else 'OFF'}",
+                bg="#1a3a2a" if on else config.GUI_SUB,
+                fg="#a6e3a1" if on else config.GUI_FG,
+                relief="sunken" if on else "raised")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _refresh_hands_free_button(self):
+        """ボタンの表示を SharedState の今の値に合わせる（トグルと起動時の復元の両方から）"""
+        on = SharedState.get_hands_free()
+        try:
+            if on:
+                self.btn_hands_free.config(
+                    text="完全放置モード: ON",
+                    bg="#3a1a1a", fg=config.GUI_RED, relief="sunken")
+            else:
+                self.btn_hands_free.config(
+                    text="完全放置モード: OFF",
+                    bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
+        except (tk.TclError, AttributeError):
+            pass
 
     def _refresh_item_fetch_button(self):
         on = SharedState.get_item_fetch()
@@ -2500,23 +2521,20 @@ class App(tk.Tk):
         self._refresh_speed_detect_button()
         self._log("[速度検知] ON: Begin受理後にラウンド種別を判定します"
                   if val else "[速度検知] OFF")
+        self._schedule_settings_save()
 
     def _toggle_hands_free(self):
         # ONにはいつでもできるが、効くのはprivate系インスタンスに居る窓だけ。
         # 干し芋の窓とプラベの窓を同時に監視することがあるため、窓ごとに判定する。
         val = not SharedState.get_hands_free()
         SharedState.set_hands_free(val)
+        App._refresh_hands_free_button(self)
         if val:
-            self.btn_hands_free.config(
-                text="完全放置モード: ON",
-                bg="#3a1a1a", fg=config.GUI_RED, relief="sunken")
             self._log("[放置モード] ON: アイテムロスト無視・全ラウンド即自爆・アナウンス停止"
                       "（プライベート系の窓のみ）")
         else:
-            self.btn_hands_free.config(
-                text="完全放置モード: OFF",
-                bg=config.GUI_SUB, fg=config.GUI_FG, relief="raised")
             self._log("[放置モード] OFF")
+        self._schedule_settings_save()
 
     def _browse_tnl(self):
         p = filedialog.askopenfilename(
@@ -2760,10 +2778,10 @@ class App(tk.Tk):
         self.v_desktop_mode.set(bool(data.get("desktop_mode", config.LAUNCH_DESKTOP_MODE)))
         self.v_use_osc.set(bool(data.get("use_osc", config.OSC_ENABLED)))
         self.v_ton_entry.set(bool(data.get("ton_entry", config.TON_ENTRY_ENABLED)))
-        self.v_join_world.set(bool(data.get("join_world", False)))
+        self.v_join_world.set(bool(data.get("join_world", True)))    # 無い（初回）は ON
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         if hasattr(self, "v_ton_entry_plush"):
-            self.v_ton_entry_plush.set(data.get("ton_entry_plush") is True)    # 無い・壊れた値は OFF
+            self.v_ton_entry_plush.set(data.get("ton_entry_plush") is not False)    # 無い・壊れた値は ON（false を保存したときだけ OFF）
             App._refresh_plush_check(self)
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
@@ -2837,6 +2855,14 @@ class App(tk.Tk):
         SharedState.set_item_fetch(data.get("item_fetch") is True)    # 無い・壊れた値は OFF（マウスを動かすので true だけ）
         SharedState.set_item_fetch_gain(data.get("item_fetch_gain"))   # 壊れた値は無し
         self._refresh_item_fetch_button()
+        # 前回のトグルを引き継ぐ。無い（古い settings.json）・壊れた値は既定
+        speed = data.get("speed_detect")
+        SharedState.set_speed_detect(speed if isinstance(speed, bool) else config.SPEED_DETECT_ENABLED)
+        App._refresh_speed_detect_button(self)
+        SharedState.set_hands_free(data.get("hands_free") is True)
+        App._refresh_hands_free_button(self)
+        SharedState.set_item_begin_mode(data.get("item_begin_mode") is True)
+        App._refresh_item_begin_button(self)
         self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
         for name, var in self.v_freeze_rounds.items():
             var.set(name in _as_round_names(data.get("freeze_rounds")))
@@ -3724,6 +3750,23 @@ class App(tk.Tk):
         self._auto_start_before_entry()
         self._run_ton_entry()
 
+    def _all_auto_checks_on(self) -> bool:
+        """起動の詳細設定の 2 行目の 4 つが全部 ON か"""
+        return all(bool(getattr(self, name, None) and getattr(self, name).get())
+                   for name in ("v_join_world", "v_ton_entry", "v_ton_begin", "v_ton_entry_plush"))
+
+    def _apply_full_auto_settings(self):
+        """全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF。ボタンを押したときと同じ道
+        （SharedState の setter → 表示の更新 → 設定の保存）。すでにその値ならそのまま"""
+        SharedState.set_hands_free(True)
+        SharedState.set_item_fetch(True)
+        SharedState.set_speed_detect(False)
+        self._refresh_hands_free_button()
+        self._refresh_item_fetch_button()
+        self._refresh_speed_detect_button()
+        self._schedule_settings_save()
+        self._log("[起動] 全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF")
+
     def _auto_start_before_entry(self):
         """「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方 ON で、マクロが止まっていれば、
         入室操作の前にマクロを始める（ED。Guidance Plush の移動にマクロの受信が要るため）。
@@ -3733,6 +3776,10 @@ class App(tk.Tk):
         if getattr(self, "_start_stop_busy", False):
             self._log("[起動] マクロの開始・停止の途中のため、自動では開始しません")
             return
+        # 4 つ（自動Join・自動突破・自動でBegin・Guidance Plushを自動取得）が全部 ON なら全自動の設定にする。
+        # _start() が SharedState の値を読んで監視を組み立てるので、開始の前に行う
+        if App._all_auto_checks_on(self):
+            App._apply_full_auto_settings(self)
         self._start_stop_busy = True
         self._refresh_start_stop_button()
         self._start_quiet = True
@@ -3976,6 +4023,9 @@ class App(tk.Tk):
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
             "freeze_8pages": self.v_freeze_8pages.get(),
             "item_fetch":    SharedState.get_item_fetch(),
+            "speed_detect":  SharedState.get_speed_detect(),
+            "hands_free":    SharedState.get_hands_free(),
+            "item_begin_mode": SharedState.get_item_begin_mode(),
             "item_fetch_gain": (list(SharedState.get_item_fetch_gain())
                                 if SharedState.get_item_fetch_gain() else None),
             "freeze_punish": self.v_freeze_punish.get(),
