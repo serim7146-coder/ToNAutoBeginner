@@ -452,10 +452,10 @@ class TestTheCheck(unittest.TestCase):
 
     def test_next_to_begin_and_only_with_begin(self):
         chk = self.app.chk_ton_entry_plush
-        self.assertEqual(chk.cget("text"), "Guidance Plush")
+        self.assertEqual(chk.cget("text"), "Guidance Plushを自動取得")
         row = chk.master.pack_slaves()
         texts = [w.cget("text") for w in row]
-        self.assertEqual(texts[texts.index("続けてBeginまで押す") + 1], "Guidance Plush")
+        self.assertEqual(texts[texts.index("自動でBeginを押す") + 1], "Guidance Plushを自動取得")
         self.app.v_ton_begin.set(False)
         self.app._refresh_plush_check()
         self.assertEqual(str(chk.cget("state")), "disabled")
@@ -463,16 +463,16 @@ class TestTheCheck(unittest.TestCase):
         self.app._refresh_plush_check()
         self.assertEqual(str(chk.cget("state")), "normal")
 
-    def test_saved_off_by_default(self):
-        self.assertFalse(self.app.v_ton_entry_plush.get())
+    def test_saved_on_by_default(self):
+        self.assertTrue(self.app.v_ton_entry_plush.get())
         self.app.v_ton_entry_plush.set(True)
         stored = {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
             self.app._save_launch_settings()
         self.assertIs(stored["ton_entry_plush"], True)
-        for data, expected in (({"ton_entry_plush": True, "ton_begin": True}, True), ({}, False),
-                               ({"ton_entry_plush": "yes"}, False)):
+        for data, expected in (({"ton_entry_plush": True, "ton_begin": True}, True), ({}, True),
+                               ({"ton_entry_plush": False}, False), ({"ton_entry_plush": "yes"}, True)):
             with patch.object(mainGUI, "load_settings", return_value=data):
                 self.app._load_saved_settings()
             self.assertIs(self.app.v_ton_entry_plush.get(), expected, data)

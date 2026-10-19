@@ -934,7 +934,7 @@ class TestLaunchWidgetsStillReachable(unittest.TestCase):
                       self.source)
 
     def test_the_details_are_inside_the_collapsible(self):
-        for frame in ("lf22", "lf25"):
+        for frame in ("lf22", "lf2"):
             self.assertIn(f"{frame} = ttk.Frame(f2_launch)", self.source, frame)
 
     def test_the_window_count_warning_is_outside(self):
@@ -3061,7 +3061,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         self.assertIs(saved["join_world"], True)
         self.assertIs(self._load({"join_world": True}, "v_join_world"), True)
         self.assertIs(self._load({"join_world": False}, "v_join_world"), False)
-        self.assertIs(self._load({}, "v_join_world"), False, "既定は外れている")
+        self.assertIs(self._load({}, "v_join_world"), True, "既定は付いている（GC）")
 
     def test_it_is_saved(self):
         app = self._app()
@@ -3203,6 +3203,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "ton_entry_plush",                                   # DZ で足した
             "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）
             "follow_utils",                                      # EB で足した
+            "speed_detect", "hands_free", "item_begin_mode",     # GC で足した（前回のトグルを引き継ぐ）
             "voice_volumes",                                     # EO で足した
             "win_count",
             "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",

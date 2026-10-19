@@ -1658,7 +1658,7 @@ class ActionExecutor:
         st = self._st
         if st.round_end_seen:
             return True
-        self._log("Verified Round End を待っています…")
+        self._log("Intermission待ち…")
         deadline = time.time() + timeout
         while time.time() < deadline:
             if not self._is_running() or st.in_round:
