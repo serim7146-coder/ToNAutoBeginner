@@ -274,7 +274,7 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\run_face\` | Run の向き・前後でうまくいかなかったときの撮影（1/2 の JPEG。最新 `SHOT_KEEP` 枚） |
 | `%APPDATA%\ToNAutoBeginner\run_pos\` | Run の位置合わせのためのデータ（等倍の PNG。基準は窓ごとに 3 枚（暗い画面は基準にしない）・Run の後は 30 枚。不具合の報告には入れない） |
 | `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかった・Guidance Plush の装備を確かめられなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
-| `%APPDATA%\ToN ListTool\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ） |
+| `%APPDATA%\ToN ListTool\state\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ。2.17 より前は直下の `host_state.sqlite3`——新しい場所に無ければそちらを読む） |
 | `%APPDATA%\ton-syncskip\ton-utils.log`・`save-history.sqlite` | ToN Utils のログと記録（読むだけ。sqlite は `file:…?mode=ro` で開き、`logs` の source・started だけを読む。写しも取らない） |
 | リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |
 | `maps.json` の各マップ | `id`・`name` と印 `normal`（通常ラウンドで出る）・`8pages`（8 Pages で選ばれる）・`run`（Run のマップ）。1 か 0。同じ番号は 1 だけ（Dring King's Citadel と Sewers）で、統計の名前はラウンドに合う印で選ぶ（`Statistics.map_name_for_id`） |
