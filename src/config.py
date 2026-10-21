@@ -46,11 +46,13 @@ ROUND_STORE_PATH = SETTINGS_PATH.parent / "rounds.sqlite"
 # ToN ListTool 2.13 以降の保存先（SQLite）。これだけを読む。
 # 2.13 より前の host_save.json.gz には対応しない——ディスクに古いものが残って
 # いることがあり、SQLite が一瞬無いだけで何日も前のリストで判定してしまうため
-HOST_STATE_PATH = os.path.join(
-    os.environ.get("APPDATA", ""), "ToN ListTool", "host_state.sqlite3")
+_LISTTOOL_DIR = os.path.join(os.environ.get("APPDATA", ""), "ToN ListTool")
+# ToN ListTool 2.17 以降は state\・lists\ の下（2026-10-21 の更新で移った）。前の直下は残っていれば読む（GF）
+HOST_STATE_PATH = os.path.join(_LISTTOOL_DIR, "state", "host_state.sqlite3")
+HOST_STATE_LEGACY_PATH = os.path.join(_LISTTOOL_DIR, "host_state.sqlite3")
 # 主催者自身の続行リスト。host_save の participants には入らないため別に読む
-USER_SAVE_PATH = os.path.join(
-    os.environ.get("APPDATA", ""), "ToN ListTool", "user_save.json")
+USER_SAVE_PATH = os.path.join(_LISTTOOL_DIR, "lists", "user_save.json")
+USER_SAVE_LEGACY_PATH = os.path.join(_LISTTOOL_DIR, "user_save.json")
 HOST_SAVE_POLL_SEC = 3.0
 # 外部ツール起動ボタンの「起動中」表示を見直す間隔。
 # 続行リストの供給元判定とは別のループで回す（片方の失敗を巻き込まないため）

@@ -73,6 +73,16 @@ def _user_save_digest(path):
         return _file_stamp(path)
 
 
+def _first_existing(path: str, legacy: str) -> str:
+    """新しい場所にあればそれ、無くて前の場所にあればそちら、どちらも無ければ新しい場所（GF）。
+    ToN ListTool 2.17 で保存先が state\\・lists\\ の下へ移った。前の直下は残っていれば読む"""
+    if os.path.exists(path):
+        return path
+    if os.path.exists(legacy):
+        return legacy
+    return path
+
+
 def exclusive_check(checked, other):
     """片方を入れたら、もう片方の同じラウンドを外す"""
     if checked.get():
@@ -2671,7 +2681,9 @@ class App(tk.Tk):
         if not self._process_cache.watch(config.TON_LISTTOOL_PROCESS):
             return "lost", "ToN ListTool が起動していません"
 
-        path, load = config.HOST_STATE_PATH, MatchTNL.load_host_state
+        path = _first_existing(config.HOST_STATE_PATH, config.HOST_STATE_LEGACY_PATH)
+        user_save = _first_existing(config.USER_SAVE_PATH, config.USER_SAVE_LEGACY_PATH)
+        load = MatchTNL.load_host_state
         name = os.path.basename(path)
         if not os.path.exists(path):
             return "lost", f"{name} がありません"
@@ -2683,13 +2695,13 @@ class App(tk.Tk):
         # 自分のリストだけ更新されたときも読み直す。SQLite は本体を触らずに
         # -wal だけ伸びることがあるので、そちらも見る
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
-                 _user_save_digest(config.USER_SAVE_PATH),
+                 _user_save_digest(user_save),
                  _file_stamp(path + "-wal"))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return "same", None
 
         try:
-            keep_on, meta, wishes = load(path, config.USER_SAVE_PATH)
+            keep_on, meta, wishes = load(path, user_save)
         except Exception as e:
             DebugLog.exception("mainGUI._read_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
