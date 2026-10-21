@@ -10,6 +10,7 @@ EVENT_VERIFIED = "verified"      # `Verified` の行（受理か定期かは Log
 EVENT_ROUND_START = "round_start"
 EVENT_KILLERS_SET = "killers_set"
 EVENT_YOU_DIED = "you_died"
+EVENT_REBORN = "reborn"          # 猫（Maxwell）で復活した（「You died.」と同じ秒に続く）
 EVENT_ROUND_OVER = "round_over"
 EVENT_VERIFIED_END = "verified_end"
 EVENT_KILLERS_UNKNOWN = "killers_unknown"
@@ -63,6 +64,7 @@ def _killers_round_type(raw: str, a: str, b: str, c: str) -> str:
     return name
 LIVED_MARK = "Lived in round"
 RE_YOU_DIED = re.compile(r"^You died[.]$")
+RE_REBORN = re.compile(r"^LOL JK, REBORN!$")
 RE_ROUND_OVER = re.compile(r"^RoundOver$")
 RE_VERIFIED_END = re.compile(r"^Verified Round End$")
 RE_VERIFIED = re.compile(r"^Verified$")
@@ -95,6 +97,7 @@ RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RESPAWN_MARK = "Player respawned"
 YOU_DIED_MARK = "You died"
+REBORN_MARK = "LOL JK, REBORN"
 SUS_PLAYER_MARK = "Sus player"
 RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
@@ -264,6 +267,8 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_YOU_DIED.match(line):
         return LogEvent(EVENT_YOU_DIED)
+    if RE_REBORN.match(line):
+        return LogEvent(EVENT_REBORN)
     if RE_ROUND_OVER.match(line):
         return LogEvent(EVENT_ROUND_OVER)
     if RE_VERIFIED_END.match(line):
