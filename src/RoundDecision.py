@@ -104,6 +104,20 @@ def is_self_inserts_bloodthirsty(
     )
 
 
+def list_continues(keep_on_set: dict, terror_ids: list[int], round_type: str) -> bool:
+    """続行リストだけで見て、このテラー構成を続行するか（3クラ解放・Self Inserts は含めない）"""
+    tnl_key = MatchTNL.LOG_TO_TNL.get(round_type, round_type)
+    # 8 Pages のログ番号は LogMonitor が続行リストのIDへ直してから渡す
+    should_continue = MatchTNL.should_continue(keep_on_set, tnl_key, terror_ids)
+    if not should_continue and round_type in SPECIAL_MOON_ROUNDS:
+        # ラウンド別のキーに加えて Special/Moon 枠も見る。置き換えではない——
+        # ID192(Bloodthirsty Creature) は Fog / Ghost / Midnight などラウンド別の
+        # キーにも入っていて、寄せるとそちらの指定を取りこぼす
+        should_continue = MatchTNL.should_continue(
+            keep_on_set, MatchTNL.SPECIAL_MOON_KEY, terror_ids)
+    return should_continue
+
+
 def decide_killers(
     keep_on_set: dict,
     terror_ids: list[int],
@@ -120,14 +134,6 @@ def decide_killers(
     # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,
                                           bloodthirsty_variant)
-    tnl_key = MatchTNL.LOG_TO_TNL.get(round_type, round_type)
-    # 8 Pages のログ番号は LogMonitor が続行リストのIDへ直してから渡す
-    should_continue = MatchTNL.should_continue(keep_on_set, tnl_key, terror_ids)
-    if not should_continue and round_type in SPECIAL_MOON_ROUNDS:
-        # ラウンド別のキーに加えて Special/Moon 枠も見る。置き換えではない——
-        # ID192(Bloodthirsty Creature) は Fog / Ghost / Midnight などラウンド別の
-        # キーにも入っていて、寄せるとそちらの指定を取りこぼす
-        should_continue = MatchTNL.should_continue(
-            keep_on_set, MatchTNL.SPECIAL_MOON_KEY, terror_ids)
-    should_continue = should_continue or open_special or forced
+    should_continue = (list_continues(keep_on_set, terror_ids, round_type)
+                       or open_special or forced)
     return KillerDecision(open_special, should_continue)

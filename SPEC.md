@@ -61,7 +61,9 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `LogParser.py` | ログ1行を `LogEvent`（種類＋付帯情報）にする。状態を持たない。 |
 | `VerifiedTracker.py` | `Verified` の行が Begin の受理か、約300秒ごとの定期シグナルかを、ログの時刻で見分ける。 |
 | `MatchTNL.py` | .tnl と ToN ListTool の主催リスト（`host_state.sqlite3`）の読み込み、ログのテラーID → 続行リストのIDの変換（Alternate +134・Unbound +200）。全窓で共有する `SharedLists`。ビット列 → ID の集合の変換は同じビット列なら覚えた結果を使う。 |
-| `RoundDecision.py` | 続行するか・3クラ解放（DTM/Waldo）の対象かの判定。 |
+| `RoundDecision.py` | 続行するか・3クラ解放（DTM/Waldo）の対象かの判定。`list_continues` は続行リストだけで見た判定（`decide_killers` と続行表のラベルが使う）。 |
+| `ContinueTable.py` | 続行表（GH）。続行無効・デフォ続行の 2 つの表（`Table`。ON/OFF つき）と、続行リストへ重ねる `apply`、判定の行に付ける `overlay_label`、.tnl／.tnnl の取り込み、保存・読み込み（`continue_table.json`。一時ファイルに書いて置き換える）。今の表は `current()`／`set_current()` で全窓・画面が共有し、中身は書き換えず差し替える。 |
+| `ContinueTableGUI.py` | 続行表の編集画面（`ContinueTableWindow`）。ラウンドの一覧（`assets/data/continue_slots.json`）・テラーのアイコンの格子（`assets/icons` のシートを OpenCV で切り出して 40px に拡大し PNG にして `tk.PhotoImage` へ。絵が無い番号は名前の札）。変えるたびに保存して `set_current`。 |
 | `GroupRound.py` | 干し芋／焼き芋のインスタンスのルール（と、プライベートの Sabotage）。 |
 | `RoundSequence.py` | ラウンドの並び（通常・特殊）から Moon の解放状況を推定する。 |
 | `TerrorReplacement.py` | 置き換えテラー（Atrached・Hungry Home Invader・Bloodthirsty・Foxy・Glorbo・Gigabytes など）の合図の行（`SIGNALS`）と差し替えの表（`TABLE`）。 |
@@ -228,6 +230,13 @@ LogMonitor._process(line)
    Bloodbath EX はラウンド開始の行では「Bloodbath」と出る。`LogParser` が Killers 行で3つの番号がそろった Bloodbath を「Bloodbath EX」に読み替える（「EX」とだけ出た場合も同じ名前にそろえる。実ログでは未確認）。判断はすべて Killers 行の後なので、続行リスト・ラウンド指定・DTM/Waldo・統計（番号 8）は EX として扱う。干し芋/焼き芋では自爆しない（`GroupRound.ALWAYS_CONTINUE_ROUNDS`。8 Pages・Run と同じ）。
 5. 選んだ Fog・Ghost・8 Pages のラウンド（音声・突入フリーズ）は、`(Alternate)` の付いた Killers 行でも同じラウンドとして扱う。
 
+### 7.1 続行表（GH）
+`LogMonitor._keep_on()`（窓の続行リスト）が、tnl・主催リストのタブ・参加者別の希望を畳んだ**あと**に `ContinueTable.apply(リスト, ContinueTable.current())` を重ねる。
+結果 ＝ (下のリスト − 続行無効) ∪ デフォ続行（それぞれ ON のものだけ）。下のリストにあったキーは空になっても残す（「リストがあって続行なし」を保つ）。表が空・OFF のときは下のリストをそのまま返す。
+- **重ならない所**: 干し芋・焼き芋（`GroupRound.GROUP_INSTANCES`）は下のリストのまま。「リストが無いので止める」（`_wishes_missing`・`_shared_list_empty`・`_host_list_missing`）は重ねる前の希望で見る。
+- **重なるのはリストの dict だけ**: 3 クラ済みの完全放置モード・全続行・自爆するラウンドの指定・Glorbo/EX の問答無用・3 クラ解放（DTM/Waldo）・Self Inserts（Bloodthirsty）は、その決まりが先に（または別に）決める。その決まりで自爆するなら、デフォ続行にあっても自爆する。
+- **ログ**: `_decide_with_keep_on_set` の判定の行の後ろに `（デフォ続行）`／`（続行無効）`。重ねる前後の `RoundDecision.list_continues` が変わり、かつ最終の結果がその向きのときだけ（`LogMonitor._overlay_label`）。
+
 ## 8. Begin
 
 - RoundOver から `BEGIN_WAIT_SEC` 待って、前進＋左（OSC は同時押し）で Begin の前へ（通常 2.08 秒・Punished の後は 3.2 秒）。
@@ -269,6 +278,7 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\debug.log`（.1〜.3） | デバッグログ。20MB で世代を回す |
 | `%APPDATA%\ToNAutoBeginner\rounds.sqlite` | 統計画面の手元の保存 |
 | `%APPDATA%\ToNAutoBeginner\fog_object_names.json` | 看破の名前ごとの答え合わせ |
+| `%APPDATA%\ToNAutoBeginner\continue_table.json` | 続行表（続行無効・デフォ続行の 2 つの表と ON/OFF。`{"version": 1, "use_disabled", "use_default", "disabled": {ラウンドのキー: [番号]}, "default": {…}}`。壊れていたら空で始める） |
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToNAutoBeginner\begin_adjust\` | Begin の位置合わせの各段の撮影（1 回ごとに「時刻_窓N」の組。見つかった段は四角と照準を描く。1/2 の JPEG。新しい 10 組。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToNAutoBeginner\run_face\` | Run の向き・前後でうまくいかなかったときの撮影（1/2 の JPEG。最新 `SHOT_KEEP` 枚） |
@@ -276,13 +286,13 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかった・Guidance Plush の装備を確かめられなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToN ListTool\state\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ。2.17 より前は直下の `host_state.sqlite3`——新しい場所に無ければそちらを読む） |
 | `%APPDATA%\ton-syncskip\ton-utils.log`・`save-history.sqlite` | ToN Utils のログと記録（読むだけ。sqlite は `file:…?mode=ro` で開き、`logs` の source・started だけを読む。写しも取らない） |
-| リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |
+| リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`・`continue_slots.json`（続行表の枠）、`assets/icons/`（続行表のテラーのアイコンのシートと `icons.json`）、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |
 | `maps.json` の各マップ | `id`・`name` と印 `normal`（通常ラウンドで出る）・`8pages`（8 Pages で選ばれる）・`run`（Run のマップ）。1 か 0。同じ番号は 1 だけ（Dring King's Citadel と Sewers）で、統計の名前はラウンドに合う印で選ぶ（`Statistics.map_name_for_id`） |
 | `src/tests/data/` | テストの資料（撮影の切り出しなど。exe には入れない） |
 
 ## 12. ビルド・テスト
 
-- ビルド: リポジトリの直下で `python build.py`（Nuitka の onefile）。引数は `build.BASE_ARGS`（`src/main.py` の先頭の参考の行と同じ。テストで確かめている）。同梱データは `assets/…` を同じ置き場所で入れる（`.env`・`assets/ToNAutoBeginnerIcon.ico`・`assets/data/*.json`・`assets/voice`・`assets/templates`）。`win32clipboard`（セーブコード）・`zeroconf`/`ifaddr`（OSCQuery）・`cv2` を含める。zeroconf は `--recompile-extension-modules` で全部ソースから組む（Cython 製の .pyd と混ざると mDNS の広告が `KeyError: '__pyx_vtable__'` で失敗する）。展開先は `%LOCALAPPDATA%\ToNAutoBeginner\<版>-<ビルドの印>`。
+- ビルド: リポジトリの直下で `python build.py`（Nuitka の onefile）。引数は `build.BASE_ARGS`（`src/main.py` の先頭の参考の行と同じ。テストで確かめている）。同梱データは `assets/…` を同じ置き場所で入れる（`.env`・`assets/ToNAutoBeginnerIcon.ico`・`assets/data/*.json`・`assets/voice`・`assets/templates`・`assets/icons`）。`win32clipboard`（セーブコード）・`zeroconf`/`ifaddr`（OSCQuery）・`cv2` を含める。zeroconf は `--recompile-extension-modules` で全部ソースから組む（Cython 製の .pyd と混ざると mDNS の広告が `KeyError: '__pyx_vtable__'` で失敗する）。展開先は `%LOCALAPPDATA%\ToNAutoBeginner\<版>-<ビルドの印>`。
   exe ができたら続けてインストーラー `dist/ToNAutoBeginner-Setup.exe` を作る（Inno Setup 7 か 6 の ISCC。`installer/ToNAutoBeginner.iss`。見つからなければ exe だけ）。
 - インストーラー: ユーザー単位（管理者権限なし）で `%LOCALAPPDATA%\Programs\ToNAutoBeginner` に入れる。自動更新は exe の横で差し替えるので、書き込める場所に入れる。
   起動中かは `config.APP_MUTEX_NAME` のミューテックス（`main.hold_running_mutex`。.iss の AppMutex と同じ名前）で見る。

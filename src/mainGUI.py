@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import hashlib
 import json
@@ -12,6 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 import config
+import ContinueTable
 import DebugLog
 import UIFont
 import UiInbox
@@ -43,6 +45,7 @@ import WindowVolume
 import WindowArrange
 import SaveLoad
 from StatisticsGUI import StatisticsWindow
+from ContinueTableGUI import ContinueTableWindow
 
 try:
     import keyboard
@@ -906,6 +909,11 @@ class App(tk.Tk):
         self.minsize(880, 600)
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
+        # 続行表（GH）。保存してあるものを読んで全窓の判定に効かせる。ON/OFF はメインのチェックが持つ
+        table = ContinueTable.load()
+        ContinueTable.set_current(table)
+        self.v_ct_disabled = tk.BooleanVar(value=table.use_disabled)
+        self.v_ct_default = tk.BooleanVar(value=table.use_default)
         self.v_win_count = tk.IntVar(value=4)
         # 手で変えた窓数（settings.json の win_count）。自動検出で入った値は
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
@@ -1666,6 +1674,18 @@ class App(tk.Tk):
         ttk.Button(f1, text="再読み込み", command=self._load_tnl).pack(side="left", padx=(4, 0))
         self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
+
+        # 続行表（GH）: 続行リストの上に重ねる 2 つの表
+        fct = ttk.LabelFrame(self, text="続行表", padding=8)
+        fct.pack(fill="x", padx=12, pady=4)
+        ttk.Button(fct, text="続行表", command=self._open_continue_table).pack(side="left")
+        ttk.Checkbutton(fct, text="続行無効", variable=self.v_ct_disabled,
+                        command=self._on_continue_table_use).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(fct, text="デフォ続行", variable=self.v_ct_default,
+                        command=self._on_continue_table_use).pack(side="left", padx=(12, 0))
+        self.lbl_ct_count = ttk.Label(fct, text="")
+        self.lbl_ct_count.pack(side="left", padx=(12, 0))
+        self._refresh_continue_table_count()
 
         # ③ 窓数・ログ
         f2 = CollapsibleFrame(self, text="② 窓数・ログ設定")
@@ -3215,6 +3235,31 @@ class App(tk.Tk):
             text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
         self._debug_start()
+
+    # ── 続行表（GH）────────────────────────
+    def _open_continue_table(self):
+        window = getattr(self, "_continue_table_window", None)
+        try:
+            if window is not None and window.winfo_exists():
+                window.lift()
+                return
+        except tk.TclError:
+            pass
+        self._continue_table_window = ContinueTableWindow(
+            self, on_change=self._refresh_continue_table_count)
+
+    def _on_continue_table_use(self):
+        """「続行無効」「デフォ続行」のチェックを変えた: 保存してすぐ判定に効かせる"""
+        table = dataclasses.replace(ContinueTable.current(),
+                                    use_disabled=bool(self.v_ct_disabled.get()),
+                                    use_default=bool(self.v_ct_default.get()))
+        ContinueTable.set_current(table)
+        ContinueTable.save(table)
+        self._refresh_continue_table_count()
+
+    def _refresh_continue_table_count(self):
+        disabled, default = ContinueTable.counts(ContinueTable.current())
+        self.lbl_ct_count.configure(text=f"無効 {disabled}件・デフォ {default}件")
 
     # ── 不具合の報告 ────────────────────────
     def _open_report(self):
