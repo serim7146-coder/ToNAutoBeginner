@@ -98,6 +98,11 @@ class _Osc:
             self.on_press(address, stop)
         return True
 
+    def press_axis(self, address, value, sec, stop=None):
+        """GG: 向きの細かい直し（幅の 3% 以下）の軸"""
+        self.world.events.append(("osc_axis", address, value, round(sec, 4)))
+        return True
+
     def stop_all(self, repeat=1):
         self.world.events.append("release")
 
@@ -587,6 +592,18 @@ class TestRoundOverRightAfterTheRespawn(_Case):
         self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
         notes = [c.args[0] for c in write.call_args_list if "RoundOver が来た" in c.args[0]]
         self.assertEqual(notes, ["[操作] [窓2] Run: リスポーンの後に RoundOver が来た → 後ろへ・正面へは続ける"])
+
+    def test_a_small_facing_fix_uses_the_axis_after_the_turn(self):
+        """GG: 左へ回した後のずれが幅の 3% 以下（1.5%）なら軸 +0.55 で直す（ボタンの LookLeft/LookRight は送らない）"""
+        self._round_over_while_backing()
+        lights = iter([(433.5 + 13, 0.9, 1.0), (433.5, 0.9, 1.0)])
+        frame = __import__("numpy").zeros((702, 867, 3), "uint8")
+        with patch.object(self.ex, "_capture_bgr", return_value=frame),              patch.object(ActionExecutor.RunFace, "find_mark", side_effect=lambda _s: next(lights)):
+            self._run()
+        sent = [e for e in self.w.events if e[0] in ("osc", "osc_axis")]
+        self.assertEqual(sent, [("osc", "/input/MoveBackward", 2.85), ("osc", "/input/LookLeft", 0.9),
+                                ("osc_axis", "/input/LookHorizontal", 0.55, round(13 / (0.09 * 867), 4))])
+        self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました（向きを 1 回直しました）"])
 
     def test_the_facing_fix_goes_on_after_the_round_over(self):
         self._round_over_while_backing()

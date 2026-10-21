@@ -117,35 +117,56 @@ class TestTheMarkOnRealShots(unittest.TestCase):
 
 
 class _World:
-    """回すと目印が横へ動く偽の撮影（目印の位置を偽の find_mark が返す）。LookLeft は景色を右へ"""
+    """回すと目印が横へ動く偽の撮影（目印の位置を偽の find_mark が返す）。LookLeft は景色を右へ。
+    ボタン（press）は RUN_FACE_RATE・軸（press_axis。GG）は RUN_FACE_FINE_RATE で動く（gain / axis_gain 倍で、
+    見込みと違う回り方も作る）。presses はボタンだけ・axis は軸だけ・calls は順番の全部"""
 
-    def __init__(self, x, width=867, gain=1.0, lose_after=None):
+    def __init__(self, x, width=867, gain=1.0, lose_after=None, axis_gain=None):
         self.x, self.width, self.gain = x, width, gain
+        self.axis_gain = gain if axis_gain is None else axis_gain
         self.lose_after = lose_after        # この回数押したら目印が消える
-        self.presses = []
+        self.presses = []                   # (address, sec)
+        self.axis = []                      # (address, value, sec)
+        self.calls = []                     # ("press", address, sec) / ("axis", address, value, sec)
+        self.stops = 0                      # stop_all の回数
+        self.stop_args = []                 # 渡された stop（呼べるか見る）
+        self._last_dir = None               # 直前の押しの向き（+1 右・-1 左）と秒数
 
     def shot(self):
         import numpy as np
         return np.zeros((702, self.width, 3), np.uint8)
 
     def find(self, _shot):
-        if self.x is None or (self.lose_after is not None and len(self.presses) >= self.lose_after
-                              and self.presses[-1][0] != "back"):
+        if self.x is None or (self.lose_after is not None and len(self.calls) >= self.lose_after):
             return None
         return (self.x, 0.9, 1.0)
 
-    def press(self, address, sec, stop=None):
-        moved = sec * config.RUN_FACE_RATE * self.width * self.gain
-        reverting = bool(self.presses) and self.presses[-1][1] == round(sec, 4) and address != self.presses[-1][0]
-        self.presses.append((address, round(sec, 4)))
+    def _turn(self, direction, sec, moved):
+        reverting = self._last_dir is not None and self._last_dir == (-direction, round(sec, 4))
+        self._last_dir = (direction, round(sec, 4))
         if self.x is not None:
-            self.x += moved if address == "/input/LookLeft" else -moved
+            self.x -= direction * moved     # 右へ回すと景色は左へ（目印の x が減る）
         if reverting and self.lose_after is not None:
             self.lose_after = None          # 戻したら目印はまた見える
+
+    def press(self, address, sec, stop=None):
+        self.stop_args.append(stop)
+        self.presses.append((address, round(sec, 4)))
+        self.calls.append(("press", address, round(sec, 4)))
+        self._turn(1 if address == "/input/LookRight" else -1, sec,
+                   sec * config.RUN_FACE_RATE * self.width * self.gain)
+        return True
+
+    def press_axis(self, address, value, sec, stop=None):
+        self.stop_args.append(stop)
+        self.axis.append((address, value, round(sec, 4)))
+        self.calls.append(("axis", address, value, round(sec, 4)))
+        self._turn(1 if value > 0 else -1, sec,
+                   sec * config.RUN_FACE_FINE_RATE * self.width * self.axis_gain)
         return True
 
     def stop_all(self, repeat=1):
-        pass
+        self.stops += 1
 
 
 class TestTurningToTheFront(unittest.TestCase):
@@ -175,7 +196,9 @@ class TestTurningToTheFront(unittest.TestCase):
 
     def test_the_values(self):
         self.assertEqual((config.RUN_FACE_TOL, config.RUN_FACE_RATE, config.RUN_FACE_MIN_SEC, config.RUN_FACE_MAX_SEC,
-                          config.RUN_FACE_SETTLE_SEC, config.RUN_FACE_TRIES), (0.03, 1.22, 0.02, 0.10, 0.35, 6))
+                          config.RUN_FACE_SETTLE_SEC, config.RUN_FACE_TRIES), (0.01, 1.22, 0.02, 0.10, 0.35, 6))
+        self.assertEqual((config.RUN_FACE_FINE_MAX, config.RUN_FACE_FINE_AXIS, config.RUN_FACE_FINE_RATE,
+                          config.RUN_FACE_FINE_MIN_SEC, config.RUN_FACE_FINE_MAX_SEC), (0.03, 0.55, 0.09, 0.02, 0.35))
 
     def test_a_press_is_never_longer_than_0_10(self):
         world = _World(433.5 - 300)
@@ -190,9 +213,10 @@ class TestTurningToTheFront(unittest.TestCase):
         self.assertEqual(world.presses, [("/input/LookRight", round(80 / (1.22 * 867), 4))])
         self.assertEqual(self.slept[0], config.RUN_FACE_SETTLE_SEC, "回し終えてから撮る")
 
-    def test_a_small_offset_is_at_least_0_02(self):
+    def test_a_small_button_press_is_at_least_0_02(self):
+        """ボタンの下限（軸に分けなければ 1.7% のずれは 0.014 秒 → 0.02 秒）"""
         world = _World(433.5 + 15, gain=0.5)
-        with patch.object(config, "RUN_FACE_TOL", 0.01):
+        with patch.object(config, "RUN_FACE_FINE_MAX", 0.0):
             self._face(world)
         self.assertEqual(world.presses[0], ("/input/LookRight", 0.02))
 
@@ -202,13 +226,15 @@ class TestTurningToTheFront(unittest.TestCase):
         self.assertGreater(fixed, 2)
         self.assertLessEqual(abs(world.x - 433.5), 867 * config.RUN_FACE_TOL)
         self.assertTrue(all(a == "/input/LookLeft" for a, _s in world.presses))
+        self.assertTrue(all(a == "/input/LookHorizontal" and v == -0.55 for a, v, _s in world.axis), world.axis)
         self.assertEqual(self.saved, [])
 
     def test_within_does_nothing(self):
-        for dx in (0, 25, -25):
+        """幅の 1% 以内（0.92%）は正面。3% 前提だった 25px（2.9%）は今は軸で直す"""
+        for dx in (0, 8, -8):
             world = _World(433.5 + dx)
             self.assertEqual(self._face(world), 0, dx)
-            self.assertEqual(world.presses, [])
+            self.assertEqual(world.calls, [])
 
     def test_worse_after_a_press_turns_back_the_same_and_stops(self):
         """押したらずれが大きくなった（回りすぎて反対側へ）→ 逆向きを同じ秒数押して戻し、止める"""
@@ -295,6 +321,234 @@ class TestTurningToTheFront(unittest.TestCase):
             self.ex.do_run_respawn(self.st.round_seq)
         self.assertEqual([a for a, _s in sent], ["/input/MoveBackward", "/input/LookLeft", "/input/LookLeft"])
         self.assertEqual(logs, ["Run: リスポーンして正面を向きました（向きを 1 回直しました）"])
+
+
+    # ── GG: 幅の 3% 以下は軸 /input/LookHorizontal の ±0.55 で細かく回す（1% まで詰める） ──
+
+    def _logs(self):
+        return [c.args[0] for c in DebugLog.write.call_args_list]
+
+    def test_2_percent_right_turns_the_axis_plus(self):
+        """ずれ +2%（幅 654 で +13px）→ 軸 +0.55・13 / (0.09 × 654) = 0.221 秒 → 撮り直しで 0.3% → 正面（直した 1 回）"""
+        world = _World(327 + 13, width=654, axis_gain=0.85)           # 11px 回って 2px（0.3%）残る
+        self.assertEqual(self._face(world), 1)
+        self.assertEqual(world.presses, [], "ボタンは使わない")
+        self.assertEqual(world.axis, [("/input/LookHorizontal", 0.55, 0.2209)])
+        self.assertAlmostEqual(13 / (0.09 * 654), 0.2209, places=4)
+        self.assertIn("[操作] [窓1] Run: 向き: /input/LookHorizontal +0.55 0.221秒（細かく）", self._logs())
+        self.assertIn("[操作] [窓1] Run: 向き: 正面（直した 1 回）", self._logs())
+        self.assertFalse(any("/input/LookRight" in m or "/input/LookLeft" in m for m in self._logs()))
+        self.assertEqual(world.stops, 1, "回した後に stop_all(repeat=1)")
+        self.assertEqual(self.slept[0], config.RUN_FACE_SETTLE_SEC, "回し終えてから撮る")
+
+    def test_2_percent_left_turns_the_axis_minus(self):
+        world = _World(327 - 13, width=654, axis_gain=0.85)
+        self.assertEqual(self._face(world), 1)
+        self.assertEqual(world.axis, [("/input/LookHorizontal", -0.55, 0.2209)])
+        self.assertEqual(world.presses, [])
+        self.assertIn("[操作] [窓1] Run: 向き: /input/LookHorizontal -0.55 0.221秒（細かく）", self._logs())
+
+    def test_5_percent_uses_the_buttons_then_the_axis(self):
+        """ずれ 5% → 今のボタン（LookRight・今の秒数）→ 2% → 軸 → 0.4% → 正面（直した 2 回）"""
+        dx = 0.05 * 654
+        world = _World(327 + dx, width=654, gain=0.6, axis_gain=0.8)
+        self.assertEqual(self._face(world), 2)
+        self.assertEqual(world.presses, [("/input/LookRight", round(dx / (1.22 * 654), 4))])
+        self.assertEqual([c[0] for c in world.calls], ["press", "axis"], "ボタンが先・軸が後")
+        self.assertEqual(world.axis[0][:2], ("/input/LookHorizontal", 0.55))
+        self.assertLessEqual(abs(world.x - 327), 654 * 0.01)
+        self.assertEqual(world.stops, 2)
+        logs = self._logs()
+        self.assertIn("[操作] [窓1] Run: 向き: /input/LookRight 0.041秒", logs, "ボタンのログは今のまま")
+        self.assertTrue(any("/input/LookHorizontal +0.55" in m and m.endswith("秒（細かく）") for m in logs), logs)
+        self.assertIn("[操作] [窓1] Run: 向き: 正面（直した 2 回）", logs)
+
+    def test_0_8_percent_does_nothing(self):
+        world = _World(327 + 0.008 * 654, width=654)
+        self.assertEqual(self._face(world), 0)
+        self.assertEqual(world.calls, [])
+        self.assertIn("[操作] [窓1] Run: 向き: 正面（直した 0 回）", self._logs())
+
+    def test_just_over_1_percent_is_turned(self):
+        world = _World(327 + 0.0115 * 654, width=654, axis_gain=1.0)
+        self.assertEqual(self._face(world), 1)
+        self.assertEqual(len(world.axis), 1)
+
+    def test_the_border_3_percent_is_the_axis_and_over_it_the_button(self):
+        """ちょうど 3% は軸・それより大きい（3.1%）はボタン"""
+        world = _World(500 + 30, width=1000)
+        self._face(world)
+        self.assertEqual(world.calls[0][0], "axis")
+        self.assertEqual(world.calls[0][2:], (0.55, round(30 / (0.09 * 1000), 4)))
+        world = _World(500 + 31, width=1000)
+        self._face(world)
+        self.assertEqual(world.calls[0], ("press", "/input/LookRight", round(31 / (1.22 * 1000), 4)))
+
+    def test_the_axis_length_is_clamped(self):
+        """軸の秒数は 0.02〜0.35 秒"""
+        world = _World(500 + 0.5, width=1000)             # 0.05% → 0.0056 秒 → 0.02 秒
+        with patch.object(config, "RUN_FACE_TOL", 0.0001):
+            self._face(world)
+        self.assertEqual(world.axis[0][2], 0.02)
+        world = _World(500 + 80, width=1000)              # 8% を軸で（分け目を 10% に）→ 0.89 秒 → 0.35 秒
+        with patch.object(config, "RUN_FACE_FINE_MAX", 0.10):
+            self._face(world)
+        self.assertEqual(world.axis[0][2], 0.35)
+
+    def test_the_axis_length_for_3_percent_fits(self):
+        """ちょうど 3% でも上限の 0.35 秒に収まる（0.333 秒）"""
+        world = _World(500 + 30, width=1000)
+        self._face(world)
+        self.assertLessEqual(world.axis[0][2], config.RUN_FACE_FINE_MAX_SEC)
+        self.assertAlmostEqual(world.axis[0][2], 0.3333, places=4)
+
+    def test_worse_after_the_axis_turns_back_with_the_opposite_sign_and_stops(self):
+        """軸で回したら大きくなった → 同じ秒数で −value の軸を送って戻し、止める（ボタンは使わない）"""
+        world = _World(327 + 13, width=654, axis_gain=3.0)             # 13px のつもりが 39px 回って −26px
+        fixed = self._face(world)
+        self.assertEqual(world.axis, [("/input/LookHorizontal", 0.55, 0.2209), ("/input/LookHorizontal", -0.55, 0.2209)])
+        self.assertEqual(world.presses, [])
+        self.assertEqual(fixed, 0, "戻したので直した回数に数えない")
+        self.assertAlmostEqual(world.x, 327 + 13, delta=0.01, msg="押す前の向きに戻った")
+        self.assertEqual(self.saved, [(1, "reverted")])
+        self.assertEqual(world.stops, 2)
+        self.assertTrue(any("→ /input/LookHorizontal -0.55 0.221秒で戻して止める" in m for m in self._logs()), self._logs())
+
+    def test_worse_after_the_axis_on_the_left_turns_back_plus(self):
+        world = _World(327 - 13, width=654, axis_gain=3.0)
+        self._face(world)
+        self.assertEqual([v for _a, v, _s in world.axis], [-0.55, 0.55])
+
+    def test_the_mark_lost_after_the_axis_turns_back_and_stops(self):
+        world = _World(327 + 13, width=654, lose_after=1)
+        fixed = self._face(world)
+        self.assertEqual(world.axis, [("/input/LookHorizontal", 0.55, 0.2209), ("/input/LookHorizontal", -0.55, 0.2209)])
+        self.assertEqual(fixed, 0)
+        self.assertEqual(self.saved, [(1, "reverted")])
+        self.assertTrue(any("目印が消えた → /input/LookHorizontal -0.55" in m for m in self._logs()), self._logs())
+
+    def test_it_gives_up_after_6_with_the_axis_too(self):
+        world = _World(327 + 19, width=654, axis_gain=0.05)            # 3% 以内（2.9%）だが少しずつしか縮まない
+        self.assertEqual(self._face(world), 6)
+        self.assertEqual(len(world.axis), 6)
+        self.assertEqual(world.presses, [])
+        self.assertEqual(self.saved, [(1, "tries")])
+        self.assertTrue(any("6 回直しても ずれ" in m and "やめる" in m for m in self._logs()), self._logs())
+
+    def test_the_axis_turn_stops_with_the_round_or_the_stop(self):
+        """軸に渡す stop は、ラウンドが進んだ・止めたで True（今のボタンと同じ）"""
+        world = _World(327 + 13, width=654, axis_gain=0.1)
+        orig = world.press_axis
+
+        def press_axis(address, value, sec, stop=None):
+            self.assertFalse(stop())
+            orig(address, value, sec, stop)
+            self.st.round_seq += 1
+            self.assertTrue(stop(), "ラウンドが進んだ")
+        world.press_axis = press_axis
+        self._face(world)
+        self.assertEqual(len(world.axis), 1, "止まったので撮り直さない")
+        self.st.round_seq = 5
+        self.assertFalse(world.stop_args[0]())
+        self.running["on"] = False
+        self.assertTrue(world.stop_args[0]())
+
+    def test_stopping_during_the_axis_does_not_measure_again(self):
+        world = _World(327 + 13, width=654, axis_gain=0.1)
+        orig = world.press_axis
+
+        def press_axis(address, value, sec, stop=None):
+            orig(address, value, sec, stop)
+            self.running["on"] = False
+        world.press_axis = press_axis
+        self._face(world)
+        self.assertEqual(len(world.axis), 1)
+
+
+class TestPressAxis(unittest.TestCase):
+    """OSCClient.press_axis（GG）: 軸は float のまま送り直す（press の int の 1 は全速になる）。実際には送らない"""
+
+    def setUp(self):
+        self.client = OSCClient.OSCClient(9000)
+        self.addCleanup(self.client.close)
+        self.sent = []
+        self.now = [100.0]
+        self.slept = []
+        fake_time = type(sys)("time_for_test")
+
+        def perf_counter():
+            self.now[0] += 0.001                # 短い待ち（回しながら待つ）でも時間が進む
+            return self.now[0]
+
+        def sleep(sec):
+            self.slept.append(sec)
+            self.now[0] += sec
+        fake_time.perf_counter = perf_counter
+        fake_time.sleep = sleep
+        fake_time.time = time.time
+        for p in (patch.object(self.client, "send", side_effect=lambda a, v: self.sent.append((a, v)) or True),
+                  patch.object(OSCClient, "time", fake_time)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_zero_then_value_then_resend_the_same_float_then_zero(self):
+        ok = self.client.press_axis("/input/LookHorizontal", 0.55, 0.25)
+        self.assertTrue(ok)
+        values = [v for _a, v in self.sent]
+        self.assertEqual(values[:2], [0.0, 0.55], "押す前に 0.0 を送ってから value")
+        self.assertEqual(values[-1], 0.0, "最後は 0.0")
+        self.assertTrue(all(a == "/input/LookHorizontal" for a, _v in self.sent))
+        self.assertGreaterEqual(values.count(0.55), 3, "押し始めのあと、0.1 秒ごとに同じ値を送り直す")
+        self.assertTrue(all(isinstance(v, float) for v in values), values)
+        self.assertEqual(sorted(set(values)), [0.0, 0.55], "int の 1 やほかの値を送らない")
+
+    def test_the_value_goes_out_as_an_osc_float(self):
+        self.client.press_axis("/input/LookHorizontal", -0.55, 0.0)
+        for _a, v in self.sent:
+            msg = OSCClient.OSCClient.build_message("/input/LookHorizontal", v)
+            self.assertIn(b",f", msg)
+            self.assertNotIn(b",i", msg)
+
+    def test_an_int_value_is_sent_as_float(self):
+        self.client.press_axis("/input/LookHorizontal", 1, 0.0)
+        self.assertEqual([type(v) for _a, v in self.sent], [float, float, float])
+
+    def test_stop_releases_at_once(self):
+        calls = []
+
+        def stop():
+            calls.append(1)
+            return len(calls) >= 2                  # 1 回目は押している・2 回目で止める
+        self.client.press_axis("/input/LookHorizontal", 0.55, 5.0, stop=stop)
+        self.assertEqual([v for _a, v in self.sent][-1], 0.0)
+        self.assertLess(self.now[0], 100.0 + 0.5, "5 秒待たずに離す")
+
+    def test_stop_already_true_sends_zero_value_zero(self):
+        self.client.press_axis("/input/LookHorizontal", 0.55, 1.0, stop=lambda: True)
+        self.assertEqual([v for _a, v in self.sent], [0.0, 0.55, 0.0])
+
+    def test_the_hold_is_accurate_for_a_short_press(self):
+        """残りが 0.02 秒を切ったら sleep せず perf_counter で待つ（sleep は 0.02 秒ぶん手前まで）"""
+        start = self.now[0]
+        self.client.press_axis("/input/LookHorizontal", 0.55, 0.12)
+        held = self.now[0] - start
+        self.assertGreaterEqual(held, 0.12)
+        self.assertLess(held, 0.12 + 0.01)
+        self.assertTrue(all(s <= config.OSC_HOLD_RESEND_SEC + 1e-9 for s in self.slept), self.slept)
+        self.assertLessEqual(sum(self.slept), 0.12 - 0.02 + 0.01, "最後の 0.02 秒は sleep しない")
+
+    def test_a_very_short_press_does_not_sleep(self):
+        self.client.press_axis("/input/LookHorizontal", 0.55, 0.015)
+        self.assertEqual(self.slept, [])
+        self.assertEqual([v for _a, v in self.sent], [0.0, 0.55, 0.0])
+
+    def test_stop_all_zeroes_the_axis_with_a_float(self):
+        """stop_all は /input/LookHorizontal も float の 0.0 で止める（ボタンは int の 0）"""
+        self.client.stop_all(repeat=1)
+        sent = dict(self.sent)
+        self.assertEqual(sent["/input/LookHorizontal"], 0.0)
+        self.assertIsInstance(sent["/input/LookHorizontal"], float)
+        self.assertIsInstance(sent["/input/LookLeft"], int)
 
 
 class TestTheShotsAreKept(unittest.TestCase):

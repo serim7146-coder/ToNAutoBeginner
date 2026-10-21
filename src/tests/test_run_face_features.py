@@ -376,9 +376,13 @@ def _strip(name):
 class _Osc:
     def __init__(self):
         self.presses = []
+        self.axis = []                  # GG: 細かい直しの軸（address, value, sec）
 
     def press(self, address, sec, stop=None):
         self.presses.append((address, round(sec, 4)))
+
+    def press_axis(self, address, value, sec, stop=None):
+        self.axis.append((address, value, round(sec, 4)))
 
     def stop_all(self, repeat=1):
         pass
@@ -439,6 +443,16 @@ class TestTheFlowAndTheLog(unittest.TestCase):
         self.assertIn("[操作] [窓1] Run: 向き: 正面（直した 1 回）", self.written)
         self.assertEqual(self.ex._last_face[1][3], "features")
 
+    def test_a_small_offset_turns_by_the_analog_axis(self):
+        """GG: 幅の 3% 以下 1% 超（+13px＝1.5%）は軸 /input/LookHorizontal +0.55（ボタンは使わない）"""
+        import numpy as np
+        shot = np.zeros((703, 867, 3), np.uint8)
+        fixed = self._face(shot, [(433.5 + 13, 150, 1.0, "features"), (433.5 + 2, 150, 1.0, "features")])
+        self.assertEqual(fixed, 1)
+        self.assertEqual(self.ex._osc.axis, [("/input/LookHorizontal", 0.55, round(13 / (0.09 * 867), 4))])
+        self.assertEqual(self.ex._osc.presses, [])
+        self.assertIn("[操作] [窓1] Run: 向き: 正面（直した 1 回）", self.written)
+
     def test_not_found_is_as_before(self):
         import numpy as np
         shot = np.zeros((703, 867, 3), np.uint8)
@@ -463,7 +477,7 @@ class TestTheFlowAndTheLog(unittest.TestCase):
         self.assertIs(got_shot, shot)
         self.assertEqual(mark[3], "features")
         dx = mark[0] - shot.shape[1] / 2
-        self.assertLess(abs(dx), shot.shape[1] * 0.03, "依頼者の FOV 75 は正面を向いている")
+        self.assertLess(abs(dx), shot.shape[1] * config.RUN_FACE_TOL, "依頼者の FOV 75 は正面を向いている")
         self.assertEqual(self._face_real(shot), 0)
         self.assertEqual(self.ex._osc.presses, [])
         self.assertTrue(any("特徴点 インライア" in str(m) for m in self.written), self.written)
