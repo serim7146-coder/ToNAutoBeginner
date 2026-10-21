@@ -7,6 +7,8 @@ import numpy as np
 PLUSH = 70
 SCALE = 2.0
 OFFSET = (100.0, 50.0)
+# 照準。Have Plush の行の点（撮影 (246, 242)）が HUD に止められない位置（横 −0.05・縦 +0.13。PLUSH_ROW_HUD_X_MAX より右）
+AIM = (300.0, 100.0)
 
 
 def project(pt):
@@ -45,9 +47,12 @@ class _Shop:
         if not self.no_row and self.knob == want:
             x, y = (int(v) for v in at(ItemFetch.PLUSH_ROW))
             img[y - 3:y + 4, x - 20:x + 21] = (0, 200, 0)        # 緑の文字（BGR）
+            pitch = int(ItemFetch.PLUSH_ROW_PITCH * SCALE)       # 上は Paradise Lost（赤）・下は Joyous Orb（黄）
+            img[y - pitch - 3:y - pitch + 4, x - 20:x + 21] = (0, 0, 200)
+            img[y + pitch - 3:y + pitch + 4, x - 20:x + 21] = (0, 200, 200)
         ex, ey = (int(v) for v in at(ItemFetch.BUTTONS["Equip"]))
         img[ey - 4:ey + 5, ex - 10:ex + 11] = (0, 200, 0)
-        return img, (1800.0, 100.0)
+        return img, AIM
 
     def tab_down(self):
         self.events.append(("tab_down",))

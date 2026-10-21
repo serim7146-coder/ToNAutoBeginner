@@ -105,6 +105,16 @@ PLUSH_ROW = (73, 96)                # Have Plush の行（緑の文字。Paradis
 PLUSH_ROW_WINDOW = (25, 5)          # 行の緑を探す範囲（横 ±25・縦 ±5）
 PLUSH_SHIFTS = (0, 8, -8)           # 行に緑が無ければドラッグ先をずらす（見本の px。最大 3 回）
 PLUSH_ROUNDS = 2                    # Equipping が来ない・違う番号なら、行を選ぶところから 1 回やり直す
+# Have Plush の行の点は、画面に固定の HUD（Intermission の枠の右の端）にクリックを止められることがある。
+# 2026-10-19〜21 の 31 回: 照準から横 −0.090 より左は反応なし・−0.089 より右は反応あり（余白 0.01）。
+# 一覧の道（buy_plush）だけ、行の点が HUD に掛かるなら視点を横に動かして、その点を右へ寄せる
+PLUSH_ROW_HUD_X_MAX = -0.080        # 行の点がこれより左（照準から・クライアントの高さで割る）で縦が HUD_Y の中なら止められる
+PLUSH_ROW_SAFE_X = -0.070           # 寄せる先（照準から・高さで割る）
+# 行の取り違え（Jailbird など）を避けるため、緑の上下の行の色の並びで Have Plush を確かめる。
+# 一覧は行の間隔が約 16（見本の px。撮影から測った）。Have Plush の上は Paradise Lost（赤）・下は Joyous Orb（黄）
+PLUSH_ROW_PITCH = 16
+RED_HSV_RANGES = (((0, 80, 90), (10, 255, 255)), ((165, 80, 90), (179, 255, 255)))   # Paradise Lost（H 175〜178）
+YELLOW_HSV = ((15, 80, 90), (35, 255, 255))                                           # Joyous Orb（H 19〜26）
 PLUSH_OPEN_WAIT_SEC = 0.5           # Event を押してから一覧が出るまで
 DRAG_STEPS = 20                     # つまみのドラッグ（Tab＋左ボタンを押したまま 20 段）
 DRAG_STEP_SEC = 0.03
@@ -234,6 +244,54 @@ def green_center(bgr, pos, scale, window=GREEN_WINDOW):
         return None
 
 
+def color_area(bgr, pos, scale, ranges, window=GREEN_WINDOW) -> int:
+    """green_center と同じ窓（pos の周りの 見本の px で 横 ±window[0]・縦 ±window[1]）で、ranges
+    （(low, high) の並び）のどれかに入る画素の数。撮影が無い・例外は 0"""
+    try:
+        import cv2
+        import numpy as np
+        if not hasattr(bgr, "shape"):
+            return 0
+        sx, sy = scale
+        h, w = bgr.shape[:2]
+        x0 = max(0, int(round(pos[0] - window[0] * sx)))
+        x1 = min(w, int(round(pos[0] + window[0] * sx)) + 1)
+        y0 = max(0, int(round(pos[1] - window[1] * sy)))
+        y1 = min(h, int(round(pos[1] + window[1] * sy)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return 0
+        hsv = cv2.cvtColor(np.ascontiguousarray(bgr[y0:y1, x0:x1]), cv2.COLOR_BGR2HSV)
+        mask = np.zeros(hsv.shape[:2], np.uint8)
+        for low, high in ranges:
+            mask |= cv2.inRange(hsv, np.array(low, np.uint8), np.array(high, np.uint8))
+        return int(np.count_nonzero(mask))
+    except Exception:
+        return 0
+
+
+def row_order_ok(bgr, center, scale) -> tuple:
+    """緑の重心 center の上 PLUSH_ROW_PITCH に赤・下に黄があるか。(合ったか, ログの文字) を返す。
+    合えば '赤／黄'、違えば '上 黄・下 黄' のように上下の色の名前（赤・黄・緑・なし のうち画素が一番多いもの）。
+    窓は PLUSH_ROW_WINDOW。最小の量は GREEN_MIN_AREA × 倍率²（green_center と同じ）"""
+    sx, sy = scale
+    least = max(1.0, GREEN_MIN_AREA * sx * sy)
+    colors = (("赤", RED_HSV_RANGES), ("黄", (YELLOW_HSV,)), ("緑", ((GREEN_HSV_LOW, GREEN_HSV_HIGH),)))
+
+    def name_at(dy_px):
+        pos = (center[0], center[1] + dy_px * sy)
+        counts = [(color_area(bgr, pos, scale, rng, PLUSH_ROW_WINDOW), nm) for nm, rng in colors]
+        best, nm = max(counts, key=lambda c: c[0])
+        return nm if best >= least else "なし", counts
+
+    up, up_counts = name_at(-PLUSH_ROW_PITCH)
+    down, down_counts = name_at(PLUSH_ROW_PITCH)
+    up_red = dict((nm, n) for n, nm in up_counts)["赤"] >= least
+    down_yellow = dict((nm, n) for n, nm in down_counts)["黄"] >= least
+    if up_red and down_yellow:
+        return True, "赤／黄"
+    return False, f"上 {up}・下 {down}"
+
+
 def knob_band(bgr, pos, scale, window=PLUSH_KNOB_WINDOW):
     """pos（画面の点。見積もりのつまみ）の周りの窓（見本の px × scale）で、明るい灰色の縦の帯の
     (中心 x, 上端 y, 下端 y) を画面の座標で返す。無ければ None。
@@ -313,6 +371,13 @@ def in_hud(point, aim, height) -> bool:
     """撮影の点が HUD の範囲（照準 ＋ HUD_X・HUD_Y × クライアントの高さ）に入っているか"""
     rx, ry = (point[0] - aim[0]) / height, (point[1] - aim[1]) / height
     return HUD_X[0] <= rx <= HUD_X[1] and HUD_Y[0] <= ry <= HUD_Y[1]
+
+
+def row_blocked(point, aim, height) -> bool:
+    """Have Plush の行の点（撮影）が、HUD にクリックを止められる位置か（照準から横 PLUSH_ROW_HUD_X_MAX より左・
+    縦が HUD_Y の中。一覧の道だけ見る）"""
+    rx, ry = (point[0] - aim[0]) / height, (point[1] - aim[1]) / height
+    return rx < PLUSH_ROW_HUD_X_MAX and HUD_Y[0] <= ry <= HUD_Y[1]
 
 
 def panel_outside(corners, size) -> tuple:
@@ -567,9 +632,11 @@ class Fetcher:
         self.log(f"アイテム取得: 視点を戻した（縦 {dy}）")
 
     # ── 3. 店の画面の全体を映す・店のボタン ──
-    def frame_panel(self, shop: str):
+    def frame_panel(self, shop: str, plush_row: bool = False):
         """見本の四隅が撮影に入るまで視点を動かす（横が先。横が入って縦がはみ出すときだけ縦）。
-        入っていれば動かさない（感度も測らない）。入った撮影の (撮影, 照準, locate の結果) か None"""
+        入っていれば動かさない（感度も測らない）。入った撮影の (撮影, 照準, locate の結果) か None。
+        plush_row（一覧の道）なら、Have Plush の行の点が HUD に止められる位置のとき（row_blocked）も、
+        ボタンの扱いのあとで、視点を横に動かしてその点を PLUSH_ROW_SAFE_X へ寄せる（縦は動かさない）"""
         point = BUTTONS[shop]
         misses = moves = 0
         while True:
@@ -596,16 +663,26 @@ class Fetcher:
             boxes = [(name, button_box(project, pt)) for name, pt in (("店のボタン", BUTTONS[shop]),
                                                                        ("Equip", BUTTONS["Equip"]))]
             hud = [name for name, box in boxes if box_in_hud(box, aim, height)]
+            row_pt = project(PLUSH_ROW)[:2] if plush_row else None
+            blocked = row_blocked(row_pt, aim, height) if plush_row else False
             where = ("入っている" if not (out_x or out_y)
                      else "はみ出す（" + "・".join(n for n, o in (("横", out_x), ("縦", out_y)) if o) + "）")
             self.log(f"アイテム取得: 店の画面: 手がかり {found[4]} 点・四隅 {where}・"
-                     f"HUD に重なる点 {'・'.join(hud) if hud else 'なし'}・"
+                     f"HUD に重なる点 {'・'.join(hud + ['Plush の行'] if blocked else hud) or 'なし'}・"
                      f"真ん中のずれ 横 {dx:.1f}・縦 {dy:.1f}（動かした {moves} 回）・見た箱 "
-                     + "／".join(f"{name} {box_ratio(box, aim, height)}" for name, box in boxes))
-            if not (out_x or out_y or hud):
+                     + "／".join(f"{name} {box_ratio(box, aim, height)}" for name, box in boxes)
+                     + (f"／Plush の行 横 {(row_pt[0] - aim[0]) / height:+.3f}・縦 {(row_pt[1] - aim[1]) / height:+.3f}"
+                        if plush_row else ""))
+            if not (out_x or out_y or hud or blocked):
                 return img, aim, found
             # はみ出している・押す点が HUD に重なる → 店の画面の真ん中を照準へ寄せる（横が先。縦は要るときだけ）
-            if (out_x or (hud and not out_y)) and abs(dx) > PANEL_SETTLE_PX:
+            if not (out_x or out_y or hud):
+                # 行の点だけが HUD に重なる（ボタンの扱いが先）→ 視点を横だけ動かして、行の点を SAFE へ寄せる（板が右へ動く）
+                want = ((row_pt[0] - aim[0]) - PLUSH_ROW_SAFE_X * height, 0.0)
+                if abs(want[0]) <= PANEL_SETTLE_PX:
+                    self.log("アイテム取得: 押す点が HUD に重なります（Plush の行）")
+                    return None
+            elif (out_x or (hud and not out_y)) and abs(dx) > PANEL_SETTLE_PX:
                 want = (dx, 0.0)                # 横が先
             elif (out_y or hud) and abs(dy) > PANEL_SETTLE_PX:
                 want = (0.0, dy)
@@ -755,15 +832,15 @@ class Fetcher:
         self.log(f"アイテム取得: 感度 横 {gain[0]:.3f}・縦 {gain[1]:.3f}")
         return True
 
-    def _frame(self, shop: str):
-        """全体を映す。保存した感度で映せなければ、測り直して1回やり直す"""
-        framed = self.frame_panel(shop)
+    def _frame(self, shop: str, plush_row: bool = False):
+        """全体を映す。保存した感度で映せなければ、測り直して1回やり直す。plush_row は frame_panel へ素通し"""
+        framed = self.frame_panel(shop, plush_row)
         if framed is None and self.gain_from_saved:
             self.log("アイテム取得: 感度 測り直し（保存した値で店の画面が入りきらない）")
             self.saved_gain = None      # 合わなかった値で測りの量を決めない・頼らない
             self.gain = None
             self.gain_from_saved = False
-            framed = self.frame_panel(shop)
+            framed = self.frame_panel(shop, plush_row)
         return framed
 
     def buy(self, shop: str, target_id: int) -> bool:
@@ -787,7 +864,7 @@ class Fetcher:
         行を出す → 行（緑の文字）を押す → Equip。点はすべて最初の画面の位置合わせから写す（Event の
         後に撮り直して位置合わせはしない）。Equipping target_id が来ない・違う番号なら、行を選ぶ
         ところから 1 回やり直す"""
-        framed = self._frame("Event")
+        framed = self._frame("Event", plush_row=True)
         if framed is None:
             return False
         project = framed[2][5]
@@ -851,10 +928,15 @@ class Fetcher:
                 self.log(f"アイテム取得: つまみ 実測（引いた後）: y {after[1]}〜{after[2]}（"
                          + (f"動いた {moved} px" if moved >= KNOB_MOVED_PX * ksy else "動いていない") + "）")
             rx, ry, sx, sy = project(PLUSH_ROW)
-            center = (green_center(shot[0], (rx, ry), (sx, sy), PLUSH_ROW_WINDOW)
-                      if shot is not None else None)
-            self.log(f"アイテム取得: Have Plush の行 ({rx:.1f}, {ry:.1f}): "
-                     + ("緑なし" if center is None else f"緑 ({center[0]:.1f}, {center[1]:.1f})"))
+            green = (green_center(shot[0], (rx, ry), (sx, sy), PLUSH_ROW_WINDOW)
+                     if shot is not None else None)
+            center, text = green, "緑なし"
+            if green is not None:
+                ok, how = row_order_ok(shot[0], green, (sx, sy))
+                text = f"緑 ({green[0]:.1f}, {green[1]:.1f})" + (f"・並び {how}" if ok else f"・並びが違う（{how}）")
+                if not ok:
+                    center = None               # 上下の並びが Have Plush でない（Jailbird など）→ 緑なしと同じ扱い
+            self.log(f"アイテム取得: Have Plush の行 ({rx:.1f}, {ry:.1f}): " + text)
             if center is not None:
                 return center
         return None
