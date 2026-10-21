@@ -49,6 +49,7 @@ HELD_LOST_RESPAWN = "リスポーン"
 HELD_LOST_RUN_DEATH = "Run 死亡"
 HELD_LOST_SABOTAGE = "Sabotage マーダー"
 HELD_LOST_INSTANCE = "インスタンス移動"
+HELD_LOST_REBORN = "猫消費"
 
 
 # ═══════════════════════════════════════════════
@@ -319,13 +320,15 @@ class LogMonitor:
             else:
                 self._log(f"⚠ 前面化に失敗（{label}は継続）")
 
-    def _release_continue_freeze_after_delay(self, round_seq: int):
+    def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None):
         """死亡から一定時間後に続行ラウンドのフリーズを解除する。
 
         猶予を置くのは、解除前に手動操作を挟む余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
         （続行ラウンドほど手動で挟む用事がないため）。
         待機中に次のラウンドが始まったら（round_seqが変わったら）何もしない。
+        reborn_seq は死亡からの予約だけが渡す。待機中に猫で復活していたら（番号が変わったら）
+        その死亡は取り消されているので何もしない（RoundOver からの予約は渡さない）。
         """
         st = self.st
         # 眠っている間にテラーが判明する可能性があるので、待つ長さは先に決める
@@ -333,6 +336,9 @@ class LogMonitor:
                  else config.CONTINUE_FREEZE_RELEASE_DELAY_SEC)
         time.sleep(delay)
         if not self._running or st.round_seq != round_seq:
+            return
+        if reborn_seq is not None and st.reborn_seq != reborn_seq:
+            self._debug("復活したので、死亡からの解除はしません")
             return
         if st.is_continue_round:
             st.is_continue_round = False
@@ -438,15 +444,19 @@ class LogMonitor:
         if self._auto_begin_active():
             self._start_daemon(self._action.do_begin_again, st.round_seq)
 
-    def _release_round_freeze_after_delay(self, round_seq: int):
+    def _release_round_freeze_after_delay(self, round_seq: int, reborn_seq=None):
         """死亡から一定時間後にラウンド突入フリーズを解除する。
 
         猶予は霧ラウンドと同じ。待機中に次のラウンドが始まっていたら何もしない
-        （ROUND_START 側で解除済み）。
+        （ROUND_START 側で解除済み）。待機中に猫で復活していたら（reborn_seq が変わったら）
+        その死亡は取り消されているので何もしない。
         """
         time.sleep(config.FOG_FREEZE_RELEASE_DELAY_SEC)
         st = self.st
         if not self._running or st.round_seq != round_seq:
+            return
+        if reborn_seq is not None and st.reborn_seq != reborn_seq:
+            self._debug("復活したので、死亡からの解除はしません")
             return
         if st.round_freeze_held:
             SharedState.round_freeze_end(st)
@@ -547,12 +557,12 @@ class LogMonitor:
                          LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK,
                          LogParser.ITEM_EQUIP_MARK, LogParser.PAGE_COLLECTED_MARK,
                          LogParser.RESPAWN_MARK, LogParser.YOU_DIED_MARK,
-                         LogParser.SUS_PLAYER_MARK)
+                         LogParser.REBORN_MARK, LogParser.SUS_PLAYER_MARK)
     # 所持アイテムを取り戻すために、入室後の分を古い順に流す行
     _HELD_ITEM_REPLAY_KINDS = (LogParser.EVENT_ITEM_EQUIP, LogParser.EVENT_ROUND_START,
                                LogParser.EVENT_ROUND_OVER, LogParser.EVENT_PAGE_COLLECTED,
                                LogParser.EVENT_RESPAWN, LogParser.EVENT_YOU_DIED,
-                               LogParser.EVENT_SUS_PLAYER)
+                               LogParser.EVENT_REBORN, LogParser.EVENT_SUS_PLAYER)
     # 定期の Verified の位相を取り戻すために集める行
     _VERIFIED_LEARN_KINDS = (LogParser.EVENT_VERIFIED, LogParser.EVENT_ROUND_START,
                              LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END)
@@ -1009,6 +1019,9 @@ class LogMonitor:
             elif kind == LogParser.EVENT_RESPAWN:
                 if in_round:
                     held = 0
+            elif kind == LogParser.EVENT_REBORN:
+                if in_round:
+                    held = 0
             elif kind == LogParser.EVENT_PAGE_COLLECTED:
                 if self._page_loses_held_item(round_type, held):
                     held = 0
@@ -1400,6 +1413,7 @@ class LogMonitor:
         LogParser.EVENT_ROUND_START: "_on_round_start",
         LogParser.EVENT_KILLERS_SET: "_on_killers_set",
         LogParser.EVENT_YOU_DIED: "_on_you_died",
+        LogParser.EVENT_REBORN: "_on_reborn",
         LogParser.EVENT_RESPAWN: "_on_respawn",
         LogParser.EVENT_PAGE_COLLECTED: "_on_page_collected",
         LogParser.EVENT_ROUND_OVER: "_on_round_over",
@@ -1737,14 +1751,30 @@ class LogMonitor:
         # 猶予中に手動で視点調整などを挟めるようにするため。
         if st.is_continue_round:
             self._start_daemon(self._release_continue_freeze_after_delay,
-                               st.round_seq)
+                               st.round_seq, st.reborn_seq)
         if st.round_freeze_held:
             self._start_daemon(self._release_round_freeze_after_delay,
-                               st.round_seq)
+                               st.round_seq, st.reborn_seq)
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")
             self._lose_held_item(HELD_LOST_RUN_DEATH)
         self._drop_when_round_ends("死んだ")
+
+    def _on_reborn(self, event):
+        """猫（Maxwell）で復活した。直前の死亡を取り消し、猫を消費したのでアイテムロストにする。
+
+        死亡の行（You died.）と同じ秒に来る。ラウンドの外なら何もしない。
+        """
+        st = self.st
+        if not st.in_round:
+            return
+        st.reborn_seq += 1      # 死亡で予約した解除（続行・ラウンド突入）がこれを見て、しないと決める
+        st.died_this_round = False
+        if st.dropped_round_seq == st.round_seq:
+            st.dropped_round_seq = -1   # 死んだので落とす、をこのラウンドでもう一度使えるようにする
+        self._debug("猫消費 → 死亡を取り消し")
+        self._mark_item_lost(f"{HELD_LOST_REBORN}: アイテムロスト")
+        self._lose_held_item(HELD_LOST_REBORN)
 
     def _on_respawn(self, event):
         """リスポーン（ラウンド中ならアイテムロスト）"""

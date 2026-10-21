@@ -168,6 +168,7 @@ class WindowState:
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False
     died_this_round: bool = False
+    reborn_seq: int = 0                 # 猫で復活した通し番号（死亡で予約した解除が、起きたときに見比べる）
     lived_this_round: bool = False
     item_equipped_after_death: bool = False
     pending_sabotage_murder: bool = False
