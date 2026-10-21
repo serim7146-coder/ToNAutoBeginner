@@ -98,6 +98,29 @@ class OSCClient:
             ok = self.send(address, 0) and ok
         return ok
 
+    def press_axis(self, address: str, value: float, hold_sec: float, stop=None) -> bool:
+        """軸（float）を value にして hold_sec 後に 0.0 へ戻す（GG。Run の向きの細かい直し）。押す前に 0.0 を送ってから value。
+        押している間は OSC_HOLD_RESEND_SEC ごとに同じ value を送り直す（press の送り直しは int の 1 で、
+        軸へ送ると全速になる＝使わない。軸へ int を送ると解釈が不定になる）。stop() が True ならその場で 0.0 を送って抜ける。
+        短い秒数をそろえるため、残りが 0.02 秒を切ったら time.perf_counter で待つ（sleep の刻みは Windows で約 15ms）"""
+        value = float(value)
+        ok = self.send(address, 0.0)
+        ok = self.send(address, value) and ok
+        end = time.perf_counter() + max(0.0, hold_sec)
+        spin_sec = 0.02
+        while True:
+            if stop is not None and stop():
+                return self.send(address, 0.0) and ok       # 待たずに離す
+            remain = end - time.perf_counter()
+            if remain <= 0:
+                break
+            if remain < spin_sec:
+                continue                                    # 残りが短い間は sleep せず perf_counter で待つ
+            time.sleep(min(remain - spin_sec, config.OSC_HOLD_RESEND_SEC))
+            if time.perf_counter() < end and not (stop is not None and stop()):
+                ok = self.send(address, value) and ok       # 同じ float を送り直す
+        return self.send(address, 0.0) and ok
+
     def press_multi(self, holds, stop=None) -> bool:
         """複数の入力を同時に押し、それぞれの秒数で個別に離す。
 

@@ -2273,10 +2273,14 @@ class ActionExecutor:
 
     def _face_the_stairs(self, round_seq: int) -> int:
         """撮影で階段の上の構造の絵（RunFace）を探し、真ん中からずれていれば短く回して直す（背面・OSC。
-        前面は借りない。ほかの窓のフリーズ中でもよい）。目印が左（回し足りない）→ LookLeft、右 → LookRight を
-        min(RUN_FACE_MAX_SEC, max(RUN_FACE_MIN_SEC, |ずれ| / (RUN_FACE_RATE × 幅))) 秒。押した後に撮り直して、
-        ずれが大きくなった・目印が消えた → 直前の分を逆向きに同じ秒数押して戻し、止める（悪い向きのまま
-        手放さない。依頼者）。許しの中 → 止める。縮んだ → 続ける（RUN_FACE_TRIES 回まで）。
+        前面は借りない。ほかの窓のフリーズ中でもよい）。許し（RUN_FACE_TOL＝幅の 1%）の中 → 止める（GG）。
+        ずれが幅の RUN_FACE_FINE_MAX（3%）より大きい → 目印が左（回し足りない）→ LookLeft、右 → LookRight を
+        min(RUN_FACE_MAX_SEC, max(RUN_FACE_MIN_SEC, |ずれ| / (RUN_FACE_RATE × 幅))) 秒（ボタンは 1 回 1.45% 刻みで
+        1% に詰められない）。3% 以下で 1% より大きい → 軸 /input/LookHorizontal を ±RUN_FACE_FINE_AXIS（0.55。
+        目印が右なら +）で min(RUN_FACE_FINE_MAX_SEC, max(RUN_FACE_FINE_MIN_SEC, |ずれ| / (RUN_FACE_FINE_RATE × 幅))) 秒
+        （0.2〜0.5% 刻み。2026-10-22 の実機の測り）。押した後に撮り直して、
+        ずれが大きくなった・目印が消えた → 直前の分を逆向き（軸は同じ秒数で符号を逆に）に同じ秒数押して戻し、止める
+        （悪い向きのまま手放さない。依頼者）。縮んだ → 続ける（RUN_FACE_TRIES 回まで）。
         最初から目印が見つからない → 押さない。直した（残した）回数を返す"""
         idx = self._st.window_idx
         head = f"[操作] [窓{idx}] Run: 向き"
@@ -2308,22 +2312,38 @@ class ActionExecutor:
                 return fixed
             if not self._run_after_respawn(round_seq):
                 return fixed
-            address = "/input/LookLeft" if dx < 0 else "/input/LookRight"
-            sec = min(config.RUN_FACE_MAX_SEC,
-                      max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width)))
-            DebugLog.write(f"{head}: {address} {sec:.3f}秒")
-            self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+            stop = lambda: not self._run_after_respawn(round_seq)  # noqa: E731
+            fine = abs(dx) <= width * config.RUN_FACE_FINE_MAX
+            if fine:
+                # GG: ボタンは 1 回 1.45% 刻みで 1% に詰められないので、軸 /input/LookHorizontal の ±0.55 で回す
+                value = config.RUN_FACE_FINE_AXIS * (1 if dx > 0 else -1)
+                sec = min(config.RUN_FACE_FINE_MAX_SEC,
+                          max(config.RUN_FACE_FINE_MIN_SEC, abs(dx) / (config.RUN_FACE_FINE_RATE * width)))
+                DebugLog.write(f"{head}: /input/LookHorizontal {value:+.2f} {sec:.3f}秒（細かく）")
+                self._osc.press_axis("/input/LookHorizontal", value, sec, stop=stop)
+            else:
+                address = "/input/LookLeft" if dx < 0 else "/input/LookRight"
+                sec = min(config.RUN_FACE_MAX_SEC,
+                          max(config.RUN_FACE_MIN_SEC, abs(dx) / (config.RUN_FACE_RATE * width)))
+                DebugLog.write(f"{head}: {address} {sec:.3f}秒")
+                self._osc.press(address, sec, stop=stop)
             self._osc.stop_all(repeat=1)
             fixed += 1
             if not self._run_after_respawn(round_seq):
                 return fixed
             new_shot, new_mark = self._measure_face()
             if new_mark is None or abs(new_mark[0] - new_shot.shape[1] / 2) > abs(dx):
-                back = "/input/LookRight" if address == "/input/LookLeft" else "/input/LookLeft"
                 why = ("目印が消えた" if new_mark is None
                        else f"ずれが大きくなった（{new_mark[0] - new_shot.shape[1] / 2:+.1f}）")
+                if fine:
+                    back = f"/input/LookHorizontal {-value:+.2f}"
+                else:
+                    back = "/input/LookRight" if address == "/input/LookLeft" else "/input/LookLeft"
                 DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める（ずれ {dx:+.1f} の向き）")
-                self._osc.press(back, sec, stop=lambda: not self._run_after_respawn(round_seq))
+                if fine:
+                    self._osc.press_axis("/input/LookHorizontal", -value, sec, stop=stop)
+                else:
+                    self._osc.press(back, sec, stop=stop)
                 self._osc.stop_all(repeat=1)
                 RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "reverted")
                 return fixed - 1
