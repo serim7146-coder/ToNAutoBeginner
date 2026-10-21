@@ -56,6 +56,8 @@
         "10": ["Pot Of Greed", 0]
     },
     "Event": {
+        "25": ["Luxury Coil", 0],
+        "35": ["Blue Medkit", 0],
         "30": ["Sealed Sword", 1],
         "23": ["Avenger", 0],
         "41": ["Maxwell", 0],
