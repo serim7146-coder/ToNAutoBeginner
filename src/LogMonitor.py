@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+import ContinueTable
 import SharedState
 import WindowOperator
 import PlaySound
@@ -841,7 +842,16 @@ class LogMonitor:
                 if name in present}
 
     def _keep_on(self) -> dict:
-        """この窓の続行リスト"""
+        """この窓の続行リスト。続行表（GH）を重ねたもの。
+        干し芋・焼き芋（グループのインスタンス）には重ねない。「リストが無いので止める」の判定は
+        重ねる前のリスト（_keep_on_base / _effective_wishes）で見る"""
+        base = self._keep_on_base()
+        if self.st.instance_type in GroupRound.GROUP_INSTANCES:
+            return base
+        return ContinueTable.apply(base, ContinueTable.current())
+
+    def _keep_on_base(self) -> dict:
+        """この窓の続行リスト（続行表を重ねる前）"""
         tab = self._window_tab()
         if tab is not None:
             # そのタブの参加者の希望だけ（主催者自身のぶんは読み込み側で足してある）
@@ -2496,7 +2506,8 @@ class LogMonitor:
                "【プレイ】" if st.is_continue_round else "【スキップ】")
         if st.is_continue_round and self._is_all_continue_round():
             tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
-        self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}")
+        self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}"
+                  + self._overlay_label(all_ids))
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
@@ -2524,6 +2535,19 @@ class LogMonitor:
             # 続行にならなければ自爆する。グループもここに含める
             if self.cfg.do_skip and (is_private or is_group):
                 self._start_daemon(self._action.do_skip)
+
+    def _overlay_label(self, ids) -> str:
+        """判定の行の後ろに付ける文字。続行表を重ねて続行の判定が変わり、その結果になったときだけ
+        （デフォ続行で続行にした／続行無効で続行をやめた）。グループのインスタンスは重ねない"""
+        st = self.st
+        if st.instance_type in GroupRound.GROUP_INSTANCES:
+            return ""
+        label = ContinueTable.overlay_label(self._keep_on_base(), self._keep_on(),
+                                            st.round_type, ids)
+        wanted = {ContinueTable.LABEL_DEFAULT: True, ContinueTable.LABEL_DISABLED: False}
+        if label and wanted[label] != st.is_continue_round:
+            return ""           # 3クラ解放などリスト以外の決まりで、結果が逆になった
+        return label
 
     def _send_round_statistics_once(self):
         st = self.st
