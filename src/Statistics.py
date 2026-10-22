@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 import config
+import TerrorIds
 
 
 SIGNIFICANCE_LEVELS = (
@@ -205,7 +206,7 @@ def terror_name(terror_id: int, terror_data: dict[str, dict[str, str]]) -> str:
     for category in ("classic", "alternate", "unbound"):
         if sid in terror_data.get(category, {}):
             return terror_data[category][sid]
-    return f"ID:{terror_id}"
+    return TerrorIds.name(terror_id)
 
 
 def analyze_terror_counts(

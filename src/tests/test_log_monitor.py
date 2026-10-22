@@ -653,11 +653,12 @@ class TestTerrorNameAlwaysLogged(unittest.TestCase):
 
         self.assertTrue(any("Terror set:" in m for m in logs), logs)
 
-    def test_unknown_id_shows_the_raw_id(self):
-        """terrors.json に無いIDは ID:xxxxx の形で出る"""
+    def test_unknown_id_shows_the_number_with_a_hash(self):
+        """表に無い番号は #番号 の形で出る（名前が無いとき）"""
         logs = self._on_killers(self._monitor(), ids=(99999,))
 
-        self.assertTrue(any("ID:99999" in m for m in logs), logs)
+        self.assertTrue(any("#99999" in m for m in logs), logs)
+        self.assertFalse(any("ID:" in m for m in logs), logs)
 
     def test_decision_line_has_no_name(self):
         """判定行は名前を落としてタグだけ"""
@@ -915,15 +916,14 @@ class TestLogMonitorRuntimeHelpers(unittest.TestCase):
         self.assertFalse(monitor._running)
         self.assertTrue(monitor._stop_event.is_set())
 
-    def test_format_terror_ids_caches_name_lookup(self):
-        LogMonitor._terror_name_cached.cache_clear()
-        with patch.object(LogMonitor.ReadJson, "terror_name", return_value="Cached Terror") as mock_name:
-            first = LogMonitor.format_terror_ids([9999])
-            second = LogMonitor.format_terror_ids([9999])
-
-        self.assertEqual(first, "Cached Terror")
-        self.assertEqual(second, "Cached Terror")
-        mock_name.assert_called_once_with(9999, config.TERRORS)
+    def test_format_terror_ids_shows_names_and_falls_back_to_the_number(self):
+        self.assertEqual(LogMonitor.format_terror_ids([0, 135, 283]), "Huggy, Whiteface, Self Inserts")
+        self.assertEqual(LogMonitor.format_terror_ids([9999]), "#9999")
+        self.assertEqual(LogMonitor.format_terror_ids([]), "")
+        # 8 Pages のラウンドの番号は 8 Pages の索引から（172 は 8 Pages にしか出ない Baldi）
+        self.assertEqual(LogMonitor.format_terror_ids([0, 172], "8 Pages"), "Huggy, Baldi")
+        self.assertEqual(LogMonitor.format_terror_ids([172]), "#172")
+        self.assertEqual(LogMonitor.format_terror_ids([316]), "Evil Purple Foxy")
 
 
 
