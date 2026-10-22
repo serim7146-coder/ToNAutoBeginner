@@ -743,37 +743,42 @@ LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
 ENRAGE_IDENTIFY_ENABLED = True
 STUNNED_IDENTIFY_ENABLED = True
 
+# ── テラーの番号（ツールの独自の番号。assets/data/terror_ids.json。表と合っていることはテストで確かめる）──
+# Classic はログの番号そのまま、Alternate は 1000＋ログの番号、Unbound は 2000＋ログの番号、
+# 8 Pages は 3000＋ページの番号、4000〜は固定の表。入口（LogMonitor._own_killer_ids）でログの番号を
+# 独自の番号に直したあとは、すべてこの番号で扱う
 # alternate。霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy（置き換えではない）
-JOY_ID = 164
+JOY_ID = 1030
 
 # ── 置き換えテラーのID ──
 # 置き換えの表（元 → 置き換え後・起きるラウンド）と合図のログ行は TerrorReplacement に
 # まとめてある。ここは番号だけ
 SONIC_ID = 40
-ATRACHED_ID = 191                   # Classic の Sonic → Atrached
+ATRACHED_ID = 4001                  # Classic の Sonic → Atrached
 SLENDER_ID = 47
-HUNGRY_HOME_INVADER_ID = 190        # Classic の Slender → Hungry Home Invader
+HUNGRY_HOME_INVADER_ID = 4000       # Classic の Slender → Hungry Home Invader
 CURIOUS_CREATURE_ID = 106
-BLOODTHIRSTY_CREATURE_ID = 192      # Curious → Wild Yet Bloodthirsty Creature（全ラウンド）
+BLOODTHIRSTY_CREATURE_ID = 4002     # Curious → Wild Yet Bloodthirsty Creature（全ラウンド）
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
-# 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
-SELF_INSERTS_ID = 283
-# 続行表の仮の番号。続行リスト（.tnl）に「Bloodthirsty 入りの Self Inserts」の枠は無いので、
-# 続行表の画面にだけ Unbound のバリアントの段へ置く。続行無効に入れると、Self Inserts の
-# Bloodthirsty でも必ず続行はせず、普通のリストの判定（283 があるか）に任せる
-SELF_INSERTS_BLOODTHIRSTY_SLOT = 1283
-# alternate。Sanic は Foxy に置き換わることがある
-SANIC_ID = 136
-FOXY_ID = 316
-# alternate。Neo Pilot に置き換わる。置き換え後のIDと合図のログはまだ分からない
-FUSION_PILOT_ID = 163
+# 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious は対象外）
+SELF_INSERTS_ID = 2083
+# 「Bloodthirsty 入りの Self Inserts」の正式な番号。ListTool に枠は無い（.tnl には書かない）ので、続行表の画面だけ
+# Unbound のバリアントの段に置く。続行無効に入れると、Self Inserts の Bloodthirsty でも必ず続行はせず、
+# 普通のリストの判定（Self Inserts があるか）に任せる
+SELF_INSERTS_BLOODTHIRSTY_ID = 4013
+# alternate。Sanic は Foxy に置き換わることがある（表示名は Evil Purple Foxy）
+SANIC_ID = 1002
+FOXY_ID = 4011
+# alternate。Fusion Pilot は Neo Pilot に置き換わる。合図のログはまだ分からない
+FUSION_PILOT_ID = 1029
+NEO_PILOT_ID = 4010
 # Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）
 ARKUS_ID = 61
-GLORBO_ID = 317
+GLORBO_ID = 4012
 # 元IDが毎回違う（実測12件すべて別ID）ので、IDからは予測できない。
 # Classicの1体構成は常に候補として出現ログを待つ
-GIGABYTES_ID = 314
+GIGABYTES_ID = 4009
 
 # Variantテラー（Classicでもこれなら通常判定に回す）
 VARIANT_TERROR_IDS = frozenset({

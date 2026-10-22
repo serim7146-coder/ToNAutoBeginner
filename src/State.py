@@ -56,7 +56,6 @@ class WindowState:
     # オブジェクトなし → DTM を確かめるログの時刻（0 = 確かめない）。1回だけ
     fog_no_object_deadline: float = 0.0
     fog_no_object_dtm: bool = False       # このラウンドでオブジェクトなし → DTM と判断した
-    eight_pages_unknown_logged: bool = False   # 未登録の 8 Pages 番号の案内は1回だけ
     statistics_quiet: bool = False        # 看破の結果で送る統計は黙って送る
     log_pos: int = 0
     in_round: bool = False

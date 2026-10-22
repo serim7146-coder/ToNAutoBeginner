@@ -8,10 +8,6 @@ MAIN_CATEGORIES = ("classic", "alternate", "unbound")
 FOG_CATEGORIES = ("classic", "alternate")
 # 新しい形の "terrors"（Enrage に出る個体名）を分けて持つキー
 INDIVIDUALS_KEY = "individuals"
-# 8 Pages。ログの `Killers have been set - A B 0` の A は 8 Pages 専用の番号で、
-# 続行リストのIDとは別体系。行の `"list_id"` がその橋渡し（無い・null は未登録）
-EIGHT_PAGES_KEY = "8pages"
-EIGHT_PAGES_INDEX_KEY = "8pages_index"      # {"ページ番号": list_id | None}
 # 看破（[NetworkProcessing] に実際に出たオブジェクト名）`"objects": [...]` を持つキー。
 # 看破の照合はこれだけで行う。Enrage・スタン・terror_id_by_name() には使わない
 OBJECTS_KEY = "objects"
@@ -29,24 +25,12 @@ def normalize_terrors(raw: dict) -> dict:
     おけば、統計画面などIDと名前しか見ない側は形の違いを知らずに済む。
     個体名は `INDIVIDUALS_KEY` に `{カテゴリ: {"ID": [個体名...]}}` で持つ。
     看破のオブジェクト名は `OBJECTS_KEY` に同じ形で持つ。
-    ID が文字列の "8pages" などはそのまま残す（通常のID引きには混ぜない）。
+    番号はツールの独自の番号（TerrorIds）。"8pages" などの分類はそのまま残す（通常のID引きには混ぜない。
+    8 Pages のテラーの番号・名前・アイコンは assets/data/terror_ids.json にある）。
     """
     data: dict = {}
     individuals: dict = {}
     objects: dict = {}
-    pages: dict = {}
-    for entry in (raw.get(EIGHT_PAGES_KEY) if isinstance(raw, dict) else None) or []:
-        if not isinstance(entry, dict):
-            continue
-        page = entry.get("id")
-        if isinstance(page, str) and page.isdigit():
-            page = int(page)
-        if isinstance(page, bool) or not isinstance(page, int):
-            continue
-        list_id = entry.get("list_id")
-        if isinstance(list_id, bool) or not isinstance(list_id, int):
-            list_id = None                  # 未登録（まだ分かっていない番号）
-        pages[str(page)] = list_id
     for category, value in raw.items():
         if category not in MAIN_CATEGORIES or not isinstance(value, list):
             data[category] = value
@@ -78,14 +62,7 @@ def normalize_terrors(raw: dict) -> dict:
     if individuals:
         data[INDIVIDUALS_KEY] = individuals
         data[OBJECTS_KEY] = objects
-    data[EIGHT_PAGES_INDEX_KEY] = pages
     return data
-
-
-def eight_pages_list_id(page_id, data: dict):
-    """8 Pages のログ番号 → 続行リストのID。未登録・表に無い番号は None"""
-    index = data.get(EIGHT_PAGES_INDEX_KEY) or {}
-    return index.get(str(page_id))
 
 
 def terror_name(id: int, data: dict) -> str | None:
@@ -119,7 +96,7 @@ def _name_index(data: dict) -> dict:
 def is_alternate_terror(tid, data: dict) -> bool:
     """そのIDが terrors.json の alternate カテゴリに属するか。
 
-    カテゴリ間でIDは重複しないので、これだけで枠を判定できる。
+    カテゴリ間でIDは重複しないので、これだけで枠を判定できる（Alternate は 1000〜、Foxy は 4011）。
     `Killers is unknown` の行には `Fog (Alternate)` が出ないので、
     Enrage で判明したテラーからオルタネイト枠を決めるのに使う。
     """

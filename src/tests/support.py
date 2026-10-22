@@ -550,7 +550,7 @@ class FakeOBS:
 
 
 # ── 霧の看破: 実ログ（--enable-sdk-log-levels 付き）から抜き出した固定データ ──
-# 依頼者の実ログのパスには依存しない。公開の ID は「オフセット済み」
+# 依頼者の実ログのパスには依存しない。公開の ID は独自の番号（Alternate は 1000＋ログの番号）
 FOG_EARLY_READ_ROUNDS = [
     # (ログ・時刻, [NetworkProcessing] の行, 公開の行, 公開ID, objects で決まるID)
     ("16-30-13 16:38",
@@ -560,13 +560,13 @@ FOG_EARLY_READ_ROUNDS = [
     ("16-30-13 17:20",
      ["2026.09.21 17:20:30 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [32] Paradise Bird (1) because tsuki__2 already owner"],
      "2026.09.21 17:21:20 Debug      -  Killers have been revealed - 12 0 0 // Round type is Fog (Alternate)",
-     146, 146),
+     1012, 1012),
     ("16-30-13 17:31",
      ["2026.09.21 17:31:15 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [86] WALPURGISNACHT because tsuki__2 already owner",
       "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling (15) because tsuki__2 already owner",
       "2026.09.21 17:31:33 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [12] witchling because tsuki__2 already owner"],
      "2026.09.21 17:32:05 Debug      -  Killers have been revealed - 33 0 0 // Round type is Fog (Alternate)",
-     167, 167),
+     1033, 1033),
     ("18-59-24 22:04",
      ["2026.09.21 22:04:41 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [20] Immortal Snail because meteor? already owner"],
      "2026.09.21 22:05:31 Debug      -  Killers have been revealed - 101 0 0 // Round type is Fog",
@@ -574,14 +574,14 @@ FOG_EARLY_READ_ROUNDS = [
     ("08-39-27 08:43",
      ["2026.09.21 08:43:40 Debug      -  [NetworkProcessing] serim01 would like to transfer [10] Kuro GuidingStar to すぅみ_suumi"],
      "2026.09.21 08:44:30 Debug      -  Killers have been revealed - 6 0 0 // Round type is Fog (Alternate)",
-     140, 140),
+     1006, 1006),
     ("18-59-24 20:45",
      ["2026.09.21 20:45:59 Warning    -  [NetworkProcessing] Ignoring TrySetOwner attempt on [29b] SmileyWalker because meteor? already owner",
       "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] Transferred ownership of [29b] SmileyWalker to 5",
       "2026.09.21 20:46:01 Debug      -  [NetworkProcessing] serim01 would like to transfer [29b] SmileyWalker to meteor?",
       "2026.09.21 20:46:01 Error      -  [NetworkProcessing] Non-owner attempted to request ownership of [29b] SmileyWalker for someone else."],
      "2026.09.21 20:46:49 Debug      -  Killers have been revealed - 8 0 0 // Round type is Fog (Alternate)",
-     142, 142),
+     1008, 1008),
 ]
 
 
@@ -605,15 +605,15 @@ def fog_early_read_terrors():
             entry(133, "Malicious Twins", ["Malicious Twin"], ["Twin1"]),
         ],
         "alternate": [
-            entry(139, "Chomper", ["Chomper"], []),
-            entry(140, "The Knight of Toren", ["The Knight Of Toren"], ["Kuro GuidingStar"]),
-            entry(142, "Smile Walker", ["Smile Walker"], ["SmileyWalker"]),
-            entry(146, "Paradise Bird", ["Paradise Bird"], ["Paradise Bird"]),
-            entry(167, "Walpurgisnacht", ["Walpurgisnacht", "Unknown Witch"],
+            entry(1005, "Chomper", ["Chomper"], []),
+            entry(1006, "The Knight of Toren", ["The Knight Of Toren"], ["Kuro GuidingStar"]),
+            entry(1008, "Smile Walker", ["Smile Walker"], ["SmileyWalker"]),
+            entry(1012, "Paradise Bird", ["Paradise Bird"], ["Paradise Bird"]),
+            entry(1033, "Walpurgisnacht", ["Walpurgisnacht", "Unknown Witch"],
                   ["WALPURGISNACHT", "witchling"]),
         ],
         "unbound": [
-            entry(227, "Byte Horde", ["Byte Horde"], ["Duke"]),
+            entry(2027, "Byte Horde", ["Byte Horde"], ["Duke"]),
         ],
     })
 
@@ -898,26 +898,9 @@ def own_list(data):
 
 
 def flow_id(x, eight_pages=False):
-    """ツールの中の流れ（LogMonitor の st.terror_ids など）が持つ、前の番号 x のテラーの番号。
-    流れがまだ今の番号の間は x そのまま（独自の番号に変えるときに、ここを own(x, eight_pages) にする）"""
-    return x
-
-
-def eight_pages_terrors(pages):
-    """8pages の表だけ差し替えた TERRORS。pages は {ログ番号: list_id | None}"""
-    raw = {
-        "classic": [{"id": 39, "name": "Rush", "terrors": ["Rush"]},
-                    {"id": 85, "name": "Arrival", "terrors": ["Arrival"]}],
-        "alternate": [{"id": 135, "name": "Whiteface", "terrors": ["Whiteface"]},
-                      {"id": 172, "name": "Baldi", "terrors": ["Baldi"]}],
-        "8pages": [{"id": page, "name": f"p{page}", "terrors": [],
-                    **({} if list_id is _MISSING else {"list_id": list_id})}
-                   for page, list_id in pages.items()],
-    }
-    return ReadJson.normalize_terrors(raw)
-
-
-_MISSING = object()
+    """ツールの中の流れ（LogMonitor の st.terror_ids など）が持つ、ToN ListTool の番号 x のテラーの番号。
+    流れは入口からずっと独自の番号なので own(x, eight_pages)"""
+    return own(x, eight_pages)
 
 
 def _freeze_other_continue():

@@ -14,7 +14,7 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
 
     UNBOUND_KEY = "Unbound/アンバウンド"
     SELF_INSERTS = config.SELF_INSERTS_ID          # 283
-    PACK = 265                                     # Pack of Wild Yet Curious
+    PACK = own(265)                                # Pack of Wild Yet Curious
 
     def _decide(self, round_type, terror_ids, keep_on=None,
                 bloodthirsty=False, wins=99, cancel_afk=False):
@@ -48,7 +48,7 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
         self.assertFalse(
             self._decide("Unbound", [self.PACK], bloodthirsty=True).is_continue_round)
         self.assertTrue(
-            self._decide("Unbound", [self.PACK], {self.UNBOUND_KEY: {own(self.PACK)}},
+            self._decide("Unbound", [self.PACK], {self.UNBOUND_KEY: {self.PACK}},
                          bloodthirsty=True).is_continue_round)
 
     def test_other_rounds_are_not_covered(self):
@@ -61,7 +61,7 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
 
     def test_another_unbound_group_is_not_covered(self):
         self.assertFalse(
-            self._decide("Unbound", [200], bloodthirsty=True).is_continue_round)
+            self._decide("Unbound", [2000], bloodthirsty=True).is_continue_round)
 
     def test_omitting_the_flag_keeps_the_old_behaviour(self):
         decided = RoundDecision.decide_killers(
@@ -361,22 +361,18 @@ class TestTerrorReplacementTable(unittest.TestCase):
 
 
 class TestNeoPilotSlot(unittest.TestCase):
-    """Neo Pilot は枠だけ。IDと合図が分かるまで無効"""
+    """Neo Pilot は枠だけ。合図のログが分かるまで無効（番号は 4010 に決まっている）"""
 
     def _row(self):
         return [r for r in TerrorReplacement.TABLE if r.name == "Neo Pilot"][0]
-
-    def _with_neo_pilot(self):
-        data = {k: dict(v) if isinstance(v, dict) else v
-                for k, v in config.TERRORS.items()}
-        data["alternate"]["999"] = "Neo Pilot"
-        return patch.object(config, "TERRORS", data)
 
     def test_it_is_disabled_now(self):
         row = self._row()
 
         self.assertEqual(row.source, config.FUSION_PILOT_ID)
-        self.assertIsNone(row.target_id(), "terrors.json にまだ無い")
+        self.assertEqual(row.target_id(), config.NEO_PILOT_ID)
+        self.assertEqual(config.NEO_PILOT_ID, TerrorIds.NEO_PILOT)
+        self.assertFalse(row.wired)
         self.assertFalse(row.enabled)
 
     def test_it_never_waits_while_disabled(self):
@@ -389,24 +385,23 @@ class TestNeoPilotSlot(unittest.TestCase):
 
     def test_the_id_alone_does_not_enable_it(self):
         """合図のログが分からないまま待つと、毎回0.3秒むだに待つだけ"""
-        with self._with_neo_pilot():
-            row = self._row()
-            self.assertEqual(row.target_id(), 999)
-            self.assertFalse(row.enabled)
+        row = self._row()
+        self.assertIsNotNone(row.target_id())
+        self.assertFalse(row.enabled)
+        self.assertEqual(TerrorReplacement.rows_for_flag("neo_pilot"), [])
 
     def test_the_id_and_the_signal_enable_it(self):
         import dataclasses
-        with self._with_neo_pilot():
-            row = dataclasses.replace(self._row(), wired=True)
+        row = dataclasses.replace(self._row(), wired=True)
 
-            self.assertTrue(row.enabled)
-            self.assertEqual(row.apply([config.FUSION_PILOT_ID]), [999])
+        self.assertTrue(row.enabled)
+        self.assertEqual(row.apply([config.FUSION_PILOT_ID]), [config.NEO_PILOT_ID])
 
     def test_the_signal_alone_does_not_enable_it(self):
         import dataclasses
-        row = dataclasses.replace(self._row(), wired=True)
+        row = dataclasses.replace(self._row(), wired=True, target=None, target_name="")
 
-        self.assertFalse(row.enabled, "IDが無い間は表から外れる")
+        self.assertFalse(row.enabled, "番号が無い行は表から外れる")
 
 
 
@@ -693,7 +688,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
         self.assertFalse(self._pending(monitor))
 
     def test_it_does_not_wait_for_other_groups(self):
-        for ids in ([265], [200], [config.CURIOUS_CREATURE_ID]):
+        for ids in ([2065], [2000], [config.CURIOUS_CREATURE_ID]):
             monitor = self._monitor(terror_ids=ids)
 
             self.assertFalse(self._pending(monitor), ids)
@@ -725,7 +720,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
         self.assertTrue(monitor.st.is_continue_round)
 
     def test_other_rounds_gain_no_latency(self):
-        monitor = self._monitor(terror_ids=[265])
+        monitor = self._monitor(terror_ids=[2065])
 
         started = self._started(monitor)
 

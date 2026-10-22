@@ -236,7 +236,7 @@ class TestVolumeTargetsInRounds(unittest.TestCase):
     def test_a_dtm_continue_is_other(self):
         monitor = self._monitor()
 
-        self._round(monitor, "Classic", [LogMonitor.DTM_TERROR_ID])
+        self._round(monitor, "Classic", [config.DTM_ID])
 
         self.assertTrue(monitor.st.is_continue_round)
         self.assertTrue(monitor.st.open_special_continue)
@@ -253,7 +253,7 @@ class TestVolumeTargetsInRounds(unittest.TestCase):
 
     def test_the_dtm_mark_does_not_survive_into_the_next_round(self):
         monitor = self._monitor()
-        self._round(monitor, "Classic", [LogMonitor.DTM_TERROR_ID])
+        self._round(monitor, "Classic", [config.DTM_ID])
         self.assertTrue(monitor.st.open_special_continue)
 
         monitor._process(self.PREFIX + "This round is taking place at Facility (12) "
@@ -917,13 +917,13 @@ class TestLogMonitorRuntimeHelpers(unittest.TestCase):
         self.assertTrue(monitor._stop_event.is_set())
 
     def test_format_terror_ids_shows_names_and_falls_back_to_the_number(self):
-        self.assertEqual(LogMonitor.format_terror_ids([0, 135, 283]), "Huggy, Whiteface, Self Inserts")
+        self.assertEqual(LogMonitor.format_terror_ids([0, 1001, 2083]), "Huggy, Whiteface, Self Inserts")
         self.assertEqual(LogMonitor.format_terror_ids([9999]), "#9999")
         self.assertEqual(LogMonitor.format_terror_ids([]), "")
-        # 8 Pages のラウンドの番号は 8 Pages の索引から（172 は 8 Pages にしか出ない Baldi）
-        self.assertEqual(LogMonitor.format_terror_ids([0, 172], "8 Pages"), "Huggy, Baldi")
-        self.assertEqual(LogMonitor.format_terror_ids([172]), "#172")
-        self.assertEqual(LogMonitor.format_terror_ids([316]), "Evil Purple Foxy")
+        # 8 Pages の行は 3000＋ページ（14 ページ目は Huggy、46 ページ目は 8 Pages にしか出ない Baldi）。表に無いページは #番号
+        self.assertEqual(LogMonitor.format_terror_ids([3014, 3046]), "Huggy, Baldi")
+        self.assertEqual(LogMonitor.format_terror_ids([3070]), "#3070")
+        self.assertEqual(LogMonitor.format_terror_ids([4011]), "Evil Purple Foxy")
 
 
 

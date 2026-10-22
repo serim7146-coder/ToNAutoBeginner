@@ -140,11 +140,10 @@ TABLE: tuple[Replacement, ...] = (
     # alternate のIDはほかのカテゴリと重ならないので、ラウンドを絞らなくても
     # オルタ枠でしか起きない
     Replacement("Foxy", config.SANIC_ID, config.FOXY_ID, None, "foxy"),
-    # 枠だけ。ID（terrors.json）と合図のログ（LogParser）が分かるまで無効。
-    # 有効にするには terrors.json に "Neo Pilot" を足し、合図の行を LogParser に
+    # 枠だけ。合図のログ（LogParser）が分かるまで無効。有効にするには合図の行を LogParser の
     # SIGNALS に足して neo_pilot を立てるようにしてから wired=True にする
-    Replacement("Neo Pilot", config.FUSION_PILOT_ID, None, None, "neo_pilot",
-                wired=False, target_name="Neo Pilot"),
+    Replacement("Neo Pilot", config.FUSION_PILOT_ID, config.NEO_PILOT_ID, None, "neo_pilot",
+                wired=False),
     # Punished の Sewers で、Arkus が低確率で Glorbo になる。マップは条件に
     # 入れない（表に map の欄が無く、合図が来た時点で確定する）。ほかのマップの
     # Punished + Arkus では 0.3 秒の変種待ちが入るだけ

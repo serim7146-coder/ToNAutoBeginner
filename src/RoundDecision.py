@@ -3,7 +3,6 @@ from dataclasses import dataclass
 import config
 import ItemCatalog
 import MatchTNL
-import TerrorIds
 
 
 @dataclass(frozen=True)
@@ -25,13 +24,6 @@ def selectable_round_name(round_type: str) -> str:
         if base in config.SKIP_ROUND_SELECTABLE:
             return base
     return round_type
-
-
-def normalize_killer_ids(ids: list[int], round_type: str, state_round_type: str = "") -> list[int]:
-    normalized = MatchTNL.apply_alternate_offset(ids, round_type)
-    if state_round_type == "Unbound":
-        normalized = [tid + MatchTNL.UNBOUND_OFFSET for tid in normalized]
-    return normalized
 
 
 def open_special_active(wins: int, after_unlock: bool = False) -> bool:
@@ -86,10 +78,10 @@ def is_self_inserts_bloodthirsty(
 
     ToN ListTool は「Bloodthirsty 入りの Self Inserts」を表現できない——
     リストに出せるのは `Self Inserts` の1枠だけ——ので、リストに頼らず
-    必ず続行する。`Pack of Wild Yet Curious(265)` は対象外（あちらは
+    必ず続行する。`Pack of Wild Yet Curious`（Unbound の 2065）は対象外（あちらは
     リストで指定できる）。
 
-    table_disabled: 続行表の続行無効に Self Inserts (Bloodthirsty) の仮の番号があるとき True
+    table_disabled: 続行表の続行無効に Self Inserts (Bloodthirsty)（4013）があるとき True
     （呼ぶ側が決める）。このときは必ず続行せず、普通のリストの判定に任せる。
     """
     return (
@@ -105,10 +97,7 @@ def list_continues(keep_on_set: dict, terror_ids: list[int], round_type: str) ->
     ラウンドのキーだけを見る（Special/Moon のラウンドは Special/Moon のキー。Classic などが Special/Moon を
     予備に見ることはもう無い——ListTool の Special/Moon は読み込むときに置き場所のキーへ配ってある）"""
     tnl_key = MatchTNL.LOG_TO_TNL.get(round_type, round_type)
-    # TEMP: 流れの中の番号がまだ今の番号の間（独自の番号になるまで）は、リストが独自の番号なので直して比べる
-    eight_pages = round_type == TerrorIds.EIGHT_PAGES_ROUND
-    own = [t for t in (TerrorIds.own_from_legacy(x, eight_pages) for x in terror_ids) if t is not None]
-    return MatchTNL.should_continue(keep_on_set, tnl_key, own)
+    return MatchTNL.should_continue(keep_on_set, tnl_key, terror_ids)
 
 
 def decide_killers(

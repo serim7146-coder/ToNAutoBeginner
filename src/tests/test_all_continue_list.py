@@ -119,7 +119,7 @@ class TestOtherKindsOfContinue(_Case):
         monitor = self._monitor(keep_on={})
         monitor.cfg.cancel_afk = True
         _s, play, _rec, _rem = self._killers(monitor, [config.DTM_ID] if hasattr(config, "DTM_ID")
-                                             else [LogMonitor.DTM_TERROR_ID])
+                                             else [config.DTM_ID])
         self.assertTrue(monitor.st.is_continue_round)
         self.assertTrue(monitor.st.open_special_continue, "DTM/Waldo の続行（音量は今どおりその他）")
 

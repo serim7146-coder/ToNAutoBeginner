@@ -1558,7 +1558,7 @@ class TestRoundStoreAggregation(unittest.TestCase):
         self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
         self.store.add_own(10, 1, 1, 1, None, None, self.MINE)             # 自分（1人目）
         self.rows = [
-            {"time": 100, "round": 10, "map_id": 12, "terror1": 201, "terror2": None,
+            {"time": 100, "round": 10, "map_id": 12, "terror1": 2001, "terror2": None,
              "terror3": None, "transformed_uid": self.OTHER, "other_uids": [self.MINE, 9]},
             {"time": 200, "round": 6, "map_id": 1, "terror1": 5, "terror2": 6,
              "terror3": 7, "transformed_uid": self.OTHER, "other_uids": None},
@@ -1615,7 +1615,7 @@ class TestRoundStoreAggregation(unittest.TestCase):
         expected = sum(n for tid, n in counts.items() if tid in ids)
         total, _candidates, _rows = Statistics.analyze_terror_counts(counts, config.TERRORS, ids)
         self.assertEqual(total, expected)
-        self.assertLess(total, sum(counts.values()), "候補外（Unbound の 201）は入らない")
+        self.assertLess(total, sum(counts.values()), "候補外（Unbound の 2001）は入らない")
 
     def test_the_same_round_name_or_map_is_added_up(self):
         self.assertEqual(Statistics.round_summary_from_counts([("Fog", 2, 2), ("Fog", 3, 1)]),
@@ -1794,8 +1794,8 @@ class TestGetTransformedUid(unittest.TestCase):
 
     def test_round_row_is_one_row_even_with_other_uids(self):
         """"ToNRounds" の1行を今の形に直す。other_uids（同じラウンドを見たほかの人）があっても1件"""
-        v1 = {"time": 12696896, "round": 10, "map_id": 2, "terror1": 201, "terror2": None,
+        v1 = {"time": 12696896, "round": 10, "map_id": 2, "terror1": 2001, "terror2": None,
               "terror3": None, "transformed_uid": 123, "other_uids": [5, 6]}
         self.assertEqual(ConnectDB.round_row(v1),
                          {"created_at": "2026-05-27T22:54:56Z", "round": "Unbound",
-                          "terror_ids": [201], "map_id": 2, "transformed_uid": 123})
+                          "terror_ids": [2001], "map_id": 2, "transformed_uid": 123})

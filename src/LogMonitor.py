@@ -30,21 +30,12 @@ from ActionExecutor import ActionExecutor
 from State import WindowConfig, WindowState
 
 
-DTM_TERROR_ID = ReadJson.terror_id("Don't Touch Me", config.TERRORS)
-
-
 _UNSET = object()       # 「まだ計算していない」を None（対応づけできない）と分ける
 
 
-def format_terror_ids(ids: list[int], round_type: str = "") -> str:
-    """ログに出すテラーの名前（名前が無ければ `#番号`）。番号は今のツールの番号で、独自の番号へ直して引く
-    （8 Pages のラウンドの番号は 8 Pages の索引から）"""
-    eight_pages = round_type == TerrorIds.EIGHT_PAGES_ROUND
-
-    def one(tid):
-        own = TerrorIds.own_from_legacy(tid, eight_pages)
-        return TerrorIds.name(own) if own is not None else f"#{tid}"
-    return ", ".join(one(tid) for tid in ids)
+def format_terror_ids(ids: list[int]) -> str:
+    """ログに出すテラーの名前（ツールの独自の番号 → 名前。名前が無ければ `#番号`）"""
+    return ", ".join(TerrorIds.name(tid) for tid in ids)
 
 
 # 所持アイテムをなくした理由（公開ログ）。Punished などのラウンド開始は「<種類> 開始」
@@ -1383,7 +1374,7 @@ class LogMonitor:
         if self.st.instance_type in GroupRound.GROUP_INSTANCES:
             return False
         return ContinueTable.disables(self._continue_table(), MatchTNL.LOG_TO_TNL["Unbound"],
-                                      TerrorIds.SELF_INSERTS_BLOODTHIRSTY)
+                                      config.SELF_INSERTS_BLOODTHIRSTY_ID)
 
     def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
@@ -1659,7 +1650,6 @@ class LogMonitor:
         st.fog_object_seen             = False
         st.fog_no_object_deadline      = 0.0
         st.fog_no_object_dtm           = False
-        st.eight_pages_unknown_logged  = False
         st.fog                         = False
         st.begin_done                  = False
         st.begin_accepted_at           = 0.0
@@ -1775,7 +1765,16 @@ class LogMonitor:
             st.round_type = event.round_type
         st.utils_anchor_seq = st.round_seq          # Utils の判断を待ち始めてよい（EB）
         st.utils_anchor_time = st.log_now or time.time()
-        self._on_killers(event.terror_ids or [], st.round_type, revealed=False)
+        self._on_killers(self._own_killer_ids(event.terror_ids or [], st.round_type), st.round_type, revealed=False)
+
+    def _own_killer_ids(self, log_ids, round_type: str) -> list[int]:
+        """ゲームのログのテラーの番号 → ツールの独自の番号（入口はここだけ。ここから先はすべて独自の番号）。
+        表に無い番号も落とさず流す（名前は `#番号`。統計・DB にも残る）。debug.log には番号ごとに 1 回だけ書く"""
+        own = TerrorIds.from_log(log_ids, round_type, self.st.round_type)
+        for tid in own:
+            if TerrorIds.row(tid) is None:
+                TerrorIds.report_unknown(tid)
+        return own
 
     def _on_you_died(self, event):
         """死亡"""
@@ -1977,10 +1976,11 @@ class LogMonitor:
         st.fog_no_object_deadline = 0.0
         st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判断する（EB）
         st.utils_anchor_time = st.log_now or time.time()
-        self._on_killers(event.terror_ids or [], event.round_type, revealed=True)
+        own = self._own_killer_ids(event.terror_ids or [], event.round_type)
+        self._on_killers(own, event.round_type, revealed=True)
         # 答え合わせは公開の後（食い違いの警告はもう出してよい）
-        self._check_early_read(event.terror_ids or [], event.round_type)
-        self._check_no_object_dtm(event.terror_ids or [], event.round_type)
+        self._check_early_read(own)
+        self._check_no_object_dtm(own)
 
     def _on_joining(self, event):
         """インスタンスに入った"""
@@ -2084,13 +2084,10 @@ class LogMonitor:
                 or st.instance_type in GroupRound.GROUP_INSTANCES
                 or not st.terror_ids or not st.round_type):
             return
-        # TEMP: 流れの中の番号がまだ今の番号の間は、リスト（独自の番号）に合わせて直す
-        eight_pages = st.round_type == TerrorIds.EIGHT_PAGES_ROUND
-        own = [t for t in (TerrorIds.own_from_legacy(x, eight_pages) for x in st.terror_ids) if t is not None]
-        removed = ContinueList.remove_survived_current(st.round_type, own)
+        removed = ContinueList.remove_survived_current(st.round_type, st.terror_ids)
         if not removed:
             return
-        names = ", ".join(TerrorIds.name(tid) for tid in dict.fromkeys(tid for _key, tid in removed))
+        names = format_terror_ids(list(dict.fromkeys(tid for _key, tid in removed)))
         self._log(f"[続行リスト] 生存したので外しました: {names} / {st.round_type}")
         if self._on_list_changed:
             self._on_list_changed()
@@ -2174,39 +2171,20 @@ class LogMonitor:
             round_type = GroupRound.FOG_ALTERNATE_ROUND_TYPE
         # st.round_type は書き換えない。ラウンド指定自爆（cfg.skip_rounds）が
         # 「Fog」で持っているので、書き換えるとその指定が黙って効かなくなる
-        self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid], round_type)}")
+        self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid])}")
         # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
         # 「前倒し済み」と見なされて素通りしてしまう
         self._on_killers([tid], round_type, revealed=True)
         st.enrage_identified = tid
 
-    def _eight_pages_ids(self, ids: list[int]) -> list[int]:
-        """8 Pages のログ番号を続行リストのIDへ直す。
-
-        `Killers have been set - A B 0` の A だけでテラーが決まる（B は別物）。
-        A は 8 Pages 専用の番号なので、terrors.json の 8pages の `list_id` で
-        橋渡しする。未登録なら空にする——分からないIDのまま続行判定・3クラ解放・
-        統計に流すと、無関係なテラーとして扱われる
-        """
-        page = ids[0] if ids else None
-        if page is None:
-            return []
-        tid = ReadJson.eight_pages_list_id(page, config.TERRORS)
-        if tid is None:
-            if not self.st.eight_pages_unknown_logged:
-                self.st.eight_pages_unknown_logged = True
-                self._log(f"8 Pages: 未登録の番号 {page}"
-                          "（terrors.json の 8pages に list_id を足してください）")
-            return []
-        return [tid]
-
     def _on_killers(self, ids: list[int], round_type: str, revealed: bool):
+        """テラーが決まった。ids はツールの独自の番号（_own_killer_ids で直したもの）。
+        8 Pages の `Killers have been set - A B 0` は A だけでテラーが決まる（B は別物）ので、3000＋A の 1 つ。
+        表に無いページもそのまま流す（名前は `#3000＋ページ`）——続行リストには入れる手段が無く、
+        決まりのどれにも当たらないので、続行にはならない"""
         st = self.st
         st.fog = False
 
-        ids = RoundDecision.normalize_killer_ids(ids, round_type, st.round_type)
-        if round_type == "8 Pages":
-            ids = self._eight_pages_ids(ids)
         ids = self._apply_replacements(ids, round_type)
 
         # テラーIDを累積（複数回Killers行が来るラウンド対応）
@@ -2217,7 +2195,7 @@ class LogMonitor:
         # 名前は判定より先に出す。この下には設定・インスタンス種別による
         # early return が5つあり、そこを通ると何が出たのか分からなくなるため。
         verb = "revealed" if revealed else "set"
-        self._log(f"Terror {verb}: {format_terror_ids(st.terror_ids, round_type)} / {round_type}")
+        self._log(f"Terror {verb}: {format_terror_ids(st.terror_ids)} / {round_type}")
 
         if not self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
@@ -2228,8 +2206,8 @@ class LogMonitor:
             # 食い違いは残す——前倒しの精度は半分なので、外したときに分かるように
             if st.enrage_identified not in ids:
                 self._log(
-                    f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified], round_type)})と "
-                    f"revealed({format_terror_ids(ids, round_type)})が食い違いました")
+                    f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified])})と "
+                    f"revealed({format_terror_ids(ids)})が食い違いました")
             return
 
         # 他の人がいるのに主催リストが取れない窓、この窓にいる誰の希望も
@@ -2364,7 +2342,7 @@ class LogMonitor:
         st = self.st
         if config.GLORBO_ID in ids:
             return "Glorbo"
-        if st.round_type == LogParser.BLOODBATH_EX and ids and all(t == DTM_TERROR_ID for t in ids):
+        if st.round_type == LogParser.BLOODBATH_EX and ids and all(t == config.DTM_ID for t in ids):
             return "EX の DTM"
         if (st.round_type == LogParser.BLOODBATH_EX and ids
                 and all(t == config.WALDO_ID for t in ids)
@@ -2377,18 +2355,18 @@ class LogMonitor:
         st = self.st
         if not RoundDecision.open_special_active(st.open_special_round_wins,
                                                  self._after_unlock()):
-            return f"放置モード(3クラ済み): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
+            return f"放置モード(3クラ済み): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         if not RoundDecision.open_special_round_type(st.round_type):
-            return f"放置モード(複数体のラウンド): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
+            return f"放置モード(複数体のラウンド): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         if not st.item_id:
-            has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in ids
+            has_dtm = self.cfg.cancel_afk and config.DTM_ID in ids
             if not has_dtm:
-                return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {format_terror_ids(ids, st.round_type)} / "
+                return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {format_terror_ids(ids)} / "
                         f"{st.round_type}")
         has_cancel_afk = bool(self.cfg.cancel_afk and
                               RoundDecision.open_special_ids(ids, self._holds_plush()))
         if not has_cancel_afk:
-            return f"放置モード(DTM/Waldo続行対象外): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
+            return f"放置モード(DTM/Waldo続行対象外): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         return None
 
     def _decide(self, round_type: str):
@@ -2463,7 +2441,7 @@ class LogMonitor:
         if st.utils_wait_seq == st.round_seq:
             return True                 # もう待っている
         st.utils_wait_seq = st.round_seq
-        self._log(f"判定: {format_terror_ids(st.terror_ids, round_type)} / {round_type}"
+        self._log(f"判定: {format_terror_ids(st.terror_ids)} / {round_type}"
                   f"（このツールの判定: {self._outcome(plan)}）→ Utils の判断を待ちます")
         # 数えるのは Utils の時刻が「起点の行の時刻 − UTILS_EARLY_SEC」以後の行（すでにファイルにある行も。EB2）
         anchor = st.utils_anchor_time or time.time()
@@ -2559,7 +2537,7 @@ class LogMonitor:
                "【プレイ】" if st.is_continue_round else "【スキップ】")
         if st.is_continue_round and self._is_all_continue_round():
             tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
-        self._log(f"判定: {format_terror_ids(all_ids, round_type)} / {round_type} {tag}"
+        self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}"
                   + self._overlay_label(all_ids))
 
         if st.is_continue_round:
@@ -2725,35 +2703,35 @@ class LogMonitor:
                 and not st.early_read_void and self._fog_terror_unknown()):
             return
         st.fog_no_object_dtm = True
-        st.early_read_tid = DTM_TERROR_ID       # 後から名前が見えても二重に判定しない
-        self._identify_fog_terror(DTM_TERROR_ID, "看破（オブジェクトなし）", "",
+        st.early_read_tid = config.DTM_ID       # 後から名前が見えても二重に判定しない
+        self._identify_fog_terror(config.DTM_ID, "看破（オブジェクトなし）", "",
                                   early_read=True)
 
-    def _check_no_object_dtm(self, ids: list[int], round_type: str):
-        """公開の後: オブジェクトなし → DTM が外れていたら知らせる"""
+    def _check_no_object_dtm(self, ids: list[int]):
+        """公開の後: オブジェクトなし → DTM が外れていたら知らせる（ids は独自の番号）"""
         st = self.st
         if not st.fog_no_object_dtm or not ids:
             return
         st.fog_no_object_dtm = False
-        public = RoundDecision.normalize_killer_ids(list(ids)[:1], round_type)[0]
-        if public == DTM_TERROR_ID:
+        public = list(ids)[0]
+        if public == config.DTM_ID:
             return
-        message = f"看破（オブジェクトなし）が外れました（公開: {format_terror_ids([public], round_type)}）"
+        message = f"看破（オブジェクトなし）が外れました（公開: {format_terror_ids([public])}）"
         if self._may_show_fog_info():
             self._log(f"⚠ {message}")
         self._debug(message)
 
-    def _check_early_read(self, ids: list[int], round_type: str):
+    def _check_early_read(self, ids: list[int]):
         """答え合わせ。看破で見えた名前ごとに、公開と一致したかを記録する。
 
-        公開の ID はオルタネイトなら +134 してから比べる（33 → 167 Walpurgisnacht）。
+        公開の ID（ids は独自の番号。オルタネイトなら 1000＋ログの番号）と比べる（33 → 1033 Walpurgisnacht）。
         一度でも食い違った名前は以後使わない。
         """
         st = self.st
         hits, st.early_read_hits = st.early_read_hits, {}
         if not hits or not ids:
             return
-        public = RoundDecision.normalize_killer_ids(list(ids)[:1], round_type)[0]
+        public = list(ids)[0]
         for key, (tid, name) in hits.items():
             matched = tid == public
             FogEarlyRead.trust.record(key, matched)

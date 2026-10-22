@@ -1074,7 +1074,7 @@ class TestSkipRoundsByType(unittest.TestCase):
     """privateのラウンド指定自爆（続行リストより優先、3クラ解放は例外）"""
 
     CLASSIC_KEY = "Classic/クラシック"
-    DTM = LogMonitor.DTM_TERROR_ID
+    DTM = config.DTM_ID
 
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
