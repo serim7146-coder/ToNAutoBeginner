@@ -27,8 +27,10 @@ class _Case(unittest.TestCase):
         return monitor
 
     def _killers(self, monitor, ids, round_type=None, revealed=False):
+        """ログの番号を入口（_own_killer_ids）で独自の番号にしてから流す"""
+        round_type = round_type or monitor.st.round_type
         with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
-            monitor._on_killers(list(ids), round_type or monitor.st.round_type, revealed=revealed)
+            monitor._on_killers(monitor._own_killer_ids(list(ids), round_type), round_type, revealed=revealed)
         return monitor.logs
 
 
@@ -54,6 +56,15 @@ class TestPublicLog(_Case):
     def test_a_number_without_a_name_is_shown_with_a_hash(self):
         logs = self._killers(self._monitor(), [99999])
         self.assertIn("[窓1] Terror set: #99999 / Classic", logs)
+
+    def test_an_alternate_slot_number_of_36_or_more_is_still_alternate(self):
+        logs = self._killers(self._monitor("Alternate"), [40])
+        self.assertIn("[窓1] Terror set: #1040 / Alternate", logs)
+
+    def test_an_unregistered_eight_pages_page_is_shown_with_a_hash_and_has_no_public_warning(self):
+        logs = self._killers(self._monitor("8 Pages"), [70])
+        self.assertIn("[窓1] Terror set: #3070 / 8 Pages", logs)
+        self.assertFalse(any("未登録" in m for m in logs), logs)
 
     def test_several_terrors_are_joined_with_commas(self):
         logs = self._killers(self._monitor("Bloodbath"), [50, 7, 3])

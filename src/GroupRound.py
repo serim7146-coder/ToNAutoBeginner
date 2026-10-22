@@ -9,7 +9,6 @@ private（私用）インスタンスの判定には一切関わらない。呼�
 
 import config
 import MatchTNL
-import TerrorIds
 
 # 判定結果
 CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウンスもフリーズもしない
@@ -49,8 +48,8 @@ def is_variant(terror_ids) -> bool:
 def is_fog_alternate(killers_round_type: str) -> bool:
     """オルタネイト枠のFogか。
 
-    `apply_alternate_offset()` が round_type を見て +134 しているので、
-    ID範囲(134〜169)で見ても同じ情報になる。直接的なほうを使う。
+    入口（LogMonitor._own_killer_ids）が round_type を見て 1000＋ログの番号にしているので、
+    ID範囲(1000〜1999)で見ても同じ情報になる。直接的なほうを使う。
     """
     return killers_round_type == FOG_ALTERNATE_ROUND_TYPE
 
@@ -133,8 +132,7 @@ def _decide_sabotage(instance_type, terror_ids, sus_players, host_wishes,
         return NORMAL
 
     murderers = set(sus_players)
-    # TEMP: 流れの中の番号がまだ今の番号の間は、リスト（独自の番号）に合わせて直す（Sabotage は Classic だけ）
-    ids = {t for t in (TerrorIds.own_from_legacy(x) for x in terror_ids) if t is not None}
+    ids = set(terror_ids)
 
     if instance_type in (config.INSTANCE_YAKIIMO, *config.PRIVATE_LIKE_INSTANCES):
         # 選出されたマーダーがマーダー枠で続行を希望している → 自爆

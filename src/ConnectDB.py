@@ -13,7 +13,6 @@ import config
 import DebugLog
 import RoundStore
 import TaskStats
-import TerrorIds
 
 try:
     from dotenv import load_dotenv
@@ -177,10 +176,7 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     if not _configured():
         say("Supabase設定がないためラウンド統計送信をスキップします。")
         return
-    # TEMP: LogMonitor が独自の番号に変えるまでは今の番号で届く。ここで独自の番号に直す（変換できない番号は送らない）
-    own = [TerrorIds.own_from_legacy(t, eight_pages=(round_id == TerrorIds.EIGHT_PAGES_ROUND_ID))
-           for t in (terror_ids or [])]
-    ids = ([t for t in own if t is not None] + [None, None, None])[:3]
+    ids = (list(terror_ids or []) + [None, None, None])[:3]
     payload = {
         "p_instance": instance_key,
         "p_time": db_time(round_time),

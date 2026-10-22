@@ -23,7 +23,7 @@ class TestTerrorIdByName(unittest.TestCase):
         self.assertIsNone(ReadJson.terror_id_by_name("Mona", config.TERRORS))
         self.assertEqual(
             ReadJson.terror_id_by_name("Mona & Mona & Mona & Mona",
-                                       config.TERRORS), 233)
+                                       config.TERRORS), 2033)
 
     def test_an_individual_name_does_not_resolve(self):
         """terrors.json だけを見た場合。別名表は渡していない"""

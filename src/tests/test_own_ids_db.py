@@ -256,20 +256,22 @@ class TestRegisterRoundV2(unittest.TestCase):
         _req, body = self._send("Classic", [5])
         self.assertIsNone(body["p_players"])
 
-    def test_the_numbers_are_the_tools_own(self):
-        _req, body = self._send("Alternate", [135])
+    def test_the_numbers_are_sent_as_they_are(self):
+        """流れの番号がすでに独自の番号なので、送る前に直さない"""
+        _req, body = self._send("Alternate", [1001])
         self.assertEqual(body["p_t1"], 1001)
-        _req, body = self._send("Unbound", [283])
+        _req, body = self._send("Unbound", [2083])
         self.assertEqual(body["p_t1"], 2083)
-        _req, body = self._send("8 Pages", [135])        # 8 Pages の場面の 135 は Whiteface のページ
+        _req, body = self._send("8 Pages", [3050])
         self.assertEqual(body["p_t1"], 3050)
-        _req, body = self._send("Classic", [314])
+        _req, body = self._send("Classic", [4009])
         self.assertEqual(body["p_t1"], 4009)
         self.assertEqual(self.store.rows()[-1][3], 4009, "手元にも独自の番号で貯める")
 
-    def test_a_number_that_cannot_be_converted_is_not_sent(self):
-        _req, body = self._send("Classic", [175, 5])
-        self.assertEqual((body["p_t1"], body["p_t2"], body["p_t3"]), (5, None, None))
+    def test_a_number_that_is_not_in_the_table_is_sent_too(self):
+        """名前が無い番号（表に無いページ・Alternate の枠の 36 以上）も統計・DB に残す"""
+        _req, body = self._send("Classic", [3070, 5])
+        self.assertEqual((body["p_t1"], body["p_t2"], body["p_t3"]), (3070, 5, None))
 
     def test_the_constants(self):
         self.assertEqual(ConnectDB.REGISTER_ROUND_RPC, "rpc/register_round_v2")

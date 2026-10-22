@@ -12,33 +12,6 @@ import TerrorIds
 
 
 # ═══════════════════════════════════════════════
-#  CONSTANTS
-# ═══════════════════════════════════════════════
-# Alternate枠テラーのオフセット設定
-# ログID 0〜35 のテラーは Alternate枠 → +134 してtnlスロットIDに変換する
-# tnlのAlternateスロットは134〜169として登録されているため
-ALTERNATE_OFFSET  = 134
-ALTERNATE_LOG_MAX = 35   # ログIDが0〜35 = Alternate枠テラー
-
-# Unboundラウンドのオフセット: ログID + 200 = tnlスロットID
-UNBOUND_OFFSET = 200
-
-ALTERNATE_SLOT_POSITIONS: dict[str, list[int] | None] = {
-    "Alternate":           None,  # 全枠Alternate → +134
-    "Midnight":            [2],   # 3枠目のみAlternate → +134
-    "Fog (Alternate)":     None,  # 全枠Alternate → +134、tnl照合はFog
-    "Ghost (Alternate)":   None,  # 全枠Alternate → +134、tnl照合はGhost
-    # 通常の Fog/Ghost/8Pages はClassicテラーのみ → オフセット不要
-}
-
-# April Fool期間中の特例: Alternate ID→tnlID の特別マッピング
-# キー=ログに出るID(オフセット適用後), 値=tnlでの実際のID
-# ALTERNATE_ID_OVERRIDE: dict[int, int] = {
-#     136: 316,   # April Fool: Alternate ログID2(+134=136) → tnl316
-# }
-
-
-# ═══════════════════════════════════════════════
 #  全窓で共有する続行リスト一式
 # ═══════════════════════════════════════════════
 class SharedLists:
@@ -490,26 +463,3 @@ def parse_terror_ids(a: str, b: str, c: str, round_type: str = "") -> list[int]:
         return ids[:1]
     else:
         return ids[:1]
-
-def apply_alternate_offset(ids: list[int], round_type: str) -> list[int]:
-    """
-    Alternate枠テラーのログID（0〜35）を +134 してtnlスロットIDに変換する。
-    round_type = ログの "Round type is XXX" の XXX 部分
-    - Midnight: 3枠目（index=2）のみAlternate
-    - Alternate/Fog(Alternate)/Ghost(Alternate)/8Pages(Alternate): 全枠Alternate
-    - その他（通常8Pages/Fog/Ghost等）: オフセットなし
-    """
-    if round_type not in ALTERNATE_SLOT_POSITIONS:
-        return ids
-    positions = ALTERNATE_SLOT_POSITIONS[round_type]  # None=全枠, list=指定枠のみ
-    result = []
-    for i, tid in enumerate(ids):
-        is_alt_slot = (positions is None) or (i in positions)
-        if is_alt_slot and 0 <= tid <= ALTERNATE_LOG_MAX:
-            converted = tid + ALTERNATE_OFFSET
-            # April Fool等の特例マッピング
-            # result.append(ALTERNATE_ID_OVERRIDE.get(converted, converted))
-            result.append(converted)
-        else:
-            result.append(tid)
-    return result

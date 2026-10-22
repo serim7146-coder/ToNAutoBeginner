@@ -475,7 +475,7 @@ class TestRecordingHooks(unittest.TestCase):
         """DTM/Waldo の3クラ解放狙いはアナウンスが鳴らない"""
         monitor = self._monitor()
 
-        self._judge(monitor, [LogMonitor.DTM_TERROR_ID])
+        self._judge(monitor, [config.DTM_ID])
 
         self.assertTrue(monitor.st.is_continue_round, "前提: 続行はする")
         self.started.assert_not_called()

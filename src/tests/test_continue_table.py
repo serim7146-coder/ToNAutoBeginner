@@ -784,7 +784,7 @@ class TestJudgementLabel(_MonitorCase):
 
     def test_no_label_when_another_rule_made_the_opposite_result(self):
         """続行無効で外れても、3クラ解放（DTM）で続行になったときは「続行無効」と書かない"""
-        dtm = LogMonitor.DTM_TERROR_ID
+        dtm = config.DTM_ID
         monitor = self._monitor({KEY: {dtm}}, ids=[dtm])
         monitor.cfg.cancel_afk = True
         ContinueTable.set_current(_store({KEY: [dtm]}))

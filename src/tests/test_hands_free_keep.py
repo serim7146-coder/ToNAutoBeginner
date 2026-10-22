@@ -4,7 +4,7 @@
 from tests.support import *  # noqa: F401,F403
 
 EX = LogParser.BLOODBATH_EX
-DTM = LogMonitor.DTM_TERROR_ID
+DTM = config.DTM_ID
 WALDO = config.WALDO_ID
 OTHER = 5                                   # DTM でも Waldo でもないテラー
 PLUSH = 70                                  # テスト中は item.json が空なので、Guidance Plush の番号を差し替える

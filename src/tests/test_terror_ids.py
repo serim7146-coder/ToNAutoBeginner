@@ -353,3 +353,95 @@ class TestMigration(unittest.TestCase):
                                  "Unbound/アンバウンド": frozenset({2083, 4013}),
                                  TerrorIds.EIGHT_PAGES_KEY: frozenset({3014, 3046})})
         self.assertEqual(sorted(dropped), [("8 Pages/8ページ", 5), ("Classic/クラシック", 999)])
+
+
+class TestTheToolUsesOwnNumbersEverywhere(unittest.TestCase):
+    """config の決まりの番号・terrors.json の番号が、表と合っている。8 Pages の行が決まりに当たらない"""
+
+    LEGACY = {"JOY_ID": 164, "SONIC_ID": 40, "ATRACHED_ID": 191, "SLENDER_ID": 47, "HUNGRY_HOME_INVADER_ID": 190,
+              "CURIOUS_CREATURE_ID": 106, "BLOODTHIRSTY_CREATURE_ID": 192, "SELF_INSERTS_ID": 283,
+              "SELF_INSERTS_BLOODTHIRSTY_ID": 1283, "SANIC_ID": 136, "FOXY_ID": 316, "FUSION_PILOT_ID": 163,
+              "NEO_PILOT_ID": 315, "ARKUS_ID": 61, "GLORBO_ID": 317, "GIGABYTES_ID": 314, "DTM_ID": 50,
+              "WALDO_ID": 131}
+
+    def test_the_rule_numbers_are_the_tools_own_numbers(self):
+        for name, legacy in self.LEGACY.items():
+            self.assertEqual(getattr(config, name), TerrorIds.own_from_legacy(legacy), name)
+            self.assertIsNotNone(TerrorIds.row(getattr(config, name)), name)
+
+    def test_the_names_of_the_rule_numbers(self):
+        names = {"JOY_ID": "Joy", "ATRACHED_ID": "Atrached", "HUNGRY_HOME_INVADER_ID": "Hungry Home Invader",
+                 "BLOODTHIRSTY_CREATURE_ID": "Wild Yet Bloodthirsty Creature", "SELF_INSERTS_ID": "Self Inserts",
+                 "SELF_INSERTS_BLOODTHIRSTY_ID": "Self Inserts (Bloodthirsty)", "FOXY_ID": "Evil Purple Foxy",
+                 "NEO_PILOT_ID": "Neo Pilot", "ARKUS_ID": "Arkus", "GLORBO_ID": "Glorbo",
+                 "GIGABYTES_ID": "The Gigabytes", "DTM_ID": "Don't Touch Me", "WALDO_ID": "Waldo",
+                 "FUSION_PILOT_ID": "Fusion Pilot", "SANIC_ID": "Sanic", "CURIOUS_CREATURE_ID": "Wild Yet Curious Creature"}
+        for name, expected in names.items():
+            self.assertEqual(TerrorIds.name(getattr(config, name)), expected, name)
+
+    def test_the_constants_in_terror_ids_and_config_are_the_same_numbers(self):
+        self.assertEqual(config.HUNGRY_HOME_INVADER_ID, TerrorIds.HUNGRY_HOME_INVADER)
+        self.assertEqual(config.ATRACHED_ID, TerrorIds.ATRACHED)
+        self.assertEqual(config.BLOODTHIRSTY_CREATURE_ID, TerrorIds.BLOODTHIRSTY_CREATURE)
+        self.assertEqual(config.GIGABYTES_ID, TerrorIds.GIGABYTES)
+        self.assertEqual(config.NEO_PILOT_ID, TerrorIds.NEO_PILOT)
+        self.assertEqual(config.FOXY_ID, TerrorIds.FOXY)
+        self.assertEqual(config.GLORBO_ID, TerrorIds.GLORBO)
+        self.assertEqual(config.SELF_INSERTS_BLOODTHIRSTY_ID, TerrorIds.SELF_INSERTS_BLOODTHIRSTY)
+        self.assertEqual(config.VARIANT_TERROR_IDS, {4000, 4001, 4002, 4009})
+        self.assertEqual(config.OPEN_SPECIAL_ROUND_TERROR_IDS, {50, 131})
+        self.assertFalse(hasattr(config, "SELF_INSERTS_BLOODTHIRSTY_SLOT"))
+
+    def test_terrors_json_numbers_are_in_the_table_with_the_same_category(self):
+        raw = json.loads(config.resource_path("assets/data/terrors.json").read_text(encoding="utf-8"))
+        for category in ("classic", "alternate", "unbound"):
+            for entry in raw[category]:
+                found = TerrorIds.row(entry["id"])
+                self.assertIsNotNone(found, entry)
+                self.assertEqual(found.category, category, entry)
+                if entry["id"] != TerrorIds.FOXY:            # 表示名は正式名が長いので Evil Purple Foxy
+                    self.assertEqual(found.name, entry["name"], entry)
+        self.assertEqual({e["id"] for e in raw["classic"]} - set(range(134)), {4000, 4001, 4002, 4009, 4012})
+        self.assertEqual({e["id"] for e in raw["alternate"]}, set(range(1000, 1036)) | {4011})
+        self.assertEqual({e["id"] for e in raw["unbound"]}, set(range(2000, 2084)))
+
+    def test_every_candidate_for_the_statistics_is_in_terrors_json_and_the_other_way_round(self):
+        for category in ("classic", "alternate", "unbound"):
+            self.assertEqual(Statistics.candidate_ids_for_category(category),
+                             {int(i) for i in config.TERRORS[category]}, category)
+
+    def test_terrors_json_has_no_list_id_for_the_pages_now(self):
+        raw = json.loads(config.resource_path("assets/data/terrors.json").read_text(encoding="utf-8"))
+        self.assertTrue(all("list_id" not in entry for entry in raw["8pages"]))
+        self.assertEqual({e["id"] for e in raw["8pages"]}, {row.log for row in TerrorIds.TABLE.rows.values()
+                                                             if row.kind == "eight_pages"})
+        self.assertFalse(hasattr(ReadJson, "eight_pages_list_id"))
+
+    def test_no_rule_looks_at_an_eight_pages_terror_except_arkus(self):
+        """8 Pages の行の ListTool の番号を通常の索引で引いた番号と、決まりの番号が重なるのは Arkus だけ（Arkus を使う
+        決まりは Punished の Glorbo への置き換えだけで、8 Pages では働かない）。新しい決まりが 8 Pages に出るテラーと
+        重なったら、ここで落ちる（意図したものか確かめるきっかけ）"""
+        rule_ids = {getattr(config, name) for name in self.LEGACY} | set(config.VARIANT_TERROR_IDS)
+        pages = {TerrorIds.statistics_id(own) for own in TerrorIds.eight_pages_ids()}
+        self.assertEqual(pages & rule_ids, {config.ARKUS_ID})
+        self.assertFalse(TerrorIds.eight_pages_ids() & rule_ids, "8 Pages の行そのもの（3000 番台）は決まりに当たらない")
+
+    def test_the_replacements_that_can_happen_in_eight_pages_do_not_touch_a_page_terror(self):
+        for row in TerrorReplacement.TABLE:
+            if row.rounds is not None and "8 Pages" not in row.rounds:
+                continue
+            if row.source is not None:
+                self.assertNotIn(row.source, TerrorIds.eight_pages_ids(), row.name)
+        for row in TerrorReplacement.TABLE:
+            if row.source == config.ARKUS_ID:
+                self.assertNotIn("8 Pages", row.rounds, "Arkus を元にする置き換えは 8 Pages では起きない")
+
+    def test_the_log_numbers_go_through_the_one_entrance(self):
+        self.assertFalse(hasattr(MatchTNL, "ALTERNATE_OFFSET"))
+        self.assertFalse(hasattr(MatchTNL, "UNBOUND_OFFSET"))
+        self.assertFalse(hasattr(MatchTNL, "ALTERNATE_LOG_MAX"))
+        self.assertFalse(hasattr(RoundDecision, "normalize_killer_ids"))
+        self.assertFalse(hasattr(LogMonitor, "DTM_TERROR_ID"))
+        self.assertTrue(hasattr(LogMonitor.LogMonitor, "_own_killer_ids"))
+        self.assertFalse(hasattr(LogMonitor.LogMonitor, "_eight_pages_ids"))
+

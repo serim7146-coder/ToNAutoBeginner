@@ -151,7 +151,7 @@ class TestEarlyReadNames(unittest.TestCase):
         data = fog_early_read_terrors()
         for name in ("Paradise Bird", "PARADISE BIRD", "paradisebird",
                      "Paradise  Bird (12)", " Paradise Bird (1) "):
-            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, data), 146, name)
+            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, data), 1012, name)
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Paradise Bird (x)", data))
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("1", data))
 
@@ -163,8 +163,8 @@ class TestEarlyReadNames(unittest.TestCase):
 
     def test_the_objects_names_match(self):
         data = fog_early_read_terrors()
-        for name, tid in (("Kuro GuidingStar", 140), ("SmileyWalker", 142),
-                          ("Innyume", 28), ("Twin1 (2)", 133), ("witchling (15)", 167)):
+        for name, tid in (("Kuro GuidingStar", 1006), ("SmileyWalker", 1008),
+                          ("Innyume", 28), ("Twin1 (2)", 133), ("witchling (15)", 1033)):
             self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, data), tid, name)
 
     def test_display_and_individual_names_do_not_match(self):
@@ -178,19 +178,19 @@ class TestEarlyReadNames(unittest.TestCase):
 
     def test_an_empty_or_missing_objects_matches_nothing(self):
         data = fog_early_read_terrors()
-        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Chomper", data), "139 は空")
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Chomper", data), "1005 は空")
         data = ReadJson.normalize_terrors({"classic": [
             {"id": 5, "name": "Nameless", "terrors": ["Nameless"]}]})
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Nameless", data), "objects が無い行")
 
     def test_unbound_objects_are_not_used(self):
         data = fog_early_read_terrors()
-        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Duke", data), "227 は unbound")
+        self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Duke", data), "2027 は unbound")
         self.assertIsNone(ReadJson.fog_terror_id_by_object_name("Byte Horde", data))
 
     def test_objects_are_for_early_read_only(self):
         data = fog_early_read_terrors()
-        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Kuro GuidingStar", data), 140)
+        self.assertEqual(ReadJson.fog_terror_id_by_object_name("Kuro GuidingStar", data), 1006)
         self.assertIsNone(ReadJson.fog_terror_id_by_name("Kuro GuidingStar", data), "Enrage には使わない")
         self.assertIsNone(ReadJson.terror_id_by_name("Kuro GuidingStar", data))
 
@@ -472,7 +472,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.play.reset_mock()
             SharedState.continue_round_reset()
             monitor = self._monitor(access="public", capable=False,
-                                    keep={self.FOG_KEY: {own(tid)}})
+                                    keep={self.FOG_KEY: {tid}})
 
             self._identify_by(monitor, how)
 
@@ -618,12 +618,12 @@ class TestFogEarlyReadUse(unittest.TestCase):
             with patch.object(monitor, "_identify_fog_terror",
                               wraps=monitor._identify_fog_terror) as identify:
                 monitor._process(self._object_line(0, "WALPURGISNACHT"))
-                self.assertEqual(monitor.st.early_read_tid, 167, "最初の名前で決まる")
+                self.assertEqual(monitor.st.early_read_tid, 1033, "最初の名前で決まる")
                 monitor._process(self._object_line(1, "witchling (15)"))
                 monitor._process(line_after(self.SNAIL_LINE, 3))
 
             self.assertEqual(identify.call_count, 1, access)
-            self.assertEqual(monitor.st.early_read_tid, 167, access)
+            self.assertEqual(monitor.st.early_read_tid, 1033, access)
             self.assertFalse(monitor.st.early_read_void, access)
             self.assertEqual(self.send.call_count, 1, access)
 
@@ -1028,15 +1028,15 @@ class TestFogNoObjectDtm(unittest.TestCase):
     # ── Convict Squad（本物の terrors.json）─────────────────
     def test_convict_names_are_convict_squad(self):
         for name in ("Convict (Etrigan)", "Convict (Nami", "Convict (Darkgrey)", "Convict (Have"):
-            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, config.TERRORS), 145, name)
+            self.assertEqual(ReadJson.fog_terror_id_by_object_name(name, config.TERRORS), 1011, name)
 
     def test_a_convict_name_decides_convict_squad_and_not_dtm(self):
         monitor = self._monitor()
         monitor._process("2026.09.21 22:04:42 Warning    -  [NetworkProcessing] Ignoring "
                          "TrySetOwner attempt on [5] Convict (Nami because x already owner")
         monitor._process(self._at(6))
-        self.assertEqual(monitor.st.early_read_tid, 145)
-        self.assertEqual(monitor.st.enrage_identified, 145)
+        self.assertEqual(monitor.st.early_read_tid, 1011)
+        self.assertEqual(monitor.st.enrage_identified, 1011)
         self._assert_no_dtm(monitor)
 
 
@@ -1103,7 +1103,7 @@ class TestFogEarlyReadAnswerCheck(unittest.TestCase):
         self.assertEqual(data["witchling"], {"match": 1})
 
     def test_an_alternate_reveal_is_offset_before_comparing(self):
-        """33 は Fog (Alternate) なら 167 Walpurgisnacht。オフセット前で比べると Luigi 扱いになる"""
+        """33 は Fog (Alternate) なら 1033 Walpurgisnacht。入口で 1000＋ログの番号にしてから比べる（33 のままだと Luigi 扱いになる）"""
         monitor = self._monitor()
         row = FOG_EARLY_READ_ROUNDS[2]
 
@@ -1262,7 +1262,7 @@ class TestFogVariantsInNg(unittest.TestCase):
         self.assertEqual(self._started().count("do_skip"), 1)
         self.assertFalse(self.send.call_args.kwargs["quiet"])
 
-        sanic_in_log = config.SANIC_ID - MatchTNL.ALTERNATE_OFFSET
+        sanic_in_log = TerrorIds.game_id(config.SANIC_ID)
         monitor._process(self.PREFIX + f"Killers have been revealed - {sanic_in_log} 0 0 "
                          "// Round type is Fog (Alternate)")
         self.assertEqual(self._started().count("do_skip"), 1, "公開で二重に自爆しない")
@@ -1321,7 +1321,7 @@ class TestFogStunned(unittest.TestCase):
     """スタンによる霧のテラー判明。Enrage 系として使い分けに乗る"""
 
     FOG_KEY = "Fog/霧"
-    WITCH = 167            # Walpurgisnacht（個体名 Unknown Witch）
+    WITCH = 1033           # Walpurgisnacht（個体名 Unknown Witch）
     UNKNOWN = ("2026.09.21 17:31:15 Debug      -  Killers is unknown - ??? // "
                "Will be revealed after 50 seconds // Round type is Fog")
     STUN = "2026.09.21 17:31:40 Debug      -  Unknown Witch was stunned."
@@ -1361,7 +1361,7 @@ class TestFogStunned(unittest.TestCase):
                 for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
 
     def test_ok_instance_decides_by_the_stun(self):
-        monitor = self._monitor("invite", keep={self.FOG_KEY: {own(self.WITCH)}})
+        monitor = self._monitor("invite", keep={self.FOG_KEY: {self.WITCH}})
 
         monitor._process(self.STUN)
 
@@ -1373,7 +1373,7 @@ class TestFogStunned(unittest.TestCase):
 
     def test_ng_instance_decides_by_the_stun_too(self):
         """スタンは通常のログ。看破 NG のインスタンスでも表示して判定する"""
-        monitor = self._monitor("public", keep={self.FOG_KEY: {own(self.WITCH)}})
+        monitor = self._monitor("public", keep={self.FOG_KEY: {self.WITCH}})
 
         monitor._process(self.STUN)
 
@@ -1424,7 +1424,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
     「リストを見ずに自爆」になる。
     """
 
-    WALPURGISNACHT = 167     # alternate
+    WALPURGISNACHT = 1033    # alternate
     HELL_BELL = 65           # classic。実ログでFogに74回出る
     FOG_ALT = GroupRound.FOG_ALTERNATE_ROUND_TYPE
 
@@ -1496,7 +1496,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
         forced.assert_called_once()
 
     def test_an_alternate_terror_in_the_list_continues(self):
-        monitor = self._monitor(keep_on={"Fog/霧": {own(self.WALPURGISNACHT)}})
+        monitor = self._monitor(keep_on={"Fog/霧": {self.WALPURGISNACHT}})
 
         self._enrage(monitor, "Walpurgisnacht")
 
@@ -1554,7 +1554,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
 
     # ── IDを壊さない ──────────────────────────
     def test_the_offset_is_not_applied_twice(self):
-        """167 が 301 にならないこと"""
+        """1033 が 2033 などにならないこと（入口の 1 か所でしか足さない）"""
         monitor = self._monitor()
 
         self._enrage(monitor, "Walpurgisnacht")
@@ -1562,10 +1562,13 @@ class TestEnrageFogAlternate(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [self.WALPURGISNACHT])
         self.assertEqual(monitor.st.enrage_identified, self.WALPURGISNACHT)
 
-    def test_the_offset_helper_leaves_alternate_ids_alone(self):
-        self.assertEqual(
-            MatchTNL.apply_alternate_offset([self.WALPURGISNACHT], self.FOG_ALT),
-            [self.WALPURGISNACHT])
+    def test_the_entrance_is_the_only_place_that_adds_the_offset(self):
+        self.assertFalse(hasattr(MatchTNL, "apply_alternate_offset"))
+        self.assertEqual(TerrorIds.from_log([33], self.FOG_ALT), [self.WALPURGISNACHT])
+        monitor = self._monitor()
+        with patch.object(LogMonitor.threading, "Thread"):
+            monitor._on_killers([self.WALPURGISNACHT], self.FOG_ALT, revealed=True)
+        self.assertEqual(monitor.st.terror_ids, [self.WALPURGISNACHT], "すでに独自の番号のものに足さない")
 
     # ── private は変わらない ───────────────────
     def test_private_decisions_are_unchanged(self):
@@ -1581,7 +1584,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
 
     def test_the_tnl_lookup_is_unchanged(self):
         monitor = self._monitor(config.INSTANCE_PRIVATE,
-                                keep_on={"Fog/霧": {own(self.WALPURGISNACHT)}})
+                                keep_on={"Fog/霧": {self.WALPURGISNACHT}})
 
         self._enrage(monitor, "Walpurgisnacht")
 
