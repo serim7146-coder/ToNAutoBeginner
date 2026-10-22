@@ -60,16 +60,19 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `LogMonitor.py` | 1窓を1スレッドで監視する中心。ログを読み、`WindowState` を更新し、判定して `ActionExecutor` に操作を頼む。イベントの種類ごとに `_HANDLERS` からメソッドを引く。 |
 | `LogParser.py` | ログ1行を `LogEvent`（種類＋付帯情報）にする。状態を持たない。 |
 | `VerifiedTracker.py` | `Verified` の行が Begin の受理か、約300秒ごとの定期シグナルかを、ログの時刻で見分ける。 |
-| `MatchTNL.py` | .tnl と ToN ListTool の主催リスト（`host_state.sqlite3`）の読み込み、ログのテラーID → 続行リストのIDの変換（Alternate +134・Unbound +200）。全窓で共有する `SharedLists`。ビット列 → ID の集合の変換は同じビット列なら覚えた結果を使う。 |
-| `RoundDecision.py` | 続行するか・3クラ解放（DTM/Waldo）の対象かの判定。`list_continues` は続行リストだけで見た判定（`decide_killers` と続行表のラベルが使う）。 |
-| `ContinueTable.py` | 続行表（GH）。続行無効・デフォ続行の 2 つの表（`Table`。ON/OFF つき）と、続行リストへ重ねる `apply`、判定の行に付ける `overlay_label`、.tnl／.tnnl の取り込み、保存・読み込み（`continue_table.json`。一時ファイルに書いて置き換える）。今の表は `current()`／`set_current()` で全窓・画面が共有し、中身は書き換えず差し替える。 |
-| `ContinueTableGUI.py` | 続行表の編集画面（`ContinueTableWindow`）。ラウンドは上の段の Combobox で選ぶ（`assets/data/continue_slots.json`。Special/Moon の枠は出さない）・テラーのアイコンの格子は `tk.Canvas` に直接描く（`layout_for` が本体の段とバリアントの段を決める。`assets/icons` のシートを OpenCV で切り出して 40px に拡大し、明るさ 3 種の PNG を `tk.PhotoImage` にして持つ。絵が無い番号は名前の札。名前は `icons.json` の `names` が先）。押したセルだけ `itemconfigure` し、`set_current` はその場で・保存は `after(300)` でまとめ、閉じるときに残りを保存。 |
+| `TerrorIds.py` | ツール独自のテラー番号（`assets/data/terror_ids.json`。0〜999 Classic・1000〜 Alternate・2000〜 Unbound・3000〜 8 Pages・4000〜 固定の表）の表と、番号の入口・出口。`from_log`（ログの番号 → 独自の番号。Alternate の枠は 1000＋、Unbound は 2000＋、8 Pages は 3000＋ページ。**この 1 か所だけが足す**。`LogMonitor._own_killer_ids` が呼ぶ）・`from_listtool`／`to_listtool`／`list_from_listtool`／`list_to_listtool`（.tnl・.tnnl・主催リストとの境）・`own_from_legacy`／`own_from_legacy_round`／`migrate_legacy`（前の版のファイルと無印の `ToNRounds` を移すときだけ）・`statistics_id`／`statistics_ids`（8 Pages の行を通常の同じテラーに足す）・`name`／`icon`／`game_id`。表に無い番号は `#番号` と名前を出し、debug.log に 1 回だけ残す。import するのは `config` だけ。表が読めなければ例外（番号が引けないまま動かさない）。 |
+| `MatchTNL.py` | .tnl と ToN ListTool の主催リスト（`host_state.sqlite3`）の読み込み。ToN ListTool の番号 → 独自の番号の変換はここ（`TerrorIds.list_from_listtool`。主催リストは人ごと・`once=True` で debug.log を重ねない）。`slots()`（`continue_slots.json` v2: ラウンドごとの枠と `listtool.variants`・`moon_keys`）・`placements`・`distribute_special_moon`（ToN ListTool の Special/Moon・Mystic Moon・Blood Moon を、ツールの「Special/Moon」1 つへ振り分ける）・`drop_not_appearing`（出ないテラーを取り込まない）・`own_list_from_listtool`・`listtool_moon_content`（書き出しで ToN ListTool の 3 つのキーを作り直す）。ログのラウンド → 続行リストのキーは `LOG_TO_TNL`（Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night は全部 `Special/Moon`）。全窓で共有する `SharedLists`。ビット列 → ID の集合の変換は同じビット列なら覚えた結果を使う。 |
+| `RoundDecision.py` | 続行するか・3クラ解放（DTM/Waldo）の対象かの判定。`list_continues` は続行リストだけで見た判定（`decide_killers` と続行表のラベルが使う）。続行リストのそのラウンドのキーだけを見る（Special/Moon の予備の判定は無い。ラウンドがもう `Special/Moon` を指す）。 |
+| `ContinueList.py` | ツールの中の続行リスト（`continue_list.json` version 2。独自の番号）。全窓が共有する今の中身・保存・生存したら外す（`remove_survived`）。前の版（ToN ListTool の番号）のファイルは初回の読み込みで直して保存し直し、直す前を `continue_list.json.listtool.bak` に残す（すでにあれば上書きしない。.bak が書けなければ直さない。直すものが無い空のデータは書き換えない）。 |
+| `ContinueTable.py` | 続行表（GH）。続行無効・デフォ続行の 2 つの表（`Table`。ON/OFF つき）と、続行リストへ重ねる `apply`、判定の行に付ける `overlay_label`、.tnl／.tnnl の取り込み（`from_tnnl` も ToN ListTool の番号を直して Special/Moon を振り分ける）、保存・読み込み（`continue_table.json` version 3。一時ファイルに書いて置き換える。version 1／2 は初回の読み込みで独自の番号に直し、直す前を `continue_table.json.listtool.bak` に残す）。今の表は `current()`／`set_current()` で全窓・画面が共有し、中身は書き換えず差し替える。 |
+| `ContinueTableGUI.py` | 続行表の編集画面（`ContinueTableWindow`）。ラウンドは左の一覧で選ぶ（`assets/data/continue_slots.json`。Special/Moon は 1 つのタブ）・テラーのアイコンの格子は `tk.Canvas` に直接描く（`layout_for` が Classic 134・Alternate 36（逆三角）・Unbound 84 の全部を描き、8 Pages・Special/Moon の特別のブロックとバリアントの段（4000 番台）を決める。そのラウンドに出ないテラーは `LEVELS["gone"]` の「選べないマス」: 暗い絵・枠なし・押しても何も起きない・全選択／全解除の対象外・ツールチップ「（このラウンドには出ません）」。選べる番号の集合は `_available`）。`assets/icons` のシートを OpenCV で切り出して 40px に拡大し、明るさ 3 種の PNG を `tk.PhotoImage` にして持つ（`TerrorIds.icon`）。絵が無い番号は名前の札。押したセルだけ `itemconfigure` し、`set_current` はその場で・保存は `after(300)` でまとめ、閉じるときに残りを保存。 |
 | `GroupRound.py` | 干し芋／焼き芋のインスタンスのルール（と、プライベートの Sabotage）。 |
 | `RoundSequence.py` | ラウンドの並び（通常・特殊）から Moon の解放状況を推定する。 |
 | `TerrorReplacement.py` | 置き換えテラー（Atrached・Hungry Home Invader・Bloodthirsty・Foxy・Glorbo・Gigabytes など）の合図の行（`SIGNALS`）と差し替えの表（`TABLE`）。 |
 | `FogEarlyRead.py` | 霧の看破（`[NetworkProcessing]` のオブジェクト名から公開前にテラーを特定）の許可と、名前ごとの答え合わせの記録。 |
 | `UtilsWatch.py` | ToN Utils のログ（`ton-utils.log`）の press・hold・許可の変化を読み、Utils の source を窓に対応づける（`save-history.sqlite` の `logs` の source・started だけを読み取り専用で読む）。全窓で1つ（`shared()`）。 |
-| `ReadJson.py` / `ItemCatalog.py` | terrors.json・item.json の読み込みと引き方。 |
+| `ReadJson.py` / `ItemCatalog.py` | terrors.json・item.json の読み込みと引き方。terrors.json の番号は独自の番号（8 Pages の行の `id` はページ番号そのもので `list_id` は無い。ツールの中の番号は 3000＋`id`）。 |
+| `LegacyRoundsTable.py` | 無印の `ToNRounds`（ToN ListTool の番号。前の版が送っていた分）を読んで独自の番号に直す、**移行の間だけの**モジュール（`NAME="legacy"`・`fetch`・`convert`。人数は NULL）。統計の取り込みが ToNRounds_v2 と両方を読む。いらなくなったら、このファイルと `RoundStore.sources()` の 1 行を消すだけ。 |
 
 ### 操作
 | モジュール | 責務 |
@@ -97,8 +100,8 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `PlaySound.py` | MCI（winmm）で音声を鳴らす。 |
 | `WindowVolume.py` | Windows のアプリごとの音量で、窓の状態ごとに VRChat の音量を変える。見張りのスレッドが Core Audio を使い、止めると元の音量に戻す。 |
 | `Recorder.py` / `OBSClient.py` | 続行ラウンドを OBS（obs-websocket v5）で録る。通信は専用のスレッド。 |
-| `ConnectDB.py` | Supabase との通信。ラウンドの送信（`rpc/register_round`）、transformed_uid の取得（`rpc/get_transformed_uid`）、統計画面の差分取得。`.env` が無ければ何もしない。 |
-| `RoundStore.py` / `Statistics.py` / `StatisticsGUI.py` | 統計画面。DB の差分を手元の SQLite に取り込み、手元で集計する。二項分布の検定。 |
+| `ConnectDB.py` | Supabase との通信。ラウンドの送信（`rpc/register_round_v2`。独自の番号と `p_players`）、transformed_uid の取得（`rpc/get_transformed_uid`）、統計画面の差分取得（`fetch_rounds(..., table=)`。`ToNRounds_v2` と、移行の間は無印の `ToNRounds`）。`.env` が無ければ何もしない。 |
+| `RoundStore.py` / `Statistics.py` / `StatisticsGUI.py` | 統計画面。DB の差分を手元の SQLite に取り込み、手元で集計する。二項分布の検定。`RoundStore` は取り込み元（`Source`: v2 と legacy）ごとに取り込んだ位置を別に覚え（meta の `initial_done:v2`・`synced_to:legacy` など。404 でも巻き戻さない）、`sync_all()` で全部を取り込む。`rounds` の列 `players` はラウンド開始時の人数（自分を含む・不明は NULL）。前の版の rounds.sqlite は初回に独自の番号へ直し（1 つのトランザクション）、直す前を `rounds.sqlite.listtool.bak` に残す。8 Pages の行は 3000 番台のまま貯め、集計のときだけ通常の同じテラーに足す（`TerrorIds.statistics_id`）。 |
 | `DebugLog.py` / `BugReport.py` | debug.log（秘密・ユーザー名を伏せる）と、不具合の報告（Discord の Webhook。窓を複数・全部選べる）。 |
 | `UnitTest.py` | テストを回す入口（`tests/test_*.py`）。 |
 
@@ -218,13 +221,13 @@ LogMonitor._process(line)
 1. 続行リストの供給元: ToN ListTool が動いていて、参加者・待機の誰かが続行リストを持っていれば主催リスト（`host_state.sqlite3`）、それ以外は .tnl。取れない状態が `HOST_LIST_LOSS_GRACE_SEC` 続いたら .tnl へ。
    主催リストの複窓対応のタブは、その窓にいる人の名前の重なりで窓に対応づける。参加者別の希望は、その窓にいる人の分だけを使う。
    主催リストは `HOST_SAVE_IGNORED_KEYS`（Fog (Alternate)・Ghost (Alternate) の枠）を読み飛ばす（ログの Fog (Alternate) は通常の Fog の枠で照合するため、畳むと判定が変わる）。tnl の読み込みでも同じ 2 つの枠を読み飛ばす（件数が主催リストと一致する。FV）。
-2. ログのテラーIDを続行リストのIDへ（`RoundDecision.normalize_killer_ids`: Alternate 枠 +134、Unbound +200。8 Pages は terrors.json の `list_id`）。
+2. ログのテラーIDを独自の番号へ（`LogMonitor._own_killer_ids` → `TerrorIds.from_log`: Alternate 枠は 1000＋、Unbound は 2000＋、8 Pages は 3000＋ページ。**この 1 か所だけ**。以後の判定・続行リスト・続行表・統計・DB は全部この番号。ToN ListTool の番号に直すのは .tnl・.tnnl・主催リストの出入りだけ）。
 3. インスタンスの種類で分ける:
    - private（Invite・Invite+・Friends・Friends+）: 自爆・Begin・放置モード・ラウンドごとの指定を使う。Run は判定を通らず、全続行で選んでいればラウンド開始の時点で全続行（リスポーンしない）として扱う。移動・クリック・カーソル・チェイスなどの操作（OSC・マウス）は private の窓だけ（`ActionExecutor.can_operate`。種類が分からない窓もしない）。前面化・音・判定・グループの自爆（キー）は見ない。
    - 干し芋・焼き芋: `GroupRound.decide`（Classic・Bloodbath など問答無用の自爆、Moon、Fog、Sabotage）。`NORMAL` なら続行リストへ。
    - それ以外: 操作しない（判定のログだけ）。
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
-4. `RoundDecision.decide_killers`: 続行リスト（Classic と Moon では Special/Moon 枠も見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
+4. `RoundDecision.decide_killers`: 続行リスト（Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night はツールの `Special/Moon` のキーで見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
    DTM/Waldo は3勝まで（窓の設定 `cancel_afk_after_unlock` で3勝の後も）。Waldo は Guidance Plush を持っているときだけ（番号は item.json の名前から。分からなければ前と同じく続行）。
    テラーが複数体出るラウンド（`config.OPEN_SPECIAL_ROUND_EXCLUDED_ROUNDS`: Double Trouble・Bloodbath・Midnight）では DTM/Waldo でも続行しない。Bloodbath EX・Cracked などほかの特殊ラウンドは続行する（完全放置モードも同じ）。完全放置モードの private の窓では、Glorbo・Bloodbath EX の 3 体 DTM・Guidance Plush を持っているときの Bloodbath EX の 3 体 Waldo は、3 クラの状態・「DTM/Waldo続行」・続行リストに関係なく続行する（`LogMonitor._hands_free_keep_reason` → plan `hands_free_keep` → `_start_glorbo_continue`。他窓フリーズ・AFK 解除ループ `glorbo=True`。アナウンス・録画なし。FX）。
    Bloodbath EX はラウンド開始の行では「Bloodbath」と出る。`LogParser` が Killers 行で3つの番号がそろった Bloodbath を「Bloodbath EX」に読み替える（「EX」とだけ出た場合も同じ名前にそろえる。実ログでは未確認）。判断はすべて Killers 行の後なので、続行リスト・ラウンド指定・DTM/Waldo・統計（番号 8）は EX として扱う。干し芋/焼き芋では自爆しない（`GroupRound.ALWAYS_CONTINUE_ROUNDS`。8 Pages・Run と同じ）。
@@ -266,9 +269,9 @@ LogMonitor._process(line)
 
 ## 10. 統計
 
-- 送る: ラウンドごとに1回、`rpc/register_round`（開始の時刻・ラウンドの番号・マップ・テラー3体まで・transformed_uid・インスタンスの番号）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
+- 送る: ラウンドごとに1回、`rpc/register_round_v2`（開始の時刻・ラウンドの番号・マップ・テラー3体まで（**独自の番号**）・transformed_uid・インスタンスの番号・`p_players`）。送り先のテーブルは `ToNRounds_v2`。`p_players` はラウンド開始時の人数（自分を含む。分からなければ null）。前の `rpc/register_round`（ToN ListTool の番号）は使わない。SQL は `supabase/migrate_terror_ids_v2.sql`（番号の対応表 `terror_id_map` は生成した値。`register_round` の本体・`ToNRounds` の定義に依存する部分は [依存]／TODO のコメントで、現物を見て書き足す）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
 - transformed_uid: `rpc/get_transformed_uid` で VRChat uid から int2 の番号をもらう（無ければ DB が割り当てる）。`Users` の表は直接読まない（`supabase/get_transformed_uid.sql`）。
-- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。
+- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。取り込み元は `ToNRounds_v2`（独自の番号・人数あり）と、移行の間だけ無印の `ToNRounds`（`LegacyRoundsTable` が独自の番号に直し、人数は NULL）。元ごとに取り込んだ位置を別に覚える。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。8 Pages の行（3000 番台）は手元ではそのまま貯め、集計のときだけ通常の同じテラーに足す。
 
 ## 11. 置き場所
 
@@ -276,9 +279,10 @@ LogMonitor._process(line)
 |---|---|
 | `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`run_respawn` |
 | `%APPDATA%\ToNAutoBeginner\debug.log`（.1〜.3） | デバッグログ。20MB で世代を回す |
-| `%APPDATA%\ToNAutoBeginner\rounds.sqlite` | 統計画面の手元の保存 |
+| `%APPDATA%\ToNAutoBeginner\rounds.sqlite`（`.listtool.bak`） | 統計画面の手元の保存（独自の番号。列 `players` あり）。前の版のものは初回に直し、直す前を `rounds.sqlite.listtool.bak` に残す |
+| `%APPDATA%\ToNAutoBeginner\continue_list.json`（`.listtool.bak`） | ツールの中の続行リスト（`{"version": 2, …}`。独自の番号。前の版のものは初回に直し、直す前を `continue_list.json.listtool.bak` に残す） |
 | `%APPDATA%\ToNAutoBeginner\fog_object_names.json` | 看破の名前ごとの答え合わせ |
-| `%APPDATA%\ToNAutoBeginner\continue_table.json` | 続行表（続行無効・デフォ続行の 2 つの表と ON/OFF。`{"version": 1, "use_disabled", "use_default", "disabled": {ラウンドのキー: [番号]}, "default": {…}}`。壊れていたら空で始める） |
+| `%APPDATA%\ToNAutoBeginner\continue_table.json` | 続行表（続行無効・デフォ続行の 2 つの表と ON/OFF。`{"version": 3, "use_disabled", "use_default", "disabled": {ラウンドのキー: [番号]}, "default": {…}}`。独自の番号。version 1／2 は初回に直し、直す前を `continue_table.json.listtool.bak` に残す。壊れていたら空で始める） |
 | `%APPDATA%\ToNAutoBeginner\begin_miss\` | BEGIN が見つからなかった撮影（窓ごとに2枚） |
 | `%APPDATA%\ToNAutoBeginner\begin_adjust\` | Begin の位置合わせの各段の撮影（1 回ごとに「時刻_窓N」の組。見つかった段は四角と照準を描く。1/2 の JPEG。新しい 10 組。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToNAutoBeginner\run_face\` | Run の向き・前後でうまくいかなかったときの撮影（1/2 の JPEG。最新 `SHOT_KEEP` 枚） |
@@ -286,7 +290,7 @@ LogMonitor._process(line)
 | `%APPDATA%\ToNAutoBeginner\fetch_miss\` | アイテム取得で見つからなかった・Guidance Plush の装備を確かめられなかったときの撮影（1/2 の JPEG。最新 20 枚。不具合の報告には撮影のチェックがあるときだけ） |
 | `%APPDATA%\ToN ListTool\state\host_state.sqlite3` | ToN ListTool の主催リスト（読むだけ。2.17 より前は直下の `host_state.sqlite3`——新しい場所に無ければそちらを読む） |
 | `%APPDATA%\ton-syncskip\ton-utils.log`・`save-history.sqlite` | ToN Utils のログと記録（読むだけ。sqlite は `file:…?mode=ro` で開き、`logs` の source・started だけを読む。写しも取らない） |
-| リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`・`maps.json`・`item.json`・`continue_slots.json`（続行表の枠）、`assets/icons/`（続行表のテラーのアイコンのシートと `icons.json`）、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |
+| リポジトリの `assets/` | exe に同梱するデータ（exe の中も同じ形）。`assets/data/terrors.json`（独自の番号）・`terror_ids.json`（独自の番号の表。生成物。ツールの中の番号・名前・ToN ListTool の番号・アイコンの位置・前の版の番号）・`maps.json`・`item.json`・`continue_slots.json`（version 2。続行表の枠と、そのラウンドの ToN ListTool の変種・Moon のキー）、`assets/icons/`（続行表のテラーのアイコンのシートと `icons.json`（シートの大きさ・メモだけ）・`layout.json`）、`assets/voice/*.mp3`、`assets/templates/begin/`・`shop/`・`respawn/`・`run/`・`saveload/`（絵の見本）、`assets/ToNAutoBeginnerIcon.ico` |
 | `maps.json` の各マップ | `id`・`name` と印 `normal`（通常ラウンドで出る）・`8pages`（8 Pages で選ばれる）・`run`（Run のマップ）。1 か 0。同じ番号は 1 だけ（Dring King's Citadel と Sewers）で、統計の名前はラウンドに合う印で選ぶ（`Statistics.map_name_for_id`） |
 | `src/tests/data/` | テストの資料（撮影の切り出しなど。exe には入れない） |
 
