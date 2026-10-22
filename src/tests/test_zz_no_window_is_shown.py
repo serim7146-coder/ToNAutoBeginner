@@ -14,7 +14,7 @@ class TestZzNoWindowIsShown(unittest.TestCase):
         self.assertEqual(_visible_windows_of_this_process(), [], "前提: いまは0件")
         app = mainGUI.App()
         self.addCleanup(app.destroy)
-        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []),              patch.object(StatisticsGUI.threading, "Thread", RunNow):
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m, **kw: []),              patch.object(StatisticsGUI.threading, "Thread", RunNow):
             stats = StatisticsGUI.StatisticsWindow(app, store=RoundStore.RoundStore(
                 Path(tempfile.mkdtemp()) / "r.sqlite"))
         app._open_report()

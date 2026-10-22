@@ -279,15 +279,15 @@ class TestStatisticsTerrorTab(unittest.TestCase):
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
         self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
-        classic = sorted(int(i) for i in config.TERRORS["classic"])[:3]
-        alternate = sorted(int(i) for i in config.TERRORS["alternate"])[:2]
+        classic = sorted(Statistics.candidate_ids_for_category("classic"))[:3]
+        alternate = sorted(Statistics.candidate_ids_for_category("alternate"))[:2]
         self.ids = classic + alternate
         for i, tid in enumerate(self.ids):
             self.store.add_own(100 + i, 6, 12, tid, None, None, self.MINE)    # Bloodbath（既定で選ばれる）
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
-        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []), \
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m, **kw: []), \
              patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
             self.window = StatisticsGUI.StatisticsWindow(self.root, store=self.store)
             for _ in range(400):
@@ -308,7 +308,7 @@ class TestStatisticsTerrorTab(unittest.TestCase):
         self.assertTrue(all(shown == tid for shown, tid in before), "Classic はそのまま")
 
         alt = self.ids[3]
-        game = alt - MatchTNL.ALTERNATE_OFFSET
+        game = TerrorIds.game_id(alt)
         self.window.v_terror_search.set(str(game))
         listed = self._listed()
         self.assertIn((game, alt), listed, "分類をまたいで、ゲームの ID で合う")
@@ -370,13 +370,13 @@ class TestStatisticsFixes(unittest.TestCase):
         self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
         for i, rid in enumerate((1, 2, 6, 11, 12, 100, 101, 102, 103, 104, 106, 107)):
             self.store.add_own(100 + i, rid, 12, None, None, None, -13)
-        self.store.add_own(200, 6, 12, 135, None, None, -13)
-        self.unbound = min(int(i) for i in config.TERRORS["unbound"])
+        self.store.add_own(200, 6, 12, 1001, None, None, -13)
+        self.unbound = min(Statistics.candidate_ids_for_category("unbound"))
         self.store.add_own(201, 10, 12, self.unbound, None, None, -13)
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
-        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []), \
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m, **kw: []), \
              patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
             self.window = StatisticsGUI.StatisticsWindow(self.root, store=self.store)
             self.root.update()
@@ -469,28 +469,29 @@ class TestStatisticsFixes(unittest.TestCase):
         self.assertEqual(self.window.terror_tree["columns"][0], "id")
 
     def test_ids_are_game_ids(self):
-        self.assertEqual(StatisticsGUI.game_terror_id("Classic", 140), 140, "Classic の 134 以上はそのまま")
-        self.assertEqual(StatisticsGUI.game_terror_id("Alternate", 135), 1)
-        self.assertEqual(StatisticsGUI.game_terror_id("Unbound", 205), 5)
+        self.assertEqual(StatisticsGUI.game_terror_id("Classic", 140), 140)
+        self.assertEqual(StatisticsGUI.game_terror_id("Alternate", 1001), 1)
+        self.assertEqual(StatisticsGUI.game_terror_id("Unbound", 2005), 5)
+        self.assertEqual(StatisticsGUI.game_terror_id("Classic", 4000), 4000, "ログの番号が無いものは独自の番号のまま")
         self.window._set_terror_category("alternate")
         tree = self.window.terror_tree
         shown = {int(i): int(tree.item(i, "values")[0]) for i in tree.get_children()}
-        self.assertEqual(shown[135], 1)
-        self.assertTrue(all(v == k - MatchTNL.ALTERNATE_OFFSET for k, v in shown.items()))
+        self.assertEqual(shown[1001], 1)
+        self.assertTrue(all(v == (k - 1000 if k < 2000 else k) for k, v in shown.items()))
         self.window._set_terror_category("unbound")
         shown = {int(i): int(tree.item(i, "values")[0]) for i in tree.get_children()}
         self.assertTrue(shown)
-        self.assertTrue(all(v == k - MatchTNL.UNBOUND_OFFSET for k, v in shown.items()))
+        self.assertTrue(all(v == k - 2000 for k, v in shown.items()))
 
     def test_search_by_game_id(self):
         row = lambda tid: Statistics.TerrorStatistic(tid, "Terror", 1, 1.0, 0.5, "")
-        self.assertTrue(StatisticsGUI.terror_matches(row(205), "5", "Unbound"))
-        self.assertFalse(StatisticsGUI.terror_matches(row(205), "205", "Unbound"))
-        self.assertTrue(StatisticsGUI.terror_matches(row(139), "5", "Alternate"))
+        self.assertTrue(StatisticsGUI.terror_matches(row(2005), "5", "Unbound"))
+        self.assertFalse(StatisticsGUI.terror_matches(row(2005), "2005", "Unbound"))
+        self.assertTrue(StatisticsGUI.terror_matches(row(1005), "5", "Alternate"))
         self.assertTrue(StatisticsGUI.terror_matches(row(140), "140", "Classic"))
         found = StatisticsGUI.search_terror_rows(
-            [("Classic", [row(5), row(140)]), ("Alternate", [row(139)]), ("Unbound", [row(205)])], "5")
-        self.assertEqual(sorted(r.terror_id for _c, r in found), [5, 139, 205])
+            [("Classic", [row(5), row(140)]), ("Alternate", [row(1005)]), ("Unbound", [row(2005)])], "5")
+        self.assertEqual(sorted(r.terror_id for _c, r in found), [5, 1005, 2005])
 
 
 
@@ -626,9 +627,9 @@ class TestTerrorColors(unittest.TestCase):
 
     def setUp(self):
         TestStatisticsFixes.setUp(self)
-        for i, tid in enumerate((164, 168, 163)):
+        for i, tid in enumerate((1030, 1034, 1029)):
             self.store.add_own(400 + i, 51, 12, tid, None, None, -13)      # Alternate
-        self.store.add_own(410, 2, 12, 135, None, None, -13)
+        self.store.add_own(410, 2, 12, 1001, None, None, -13)
         self.store.add_own(420, 6, 12, 5, None, None, -13)                 # Classic のテラー（Bloodbath）
         self.window._filter = None
         self.window._analyze()
@@ -643,40 +644,42 @@ class TestTerrorColors(unittest.TestCase):
 
     def test_the_table(self):
         self.assertEqual(StatisticsGUI.TERROR_TEXT_COLORS, {
-            164: ("#ffe600", False), 168: ("#388e3c", False), 163: ("#d84315", False),
-            209: ("#d00000", True), 211: ("#d00000", True), 231: ("#d00000", True),
-            263: ("#d00000", True), 280: ("#d00000", True),
-            264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False),
-            221: ("#e57373", False), 205: ("#e57373", False)})       # Triple Munci・Quadruple Sponge
+            1030: ("#ffe600", False), 1034: ("#388e3c", False), 1029: ("#d84315", False),
+            2009: ("#d00000", True), 2011: ("#d00000", True), 2031: ("#d00000", True),
+            2063: ("#d00000", True), 2080: ("#d00000", True),
+            2064: ("#e57373", False), 2040: ("#e57373", False), 2046: ("#e57373", False),
+            2021: ("#e57373", False), 2005: ("#e57373", False)})       # Triple Munci・Quadruple Sponge
+        # 色の鍵の名前（ListTool の番号 164 などから独自の番号に直したものが Joy・Azrael・Fusion Pilot …）
+        self.assertEqual({TerrorIds.name(k) for k in (1030, 1034, 1029)}, {"Joy", "Azrael", "Fusion Pilot"})
         self.assertFalse(hasattr(StatisticsGUI, "HIGHLIGHT_UNBOUND_TERROR_IDS"), "表1つに寄せた")
 
     def test_alternate_colors_and_others_unchanged(self):
         self.window._set_terror_category("alternate")
-        self.assertEqual(self._color(164), ("#ffe600", False))
-        self.assertEqual(self._color(168), ("#388e3c", False))
-        self.assertEqual(self._color(163), ("#d84315", False))
-        self.assertEqual(self._color(135), (None, False), "ほかは今のまま")
+        self.assertEqual(self._color(1030), ("#ffe600", False))
+        self.assertEqual(self._color(1034), ("#388e3c", False))
+        self.assertEqual(self._color(1029), ("#d84315", False))
+        self.assertEqual(self._color(1001), (None, False), "ほかは今のまま")
 
     def test_unbound_colors_and_bold(self):
         self.window._set_terror_category("unbound")
         ids = {int(i) for i in self.window.terror_tree.get_children()}
-        for tid in (209, 211, 231, 263, 280):
+        for tid in (2009, 2011, 2031, 2063, 2080):
             if tid in ids:
                 self.assertEqual(self._color(tid), ("#d00000", True), tid)
-        for tid in (264, 240, 246, 221, 205):
+        for tid in (2064, 2040, 2046, 2021, 2005):
             if tid in ids:
                 self.assertEqual(self._color(tid), ("#e57373", False), tid)
         plain = sorted(ids - set(StatisticsGUI.TERROR_TEXT_COLORS))
         self.assertTrue(plain)
         self.assertEqual(self._color(plain[0]), (None, False))
-        self.assertTrue({209, 264} <= ids, ids)
+        self.assertTrue({2009, 2064} <= ids, ids)
 
     def test_the_search_results_use_the_same_colors(self):
-        self.window.v_terror_search.set(str(164 - MatchTNL.ALTERNATE_OFFSET))
-        self.assertIn("164", self.window.terror_tree.get_children())
-        self.assertEqual(self._color(164), ("#ffe600", False))
-        self.window.v_terror_search.set(str(209 - MatchTNL.UNBOUND_OFFSET))
-        self.assertEqual(self._color(209), ("#d00000", True))
+        self.window.v_terror_search.set(str(TerrorIds.game_id(1030)))
+        self.assertIn("1030", self.window.terror_tree.get_children())
+        self.assertEqual(self._color(1030), ("#ffe600", False))
+        self.window.v_terror_search.set(str(TerrorIds.game_id(2009)))
+        self.assertEqual(self._color(2009), ("#d00000", True))
 
     def test_the_two_detail_tables_are_dark_with_round_colors(self):
         for tree in (self.window.terror_rounds_tree, self.window.round_kind_tree):
@@ -703,12 +706,12 @@ class TestTerrorColors(unittest.TestCase):
     def test_unbound_hides_round_type_and_others_bring_it_back(self):
         tabs = self.window.terror_detail_tabs
         tabs.select(self.window._kind_tab)
-        self._select("unbound", 209)
+        self._select("unbound", 2009)
         self.assertEqual(self._tab_texts(), ["出現ラウンド", "マップ"])
         self.assertEqual(str(tabs.select()), str(self.window._rounds_tab), "隠したら出現ラウンドへ")
-        self._select("alternate", 164)
+        self._select("alternate", 1030)
         self.assertEqual(self._tab_texts(), ["出現ラウンド", "ラウンドタイプ", "マップ"], "並びはそのまま")
-        self._select("unbound", 209)
+        self._select("unbound", 2009)
         self._select("classic", 5)
         self.assertEqual(self._tab_texts(), ["出現ラウンド", "ラウンドタイプ", "マップ"])
 
@@ -716,7 +719,7 @@ class TestTerrorColors(unittest.TestCase):
         tabs = self.window.terror_detail_tabs
         map_tab = tabs.tabs()[2]
         tabs.select(map_tab)
-        self._select("unbound", 209)
+        self._select("unbound", 2009)
         self.assertEqual(str(tabs.select()), str(map_tab))
 
 
@@ -760,11 +763,11 @@ class TestDbV1(unittest.TestCase):
         req, body = self._send("Fog", [101, 7, 3], 12, -13, instance_key=42,
                                round_time=self.START + 0.9)
 
-        self.assertEqual(req.full_url, "https://example.invalid/rest/v1/rpc/register_round")
+        self.assertEqual(req.full_url, "https://example.invalid/rest/v1/rpc/register_round_v2")
         self.assertEqual(req.get_method(), "POST")
         self.assertNotIn("ToNRoundStatistics", req.full_url, "旧テーブルへは送らない")
         self.assertEqual(body, {"p_instance": 42, "p_time": 10, "p_round": 2, "p_map": 12,
-                                "p_t1": 101, "p_t2": 7, "p_t3": 3, "p_uid": -13})
+                                "p_t1": 101, "p_t2": 7, "p_t3": 3, "p_uid": -13, "p_players": None})
 
     def test_the_terrors_are_the_first_three(self):
         _r, one = self._send("Classic", [5], 1, 1, round_time=self.START)
@@ -902,7 +905,7 @@ class TestRegisterRoundKeepsOwnRows(unittest.TestCase):
     def test_a_store_failure_does_not_stop_the_send(self):
         with patch.object(RoundStore.RoundStore, "add_own", side_effect=None, return_value=False):
             req, _body = self._send("Fog", [101], 12, -13, round_time=1767225600 + 40)
-        self.assertTrue(req.full_url.endswith("rpc/register_round"))
+        self.assertTrue(req.full_url.endswith("rpc/register_round_v2"))
 
 
 
@@ -945,7 +948,7 @@ class TestFetchRounds(unittest.TestCase):
         rows, urls = self._fetch([[{"time": 1}, {"time": 2}], [{"time": 3}]], None, set())
 
         self.assertEqual([r["time"] for r in rows], [1, 2, 3])
-        self.assertIn("/rest/v1/ToNRounds?select=*&order=time.asc&limit=2", urls[0])
+        self.assertIn("/rest/v1/ToNRounds_v2?select=*&order=time.asc&limit=2", urls[0])
         self.assertNotIn("time=gte", urls[0])
         self.assertNotIn("or=(", urls[0], "初回は自分の行も取る")
         self.assertIn("time=gte.2", urls[1], "次のページは最後の time から")
@@ -996,7 +999,7 @@ class TestRoundStoreSync(unittest.TestCase):
         self.assertTrue(self.store.sync(self._fetch))
 
         self.assertEqual(self.calls, [(None, set()), (2000 - 900, {-13})])
-        self.assertEqual(self.store.get_meta("synced_to"), "2000")
+        self.assertEqual(self.store.get_meta("synced_to:v2"), "2000")
 
     def test_a_new_uid_means_a_full_sync_again(self):
         self.store.add_own(100, 1, 12, 5, None, None, -13)
@@ -1013,7 +1016,7 @@ class TestRoundStoreSync(unittest.TestCase):
     def test_an_unfinished_first_sync_starts_from_everything(self):
         """synced_to が残っていても、初回の全件取得が済んでいなければ全件から"""
         self.store.add_own(100, 1, 12, 5, None, None, -13)
-        self.store.set_meta("synced_to", "5000")
+        self.store.set_meta("synced_to:v2", "5000")
         self.store.sync(self._fetch)
         self.assertEqual(self.calls, [(None, set())])
 
@@ -1070,7 +1073,7 @@ class TestRoundStoreSync(unittest.TestCase):
 
         self.assertFalse(self.store.sync(broken))
         self.assertEqual(self.store.count(), 1)
-        self.assertIsNone(self.store.get_meta("initial_done"), "次に開いたときも全件から")
+        self.assertIsNone(self.store.get_meta("initial_done:v2"), "次に開いたときも全件から")
 
 
 
@@ -1483,7 +1486,7 @@ class TestGuiRoundHelpers(unittest.TestCase):
         StatisticsGUI.StatisticsWindow._on_terror_selected(window)
         StatisticsGUI.StatisticsWindow._on_terror_selected(window)
 
-        window.store.map_counts_for_terror.assert_called_once_with(None, 1)
+        window.store.map_counts_for_terror.assert_called_once_with(None, frozenset({1, 3015}))
         self.assertEqual(window._clear_tree.call_count, 2)
         self.assertEqual(len(window.map_tree.inserted), 2)
 
@@ -1643,7 +1646,7 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.addCleanup(self._dir.cleanup)
         self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
         self.store.add_own(100, 6, 12, 5, 6, None, -13)
-        self.store.add_own(200, 10, 12, 201, None, None, -13)
+        self.store.add_own(200, 10, 12, 2001, None, None, -13)
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -1672,7 +1675,7 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.assertFalse(hasattr(RoundStore.RoundStore, "map_terror_counts"))
 
     def test_a_failed_update_still_shows_what_is_here(self):
-        def offline(_since, _mine):
+        def offline(_since, _mine, **_kw):
             raise OSError("offline")
 
         window = self._open(offline)
@@ -1696,15 +1699,15 @@ class TestStatisticsWindowV1(unittest.TestCase):
         """開いた後の Unbound（Garden Rejects）が「更新」で出る。前は開き直すまで出なかった:
         期間の終わりが開いたときのまま・テラーの集計が絞り込みが同じなら使い回し"""
         window = self._open(lambda s, m: [])
-        self.assertEqual(window._terror_stats("Unbound")[0], 1, "201 の1枠")
+        self.assertEqual(window._terror_stats("Unbound")[0], 1, "2001 の1枠")
         later = 200 + 3 * 3600
-        self.store.add_own(later, 10, 12, 209, None, None, -13)
+        self.store.add_own(later, 10, 12, 2009, None, None, -13)
 
         self._update(window)
 
         self.assertEqual(window._picker_datetime("end"),
                          StatisticsGUI._local(later).replace(minute=59, second=59))
-        self.assertEqual(window._terror_stats("Unbound")[0], 2, "209 も数える")
+        self.assertEqual(window._terror_stats("Unbound")[0], 2, "2009 も数える")
         self.assertTrue(window.v_status.get().startswith("3ラウンド"), window.v_status.get())
 
     def test_the_real_aggregation_is_applied_through_after(self):

@@ -170,8 +170,9 @@ def round_summary_from_counts(entries) -> list[tuple[str, int, int]]:
     )
 
 
-def _ids_for_category(terror_data: dict[str, dict[str, str]], category: str) -> set[int]:
-    return {int(terror_id) for terror_id in terror_data.get(category, {})}
+def _ids_for_category(category: str) -> set[int]:
+    """統計の分類（classic・alternate・unbound）に入るテラーの独自の番号（TerrorIds の category）"""
+    return {own for own in TerrorIds.ids() if TerrorIds.category(own) == category}
 
 
 def _categories_for_round(round_name: str) -> set[str]:
@@ -184,7 +185,7 @@ def _categories_for_round(round_name: str) -> set[str]:
     return {"classic"}
 
 
-def candidate_ids_for_rounds(rounds: set[str], terror_data: dict[str, dict[str, str]]) -> set[int]:
+def candidate_ids_for_rounds(rounds: set[str], terror_data=None) -> set[int]:
     categories: set[str] = set()
     for round_name in rounds:
         categories.update(_categories_for_round(round_name))
@@ -193,25 +194,32 @@ def candidate_ids_for_rounds(rounds: set[str], terror_data: dict[str, dict[str, 
 
     ids: set[int] = set()
     for category in categories:
-        ids.update(_ids_for_category(terror_data, category))
+        ids.update(_ids_for_category(category))
     return ids
 
 
-def candidate_ids_for_category(category: str, terror_data: dict[str, dict[str, str]]) -> set[int]:
-    return _ids_for_category(terror_data, category.lower())
+def candidate_ids_for_category(category: str, terror_data=None) -> set[int]:
+    return _ids_for_category(category.lower())
 
 
-def terror_name(terror_id: int, terror_data: dict[str, dict[str, str]]) -> str:
-    sid = str(terror_id)
-    for category in ("classic", "alternate", "unbound"):
-        if sid in terror_data.get(category, {}):
-            return terror_data[category][sid]
+def terror_name(terror_id: int, terror_data=None) -> str:
+    """テラーの名前（表に無ければ `#番号`）。terror_data は前の形の呼び出しのために残してあるが、見ない"""
     return TerrorIds.name(terror_id)
+
+
+def fold_counts(counts: dict) -> dict:
+    """{テラー: 出た枠数} の、8 Pages に出たテラー（3000 番台）を通常の同じテラーに足したもの
+    （TerrorIds.statistics_id。通常の番号が無い 8 Pages 限定のテラーは 3000 番台のまま）"""
+    folded: dict = {}
+    for terror_id, count in counts.items():
+        key = TerrorIds.statistics_id(terror_id)
+        folded[key] = folded.get(key, 0) + count
+    return folded
 
 
 def analyze_terror_counts(
     all_counts: dict[int, int],
-    terror_data: dict[str, dict[str, str]],
+    terror_data,
     candidate_ids: set[int],
 ) -> tuple[int, int, list[TerrorStatistic]]:
     """{テラー: 出た枠数} から、候補ごとの出現回数と二項検定（統計画面 v1 は手元の

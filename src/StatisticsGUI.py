@@ -12,10 +12,9 @@ import TaskStats
 import UIFont
 import UiInbox
 import WindowOperator
-import ConnectDB
 import RoundStore
 import Statistics
-import MatchTNL
+import TerrorIds
 
 BG  = config.GUI_BG
 FG  = config.GUI_FG
@@ -78,19 +77,19 @@ ROUND_COLORS = {
     "Special": "#94e2d5",
 }
 LEGEND_STYLE = "Legend.Treeview"
-# テラーの一覧の文字色（内部の番号 → (色, 太字か)。依頼者の指定。背景は白のまま）。
-# 内部の番号は分類ごとに範囲が違うので、番号だけで引く
+# テラーの一覧の文字色（独自の番号 → (色, 太字か)。依頼者の指定。背景は白のまま）。
+# 独自の番号は分類ごとに範囲が違うので、番号だけで引く
 TERROR_TEXT_COLORS = {
-    164: ("#ffe600", False),     # Joy
-    168: ("#388e3c", False),     # Azrael
-    163: ("#d84315", False),     # Fusion Pilot
+    1030: ("#ffe600", False),     # Joy
+    1034: ("#388e3c", False),     # Azrael
+    1029: ("#d84315", False),     # Fusion Pilot
     # Garden Rejects・Me and My Shadow・END OF THE WORLD・Angels・Mopemopemopemopemopemope
-    209: ("#d00000", True), 211: ("#d00000", True), 231: ("#d00000", True),
-    263: ("#d00000", True), 280: ("#d00000", True),
+    2009: ("#d00000", True), 2011: ("#d00000", True), 2031: ("#d00000", True),
+    2063: ("#d00000", True), 2080: ("#d00000", True),
     # Ordinary Apocalypse Bird・Chomper Trio・Transportation Trio & The Drifter
-    264: ("#e57373", False), 240: ("#e57373", False), 246: ("#e57373", False),
+    2064: ("#e57373", False), 2040: ("#e57373", False), 2046: ("#e57373", False),
     # Triple Munci・Quadruple Sponge
-    221: ("#e57373", False), 205: ("#e57373", False),
+    2021: ("#e57373", False), 2005: ("#e57373", False),
 }
 # 表に無いラウンド（DB の 999）の表示名（EZ・FB）
 UNCLASSIFIED = "未分類"
@@ -227,14 +226,10 @@ def _round_name(round_id) -> str:
 
 
 def game_terror_id(category: str, terror_id: int) -> int:
-    """表示と検索に使うゲームの ID。分類は集計した側（どの分類の一覧の行か）で決める
-    （番号の大きさで推し量らない。Classic にも 134 以上の番号がある）。
-    Alternate は −134・Unbound は −200。中で使う番号（内訳・キャッシュ・SQL）は変えない"""
-    if category == "Alternate":
-        return terror_id - MatchTNL.ALTERNATE_OFFSET
-    if category == "Unbound":
-        return terror_id - MatchTNL.UNBOUND_OFFSET
-    return terror_id
+    """表示と検索に使うゲームの ID（TerrorIds.game_id。Alternate は 1000 を、Unbound は 2000 を引いた
+    ログの番号）。ログの番号が無いもの（4000 番台）は独自の番号のまま。category は前の形の呼び出しのために残してある。
+    中で使う番号（内訳・キャッシュ・SQL）は変えない"""
+    return TerrorIds.game_id(terror_id)
 
 
 def terror_matches(row, query: str, category: str = "Classic") -> bool:
@@ -265,15 +260,18 @@ def round_kind_rows(counts) -> list[tuple[str, int, str]]:
     return rows
 
 
-def appearance_rows(rows, terror_id: int, my_uids, terror_data) -> list[tuple]:
+def appearance_rows(rows, terror_id: int, my_uids, terror_data=None) -> list[tuple]:
     """出現ラウンドのタブ: RoundStore.rounds_for_terror の行 → 表示する列
-    (日時, ラウンド, マップ, 一緒に出たテラー, 見た人数, 自分)"""
+    (日時, ラウンド, マップ, 一緒に出たテラー, 見た人数, 自分)。選んだテラーは、8 Pages の行の同じテラーも含めて外す"""
     mine = set(my_uids or ())
+    same = TerrorIds.statistics_ids(terror_id)
     out = []
     for time_, rid, map_id, t1, t2, t3, uid, other_uids, _origin in rows:
         others = [t for t in (t1, t2, t3) if t is not None]
-        if terror_id in others:
-            others.remove(terror_id)
+        for index, found in enumerate(others):
+            if found in same:
+                del others[index]
+                break
         uids = RoundStore.uids_list(other_uids)
         round_name = _round_name(rid)
         out.append((
@@ -569,7 +567,7 @@ class StatisticsWindow(tk.Toplevel):
         TaskStats.thread("StatisticsGUI._load_rows_worker", self._load_rows_worker, daemon=True).start()
 
     def _load_rows_worker(self):
-        ok = self.store.sync(ConnectDB.fetch_rounds)
+        ok = self.store.sync_all()
         try:
             UiInbox.call_soon(self, lambda: self._on_rows_loaded(ok))
         except (tk.TclError, RuntimeError):
@@ -749,17 +747,18 @@ class StatisticsWindow(tk.Toplevel):
         seq = self._analyze_seq
         active = self.v_terror_category.get()
         tid = self._selected_terror
+        same = None if tid is None else TerrorIds.statistics_ids(tid)     # 8 Pages に出た同じテラーもまとめる
         store = self.store
         self.v_status.set("集計中…")
 
         def work():
             round_rows = Statistics.round_summary_from_counts(
                 (_round_name(rid), count, slots) for rid, count, slots in store.round_summary(flt))
-            counts = store.terror_counts(flt)       # 3 つの分類で同じ数え方（問い合わせは 1 回）
+            counts = Statistics.fold_counts(store.terror_counts(flt))   # 3 つの分類で同じ数え方（問い合わせは 1 回）
             stats = {value: Statistics.analyze_terror_counts(
                          counts, config.TERRORS, Statistics.candidate_ids_for_category(value, config.TERRORS))
                      for _label, value in TERROR_CATEGORIES}
-            return round_rows, stats, store.time_series(flt, "day", tid), store.time_series(flt, "hour", tid)
+            return round_rows, stats, store.time_series(flt, "day", same), store.time_series(flt, "hour", same)
 
         def done(result):
             if seq != self._analyze_seq or flt != self._filter:
@@ -881,7 +880,7 @@ class StatisticsWindow(tk.Toplevel):
         stats = self._terror_stats_cache.get(category)
         if stats is None:
             candidate_ids = Statistics.candidate_ids_for_category(category, config.TERRORS)
-            stats = Statistics.analyze_terror_counts(self.store.terror_counts(self._filter),
+            stats = Statistics.analyze_terror_counts(Statistics.fold_counts(self.store.terror_counts(self._filter)),
                                                      config.TERRORS, candidate_ids)
             self._terror_stats_cache[category] = stats
         return stats
@@ -956,6 +955,7 @@ class StatisticsWindow(tk.Toplevel):
         self._detail_seq += 1
         seq = self._detail_seq
         store = self.store
+        same = TerrorIds.statistics_ids(terror_id)       # 8 Pages に出た同じテラーもまとめて数える
         cached = (self._map_counts_cache.get(terror_id), self._round_kind_cache.get(terror_id),
                   self._appearance_cache.get(terror_id))
 
@@ -964,13 +964,13 @@ class StatisticsWindow(tk.Toplevel):
             if maps is None:
                 maps = Statistics.map_counts_from_entries(
                     (map_id, _round_name(rid), hits)
-                    for map_id, rid, hits in store.map_counts_for_terror(flt, terror_id))
+                    for map_id, rid, hits in store.map_counts_for_terror(flt, same))
             if kinds is None:
-                kinds = round_kind_rows(store.round_counts_for_terror(flt, terror_id))
+                kinds = round_kind_rows(store.round_counts_for_terror(flt, same))
             if appeared is None:
-                total, rows = store.rounds_for_terror(flt, terror_id, TERROR_ROUNDS_LIMIT)
+                total, rows = store.rounds_for_terror(flt, same, TERROR_ROUNDS_LIMIT)
                 appeared = (total, appearance_rows(rows, terror_id, store.my_uids(), config.TERRORS))
-            series = ((store.time_series(flt, "day", terror_id), store.time_series(flt, "hour", terror_id))
+            series = ((store.time_series(flt, "day", same), store.time_series(flt, "hour", same))
                       if flt is not None else None)
             return maps, kinds, appeared, series
 

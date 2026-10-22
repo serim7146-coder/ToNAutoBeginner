@@ -196,7 +196,7 @@ class TestTheStatisticsWindow(unittest.TestCase):
 
     def test_the_rows_loaded(self):
         got = []
-        self.win.store = type("S", (), {"sync": lambda _s, fetch: True})()
+        self.win.store = type("S", (), {"sync_all": lambda _s: True})()
         self.win._on_rows_loaded = lambda ok: got.append(ok)
         _in_thread(StatisticsGUI.StatisticsWindow._load_rows_worker, self.win)
         self.assertEqual(self.watch.off_thread(), [])
@@ -219,7 +219,7 @@ class TestTheRealStatisticsWindow(unittest.TestCase):
 
             def start(self):
                 self.target()
-        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m: []), \
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m, **kw: []), \
              patch.object(StatisticsGUI.threading, "Thread", RunNow):
             window = StatisticsGUI.StatisticsWindow(root, store=store)
         inbox = window._inbox
