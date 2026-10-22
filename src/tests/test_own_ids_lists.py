@@ -211,6 +211,85 @@ class TestSameJudgement(unittest.TestCase):
                                   sus_players=["b"], host_wishes=wishes, follow_host=True))
 
 
+# ── 凍結した今のやり方: ログの番号 → ToN ListTool の番号（+134 / +200 / 8 Pages は list_id）──
+OLD_ALTERNATE_SLOTS = {"Alternate": None, "Midnight": [2], "Fog (Alternate)": None, "Ghost (Alternate)": None}
+
+
+def old_normalize(ids, round_type, state_round_type=""):
+    out = []
+    positions = OLD_ALTERNATE_SLOTS.get(round_type, "none")
+    for index, tid in enumerate(ids):
+        in_alternate_slot = positions != "none" and (positions is None or index in positions)
+        out.append(tid + 134 if in_alternate_slot and 0 <= tid <= 35 else tid)
+    if state_round_type == "Unbound":
+        out = [tid + 200 for tid in out]
+    return out
+
+
+def old_eight_pages_ids(ids):
+    table = {e["id"]: e["list_id"] for e in _frozen("terrors.json")["8pages"]}
+    page = ids[0] if ids else None
+    return [table[page]] if page in table else []
+
+
+class TestSameJudgementFromTheLogNumbers(unittest.TestCase):
+    """ログの番号 → 入口 → 独自の番号のリストと比べる、が、今の（+134・+200・list_id の）やり方と同じ結果"""
+
+    def _cases(self):
+        for round_type, state in (("Classic", "Classic"), ("Fog", "Fog"), ("Ghost", "Ghost"), ("Punished", "Punished"),
+                                  ("Alternate", "Alternate"), ("Fog (Alternate)", "Fog"), ("Ghost (Alternate)", "Ghost"),
+                                  ("Midnight", "Midnight"), ("Unbound", "Unbound"), ("Bloodbath", "Bloodbath"),
+                                  ("Double Trouble", "Double Trouble"), ("8 Pages", "8 Pages")):
+            yield round_type, state
+
+    def _log_ids(self, round_type, rng):
+        if round_type == "8 Pages":
+            return [[page, rng.randrange(0, 100)] for page in range(0, 71)]
+        if round_type == "Unbound":
+            return [[n] for n in range(0, 84)]
+        if round_type in OLD_ALTERNATE_SLOTS and round_type != "Midnight":
+            return [[n] for n in range(0, 36)]
+        if round_type == "Midnight":
+            return [[rng.randrange(0, 134), rng.randrange(0, 134), n] for n in range(0, 36)]
+        if round_type in ("Bloodbath", "Double Trouble"):
+            return [[rng.randrange(0, 134) for _ in range(3 if round_type == "Bloodbath" else 2)] for _ in range(60)]
+        return [[n] for n in range(0, 134)]
+
+    def test_every_round_and_every_log_number(self):
+        rng = random.Random(1023)
+        checked = 0
+        gone = _disabled_legacy_by_round()
+        for _ in range(8):
+            old = _random_old_list(rng, density=0.4)
+            new = MatchTNL.own_list_from_listtool(old)
+            for round_type, state in self._cases():
+                for log_ids in self._log_ids(round_type, rng):
+                    parsed = MatchTNL.parse_terror_ids(*(str(n) for n in (log_ids + [0, 0, 0])[:3]), round_type)
+                    if round_type == "8 Pages":
+                        legacy = old_eight_pages_ids(parsed)
+                    else:
+                        legacy = old_normalize(parsed, round_type, state)
+                    if any(_skip(round_type, t, old) or t in gone.get(round_type, ()) for t in legacy):
+                        continue            # わざと変わるところ・その窓に出ないテラー（リストから外した）
+                    own_ids = TerrorIds.from_log(parsed, round_type, state)
+                    self.assertEqual(
+                        RoundDecision.list_continues(new, own_ids, round_type),
+                        old_list_continues(old, legacy, round_type), (round_type, parsed, legacy, own_ids))
+                    checked += 1
+        self.assertGreater(checked, 4000)
+
+    def test_an_unregistered_page_never_continues_in_either_way(self):
+        keep = MatchTNL.own_list_from_listtool({EIGHT: {i for i in range(0, 200)}})
+        for page in range(62, 80):
+            self.assertEqual(old_eight_pages_ids([page]), [])
+            self.assertFalse(RoundDecision.list_continues(keep, TerrorIds.from_log([page], "8 Pages"), "8 Pages"))
+
+    def test_the_alternate_slot_numbers_of_36_and_more_are_alternate(self):
+        self.assertEqual(TerrorIds.from_log([40], "Alternate"), [1040])
+        self.assertEqual(TerrorIds.from_log([40, 41, 42], "Midnight"), [40, 41, 1042])
+        self.assertEqual(old_normalize([40], "Alternate"), [40], "今までは Classic の 40 と取り違えていた")
+
+
 class TestWhatChangesOnPurpose(unittest.TestCase):
     """詳細設計 §6: 判定がわざと変わるところ"""
 
