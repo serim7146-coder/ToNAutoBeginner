@@ -1356,6 +1356,14 @@ class LogMonitor:
             self._log("主催リストが戻りました → 自爆を再開します")
         st.list_lost_reason = ""
 
+    def _self_inserts_table_disabled(self) -> bool:
+        """続行表の続行無効に Self Inserts (Bloodthirsty) があるか（あれば必ず続行をやめ、普通のリストの判定にする）。
+        干し芋・焼き芋（グループのインスタンス）は続行表を使わないので、今までどおり必ず続行"""
+        if self.st.instance_type in GroupRound.GROUP_INSTANCES:
+            return False
+        return ContinueTable.disables(ContinueTable.current(), MatchTNL.LOG_TO_TNL["Unbound"],
+                                      config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
+
     def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
 
@@ -1378,7 +1386,7 @@ class LogMonitor:
         if GroupRound.is_variant(ids):
             return False        # Variantは自爆しない。通常判定へ落とす
         if RoundDecision.is_self_inserts_bloodthirsty(
-                ids, st.round_type, bloodthirsty):
+                ids, st.round_type, bloodthirsty, self._self_inserts_table_disabled()):
             # リストで指定する手段が無いので、自爆指定より優先して続行する
             return False
         return True
@@ -2267,7 +2275,8 @@ class LogMonitor:
             self._keep_on(), ids, st.round_type,
             st.open_special_round_wins, self.cfg.cancel_afk,
             bloodthirsty_variant=bloodthirsty,
-            after_unlock=self._after_unlock(), holds_plush=self._holds_plush())
+            after_unlock=self._after_unlock(), holds_plush=self._holds_plush(),
+            self_inserts_table_disabled=self._self_inserts_table_disabled())
         return ("list", decision.is_continue_round,
                 decision.is_open_special_round_target)
 

@@ -759,6 +759,10 @@ BLOODTHIRSTY_CREATURE_ID = 192      # Curious → Wild Yet Bloodthirsty Creature
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
 # 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious(265) は対象外）
 SELF_INSERTS_ID = 283
+# 続行表の仮の番号。続行リスト（.tnl）に「Bloodthirsty 入りの Self Inserts」の枠は無いので、
+# 続行表の画面にだけ Unbound のバリアントの段へ置く。続行無効に入れると、Self Inserts の
+# Bloodthirsty でも必ず続行はせず、普通のリストの判定（283 があるか）に任せる
+SELF_INSERTS_BLOODTHIRSTY_SLOT = 1283
 # alternate。Sanic は Foxy に置き換わることがある
 SANIC_ID = 136
 FOXY_ID = 316

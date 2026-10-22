@@ -89,6 +89,7 @@ def is_self_inserts_bloodthirsty(
     terror_ids: list[int],
     round_type: str,
     bloodthirsty_variant: bool,
+    table_disabled: bool = False,
 ) -> bool:
     """Unbound の Self Inserts に Bloodthirsty が出たか。
 
@@ -96,9 +97,13 @@ def is_self_inserts_bloodthirsty(
     リストに出せるのは `Self Inserts` の1枠だけ——ので、リストに頼らず
     必ず続行する。`Pack of Wild Yet Curious(265)` は対象外（あちらは
     リストで指定できる）。
+
+    table_disabled: 続行表の続行無効に Self Inserts (Bloodthirsty) の仮の番号があるとき True
+    （呼ぶ側が決める）。このときは必ず続行せず、普通のリストの判定に任せる。
     """
     return (
         bool(bloodthirsty_variant)
+        and not table_disabled
         and round_type == "Unbound"
         and config.SELF_INSERTS_ID in terror_ids
     )
@@ -127,13 +132,15 @@ def decide_killers(
     bloodthirsty_variant: bool = False,
     after_unlock: bool = False,
     holds_plush: bool | None = None,
+    self_inserts_table_disabled: bool = False,
 ) -> KillerDecision:
     open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk,
                                                 after_unlock, holds_plush)
     # リストで表現できない組み合わせ。3クラ解放とは別物なので、
     # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,
-                                          bloodthirsty_variant)
+                                          bloodthirsty_variant,
+                                          self_inserts_table_disabled)
     should_continue = (list_continues(keep_on_set, terror_ids, round_type)
                        or open_special or forced)
     return KillerDecision(open_special, should_continue)
