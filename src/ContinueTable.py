@@ -12,6 +12,10 @@
 どのプリセットを使うかは窓ごと（メイン画面の窓の設定）。「なし」を選んだ窓はその表を重ねない。
 選んでいない窓は「既定」（無ければ先頭）。窓の判定は table_for(store, 窓の番号) の Table で見る。
 
+アイテムで切り替え（GM）: 全窓共通の決まりの並び（Store.item_rules）。窓が今持っているアイテム
+（0 は持っていない）で上から最初に当てはまる決まりが、その窓の選んだプリセットを種類ごとに
+上書きする（窓のまま／なし／プリセット名）。当てはまらなければ窓の選択だけ。
+
 保存先は %APPDATA%\\ToNAutoBeginner\\continue_table.json（v2）。v1（表が 1 組だけ）は
 読むときに「既定」というプリセットへ移す。無い・壊れているときは空の「既定」だけ。
 """
@@ -36,6 +40,11 @@ DEFAULT = "default"
 DEFAULT_PRESET = "既定"       # 移行で付く名前。窓が選んでいないときもこれを使う
 NONE_LABEL = "なし"            # 窓の選択肢での「その表を重ねない」。プリセットの名前にはできない
 
+# アイテムの決まり
+ITEM_NONE = 0                  # 決まりのアイテム 0 = 持っていない
+ITEM_NONE_LABEL = "持っていない"
+KEEP_LABEL = "窓のまま"        # 決まりの「その種類は窓の選択のまま」（保存では項目を書かない）
+
 # 判定の行の後ろに付ける文字（重ねた表で続行の判定が変わったときだけ）
 LABEL_DEFAULT = "（デフォ続行）"
 LABEL_DISABLED = "（続行無効）"
@@ -47,6 +56,25 @@ class Table:
     中の dict・集合は書き換えない（変えるときは新しい Table を作る）"""
     disabled: dict = field(default_factory=dict)      # {キー: frozenset(番号)}
     default: dict = field(default_factory=dict)
+
+
+class _Keep:
+    """決まりの「窓のまま」（None の「なし」と区別するための目印）"""
+    __slots__ = ()
+
+    def __repr__(self):
+        return "KEEP"
+
+
+KEEP = _Keep()
+
+
+@dataclass(frozen=True)
+class ItemRule:
+    """アイテムで切り替える決まり 1 つ。disabled・default はそれぞれ KEEP（窓のまま）・None（なし）・プリセット名"""
+    item: int = ITEM_NONE      # アイテムの id。0 = 持っていない
+    disabled: object = KEEP
+    default: object = KEEP
 
 
 def _empty_presets() -> dict:
@@ -61,6 +89,8 @@ class Store:
     # {窓の番号(1 始まり): {DISABLED: 名前|None, DEFAULT: 名前|None}}。None は「なし」。
     # 載っていない窓・種類は選んでいない（→ fallback_name）
     windows: dict = field(default_factory=dict)
+    # 上から順に見て、最初に当てはまるものを使う（全窓共通）
+    item_rules: tuple = ()
 
 
 _PRESET_FIELD = {DISABLED: "disabled_presets", DEFAULT: "default_presets"}
@@ -116,10 +146,39 @@ def choice_for(store: Store, window_idx: int, which: str) -> str | None:
     return fallback_name(store, which)
 
 
-def table_for(store: Store, window_idx: int) -> Table:
-    """窓が重ねる表。「なし」の種類は空（＝重ならない）"""
+def rule_for(store: Store, held_item: int | None) -> ItemRule | None:
+    """持っているアイテム held_item に当てはまる最初の決まり。held_item が None（見ない）・当てはまらなければ None"""
+    if held_item is None:
+        return None
+    return next((rule for rule in store.item_rules if rule.item == held_item), None)
+
+
+def effective_choice(store: Store, window_idx: int, which: str, held_item: int | None = None) -> str | None:
+    """窓が which に使うプリセットの名前（None は「なし」）。決まりが当てはまれば、窓の選択より決まりが先。
+    決まりが「窓のまま」・消えたプリセットを指すときは窓の選択"""
+    rule = rule_for(store, held_item)
+    if rule is not None:
+        pick = getattr(rule, which)
+        if pick is None:
+            return None
+        if pick is not KEEP and pick in presets_of(store, which):
+            return pick
+    return choice_for(store, window_idx, which)
+
+
+def rule_changes_table(store: Store, window_idx: int, held_item: int | None) -> bool:
+    """決まりが当てはまり、少なくとも 1 つの種類で窓の選択と違うプリセット（「なし」を含む）になるか"""
+    if rule_for(store, held_item) is None:
+        return False
+    return any(effective_choice(store, window_idx, which, held_item) != choice_for(store, window_idx, which)
+               for which in (DISABLED, DEFAULT))
+
+
+def table_for(store: Store, window_idx: int, held_item: int | None = None) -> Table:
+    """窓が重ねる表。「なし」の種類は空（＝重ならない）。held_item（今持っているアイテム。None は見ない）に
+    当てはまる決まりがあれば、種類ごとにその決まりのプリセットで上書きする"""
     def content(which):
-        name = choice_for(store, window_idx, which)
+        name = effective_choice(store, window_idx, which, held_item)
         return presets_of(store, which).get(name, {}) if name is not None else {}
     return Table(disabled=content(DISABLED), default=content(DEFAULT))
 
@@ -137,8 +196,8 @@ def name_error(store: Store, which: str, name: str, ignore: str | None = None) -
     """プリセットの名前として使えなければ理由、使えれば ""。ignore は名前変更で今の名前（同じ名前に戻すのは可）"""
     if not name.strip():
         return "名前を入力してください。"
-    if name == NONE_LABEL:
-        return f"「{NONE_LABEL}」は使えない名前です。"
+    if name in (NONE_LABEL, KEEP_LABEL):
+        return f"「{name}」は使えない名前です。"
     if name in presets_of(store, which) and name != ignore:
         return "同じ名前のプリセットがあります。"
     return ""
@@ -193,7 +252,8 @@ def with_renamed_preset(store: Store, which: str, old: str, new: str) -> Store:
     renamed = {(new if name == old else name): body for name, body in presets.items()}
     windows = {idx: {k: (new if (k == which and v == old) else v) for k, v in kinds.items()}
                for idx, kinds in store.windows.items()}
-    return _with_presets(store, which, renamed, windows)
+    rules = _rules_map(store.item_rules, which, lambda pick: new if pick == old else pick)
+    return replace(_with_presets(store, which, renamed, windows), item_rules=rules)
 
 
 def can_delete(store: Store, which: str) -> bool:
@@ -213,7 +273,75 @@ def with_deleted_preset(store: Store, which: str, name: str) -> Store:
     goto = fallback_name(after, which)
     windows = {idx: {k: (goto if (k == which and v == name) else v) for k, v in kinds.items()}
                for idx, kinds in store.windows.items()}
-    return replace(after, windows=windows)
+    rules = _rules_map(store.item_rules, which, lambda pick: KEEP if pick == name else pick)
+    return replace(after, windows=windows, item_rules=rules)
+
+
+def _rules_map(rules: tuple, which: str, convert) -> tuple:
+    """決まりの which の値を convert(値) に置き換えた新しい決まりの並び（KEEP・None は convert に渡さない）"""
+    def pick_of(rule):
+        pick = getattr(rule, which)
+        return pick if pick is None or pick is KEEP else convert(pick)
+    return tuple(replace(rule, **{which: pick_of(rule)}) for rule in rules)
+
+
+# ── アイテムの決まり（GM）──────────────────────────
+_UNSET = object()
+
+
+def _check_pick(store: Store, which: str, pick):
+    """決まりの which の値として使えなければ ValueError（KEEP・None・あるプリセット名は可）"""
+    if pick is None or pick is KEEP:
+        return
+    if not isinstance(pick, str) or pick not in presets_of(store, which):
+        raise ValueError(f"プリセット「{pick}」がありません")
+
+
+def with_rule_added(store: Store, item: int = ITEM_NONE, disabled=KEEP, default=KEEP) -> Store:
+    """決まりを末尾に足した新しい Store（初めは「持っていない」・どちらも窓のまま）"""
+    _check_pick(store, DISABLED, disabled)
+    _check_pick(store, DEFAULT, default)
+    return replace(store, item_rules=(*store.item_rules, ItemRule(item, disabled, default)))
+
+
+def with_rule_changed(store: Store, index: int, item=_UNSET, disabled=_UNSET, default=_UNSET) -> Store:
+    """index 番目の決まりの、渡した項目だけ変えた新しい Store（範囲外は IndexError・使えない名前は ValueError）"""
+    if not 0 <= index < len(store.item_rules):
+        raise IndexError(f"{index} 番目の決まりはありません")
+    changes = {name: value for name, value in (("item", item), ("disabled", disabled), ("default", default))
+               if value is not _UNSET}
+    for which in (DISABLED, DEFAULT):
+        if which in changes:
+            _check_pick(store, which, changes[which])
+    rules = list(store.item_rules)
+    rules[index] = replace(rules[index], **changes)
+    return replace(store, item_rules=tuple(rules))
+
+
+def with_rule_moved(store: Store, index: int, delta: int) -> Store:
+    """index 番目の決まりを delta（-1 で上・+1 で下）動かした新しい Store。端を越えるときは今のまま"""
+    target = index + delta
+    if not (0 <= index < len(store.item_rules) and 0 <= target < len(store.item_rules)):
+        return store
+    rules = list(store.item_rules)
+    rules[index], rules[target] = rules[target], rules[index]
+    return replace(store, item_rules=tuple(rules))
+
+
+def with_rule_deleted(store: Store, index: int) -> Store:
+    """index 番目の決まりを消した新しい Store（範囲外は今のまま）"""
+    if not 0 <= index < len(store.item_rules):
+        return store
+    return replace(store, item_rules=store.item_rules[:index] + store.item_rules[index + 1:])
+
+
+def shadowed_rules(store: Store) -> list:
+    """決まりごとの「上に同じアイテムの決まりがあって、使われない」の真偽（編集の欄で薄く出す）"""
+    seen, result = set(), []
+    for rule in store.item_rules:
+        result.append(rule.item in seen)
+        seen.add(rule.item)
+    return result
 
 
 def with_preset_body(store: Store, which: str, name: str, body: dict) -> Store:
@@ -277,6 +405,43 @@ def _windows_from(raw) -> dict:
     return windows
 
 
+def _rule_pick(row: dict, which: str, names: dict):
+    """決まりの行の which の値 → (値, 指す先が無かったか)。キー無し→KEEP・null→None・あるプリセット名→その名前・
+    無い名前→KEEP（無かった印つき）。文字列・null 以外は ValueError（その行は捨てる）"""
+    if which not in row:
+        return KEEP, False
+    value = row[which]
+    if value is None:
+        return None, False
+    if not isinstance(value, str):
+        raise ValueError(which)
+    if value in names:
+        return value, False
+    return KEEP, True
+
+
+def _rules_from(raw, disabled_names: dict, default_names: dict) -> tuple:
+    """"item_rules"（[{"item": 70, "default": "名前"}, ...]）→ 決まりの並び。読めない行は捨てる。
+    無いプリセットを指す項目は「窓のまま」にして、debug.log に 1 行"""
+    if not isinstance(raw, list):
+        return ()
+    rules, missing = [], 0
+    for row in raw:
+        item = row.get("item") if isinstance(row, dict) else None
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            continue
+        try:
+            disabled, lost_d = _rule_pick(row, DISABLED, disabled_names)
+            default, lost_f = _rule_pick(row, DEFAULT, default_names)
+        except ValueError:
+            continue
+        missing += lost_d + lost_f
+        rules.append(ItemRule(item, disabled, default))
+    if missing:
+        DebugLog.write(f"[続行表] アイテムの決まりが指すプリセットが無いので「{KEEP_LABEL}」にしました: {missing} 件")
+    return tuple(rules)
+
+
 def _from_v1(raw: dict) -> Store:
     """v1（表が 1 組）→ それぞれ「既定」のプリセット。use_* が false だった種類は全窓「なし」"""
     windows = {}
@@ -304,13 +469,25 @@ def load(path=None) -> Store:
         return Store()
     if "disabled_presets" not in raw and "default_presets" not in raw and raw.get("version") != 2:
         return _from_v1(raw)
-    return Store(disabled_presets=_presets_from(raw.get("disabled_presets")),
-                 default_presets=_presets_from(raw.get("default_presets")),
-                 windows=_windows_from(raw.get("windows")))
+    disabled_presets = _presets_from(raw.get("disabled_presets"))
+    default_presets = _presets_from(raw.get("default_presets"))
+    return Store(disabled_presets=disabled_presets, default_presets=default_presets,
+                 windows=_windows_from(raw.get("windows")),
+                 item_rules=_rules_from(raw.get("item_rules"), disabled_presets, default_presets))
 
 
 def _body_json(body: dict) -> dict:
     return {k: sorted(v) for k, v in sorted(body.items()) if v}
+
+
+def _rule_json(rule: ItemRule) -> dict:
+    """{"item": 70, "default": "名前"}。窓のまま（KEEP）の項目は書かない・なし（None）は null"""
+    row = {"item": rule.item}
+    for which in (DISABLED, DEFAULT):
+        pick = getattr(rule, which)
+        if pick is not KEEP:
+            row[which] = pick
+    return row
 
 
 def _to_json(store: Store) -> dict:
@@ -319,6 +496,7 @@ def _to_json(store: Store) -> dict:
         "disabled_presets": {n: _body_json(b) for n, b in store.disabled_presets.items()},
         "default_presets": {n: _body_json(b) for n, b in store.default_presets.items()},
         "windows": {str(idx): dict(kinds) for idx, kinds in sorted(store.windows.items())},
+        "item_rules": [_rule_json(rule) for rule in store.item_rules],
     }
 
 

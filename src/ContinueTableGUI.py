@@ -9,7 +9,8 @@
   Unbound の Self Inserts (Bloodthirsty) の仮の番号）。ブロックの間は 1 行あける。名前は出さない（マウスを
   乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
   （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠
-- 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む
+- 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む。その下に「アイテムで切り替え」の欄（GM）: 決まり 1 つ
+  = 1 行（アイテム・続行無効・デフォ続行のプリセット・↑↓×）。同じアイテムが上にある行は薄い文字
 
 押したセルの絵と枠だけを `itemconfigure` で変える（格子は作り直さない）。判定への反映（set_current）は押した
 その場で、保存は 0.3 秒まとめて 1 回（閉じるときは残りを先に書く）。アイコンは assets/icons のシート
@@ -87,6 +88,13 @@ ROUND_KEYS_FOR_TAB = {MOON_TAB: [MatchTNL.LOG_TO_TNL[name]
 MOON_SLOT_ROUNDS = ("Mystic Moon", "Blood Moon")      # Moon の中身（枠の和）になるラウンド
 
 NOTE = "干し芋・焼き芋（グループのインスタンス）では使いません"
+
+# 「アイテムで切り替え」の欄（GM）
+RULES_TITLE = "アイテムで切り替え"
+RULES_NOTE = "窓が持っているアイテムで、上から最初に当てはまる決まりのプリセットを使います（薄い行は、上に同じアイテムがあるので使われません）"
+RULES_AREA_HEIGHT = 112      # 決まりの行を並べる欄の高さ（行が増えたら縦にスクロール）
+COLOR_RULE_DIM = "#7f849c"   # 使われない決まりの文字
+STYLE_RULE_DIM = "Dim.TCombobox"
 
 
 # ── データ（画面を作らずに読める部分）────────────────────
@@ -177,6 +185,43 @@ def terror_name(tid: int, round_key: str | None = None) -> str:
         if special:
             return special
     return terror_names().get(tid) or f"#{tid}"
+
+
+# ── アイテムの決まり（GM）───────────────────────
+def item_choices(items: dict) -> list:
+    """[(id, 選択肢の文字), ...]。先頭は「持っていない」(0)、あとは item.json の全アイテムを店（分類）ごとにまとめ、
+    「店 / 名前」。文字が重なるときは末尾に id を付ける"""
+    choices, seen = [(ContinueTable.ITEM_NONE, ContinueTable.ITEM_NONE_LABEL)], {ContinueTable.ITEM_NONE_LABEL}
+    shops: dict = {}
+    for item_id, item in items.items():
+        shops.setdefault(item.category, []).append((item_id, item))
+    for shop, entries in shops.items():
+        for item_id, item in entries:
+            text = f"{shop} / {item.name}"
+            if text in seen:
+                text = f"{text} (id={item_id})"
+            seen.add(text)
+            choices.append((item_id, text))
+    return choices
+
+
+def unknown_item_text(item_id: int) -> str:
+    """item.json に無い id（保存した決まりに残っていたとき）の選択肢の文字"""
+    return f"id={item_id}（表に無い）"
+
+
+def pick_text(pick) -> str:
+    """決まりの値（KEEP・None・プリセット名）→ ドロップダウンの文字"""
+    if pick is ContinueTable.KEEP:
+        return ContinueTable.KEEP_LABEL
+    return ContinueTable.NONE_LABEL if pick is None else pick
+
+
+def pick_from_text(text: str):
+    """ドロップダウンの文字 → 決まりの値（pick_text の逆）"""
+    if text == ContinueTable.KEEP_LABEL:
+        return ContinueTable.KEEP
+    return None if text == ContinueTable.NONE_LABEL else text
 
 
 # ── 格子の並べ方 ─────────────────────────────
@@ -375,7 +420,7 @@ class ContinueTableWindow(tk.Toplevel):
         super().__init__(master)
         self.title("続行表")
         self.configure(bg=config.GUI_BG)
-        self.geometry(f"{CANVAS_WIDTH + 250}x720")
+        self.geometry(f"{CANVAS_WIDTH + 250}x860")
         self.minsize(CANVAS_WIDTH + 230, 420)
         self._on_change = on_change
         self._rounds = load_rounds()
@@ -386,6 +431,8 @@ class ContinueTableWindow(tk.Toplevel):
         self._tip: tuple = ()                  # ツールチップの item の id
         self._save_job = None                  # 保存の予約（after の id）
         self._save_pending = False
+        self._item_choices = item_choices(config.ITEMS)      # [(id, 文字), ...]
+        self._rule_rows: list = []             # 決まりの行ごとの部品（_show_rules が作り直す）
         self.v_which = tk.StringVar(value=ContinueTable.DISABLED)
         # 編集しているプリセットの名前（表の種類ごと）。窓ごとの選びとは別（編集の対象を選ぶだけ）
         store = ContinueTable.current()
@@ -426,17 +473,46 @@ class ContinueTableWindow(tk.Toplevel):
         ttk.Button(tools, text="全解除", command=self.clear_all).pack(side="left", padx=(6, 0))
         ttk.Label(self, text=NOTE, foreground=config.GUI_YLW).pack(anchor="w", padx=10)
 
+        # 下の段（欄・ボタン）は side="bottom" で先に置く（窓が低いときに削れるのは格子のほう）
+        self._build_item_rules()
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+        ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む",
+                   command=self._import_tnl).pack(side="left")
+        ttk.Button(bottom, text=".tnnl を続行無効へ読み込む",
+                   command=self._import_tnnl).pack(side="left", padx=(6, 0))
+
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
         self._build_round_list(body)
         self._build_canvas(body)
 
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む",
-                   command=self._import_tnl).pack(side="left")
-        ttk.Button(bottom, text=".tnnl を続行無効へ読み込む",
-                   command=self._import_tnnl).pack(side="left", padx=(6, 0))
+    def _build_item_rules(self):
+        """「アイテムで切り替え」の欄（決まりの行を縦にスクロールする欄と「決まりを足す」）"""
+        style = ttk.Style(self)
+        style.configure(STYLE_RULE_DIM, foreground=COLOR_RULE_DIM)
+        style.map(STYLE_RULE_DIM, foreground=[("readonly", COLOR_RULE_DIM), ("disabled", COLOR_RULE_DIM)])
+        box = ttk.LabelFrame(self, text=RULES_TITLE, padding=6)
+        box.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
+        ttk.Label(box, text=RULES_NOTE, foreground=config.GUI_YLW).pack(anchor="w")
+        area = ttk.Frame(box)
+        area.pack(fill="x", pady=(4, 0))
+        self.rules_canvas = tk.Canvas(area, height=RULES_AREA_HEIGHT, bg=config.GUI_BG, highlightthickness=0)
+        bar = ttk.Scrollbar(area, orient="vertical", command=self.rules_canvas.yview)
+        self.rules_canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self.rules_canvas.pack(side="left", fill="x", expand=True)
+        self.rules_frame = ttk.Frame(self.rules_canvas)
+        self.rules_canvas.create_window((0, 0), window=self.rules_frame, anchor="nw")
+        self.rules_frame.bind("<Configure>", lambda _e: self.rules_canvas.configure(
+            scrollregion=self.rules_canvas.bbox("all")))
+        self.rules_canvas.bind("<Enter>", lambda _e: self.rules_canvas.bind_all("<MouseWheel>", self._rules_wheel))
+        self.rules_canvas.bind("<Leave>", lambda _e: self.rules_canvas.unbind_all("<MouseWheel>"))
+        ttk.Button(box, text="決まりを足す", command=self.add_rule).pack(anchor="w", pady=(4, 0))
+        self._show_rules()
+
+    def _rules_wheel(self, event):
+        self.rules_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
     def _build_round_list(self, parent):
         """左のラウンドの一覧（名前が入る最小の幅・縦に並べる）。暗い色で、選んでいるラウンドを強調する"""
@@ -468,7 +544,7 @@ class ContinueTableWindow(tk.Toplevel):
     def destroy(self):
         self._flush_save()                             # 予約が残っていれば、閉じる前に書く
         try:
-            self.canvas.unbind_all("<MouseWheel>")     # 窓の上で閉じても、ほかの窓へ効きを残さない
+            self.canvas.unbind_all("<MouseWheel>")     # 窓の上で閉じても、ほかの窓へ効きを残さない（決まりの欄も同じ）
         except tk.TclError:
             pass
         super().destroy()
@@ -775,6 +851,7 @@ class ContinueTableWindow(tk.Toplevel):
             self._selected[self._which()] = select
         ContinueTable.set_current(store)
         self._show_presets()                          # 消えた名前を選んだままにしない（見た目より先に）
+        self._show_rules()                            # 決まりの選択肢（プリセット名）も作り直す
         self._commit_store(store)
 
     def _ask_valid_name(self, title: str, initial: str = "", ignore: str | None = None) -> str | None:
@@ -824,6 +901,94 @@ class ContinueTableWindow(tk.Toplevel):
                              f"これを使っていた窓は「{ContinueTable.DEFAULT_PRESET}」になります。"):
             return
         self._apply_presets(ContinueTable.with_deleted_preset(store, which, name))
+
+    # ── アイテムで切り替え（GM）──
+    def _row_item_map(self, item_id: int) -> dict:
+        """行のアイテムのドロップダウンの {文字: id}。item.json に無い id なら、その行だけ選択肢に足す"""
+        mapping = {text: tid for tid, text in self._item_choices}
+        if item_id not in mapping.values():
+            mapping[unknown_item_text(item_id)] = item_id
+        return mapping
+
+    def _show_rules(self):
+        """決まりの行を今の保存内容から作り直す（足す・動かす・消す・プリセットの増減のあと）"""
+        for child in self.rules_frame.winfo_children():
+            child.destroy()
+        self._rule_rows = []
+        store = ContinueTable.current()
+        values = {which: [ContinueTable.KEEP_LABEL, ContinueTable.NONE_LABEL,
+                          *ContinueTable.preset_names(store, which)]
+                  for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT)}
+        for index, rule in enumerate(store.item_rules):
+            self._rule_rows.append(self._build_rule_row(index, rule, values))
+        self._dim_shadowed_rules()
+
+    def _build_rule_row(self, index: int, rule: ContinueTable.ItemRule, values: dict) -> dict:
+        """1 つの決まりの行: アイテム・続行無効・デフォ続行のドロップダウンと ↑ ↓ ×"""
+        mapping = self._row_item_map(rule.item)
+        text_of = {tid: text for text, tid in mapping.items()}
+        row = {"items": mapping,
+               "v_item": tk.StringVar(value=text_of[rule.item]),
+               ContinueTable.DISABLED: tk.StringVar(value=pick_text(rule.disabled)),
+               ContinueTable.DEFAULT: tk.StringVar(value=pick_text(rule.default))}
+        frame = ttk.Frame(self.rules_frame)
+        frame.pack(fill="x", pady=1)
+        row["frame"] = frame
+        row["cb_item"] = self._rule_combo(frame, row["v_item"], list(mapping), 30, index)
+        row["cb_item"].pack(side="left")
+        for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT):
+            ttk.Label(frame, text=f"{WHICH_TEXT[which]}:").pack(side="left", padx=(10, 0))
+            row[f"cb_{which}"] = self._rule_combo(frame, row[which], values[which], 12, index)
+            row[f"cb_{which}"].pack(side="left", padx=(4, 0))
+        for text, command in (("↑", lambda i=index: self.move_rule(i, -1)),
+                              ("↓", lambda i=index: self.move_rule(i, +1)),
+                              ("×", lambda i=index: self.delete_rule(i))):
+            button = ttk.Button(frame, text=text, width=3, command=command)
+            button.pack(side="left", padx=(6 if text == "↑" else 2, 0))
+            row[text] = button
+        return row
+
+    def _rule_combo(self, parent, variable, values, width: int, index: int) -> ttk.Combobox:
+        box = ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=width)
+        box.bind("<<ComboboxSelected>>", lambda _e, i=index: self._on_rule_picked(i))
+        return box
+
+    def _dim_shadowed_rules(self):
+        """上に同じアイテムの決まりがある行（使われない）のドロップダウンを薄い文字にする"""
+        shadowed = ContinueTable.shadowed_rules(ContinueTable.current())
+        for row, dim in zip(self._rule_rows, shadowed):
+            for key in ("cb_item", f"cb_{ContinueTable.DISABLED}", f"cb_{ContinueTable.DEFAULT}"):
+                row[key].configure(style=STYLE_RULE_DIM if dim else "TCombobox")
+
+    def _on_rule_picked(self, index: int):
+        """行のドロップダウンで選んだ: その行の決まりを変えて、判定へ・保存の予約"""
+        row = self._rule_rows[index]
+        store = ContinueTable.with_rule_changed(
+            ContinueTable.current(), index, item=row["items"][row["v_item"].get()],
+            disabled=pick_from_text(row[ContinueTable.DISABLED].get()),
+            default=pick_from_text(row[ContinueTable.DEFAULT].get()))
+        self._commit_store(store, tids=())
+        self._dim_shadowed_rules()
+
+    def add_rule(self):
+        """決まりを末尾に足す（初めは「持っていない」・どちらも窓のまま）"""
+        self._commit_store(ContinueTable.with_rule_added(ContinueTable.current()), tids=())
+        self._show_rules()
+        self.rules_canvas.update_idletasks()
+        self.rules_canvas.yview_moveto(1.0)
+
+    def move_rule(self, index: int, delta: int):
+        """index 番目の決まりを上（-1）・下（+1）へ。端では何もしない"""
+        store = ContinueTable.with_rule_moved(ContinueTable.current(), index, delta)
+        if store is not ContinueTable.current():
+            self._commit_store(store, tids=())
+            self._show_rules()
+
+    def delete_rule(self, index: int):
+        store = ContinueTable.with_rule_deleted(ContinueTable.current(), index)
+        if store is not ContinueTable.current():
+            self._commit_store(store, tids=())
+            self._show_rules()
 
     # ── 取り込み ──
     def _ask_file(self, title: str, pattern: str) -> str:

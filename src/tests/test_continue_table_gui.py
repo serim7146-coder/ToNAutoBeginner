@@ -1117,3 +1117,236 @@ class TestMainWindow(unittest.TestCase):
         for tab in app.tabs:
             self.assertEqual(tab.v_ct_choice[ContinueTable.DISABLED].get(), "なし", tab.idx)
             self.assertEqual(tab.v_ct_choice[ContinueTable.DEFAULT].get(), "既定", tab.idx)
+
+
+# ── GM: 「アイテムで切り替え」の欄 ─────────────────────
+class TestItemRuleData(unittest.TestCase):
+    """item_choices などの画面を作らない部分（本物の item.json を読む）"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.items = ItemCatalog.load_items(config.resource_path("assets/data/item.json"))
+
+    def test_the_choices_start_with_not_holding_then_every_item_grouped_by_shop(self):
+        choices = ContinueTableGUI.item_choices(self.items)
+        self.assertEqual(choices[0], (0, "持っていない"))
+        self.assertEqual(sorted(tid for tid, _t in choices[1:]), sorted(self.items))
+        texts = [text for _tid, text in choices]
+        self.assertEqual(len(texts), len(set(texts)), "文字が重ならない")
+        shops = [item.category for item in (self.items[tid] for tid, _t in choices[1:])]
+        runs = [shop for n, shop in enumerate(shops) if n == 0 or shops[n - 1] != shop]
+        self.assertEqual(len(runs), len(set(runs)), "店ごとにまとまっている")
+        by_id = dict(choices)
+        self.assertEqual(by_id[70], "Event / Guidance Plush")
+
+    def test_duplicate_texts_get_the_id_added(self):
+        items = {1: ItemCatalog.Item("A", "S", True), 2: ItemCatalog.Item("A", "S", False)}
+        self.assertEqual(ContinueTableGUI.item_choices(items)[1:], [(1, "S / A"), (2, "S / A (id=2)")])
+
+    def test_an_empty_table_still_offers_not_holding(self):
+        self.assertEqual(ContinueTableGUI.item_choices({}), [(0, "持っていない")])
+
+    def test_pick_text_round_trip(self):
+        keep, none = ContinueTable.KEEP, None
+        self.assertEqual(ContinueTableGUI.pick_text(keep), "窓のまま")
+        self.assertEqual(ContinueTableGUI.pick_text(none), "なし")
+        self.assertEqual(ContinueTableGUI.pick_text("既定"), "既定")
+        for pick in (keep, none, "既定"):
+            self.assertIs(ContinueTableGUI.pick_from_text(ContinueTableGUI.pick_text(pick)), pick)
+
+
+class TestItemRules(_WindowCase):
+    """GM: 窓の下の「アイテムで切り替え」。押す代わりに部品の値を変えて受け口を呼ぶ（隠れた窓にはイベントが届かない）"""
+
+    ITEMS = {5: ItemCatalog.Item("Radar", "Enkephalin", True), 70: ItemCatalog.Item("Guidance Plush", "Event", True),
+             11: ItemCatalog.Item("Nora Plush", "Survival", True)}
+
+    def setUp(self):
+        patcher = patch.object(config, "ITEMS", self.ITEMS)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+        patch_save = patch.object(ContinueTableGUI, "SAVE_DELAY_MS", 30)
+        patch_save.start()
+        self.addCleanup(patch_save.stop)
+        self.names = []
+        self.win._ask_name = lambda title, initial="": self.names.pop(0)
+        self.win._confirm = lambda text: True
+        self.win._error = lambda text: None
+
+    def _rules(self):
+        return ContinueTable.current().item_rules
+
+    def _rows(self):
+        return self.win._rule_rows
+
+    def _pick(self, index, item=None, disabled=None, default=None):
+        """行 index のドロップダウンを選び直して、選んだときの受け口を呼ぶ"""
+        row = self._rows()[index]
+        if item is not None:
+            row["v_item"].set(item)
+        if disabled is not None:
+            row[ContinueTable.DISABLED].set(disabled)
+        if default is not None:
+            row[ContinueTable.DEFAULT].set(default)
+        self.win._on_rule_picked(index)
+
+    def _add_preset(self, which, name):
+        self.win.v_which.set(which)
+        self.names = [name]
+        self.win.new_preset()
+        self.win.v_which.set(ContinueTable.DISABLED)
+
+    def _saved_rules(self):
+        self.win._flush_save()
+        return ContinueTable.load().item_rules
+
+    def test_the_section_is_under_the_buttons_with_an_add_button(self):
+        frames = [f for f in _widgets(self.win, ttk.LabelFrame) if f.cget("text") == "アイテムで切り替え"]
+        self.assertEqual(len(frames), 1)
+        texts = {b.cget("text") for b in _widgets(frames[0], ttk.Button)}
+        self.assertIn("決まりを足す", texts)
+        self.assertIs(frames[0].master, self.win, "窓の直下の段（ボタンの段と並ぶ）")
+        packed = [w for w in self.win.pack_slaves() if w.winfo_manager() == "pack"]
+        buttons_row = next(w for w in packed if any(b.cget("text").startswith(".tnl")
+                                                    for b in _widgets(w, ttk.Button)))
+        self.assertGreater(packed.index(buttons_row), packed.index(frames[0]),
+                           "side=bottom は先に置いたほうが下: 欄は読み込みのボタンの段の下にある")
+        self.assertEqual(self._rows(), [], "初めは決まりが無い")
+
+    def test_adding_makes_a_row_for_not_holding_with_window_as_is_and_saves(self):
+        self.win.add_rule()
+        self.assertEqual(self._rules(), (ContinueTable.ItemRule(0),))
+        row = self._rows()[0]
+        self.assertEqual(row["v_item"].get(), "持っていない")
+        self.assertEqual(row[ContinueTable.DISABLED].get(), "窓のまま")
+        self.assertEqual(row[ContinueTable.DEFAULT].get(), "窓のまま")
+        self.assertTrue(self.changed, "メイン画面へ知らせる")
+        self.assertEqual(self._saved_rules(), (ContinueTable.ItemRule(0),))
+
+    def test_item_choices_list_not_holding_then_the_items_by_shop(self):
+        self.win.add_rule()
+        values = list(self._rows()[0]["cb_item"]["values"])
+        self.assertEqual(values, ["持っていない", "Enkephalin / Radar", "Event / Guidance Plush", "Survival / Nora Plush"])
+
+    def test_the_preset_dropdowns_offer_keep_none_and_the_preset_names(self):
+        self.win.add_rule()
+        self._add_preset(ContinueTable.DEFAULT, "足す")
+        row = self._rows()[0]
+        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓のまま", "なし", "既定"])
+        self.assertEqual(list(row["cb_default"]["values"]), ["窓のまま", "なし", "既定", "足す"],
+                         "プリセットを作ったら選択肢を作り直す")
+
+    def test_changing_a_row_changes_the_rule_at_once_and_saves_later(self):
+        self.win.add_rule()
+        self._add_preset(ContinueTable.DEFAULT, "足す")
+        self._pick(0, item="Event / Guidance Plush", disabled="なし", default="足す")
+        expected = (ContinueTable.ItemRule(70, None, "足す"),)
+        self.assertEqual(self._rules(), expected, "判定には押したその場で効く")
+        self.assertEqual(ContinueTable.table_for(ContinueTable.current(), 1, 70).default, {})
+        self.assertTrue(_wait(self.win, lambda: ContinueTable.table_path().exists()
+                              and ContinueTable.load().item_rules == expected), "保存はまとめて")
+
+    def test_picking_keep_again_returns_to_the_window_choice(self):
+        self.win.add_rule()
+        self._pick(0, disabled="なし")
+        self.assertEqual(self._rules()[0].disabled, None)
+        self._pick(0, disabled="窓のまま")
+        self.assertIs(self._rules()[0].disabled, ContinueTable.KEEP)
+
+    def test_move_up_and_down_reorder_and_the_ends_do_nothing(self):
+        for item in ("Enkephalin / Radar", "Event / Guidance Plush", "Survival / Nora Plush"):
+            self.win.add_rule()
+            self._pick(len(self._rules()) - 1, item=item)
+        self.assertEqual([r.item for r in self._rules()], [5, 70, 11])
+        self._rows()[2]["↑"].invoke()
+        self.assertEqual([r.item for r in self._rules()], [5, 11, 70])
+        self._rows()[0]["↓"].invoke()
+        self.assertEqual([r.item for r in self._rules()], [11, 5, 70])
+        self.changed.clear()
+        self._rows()[0]["↑"].invoke()
+        self._rows()[2]["↓"].invoke()
+        self.assertEqual([r.item for r in self._rules()], [11, 5, 70], "端では動かない")
+        self.assertEqual(self.changed, [], "何も変わらないので知らせない")
+        self.assertEqual([r.item for r in self._saved_rules()], [11, 5, 70])
+        self.assertEqual(self._rows()[0]["v_item"].get(), "Survival / Nora Plush", "行も並べ直す")
+
+    def test_the_cross_deletes_the_row_and_saves(self):
+        self.win.add_rule()
+        self.win.add_rule()
+        self._pick(1, item="Event / Guidance Plush")
+        self._rows()[0]["×"].invoke()
+        self.assertEqual([r.item for r in self._rules()], [70])
+        self.assertEqual(len(self._rows()), 1)
+        self.assertEqual([r.item for r in self._saved_rules()], [70])
+        self._rows()[0]["×"].invoke()
+        self.assertEqual(self._rules(), ())
+        self.assertEqual(self._saved_rules(), ())
+
+    def test_a_row_under_the_same_item_is_dimmed(self):
+        for _ in range(3):
+            self.win.add_rule()
+        self._pick(1, item="Event / Guidance Plush")
+        dim = ContinueTableGUI.STYLE_RULE_DIM
+        styles = [[str(row[k].cget("style")) for k in ("cb_item", "cb_disabled", "cb_default")]
+                  for row in self._rows()]
+        self.assertEqual(styles[0], ["TCombobox"] * 3)
+        self.assertEqual(styles[1], ["TCombobox"] * 3)
+        self.assertEqual(styles[2], [dim] * 3, "上に「持っていない」の決まりがある")
+        self._pick(2, item="Event / Guidance Plush")
+        self.assertEqual(str(self._rows()[2]["cb_item"].cget("style")), dim)
+        self._pick(0, item="Enkephalin / Radar")          # 一番上のアイテムを変えても、Plush は 2 行目が先
+        self.assertEqual(str(self._rows()[2]["cb_item"].cget("style")), dim, "Plush は 2 行目が先")
+        self.assertEqual(str(self._rows()[1]["cb_item"].cget("style")), "TCombobox")
+        self._rows()[1]["×"].invoke()
+        self.assertEqual(str(self._rows()[1]["cb_item"].cget("style")), "TCombobox", "上が消えれば薄くない")
+
+    def test_a_saved_item_missing_from_the_table_is_shown_by_id(self):
+        ContinueTable.set_current(ContinueTable.with_rule_added(ContinueTable.current(), 4321))
+        self.win._show_rules()
+        row = self._rows()[0]
+        self.assertEqual(row["v_item"].get(), "id=4321（表に無い）")
+        self.assertIn("id=4321（表に無い）", row["cb_item"]["values"])
+        self._pick(0, disabled="なし")
+        self.assertEqual(self._rules(), (ContinueTable.ItemRule(4321, None, ContinueTable.KEEP),),
+                         "表に無い id のまま残る")
+
+    def test_renaming_a_preset_changes_the_rule_and_the_row(self):
+        self._add_preset(ContinueTable.DISABLED, "P")
+        self.win.add_rule()
+        self._pick(0, disabled="P")
+        self.names = ["Q"]
+        self.win.rename_preset()
+        self.assertEqual(self._rules()[0].disabled, "Q")
+        row = self._rows()[0]
+        self.assertEqual(row["cb_disabled"].get(), "Q")
+        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓のまま", "なし", "既定", "Q"])
+        self.assertEqual(self._saved_rules()[0].disabled, "Q")
+
+    def test_deleting_a_preset_makes_the_rule_keep_the_window_choice(self):
+        self._add_preset(ContinueTable.DISABLED, "P")
+        self.win.add_rule()
+        self._pick(0, disabled="P")
+        self.win.delete_preset()
+        self.assertIs(self._rules()[0].disabled, ContinueTable.KEEP)
+        self.assertEqual(self._rows()[0]["cb_disabled"].get(), "窓のまま")
+        self.assertNotIn("P", self._rows()[0]["cb_disabled"]["values"])
+
+    def test_a_window_opened_with_saved_rules_shows_them(self):
+        store = ContinueTable.with_rule_added(ContinueTable.current(), 70, None, ContinueTable.KEEP)
+        ContinueTable.set_current(store)
+        win = ContinueTableGUI.ContinueTableWindow(self.root)
+        self.addCleanup(win.destroy)
+        row = win._rule_rows[0]
+        self.assertEqual((row["v_item"].get(), row["disabled"].get(), row["default"].get()),
+                         ("Event / Guidance Plush", "なし", "窓のまま"))
+
+    def test_the_rules_affect_the_decision_without_any_real_input(self):
+        self._add_preset(ContinueTable.DISABLED, "外す")
+        ContinueTable.set_current(ContinueTable.with_preset_body(ContinueTable.current(), ContinueTable.DISABLED,
+                                                                 "外す", {KEY: [7]}))
+        self.win.add_rule()
+        self._pick(0, item="Event / Guidance Plush", disabled="外す")
+        store = ContinueTable.current()
+        self.assertEqual(ContinueTable.table_for(store, 1, 70).disabled, {KEY: frozenset({7})})
+        self.assertEqual(ContinueTable.table_for(store, 1, 0).disabled, {})

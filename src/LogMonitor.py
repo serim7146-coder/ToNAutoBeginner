@@ -842,8 +842,9 @@ class LogMonitor:
                 if name in present}
 
     def _continue_table(self):
-        """この窓が重ねる続行表（GL）。窓ごとに選んだ 2 つのプリセット（「なし」の種類は空）"""
-        return ContinueTable.table_for(ContinueTable.current(), self.window_idx)
+        """この窓が重ねる続行表（GL）。窓ごとに選んだ 2 つのプリセット（「なし」の種類は空）に、
+        今持っているアイテムの決まり（GM）を種類ごとに重ねたもの"""
+        return ContinueTable.table_for(ContinueTable.current(), self.window_idx, self.st.held_item_id)
 
     def _keep_on(self) -> dict:
         """この窓の続行リスト。続行表（GH）を重ねたもの（その窓の 2 つのプリセット）。
@@ -2559,8 +2560,20 @@ class LogMonitor:
                                             st.round_type, ids)
         wanted = {ContinueTable.LABEL_DEFAULT: True, ContinueTable.LABEL_DISABLED: False}
         if label and wanted[label] != st.is_continue_round:
-            return ""           # 3クラ解放などリスト以外の決まりで、結果が逆になった
-        return label
+            label = ""          # 3クラ解放などリスト以外の決まりで、結果が逆になった
+        return label + self._item_rule_label()
+
+    def _item_rule_label(self) -> str:
+        """アイテムの決まり（GM）で、この窓の表が窓の選択から変わったとき、判定の行の最後に付ける
+        〔アイテム名 の決まり〕（結果が変わらなくても付ける）。グループのインスタンスは重ねない"""
+        st = self.st
+        if st.instance_type in GroupRound.GROUP_INSTANCES:
+            return ""
+        if not ContinueTable.rule_changes_table(ContinueTable.current(), self.window_idx, st.held_item_id):
+            return ""
+        held = st.held_item_id
+        name = ItemCatalog.label(held, config.ITEMS) if held else ContinueTable.ITEM_NONE_LABEL
+        return f"〔{name} の決まり〕"
 
     def _send_round_statistics_once(self):
         st = self.st

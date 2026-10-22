@@ -173,7 +173,8 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(raw, {"version": 2,
                                "disabled_presets": {BASE: {KEY: [5, 9]}},
                                "default_presets": {BASE: {ALT: [164]}},
-                               "windows": {"1": {"disabled": BASE, "default": None}}})
+                               "windows": {"1": {"disabled": BASE, "default": None}},
+                               "item_rules": []})
 
     def test_a_missing_file_is_one_empty_preset_in_each_kind(self):
         store = ContinueTable.load(self.path)
@@ -883,3 +884,327 @@ class TestPerWindowSelfInserts(unittest.TestCase):
     def test_group_instances_ignore_the_presets(self):
         for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
             self.assertFalse(self._monitor(1, itype)._self_inserts_table_disabled(), itype)
+
+
+# ── GM: 所持アイテムで続行表のプリセットを切り替える ─────────────────────
+KEEP = ContinueTable.KEEP
+Rule = ContinueTable.ItemRule
+PLUSH = 70                      # item.json の Guidance Plush
+OTHER_ITEM = 5                  # item.json の Radar
+
+
+def _rule_store(*rules, windows=None) -> Store:
+    """窓 1・2 は何も選んでいない（＝「既定」）。プリセットは 続行無効 既定・無7・無8、デフォ続行 既定・足9・足10"""
+    return Store(
+        disabled_presets={BASE: {}, "無7": _body({KEY: [7]}), "無8": _body({KEY: [8]})},
+        default_presets={BASE: {}, "足9": _body({KEY: [9]}), "足10": _body({KEY: [10]})},
+        windows=windows or {}, item_rules=tuple(rules))
+
+
+class TestItemRuleLookup(unittest.TestCase):
+    def test_the_first_matching_rule_wins_and_unmatched_items_have_none(self):
+        store = _rule_store(Rule(PLUSH, "無7"), Rule(OTHER_ITEM, "無8"), Rule(PLUSH, "無8"))
+        self.assertEqual(ContinueTable.rule_for(store, PLUSH), Rule(PLUSH, "無7", KEEP))
+        self.assertEqual(ContinueTable.rule_for(store, OTHER_ITEM).disabled, "無8")
+        self.assertIsNone(ContinueTable.rule_for(store, 999))
+
+    def test_not_holding_anything_is_item_zero_and_none_means_do_not_look(self):
+        store = _rule_store(Rule(0, "無7"), Rule(PLUSH, "無8"))
+        self.assertEqual(ContinueTable.rule_for(store, 0).disabled, "無7")
+        self.assertIsNone(ContinueTable.rule_for(store, None), "None は見ない（0 の決まりにも当てはめない）")
+        self.assertEqual(ContinueTable.table_for(store, 1, None), ContinueTable.table_for(store, 1))
+
+    def test_a_matching_rule_overrides_the_window_choice_per_kind(self):
+        store = _rule_store(Rule(PLUSH, "無7", "足10"), windows={1: {DIS: "無8", DFL: "足9"}})
+        plain = ContinueTable.table_for(store, 1)
+        self.assertEqual((plain.disabled, plain.default), (_body({KEY: [8]}), _body({KEY: [9]})))
+        held = ContinueTable.table_for(store, 1, PLUSH)
+        self.assertEqual((held.disabled, held.default), (_body({KEY: [7]}), _body({KEY: [10]})))
+        other = ContinueTable.table_for(store, 1, 999)
+        self.assertEqual(other, plain, "当てはまらなければ窓の選択だけ")
+
+    def test_keep_uses_the_window_choice_for_that_kind_only(self):
+        store = _rule_store(Rule(PLUSH, KEEP, "足10"), windows={1: {DIS: "無8", DFL: "足9"}, 2: {DIS: "無7"}})
+        one, two = ContinueTable.table_for(store, 1, PLUSH), ContinueTable.table_for(store, 2, PLUSH)
+        self.assertEqual((one.disabled, one.default), (_body({KEY: [8]}), _body({KEY: [10]})))
+        self.assertEqual((two.disabled, two.default), (_body({KEY: [7]}), _body({KEY: [10]})))
+
+    def test_none_in_a_rule_turns_that_kind_off_even_if_the_window_chose_a_preset(self):
+        store = _rule_store(Rule(PLUSH, None, None), windows={1: {DIS: "無8", DFL: "足9"}})
+        self.assertEqual(ContinueTable.table_for(store, 1, PLUSH), Table())
+        self.assertEqual(ContinueTable.table_for(store, 1, 0).disabled, _body({KEY: [8]}))
+
+    def test_a_rule_can_pick_a_preset_when_the_window_chose_none(self):
+        store = _rule_store(Rule(PLUSH, "無7"), windows={1: {DIS: None}})
+        self.assertEqual(ContinueTable.table_for(store, 1).disabled, {})
+        self.assertEqual(ContinueTable.table_for(store, 1, PLUSH).disabled, _body({KEY: [7]}))
+
+    def test_a_rule_naming_a_missing_preset_falls_back_to_the_window_choice(self):
+        store = _rule_store(Rule(PLUSH, "消えた", "消えた"), windows={1: {DIS: "無8"}})
+        held = ContinueTable.table_for(store, 1, PLUSH)
+        self.assertEqual(held, ContinueTable.table_for(store, 1))
+        self.assertFalse(ContinueTable.rule_changes_table(store, 1, PLUSH))
+
+    def test_the_rule_is_global_so_every_window_that_holds_the_item_gets_it(self):
+        store = _rule_store(Rule(PLUSH, "無7"), windows={2: {DIS: "無8"}})
+        self.assertEqual(ContinueTable.table_for(store, 1, PLUSH).disabled, _body({KEY: [7]}))
+        self.assertEqual(ContinueTable.table_for(store, 2, PLUSH).disabled, _body({KEY: [7]}))
+        self.assertEqual(ContinueTable.table_for(store, 2, 0).disabled, _body({KEY: [8]}))
+
+    def test_rule_changes_table_is_true_only_when_a_kind_differs_from_the_window(self):
+        store = _rule_store(Rule(PLUSH, "無7"), Rule(OTHER_ITEM, BASE, KEEP), Rule(3, None), Rule(4, KEEP, KEEP),
+                            windows={1: {DIS: "無8"}, 2: {DIS: "無7"}, 3: {DIS: None}})
+        changes = ContinueTable.rule_changes_table
+        self.assertTrue(changes(store, 1, PLUSH))
+        self.assertFalse(changes(store, 2, PLUSH), "窓が同じプリセットを選んでいた")
+        self.assertTrue(changes(store, 1, OTHER_ITEM), "既定へ")
+        self.assertFalse(changes(store, 3, 3), "窓がもう「なし」")
+        self.assertTrue(changes(store, 1, 3))
+        self.assertFalse(changes(store, 1, 4), "窓のまま 2 つ")
+        self.assertFalse(changes(store, 1, 999), "当てはまる決まりが無い")
+        self.assertFalse(changes(store, 1, None))
+
+
+class TestItemRuleOperations(unittest.TestCase):
+    def test_add_appends_a_keep_rule_for_not_holding(self):
+        store = ContinueTable.with_rule_added(_rule_store())
+        self.assertEqual(store.item_rules, (Rule(0, KEEP, KEEP),))
+        store = ContinueTable.with_rule_added(store, PLUSH, "無7", None)
+        self.assertEqual(store.item_rules[1], Rule(PLUSH, "無7", None))
+
+    def test_add_and_change_reject_unknown_preset_names(self):
+        store = _rule_store(Rule(1))
+        with self.assertRaises(ValueError):
+            ContinueTable.with_rule_added(store, 1, "足9")        # 足9 はデフォ続行の名前
+        with self.assertRaises(ValueError):
+            ContinueTable.with_rule_changed(store, 0, default="無7")
+        with self.assertRaises(IndexError):
+            ContinueTable.with_rule_changed(store, 1, item=2)
+
+    def test_change_replaces_only_the_given_fields_and_keeps_the_original(self):
+        store = _rule_store(Rule(PLUSH, "無7", "足9"), Rule(3))
+        changed = ContinueTable.with_rule_changed(store, 0, disabled=None)
+        self.assertEqual(changed.item_rules, (Rule(PLUSH, None, "足9"), Rule(3)))
+        changed = ContinueTable.with_rule_changed(changed, 1, item=OTHER_ITEM, default="足10")
+        self.assertEqual(changed.item_rules[1], Rule(OTHER_ITEM, KEEP, "足10"))
+        self.assertEqual(store.item_rules[0], Rule(PLUSH, "無7", "足9"), "元の Store は変えない")
+
+    def test_move_swaps_with_the_neighbour_and_stays_at_the_ends(self):
+        store = _rule_store(Rule(1), Rule(2), Rule(3))
+        self.assertEqual([r.item for r in ContinueTable.with_rule_moved(store, 2, -1).item_rules], [1, 3, 2])
+        self.assertEqual([r.item for r in ContinueTable.with_rule_moved(store, 0, +1).item_rules], [2, 1, 3])
+        self.assertIs(ContinueTable.with_rule_moved(store, 0, -1), store)
+        self.assertIs(ContinueTable.with_rule_moved(store, 2, +1), store)
+        self.assertIs(ContinueTable.with_rule_moved(store, 9, -1), store)
+
+    def test_delete_removes_one_and_ignores_a_bad_index(self):
+        store = _rule_store(Rule(1), Rule(2), Rule(3))
+        self.assertEqual([r.item for r in ContinueTable.with_rule_deleted(store, 1).item_rules], [1, 3])
+        self.assertIs(ContinueTable.with_rule_deleted(store, 3), store)
+
+    def test_shadowed_rules_marks_the_ones_under_the_same_item(self):
+        store = _rule_store(Rule(PLUSH), Rule(0), Rule(PLUSH), Rule(0), Rule(5))
+        self.assertEqual(ContinueTable.shadowed_rules(store), [False, False, True, True, False])
+        self.assertEqual(ContinueTable.shadowed_rules(_rule_store()), [])
+
+    def test_preset_operations_keep_the_rules(self):
+        store = _rule_store(Rule(PLUSH, "無7", "足9"))
+        store = ContinueTable.with_new_preset(store, DIS, "新")
+        store = ContinueTable.with_preset_body(store, DIS, "新", {KEY: [1]})
+        store = ContinueTable.with_choice(store, 1, DIS, "新")
+        self.assertEqual(store.item_rules, (Rule(PLUSH, "無7", "足9"),))
+
+
+class TestItemRuleSaveLoad(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "continue_table.json"
+
+    def test_round_trip_keeps_keep_none_and_names_in_order(self):
+        store = _rule_store(Rule(PLUSH, KEEP, "足9"), Rule(0, None, None), Rule(OTHER_ITEM, "無7", KEEP),
+                            Rule(PLUSH, "無8"))
+        self.assertTrue(ContinueTable.save(store, self.path))
+        self.assertEqual(ContinueTable.load(self.path), store)
+
+    def test_the_file_omits_keep_and_writes_null_for_none(self):
+        store = _rule_store(Rule(PLUSH, KEEP, "足9"), Rule(0, None, KEEP))
+        ContinueTable.save(store, self.path)
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(raw["item_rules"], [{"item": PLUSH, "default": "足9"}, {"item": 0, "disabled": None}])
+
+    def test_a_file_without_rules_has_none(self):
+        self.path.write_text(json.dumps({"version": 2, "disabled_presets": {BASE: {}},
+                                         "default_presets": {BASE: {}}, "windows": {}}), encoding="utf-8")
+        self.assertEqual(ContinueTable.load(self.path).item_rules, ())
+
+    def test_bad_rows_are_skipped_and_good_rows_kept(self):
+        self.path.write_text(json.dumps({
+            "version": 2, "disabled_presets": {BASE: {}, "無7": {}}, "default_presets": {BASE: {}},
+            "item_rules": [{"item": 70, "disabled": "無7"}, "no", {"disabled": "無7"}, {"item": "70"},
+                           {"item": True}, {"item": -1}, {"item": 70.5}, {"item": 5, "disabled": 3},
+                           {"item": 6, "default": ["x"]}, None, {"item": 0, "default": None}]}), encoding="utf-8")
+        self.assertEqual(ContinueTable.load(self.path).item_rules,
+                         (Rule(70, "無7", KEEP), Rule(0, KEEP, None)))
+
+    def test_item_rules_of_the_wrong_type_are_ignored(self):
+        self.path.write_text(json.dumps({"version": 2, "item_rules": {"item": 1}}), encoding="utf-8")
+        self.assertEqual(ContinueTable.load(self.path).item_rules, ())
+
+    def test_a_rule_naming_a_missing_preset_loads_as_keep_with_one_log_line(self):
+        self.path.write_text(json.dumps({
+            "version": 2, "disabled_presets": {BASE: {}, "無7": {}}, "default_presets": {BASE: {}},
+            "item_rules": [{"item": 70, "disabled": "消えた", "default": "これも"},
+                           {"item": 5, "disabled": "無7", "default": "なし"}]}), encoding="utf-8")
+        with patch.object(DebugLog, "write") as write:
+            rules = ContinueTable.load(self.path).item_rules
+        self.assertEqual(rules, (Rule(70, KEEP, KEEP), Rule(5, "無7", KEEP)))
+        write.assert_called_once()
+        self.assertIn("続行表", write.call_args.args[0])
+
+    def test_no_log_line_when_every_name_exists(self):
+        ContinueTable.save(_rule_store(Rule(PLUSH, "無7", "足9")), self.path)
+        with patch.object(DebugLog, "write") as write:
+            ContinueTable.load(self.path)
+        write.assert_not_called()
+
+
+class TestItemRulesFollowPresets(unittest.TestCase):
+    def test_rename_follows_in_the_same_kind_only(self):
+        store = Store(disabled_presets={"P": {}, "Q": {}}, default_presets={"P": {}},
+                      item_rules=(Rule(1, "P", "P"), Rule(2, "Q", None), Rule(3, KEEP, KEEP)))
+        store = ContinueTable.with_renamed_preset(store, DIS, "P", "R")
+        self.assertEqual(store.item_rules, (Rule(1, "R", "P"), Rule(2, "Q", None), Rule(3)))
+        store = ContinueTable.with_renamed_preset(store, DFL, "P", "S")
+        self.assertEqual(store.item_rules[0], Rule(1, "R", "S"))
+
+    def test_delete_turns_rules_naming_it_into_keep(self):
+        store = Store(disabled_presets={BASE: {}, "A": {}, "B": {}}, default_presets={BASE: {}, "A": {}},
+                      item_rules=(Rule(1, "A", "A"), Rule(2, "B", None)))
+        after = ContinueTable.with_deleted_preset(store, DIS, "A")
+        self.assertEqual(after.item_rules, (Rule(1, KEEP, "A"), Rule(2, "B", None)))
+        after = ContinueTable.with_deleted_preset(after, DFL, "A")
+        self.assertEqual(after.item_rules, (Rule(1, KEEP, KEEP), Rule(2, "B", None)))
+
+    def test_renaming_to_the_same_name_changes_nothing(self):
+        store = _rule_store(Rule(PLUSH, "無7"))
+        self.assertEqual(ContinueTable.with_renamed_preset(store, DIS, "無7", "無7"), store)
+
+    def test_the_keep_label_cannot_be_a_preset_name(self):
+        with self.assertRaises(ValueError):
+            ContinueTable.with_new_preset(_rule_store(), DIS, ContinueTable.KEEP_LABEL)
+
+
+class TestItemRuleJudgement(_MonitorCase):
+    """同じテラーでも、持っているアイテムで窓ごとに判定が変わる"""
+
+    def _held(self, item, window_idx=1, ids=(7,), **kw):
+        monitor = self._monitor({KEY: {7, 8}}, ids=ids, window_idx=window_idx, **kw)
+        monitor.st.held_item_id = item
+        return monitor
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(config, "ITEMS", {PLUSH: ItemCatalog.Item("Guidance Plush", "Event", True)})
+        patcher.start()                  # テストは本物の item.json を使わない（support）
+        self.addCleanup(patcher.stop)
+        ContinueTable.set_current(_rule_store(Rule(PLUSH, "無7"), Rule(0, KEEP, "足10")))
+
+    def test_two_windows_decide_the_same_terror_by_what_they_hold(self):
+        plush, empty = self._held(PLUSH, 1), self._held(0, 2)
+        self.assertEqual(self._result_of(plush), "skip", "Plush を持つ窓は 無7 で 7 を外す")
+        self.assertEqual(self._result_of(empty), "continue", "持っていない窓は 7 のまま")
+        self.assertEqual(self._result_of(self._held(OTHER_ITEM, 3)), "continue", "当てはまらない")
+
+    def test_the_decision_follows_the_item_when_it_changes(self):
+        monitor = self._held(PLUSH)
+        self.assertEqual(self._result_of(monitor), "skip")
+        monitor.st.held_item_id = 0            # ロストした
+        self.assertEqual(self._result_of(monitor), "continue")
+
+    def test_the_default_kind_of_the_not_holding_rule_applies(self):
+        self.assertEqual(self._result_of(self._held(0, ids=(10,))), "continue", "足10 が重なる")
+        self.assertEqual(self._result_of(self._held(OTHER_ITEM, ids=(10,))), "skip")
+
+    def test_the_judgement_line_ends_with_the_item_rule_label(self):
+        plush = self._held(PLUSH)
+        plush._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(plush).endswith("【スキップ】（続行無効）〔Guidance Plush の決まり〕"),
+                        plush.logs)
+
+    def test_the_label_is_added_even_when_the_result_did_not_change(self):
+        empty = self._held(0)
+        empty._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(empty).endswith("【プレイ】〔持っていない の決まり〕"), empty.logs)
+
+    def test_no_label_when_no_rule_matches_or_it_changes_nothing(self):
+        other = self._held(OTHER_ITEM)
+        other._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(other).endswith("【プレイ】"), other.logs)
+        ContinueTable.set_current(_rule_store(Rule(PLUSH, BASE, KEEP)))      # 窓も既定
+        plush = self._held(PLUSH)
+        plush._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(plush).endswith("【プレイ】"), plush.logs)
+
+    def test_an_item_missing_from_the_table_is_shown_by_id(self):
+        ContinueTable.set_current(_rule_store(Rule(9999, "無7")))
+        monitor = self._held(9999)
+        monitor._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(monitor).endswith("〔id=9999 の決まり〕"), monitor.logs)
+
+    def test_the_item_label_follows_the_table_label_in_the_same_line(self):
+        ContinueTable.set_current(_rule_store(Rule(PLUSH, KEEP, "足9")))
+        monitor = self._held(PLUSH, ids=(9,))
+        monitor._decide_with_keep_on_set("Classic")
+        self.assertTrue(self._judgement_line(monitor).endswith("【プレイ】（デフォ続行）〔Guidance Plush の決まり〕"),
+                        monitor.logs)
+
+    def test_group_instances_do_not_use_the_rules(self):
+        for itype in sorted(GroupRound.GROUP_INSTANCES):
+            base = {KEY: {7}}
+            monitor = self._monitor(base, instance_type=itype)
+            monitor.st.held_item_id = PLUSH
+            self.assertIs(monitor._keep_on(), base, itype)
+            monitor.logs.clear()
+            monitor._decide_with_keep_on_set("Classic")
+            self.assertNotIn("の決まり", self._judgement_line(monitor), itype)
+
+    def test_hands_free_after_three_wins_still_skips_whatever_the_rule_says(self):
+        ContinueTable.set_current(_rule_store(Rule(PLUSH, KEEP, "足9")))
+        monitor = self._monitor({}, ids=(9,), hands_free=True, wins=config.OPEN_SPECIAL_ROUND_TARGET_WINS)
+        monitor.st.held_item_id = PLUSH
+        self.assertEqual(self._result_of(monitor), "skip")
+
+
+class TestItemRuleSelfInserts(unittest.TestCase):
+    """Self Inserts (Bloodthirsty) の「続行無効の 1283」も、決まりで選ばれたプリセットで見る"""
+
+    UNBOUND = "Unbound/アンバウンド"
+    SLOT = config.SELF_INSERTS_BLOODTHIRSTY_SLOT
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        self.addCleanup(ContinueTable.set_current, Store())
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        ContinueTable.set_current(Store(
+            disabled_presets={"有": _body({self.UNBOUND: [self.SLOT]}), "無": {}},
+            windows={1: {DIS: "無"}, 2: {DIS: "有"}},
+            item_rules=(Rule(PLUSH, "有"), Rule(0, "無"))))
+
+    def _monitor(self, window_idx, held, instance_type=config.INSTANCE_PRIVATE):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=window_idx)
+        monitor.st.instance_type = instance_type
+        monitor.st.held_item_id = held
+        return monitor
+
+    def test_the_rule_selected_preset_decides(self):
+        self.assertTrue(self._monitor(1, PLUSH)._self_inserts_table_disabled(), "窓は 無 だが Plush の決まりは 有")
+        self.assertFalse(self._monitor(2, 0)._self_inserts_table_disabled(), "窓は 有 だが持っていない決まりは 無")
+        self.assertFalse(self._monitor(1, OTHER_ITEM)._self_inserts_table_disabled(), "決まり無し → 窓の 無")
+        self.assertTrue(self._monitor(2, OTHER_ITEM)._self_inserts_table_disabled(), "決まり無し → 窓の 有")
+
+    def test_group_instances_ignore_the_rules(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            self.assertFalse(self._monitor(1, PLUSH, itype)._self_inserts_table_disabled(), itype)
