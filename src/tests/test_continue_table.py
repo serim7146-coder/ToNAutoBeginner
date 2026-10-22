@@ -265,14 +265,23 @@ class TestIconData(unittest.TestCase):
             self.assertLessEqual((col + 1) * cell, w, f"{tid}: {sheet} の幅")
             self.assertLessEqual((row + 1) * cell, h, f"{tid}: {sheet} の高さ")
 
-    def test_only_glorbo_has_no_icon(self):
+    def test_every_slot_has_an_icon(self):
+        """Glorbo（317）も「?」の絵を持つ（GK）。仮の番号 1283 は 192 の絵"""
         slots = {i for _key, ids in self.slots["rounds"] for i in ids}
         missing = sorted(slots - {int(t) for t in self.icons["icons"]})
-        self.assertEqual(missing, [317])
+        self.assertEqual(missing, [])
 
-    def test_icons_json_has_274_icons_and_the_added_ones(self):
-        self.assertEqual(len(self.icons["icons"]), 274)
-        for tid in (193, 194, 196, 197, 198, 199, 312, 313, 315):
+    def test_glorbo_is_the_question_mark_and_self_inserts_bloodthirsty_borrows_192(self):
+        self.assertEqual(self.icons["icons"]["317"], ["terrors", 0, 0])
+        self.assertEqual(self.icons["icons"][str(config.SELF_INSERTS_BLOODTHIRSTY_SLOT)],
+                         self.icons["icons"]["192"])
+        self.assertEqual(self.gui.terror_name(317), "Glorbo")
+        self.assertEqual(self.gui.terror_name(config.SELF_INSERTS_BLOODTHIRSTY_SLOT),
+                         "Self Inserts (Bloodthirsty)")
+
+    def test_icons_json_has_276_icons_and_the_added_ones(self):
+        self.assertEqual(len(self.icons["icons"]), 276)
+        for tid in (193, 194, 196, 197, 198, 199, 312, 313, 315, 317, 1283):
             self.assertIn(str(tid), self.icons["icons"], tid)
 
     def test_names_in_icons_json_come_before_terrors_json(self):
@@ -287,7 +296,7 @@ class TestIconData(unittest.TestCase):
 
     def test_the_screen_leaves_out_the_special_round(self):
         keys = [key for key, _ids in self.gui.load_rounds()]
-        self.assertEqual(len(keys), 18)
+        self.assertEqual(len(keys), 17, "Mystic Moon・Blood Moon は 1 つの Moon にまとまる")
         self.assertNotIn(SPECIAL, keys)
 
     def test_the_slot_file_has_the_nineteen_rounds_with_distinct_keys(self):
@@ -303,7 +312,8 @@ class TestIconData(unittest.TestCase):
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_UNCHANGED)
         self.assertEqual(img.shape[:2], (self.gui.ICON_SIZE, self.gui.ICON_SIZE))
         self.assertIsNotNone(self.gui.icon_png(193), "193 は GI で絵が付いた")
-        self.assertIsNone(self.gui.icon_png(317), "絵が無い番号は None（名前の札になる）")
+        self.assertIsNotNone(self.gui.icon_png(317), "317（Glorbo）は GK で「?」の絵が付いた")
+        self.assertIsNone(self.gui.icon_png(99999), "絵が無い番号は None（名前の札になる）")
 
     def test_names_come_from_terrors_json_or_the_number(self):
         self.assertEqual(self.gui.terror_name(0), "Huggy")

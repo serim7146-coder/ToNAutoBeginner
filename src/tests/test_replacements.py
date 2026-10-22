@@ -1,5 +1,6 @@
 """置き換えテラー（Variant・Gigabytes・Glorbo・Self Inserts など）"""
 from tests.support import *  # noqa: F401,F403
+import ContinueTable
 
 
 
@@ -170,6 +171,109 @@ class TestSelfInsertsBloodthirstyWiring(unittest.TestCase):
                       "106 がいるラウンドでは従来どおり待つこと")
 
 
+
+
+class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
+    """GK: 続行表の続行無効の Unbound に Self Inserts (Bloodthirsty) の仮の番号（1283）があるときは、
+    必ず続行をやめて普通のリストの判定（283 があるか）にする。干し芋・焼き芋は今までどおり必ず続行"""
+
+    UNBOUND_KEY = "Unbound/アンバウンド"
+    SLOT = config.SELF_INSERTS_BLOODTHIRSTY_SLOT
+    SELF_INSERTS = config.SELF_INSERTS_ID
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        self.addCleanup(ContinueTable.set_current, ContinueTable.Table())
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+
+    def _table(self, **kwargs):
+        ContinueTable.set_current(ContinueTable.Table(**kwargs))
+
+    def _monitor(self, instance_type=config.INSTANCE_PRIVATE, skip_rounds=(), keep_on=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", skip_rounds=set(skip_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        monitor.st.round_type = "Unbound"
+        monitor.st.terror_ids = [self.SELF_INSERTS]
+        monitor.st.bloodthirsty_creature_variant = True
+        monitor._keep_on = lambda: keep_on or {}        # リストの重ね方はここでは見ない
+        return monitor
+
+    def _continues(self, monitor):
+        return monitor._list_plan([self.SELF_INSERTS], True)[1]
+
+    # ── 純粋な判定 ──
+    def test_the_helper_stops_forcing_when_the_table_disables_it(self):
+        ok = RoundDecision.is_self_inserts_bloodthirsty
+        self.assertTrue(ok([self.SELF_INSERTS], "Unbound", True))
+        self.assertTrue(ok([self.SELF_INSERTS], "Unbound", True, False))
+        self.assertFalse(ok([self.SELF_INSERTS], "Unbound", True, True))
+
+    def test_decide_killers_follows_the_list_when_the_table_disables_it(self):
+        def decide(keep_on, disabled):
+            return RoundDecision.decide_killers(
+                keep_on, [self.SELF_INSERTS], "Unbound", 99, False, bloodthirsty_variant=True,
+                self_inserts_table_disabled=disabled).is_continue_round
+        self.assertTrue(decide({}, False))
+        self.assertFalse(decide({}, True), "リストに 283 が無ければ自爆")
+        self.assertTrue(decide({self.UNBOUND_KEY: {self.SELF_INSERTS}}, True), "283 があれば続行")
+
+    def test_disables_reads_the_disabled_table_of_that_key_only(self):
+        table = ContinueTable.Table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})},
+                                    default={"Classic/クラシック": frozenset({self.SLOT})})
+        self.assertTrue(ContinueTable.disables(table, self.UNBOUND_KEY, self.SLOT))
+        self.assertFalse(ContinueTable.disables(table, self.UNBOUND_KEY, 5))
+        self.assertFalse(ContinueTable.disables(table, "Classic/クラシック", self.SLOT),
+                         "デフォ続行は続行無効ではない")
+        self.assertFalse(ContinueTable.disables(table, "Fog/霧", self.SLOT))
+        off = ContinueTable.Table(disabled=table.disabled, use_disabled=False)
+        self.assertFalse(ContinueTable.disables(off, self.UNBOUND_KEY, self.SLOT),
+                         "続行無効の表が OFF なら無効にしない")
+
+    # ── LogMonitor ──
+    def test_disabled_in_the_table_means_no_forced_continue(self):
+        self._table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})})
+        self.assertFalse(self._continues(self._monitor()), "283 がリストに無い → 自爆")
+        self.assertTrue(self._continues(self._monitor(keep_on={self.UNBOUND_KEY: {self.SELF_INSERTS}})),
+                        "283 がリストにある → 続行")
+
+    def test_disabled_in_the_table_lets_the_skip_round_setting_win_again(self):
+        self._table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})})
+        self.assertTrue(self._monitor(skip_rounds=("Unbound",))._should_skip_by_round())
+
+    def test_without_the_slot_it_is_forced_as_before(self):
+        for table in ({}, {"default": {self.UNBOUND_KEY: frozenset({self.SLOT})}},
+                      {"disabled": {self.UNBOUND_KEY: frozenset({5})}},
+                      {"disabled": {"Classic/クラシック": frozenset({self.SLOT})}},
+                      {"disabled": {self.UNBOUND_KEY: frozenset({self.SLOT})}, "use_disabled": False}):
+            self._table(**table)
+            monitor = self._monitor(skip_rounds=("Unbound",))
+            self.assertTrue(self._continues(monitor), table)
+            self.assertFalse(monitor._should_skip_by_round(), table)
+
+    def test_group_instances_ignore_the_table_and_still_continue(self):
+        self._table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})})
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype)
+            self.assertFalse(monitor._self_inserts_table_disabled(), itype)
+            self.assertTrue(self._continues(monitor), itype)
+
+    def test_the_decision_path_passes_the_table_flag_to_decide_killers(self):
+        self._table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})})
+        monitor = self._monitor()
+        with patch.object(RoundDecision, "decide_killers",
+                          return_value=RoundDecision.KillerDecision(False, False)) as mock_decide:
+            monitor._list_plan([self.SELF_INSERTS], True)
+        self.assertIs(mock_decide.call_args.kwargs["self_inserts_table_disabled"], True)
+
+    def test_the_normal_list_decision_is_unchanged_by_the_slot(self):
+        """1283 は普通のリストの判定には出てこない（重ねても 283 の判定は変わらない）"""
+        self._table(default={self.UNBOUND_KEY: frozenset({self.SLOT})})
+        effective = ContinueTable.apply({}, ContinueTable.current())
+        self.assertFalse(RoundDecision.list_continues(effective, [self.SELF_INSERTS], "Unbound"))
 
 
 class TestTerrorReplacementTable(unittest.TestCase):

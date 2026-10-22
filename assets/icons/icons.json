@@ -1375,6 +1375,16 @@
    "terrors",
    7,
    9
+  ],
+  "317": [
+   "terrors",
+   0,
+   0
+  ],
+  "1283": [
+   "terrors",
+   21,
+   8
   ]
  },
  "names": {
@@ -1392,6 +1402,7 @@
   "314": "The Gigabytes",
   "315": "Neo Pilot",
   "316": "Foxy",
-  "317": "Glorbo"
+  "317": "Glorbo",
+  "1283": "Self Inserts (Bloodthirsty)"
  }
 }

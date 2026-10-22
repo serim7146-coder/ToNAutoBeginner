@@ -151,6 +151,11 @@ def apply(base: dict, table: Table) -> dict:
     return result
 
 
+def disables(table: Table, key: str, slot: int) -> bool:
+    """続行無効（ON のとき）の key に slot があるか。Self Inserts (Bloodthirsty) の必ず続行を外すかの判定が見る"""
+    return bool(table.use_disabled) and slot in table.disabled.get(key, ())
+
+
 def overlay_label(base: dict, effective: dict, round_type: str, ids) -> str:
     """重ねる前と後で続行の判定が変わったら '（デフォ続行）' か '（続行無効）'。変わらなければ ''。
     判定は RoundDecision と同じ（ラウンドのキー → 無ければ Special/Moon 枠も見る）"""

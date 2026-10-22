@@ -1,12 +1,14 @@
-"""続行表の編集画面（GJ）。ToN ListTool の続行選択画面と同じ寸法・並び・色で、テラーのアイコンを押して選ぶ。
+"""続行表の編集画面（GJ・GK）。ToN ListTool の続行選択画面と同じ並び・色で、テラーのアイコンを押して選ぶ。
 
-- 上: どちらの表を編集するか（続行無効／デフォ続行）・ラウンドの選択（小さなドロップダウン）・名前の検索
-- 中: テラーのアイコンの格子（tk.Canvas に直接描く）。上から Classic（0〜133・ListTool の並び）・Alternate
-  （134〜169・11/9/7/5/3/1 の逆三角）・Unbound（200〜283）・特別（170〜177 ほか）・バリアントの段
-  （Bloodthirsty 190〜192・Fog/Midnight の 315/316）。ブロックの間は 1 行あける。名前は出さない（マウスを
+- 左: ラウンドの一覧（細い Listbox。Moon は Mystic Moon・Blood Moon・Twilight・Solstice を 1 つにまとめた「Moon」）
+- 上: どちらの表を編集するか（続行無効／デフォ続行）・名前の検索・全選択／全解除
+- 中: テラーのアイコンの格子（tk.Canvas に直接描く。間隔は縦横とも 46px）。上から Classic（0〜133・ListTool の
+  並び）・Alternate（134〜169・11/9/7/5/3/1 の逆三角）・Unbound（200〜283）・特別（170〜177 ほか）・
+  バリアントの段（Classic だけ 190〜192・ほかの 192 があるラウンドは 192・Fog/Midnight の 315/316・
+  Unbound の Self Inserts (Bloodthirsty) の仮の番号）。ブロックの間は 1 行あける。名前は出さない（マウスを
   乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
   （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠
-- 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む／このラウンドを全部外す
+- 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む
 
 押したセルの絵と枠だけを `itemconfigure` で変える（格子は作り直さない）。判定への反映（set_current）は押した
 その場で、保存は 0.3 秒まとめて 1 回（閉じるときは残りを先に書く）。アイコンは assets/icons のシート
@@ -38,12 +40,11 @@ ALTERNATE_ROWS = (11, 9, 7, 5, 3, 1)   # Alternate は逆三角
 CELL_SIZE = 40               # 1 マス（1px の枠を含む 40×40）
 ICON_SIZE = 32               # アイコン（32×32 のまま。拡大しない）
 ICON_INSET = 4               # マスの左上からアイコンまで
-X_PITCH = 69                 # 横の間隔
-Y_PITCH = 53                 # 縦の間隔（Classic・Unbound・特別・バリアントの段）。ブロックの間もこの 1 行ぶんあける
-ALT_Y_PITCH = 99             # Alternate の縦の間隔
+X_PITCH = 46                 # 横の間隔（マス 40px＋6px。GK で詰めた）
+Y_PITCH = 46                 # 縦の間隔（逆三角の段の間も同じ）。ブロックの間もこの 1 行ぶんあける
 MARGIN = 14                  # 左右の余白（マスの左端まで）
 TOP_PAD = 14                 # 最初のブロックの上の余白
-CANVAS_WIDTH = 2 * MARGIN + (COLUMNS - 1) * X_PITCH + CELL_SIZE    # 827px
+CANVAS_WIDTH = 2 * MARGIN + (COLUMNS - 1) * X_PITCH + CELL_SIZE    # 574px
 CORNER = 2                   # 枠の角を丸める（斜めに落とす）大きさ
 SAVE_DELAY_MS = 300          # 押してから保存するまで（まとめて 1 回）
 
@@ -70,12 +71,19 @@ CLASSIC_RANGE = range(0, 134)
 ALTERNATE_RANGE = range(134, 170)
 UNBOUND_RANGE = range(200, 284)
 
-# バリアントの段（格子の下に左寄せ）: Bloodthirsty の 3 つと Fog/Midnight の Neo Pilot・Foxy
-BLOODTHIRSTY_IDS = (190, 191, 192)
-VARIANT_IDS = (190, 191, 192, 315, 316)
-NO_VARIANT_ROUNDS = frozenset({"Mystic Moon", "Blood Moon"})   # 13 個すべて特別のブロック（バリアントの段は作らない）
+# バリアントの段（格子の下に左寄せ）: Bloodthirsty の 192・Fog/Midnight の Neo Pilot・Foxy・Unbound の
+# Self Inserts (Bloodthirsty)。HHI（190）と Atrached（191）は Classic だけ
+CLASSIC_VARIANT_IDS = (190, 191, 192)
+VARIANT_IDS = (192, 315, 316, config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
+NO_VARIANT_ROUNDS = frozenset({"Moon", "Mystic Moon", "Blood Moon"})   # すべて特別のブロック（バリアントの段は作らない）
 # ラウンドごとの名前の上書き（ラウンド名＝キーの「/」の前, 番号）
 ROUND_NAMES = {("Unbound", 192): "Pack of Wild Yet Bloodthirsty Creatures"}
+
+# 一覧の「Moon」: 4 つのラウンドのキーをまとめて 1 つに見せる（押す・全選択・全解除は 4 つすべてへ）
+MOON_TAB = "Moon"
+ROUND_KEYS_FOR_TAB = {MOON_TAB: [MatchTNL.LOG_TO_TNL[name]
+                                 for name in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice")]}
+MOON_SLOT_ROUNDS = ("Mystic Moon", "Blood Moon")      # Moon の中身（枠の和）になるラウンド
 
 NOTE = "干し芋・焼き芋（グループのインスタンス）では使いません"
 
@@ -86,17 +94,36 @@ def round_display_name(key: str) -> str:
     return key.split("/", 1)[0]
 
 
+def table_keys(tab_key: str) -> list:
+    """一覧の 1 つが受け持つ表のキー。Moon は 4 つ、ほかは自分だけ"""
+    return list(ROUND_KEYS_FOR_TAB.get(tab_key, [tab_key]))
+
+
+def _moon_tab(slots: list) -> tuple:
+    """(MOON_TAB, 番号) : Mystic Moon と Blood Moon の枠の和（190・191 は Classic だけなので除く）"""
+    ids = {i for key, ids in slots if round_display_name(key) in MOON_SLOT_ROUNDS for i in ids}
+    return MOON_TAB, sorted(ids - {190, 191})
+
+
 @functools.lru_cache(maxsize=1)
 def load_rounds() -> list:
-    """[(ラウンドのキー, [番号, ...]), ...]。assets/data/continue_slots.json の順。読めなければ空。
-    Special/Moon の枠は出さない（中身は各ラウンドのバリアントの段へ移した）"""
+    """[(一覧のキー, [番号, ...]), ...]。assets/data/continue_slots.json の順。読めなければ空。
+    Special/Moon の枠は出さない。Mystic Moon・Blood Moon は 1 つの「Moon」にまとめる（最初の位置）"""
     try:
         raw = json.loads(config.resource_path(SLOTS_FILE).read_text(encoding="utf-8"))
-        return [(str(key), [int(i) for i in ids]) for key, ids in raw["rounds"]
-                if str(key) != MatchTNL.SPECIAL_MOON_KEY]
+        slots = [(str(key), [int(i) for i in ids]) for key, ids in raw["rounds"]
+                 if str(key) != MatchTNL.SPECIAL_MOON_KEY]
     except (OSError, ValueError, KeyError, TypeError):
         DebugLog.exception("ContinueTableGUI.load_rounds")
         return []
+    rounds, moon_done = [], False
+    for key, ids in slots:
+        if round_display_name(key) not in MOON_SLOT_ROUNDS:
+            rounds.append((key, ids))
+        elif not moon_done:
+            rounds.append(_moon_tab(slots))
+            moon_done = True
+    return rounds
 
 
 @functools.lru_cache(maxsize=1)
@@ -199,14 +226,13 @@ def pyramid(ids) -> list:
 
 
 def _variant_ids(name: str, ids: list) -> list:
-    """バリアントの段に行く番号。Bloodthirsty（192）があるラウンドは 190・191・192、Fog/Midnight は 315・316 も
-    （Unbound の Bloodthirsty は 192 だけ）。Mystic Moon・Blood Moon は作らない"""
+    """バリアントの段に行く番号。Classic は 190・191・192、ほかは 192 があれば 192（Fog/Midnight は 315・316 も、
+    Unbound は Self Inserts (Bloodthirsty) の仮の番号も）。HHI・Atrached は Classic だけ。Moon は作らない"""
     if name in NO_VARIANT_ROUNDS:
         return []
-    wanted = {i for i in VARIANT_IDS if i in ids}
-    if 192 in wanted and name != "Unbound":
-        wanted.update(BLOODTHIRSTY_IDS)
-    return sorted(wanted)
+    if name == "Classic" and 192 in ids:
+        return list(CLASSIC_VARIANT_IDS)
+    return sorted(i for i in VARIANT_IDS if i in ids)
 
 
 def layout_for(round_key: str, ids) -> list:
@@ -217,7 +243,8 @@ def layout_for(round_key: str, ids) -> list:
     - classic: 0〜133 を ListTool の順に 12 列（grid12）。alternate: 134〜169 を ListTool の順に逆三角
       （36 個そろわなければ 12 列）。unbound: 200〜283 を番号順に 12 列。special: 残り（170〜177・193・194・
       196〜199・312〜317 など。Mystic/Blood Moon は全部）を番号順に 12 列
-    - variant: 190・191・192（Fog/Midnight は 315・316 も）。左寄せの 1 行"""
+    - variant: Classic は 190・191・192、ほかは 192（Fog/Midnight は 315・316 も、Unbound は 1283 も）。
+      左寄せの 1 行"""
     name = round_display_name(round_key)
     ids = list(ids)
     if name == "8 Pages":
@@ -234,7 +261,7 @@ def layout_for(round_key: str, ids) -> list:
     alternate = _in_order(alternate, order["alternate"])
     blocks = [("classic", grid12(_in_order(classic, order["classic"])), Y_PITCH)]
     if len(alternate) == sum(ALTERNATE_ROWS):
-        blocks.append(("alternate", pyramid(alternate), ALT_Y_PITCH))
+        blocks.append(("alternate", pyramid(alternate), Y_PITCH))
     else:
         blocks.append(("alternate", grid12(alternate), Y_PITCH))
     blocks += [("unbound", grid12(sorted(unbound)), Y_PITCH), ("special", grid12(special), Y_PITCH),
@@ -347,8 +374,8 @@ class ContinueTableWindow(tk.Toplevel):
         super().__init__(master)
         self.title("続行表")
         self.configure(bg=config.GUI_BG)
-        self.geometry(f"{CANVAS_WIDTH + 70}x720")
-        self.minsize(CANVAS_WIDTH + 50, 420)
+        self.geometry(f"{CANVAS_WIDTH + 250}x720")
+        self.minsize(CANVAS_WIDTH + 230, 420)
         self._on_change = on_change
         self._rounds = load_rounds()
         self._photos: dict = {}                # (番号, 不透明度の種類) → PhotoImage（持っていないと消える）
@@ -360,10 +387,10 @@ class ContinueTableWindow(tk.Toplevel):
         self._save_pending = False
         self.v_which = tk.StringVar(value=ContinueTable.DISABLED)
         self.v_search = tk.StringVar()
-        self.v_round = tk.StringVar()
+        self._index = 0                        # 左の一覧で選んでいるラウンド
         self._build()
         if self._rounds:
-            self.combo_round.current(0)
+            self.list_rounds.selection_set(0)
         self._show_round()
         self.v_search.trace_add("write", lambda *_: self._restyle_all())
 
@@ -375,16 +402,16 @@ class ContinueTableWindow(tk.Toplevel):
         for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT):
             ttk.Radiobutton(top, text=WHICH_TEXT[which], variable=self.v_which, value=which,
                             command=self._restyle_all).pack(side="left", padx=(8, 0))
-        ttk.Label(top, text="ラウンド:").pack(side="left", padx=(20, 0))
-        self.combo_round = ttk.Combobox(top, textvariable=self.v_round, state="readonly", width=18,
-                                        values=[round_display_name(key) for key, _ids in self._rounds])
-        self.combo_round.pack(side="left", padx=(6, 0))
-        self.combo_round.bind("<<ComboboxSelected>>", lambda _e: self._show_round())
         ttk.Label(top, text="名前で検索:").pack(side="left", padx=(20, 0))
         ttk.Entry(top, textvariable=self.v_search, width=18).pack(side="left", padx=(6, 0))
+        ttk.Button(top, text="全選択", command=self.select_all).pack(side="left", padx=(20, 0))
+        ttk.Button(top, text="全解除", command=self.clear_all).pack(side="left", padx=(6, 0))
         ttk.Label(self, text=NOTE, foreground=config.GUI_YLW).pack(anchor="w", padx=10)
 
-        self._build_canvas()
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True)
+        self._build_round_list(body)
+        self._build_canvas(body)
 
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=(0, 10))
@@ -392,13 +419,22 @@ class ContinueTableWindow(tk.Toplevel):
                    command=self._import_tnl).pack(side="left")
         ttk.Button(bottom, text=".tnnl を続行無効へ読み込む",
                    command=self._import_tnnl).pack(side="left", padx=(6, 0))
-        ttk.Button(bottom, text="このラウンドを全部外す",
-                   command=self._clear_round).pack(side="left", padx=(6, 0))
 
-    def _build_canvas(self):
+    def _build_round_list(self, parent):
+        """左のラウンドの一覧（名前が入る最小の幅・縦に並べる）。暗い色で、選んでいるラウンドを強調する"""
+        self.list_rounds = tk.Listbox(
+            parent, width=0, exportselection=False, activestyle="none", selectmode="browse",
+            bg=COLOR_GRID_BG, fg="#e0e0e0", selectbackground=config.GUI_ACC, selectforeground="#111111",
+            highlightthickness=0, borderwidth=0, font=(UIFont.UI, 10))
+        for key, _ids in self._rounds:
+            self.list_rounds.insert("end", round_display_name(key))
+        self.list_rounds.pack(side="left", fill="y", padx=(10, 0), pady=6)
+        self.list_rounds.bind("<<ListboxSelect>>", lambda _e: self._on_round_select())
+
+    def _build_canvas(self, parent):
         """格子を描くキャンバス（縦にスクロール）。押す・乗せるは全マス共通の 1 組の束縛"""
-        box = ttk.Frame(self)
-        box.pack(fill="both", expand=True, padx=10, pady=6)
+        box = ttk.Frame(parent)
+        box.pack(side="left", fill="both", expand=True, padx=10, pady=6)
         self.canvas = tk.Canvas(box, bg=COLOR_GRID_BG, highlightthickness=0)
         bar = ttk.Scrollbar(box, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=bar.set)
@@ -440,12 +476,34 @@ class ContinueTableWindow(tk.Toplevel):
 
     # ── 今の状態 ──
     def _round_key(self) -> str | None:
-        index = self.combo_round.current()
-        return self._rounds[index][0] if 0 <= index < len(self._rounds) else None
+        """一覧で選んでいるラウンドのキー（Moon は MOON_TAB）"""
+        return self._rounds[self._index][0] if 0 <= self._index < len(self._rounds) else None
 
     def _round_ids(self) -> list:
-        index = self.combo_round.current()
-        return self._rounds[index][1] if 0 <= index < len(self._rounds) else []
+        return self._rounds[self._index][1] if 0 <= self._index < len(self._rounds) else []
+
+    def _table_keys(self) -> list:
+        """今のラウンドの表のキー（Moon は 4 つ）"""
+        key = self._round_key()
+        return table_keys(key) if key is not None else []
+
+    def _has(self, table: ContinueTable.Table, which: str, tid: int) -> bool:
+        """which の表に、今のラウンドの表のキーのどれかで tid が入っているか"""
+        kind = getattr(table, which)
+        return any(tid in kind.get(key, ()) for key in self._table_keys())
+
+    def _on_round_select(self):
+        """一覧で選んだら、そのラウンドの格子へ（同じラウンドを押し直したときは何もしない）"""
+        picked = self.list_rounds.curselection()
+        if picked and picked[0] != self._index:
+            self._index = picked[0]
+            self._show_round()
+
+    def select_round(self, index: int):
+        """一覧の index 番目を選ぶ（押したときと同じ）"""
+        self.list_rounds.selection_clear(0, "end")
+        self.list_rounds.selection_set(index)
+        self._on_round_select()
 
     def _which(self) -> str:
         return self.v_which.get()
@@ -517,10 +575,10 @@ class ContinueTableWindow(tk.Toplevel):
         （選んでいる・いないにかかわらず）、合うもので選んでいないものは 100% にして枠を目立たせる"""
         if self._searching() and not self._matches(tid):
             return "faint", COLOR_FAINT, THIN
-        table, key, which = ContinueTable.current(), self._round_key(), self._which()
-        if tid in getattr(table, which).get(key, ()):
+        table, which = ContinueTable.current(), self._which()
+        if self._has(table, which, tid):
             return "full", STRONG[which], THICK
-        if tid in getattr(table, OTHER[which]).get(key, ()):
+        if self._has(table, OTHER[which], tid):
             return "other", STRONG[OTHER[which]], THIN
         if self._searching():
             return "full", COLOR_MATCH, THICK
@@ -627,17 +685,35 @@ class ContinueTableWindow(tk.Toplevel):
             self._save_pending = False
             ContinueTable.save(ContinueTable.current())
 
-    def toggle(self, tid: int):
-        key = self._round_key()
-        if key is None:
-            return
-        self._commit(ContinueTable.with_toggled(ContinueTable.current(), self._which(), key, tid), (tid,))
+    def _with_members(self, tids, add: bool) -> ContinueTable.Table:
+        """今の表の、今のラウンドの表のキーすべて（Moon は 4 つ）へ tids を入れた／外した新しい Table"""
+        table, which = ContinueTable.current(), self._which()
+        for key in self._table_keys():
+            ids = set(getattr(table, which).get(key, ()))
+            ids = ids | set(tids) if add else ids - set(tids)
+            table = ContinueTable.with_ids(table, which, key, ids)
+        return table
 
-    def _clear_round(self):
-        """今の表の、このラウンドを全部外す（バリアントの段も含む）"""
-        key = self._round_key()
-        if key is not None:
-            self._commit(ContinueTable.with_ids(ContinueTable.current(), self._which(), key, ()))
+    def toggle(self, tid: int):
+        """押したマスを入れる／外す。Moon は 4 つのキーのどれかに入っていれば「入っている」＝外す"""
+        if self._round_key() is None:
+            return
+        present = self._has(ContinueTable.current(), self._which(), tid)
+        self._commit(self._with_members([tid], add=not present), (tid,))
+
+    def _visible_tids(self) -> list:
+        """今のラウンドで見えているマスの番号（バリアントの段も含む）。検索で絞っているときは合うものだけ"""
+        return [tid for tid in self._cells if self._matches(tid)]
+
+    def select_all(self):
+        """見えているマスを全部、今の表に入れる"""
+        if self._round_key() is not None:
+            self._commit(self._with_members(self._visible_tids(), add=True))
+
+    def clear_all(self):
+        """見えているマスを全部、今の表から外す"""
+        if self._round_key() is not None:
+            self._commit(self._with_members(self._visible_tids(), add=False))
 
     # ── 取り込み ──
     def _ask_file(self, title: str, pattern: str) -> str:
