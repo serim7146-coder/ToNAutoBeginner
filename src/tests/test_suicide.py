@@ -1173,7 +1173,7 @@ class TestSkipRoundsByType(unittest.TestCase):
     # ── Variant例外（常に効く。切り替えは廃止） ───────────
     def test_the_variant_exemption_falls_through(self):
         """Variantなら自爆指定より優先して通常判定へ"""
-        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {TerrorIds.ATRACHED}})
         monitor.st.terror_ids = [config.ATRACHED_ID]
 
         started = self._run_delayed(monitor)
@@ -1182,9 +1182,11 @@ class TestSkipRoundsByType(unittest.TestCase):
         self.assertNotIn("do_skip", started)
 
     def test_the_exemption_covers_all_four_variants(self):
-        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
-                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
-            monitor = self._monitor(keep_on={self.CLASSIC_KEY: {tid}})
+        for tid, listed in ((config.HUNGRY_HOME_INVADER_ID, TerrorIds.HUNGRY_HOME_INVADER),
+                            (config.ATRACHED_ID, TerrorIds.ATRACHED),
+                            (config.BLOODTHIRSTY_CREATURE_ID, TerrorIds.BLOODTHIRSTY_CREATURE),
+                            (config.GIGABYTES_ID, TerrorIds.GIGABYTES)):
+            monitor = self._monitor(keep_on={self.CLASSIC_KEY: {listed}})
             monitor.st.terror_ids = [tid]
 
             started = self._run_delayed(monitor)
@@ -1206,7 +1208,7 @@ class TestSkipRoundsByType(unittest.TestCase):
 
     def test_a_variant_is_never_skipped_by_the_designation(self):
         """以前は切り替え次第で自爆していた。いまは常にリストで判定する"""
-        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.ATRACHED_ID}})
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {TerrorIds.ATRACHED}})
         monitor.st.atrached_variant = True
 
         started = self._killers(monitor, [config.ATRACHED_ID])
@@ -1327,7 +1329,7 @@ class TestSkipRoundsByType(unittest.TestCase):
     # ── 置き換え待ち ───────────────────────
     def test_a_designated_round_waits_when_a_variant_would_change_it(self):
         """Gigabytes が来ればリスト判定で続行になる。来るまで待つ"""
-        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {TerrorIds.GIGABYTES}})
 
         started = self._killers(monitor, settle=False)
 
@@ -1364,7 +1366,7 @@ class TestSkipRoundsByType(unittest.TestCase):
         self.assertIn("do_skip", self._run_delayed(monitor))
 
     def test_the_wait_falls_through_when_a_variant_arrives(self):
-        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
+        monitor = self._monitor(keep_on={self.CLASSIC_KEY: {TerrorIds.GIGABYTES}})
         monitor.st.terror_ids = [config.GIGABYTES_ID]
         monitor.st.gigabytes = True     # _run_delayed は _on_killers を通らないので
                                         # ここでは ids の差し替えは起きない

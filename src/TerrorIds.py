@@ -304,11 +304,12 @@ def to_listtool(own) -> int | None:
     return found.listtool if found is not None else None
 
 
-def list_from_listtool(data, source: str = "", strict: bool = False) -> dict:
+def list_from_listtool(data, source: str = "", strict: bool = False, once: bool = False) -> dict:
     """{キー: ListTool の番号の集合} → {キー: frozenset(独自の番号)}。空になったキーは持たない。
 
     8 Pages のキーで 8 Pages に出ない番号（ListTool の枠にだけある 116 個）は捨て、件数を debug.log に 1 行
-    （読み込みごと）。表に無い番号は番号ごとに 1 回だけ debug.log（strict なら ValueError。テストが使う）"""
+    （読み込みごと。once なら同じ件数の行は 1 回だけ＝主催リストのように数秒ごとに読むとき）。表に無い番号は番号ごとに
+    1 回だけ debug.log（strict なら ValueError。テストが使う）"""
     result: dict = {}
     not_appearing = 0
     for key, numbers in (data or {}).items():
@@ -326,7 +327,11 @@ def list_from_listtool(data, source: str = "", strict: bool = False) -> dict:
         if mapped:
             result[key] = frozenset(mapped)
     if not_appearing:
-        _debug(f"{source or 'ListTool'} の 8 Pages に出ないテラー {not_appearing} 件を捨てました")
+        message = f"{source or 'ListTool'} の 8 Pages に出ないテラー {not_appearing} 件を捨てました"
+        if once:
+            _report_once("not_appearing", (source, not_appearing), message)
+        else:
+            _debug(message)
     return result
 
 

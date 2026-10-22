@@ -774,7 +774,7 @@ class TestHostSaveAllAccounts(unittest.TestCase):
         Path(self.user).write_text(json.dumps({
             "last_active": "serim01",
             "accounts": {
-                "serim01": {"data": {self.PAGES: {"10": 1}}},
+                "serim01": {"data": {self.PAGES: {"9": 1}}},
                 "ruri9752 fff9": {"data": {self.PAGES: {"20": 1}}},
                 "さぶりむ": {"data": {self.PAGES: {"30": 0}}},   # 何もONでない
                 "壊れ": {"data": "辞書ではない"},
@@ -786,9 +786,10 @@ class TestHostSaveAllAccounts(unittest.TestCase):
     def test_every_account_is_in_the_wishes(self):
         _keep, _meta, wishes = self._load()
 
-        self.assertEqual(wishes["serim01"], {self.PAGES: {10}})
-        self.assertEqual(wishes["ruri9752 fff9"], {self.PAGES: {20}})
-        self.assertEqual(wishes["roundmate"], {self.PAGES: {70}})
+        # 8 Pages のキーの ListTool の番号は list_id（9 = ページ 13、20 = ページ 20、70 = ページ 57）。独自の番号は 3000＋ページ
+        self.assertEqual(wishes["serim01"], {self.PAGES: {3013}})
+        self.assertEqual(wishes["ruri9752 fff9"], {self.PAGES: {3020}})
+        self.assertEqual(wishes["roundmate"], {self.PAGES: {3057}})
 
     def test_an_account_with_everything_off_is_kept_empty(self):
         """さぶりむ（全部 OFF）はリストを持っている。壊れたものは持っていない"""
@@ -811,7 +812,7 @@ class TestHostSaveAllAccounts(unittest.TestCase):
         """GUI の件数表示は従来どおり"""
         keep, meta, _wishes = self._load()
 
-        self.assertEqual(keep, {self.PAGES: {10, 70}})
+        self.assertEqual(keep, {self.PAGES: {3013, 3057}})
         self.assertEqual(meta["host_self"], "serim01")
         self.assertEqual(meta["participants"], 1)
 
@@ -856,7 +857,7 @@ class TestHostOwnList(unittest.TestCase):
 
         keep_on, _meta, _wishes = self._load()
 
-        self.assertEqual(keep_on[self.PAGES], {70, 135})
+        self.assertEqual(keep_on[self.PAGES], {3057, 3050}, "ListTool の 70・135 は 8 Pages の 57・50 ページ目")
         self.assertEqual(keep_on[self.CLASSIC], {5}, "participants も残ること")
 
     def test_the_host_appears_in_the_wishes(self):
@@ -865,7 +866,7 @@ class TestHostOwnList(unittest.TestCase):
 
         _keep_on, _meta, wishes = self._load()
 
-        self.assertEqual(wishes["serim01"], {self.PAGES: {70}})
+        self.assertEqual(wishes["serim01"], {self.PAGES: {3057}})
 
     def test_without_the_path_nothing_changes(self):
         self._write_host(1)
@@ -902,7 +903,7 @@ class TestHostOwnList(unittest.TestCase):
         keep_on, meta, _wishes = self._load()
 
         self.assertEqual(meta["participants"], 0)
-        self.assertEqual(keep_on[self.PAGES], {70}, "リスト自体は読めている")
+        self.assertEqual(keep_on[self.PAGES], {3057}, "リスト自体は読めている")
 
     # ── 諦める側 ────────────────────────────
     def test_a_missing_file_is_ignored(self):
@@ -966,7 +967,7 @@ class TestHostOwnList(unittest.TestCase):
         keep_on, _meta, wishes = self._load()
 
         self.assertNotIn(self.FOG_ALT, keep_on)
-        self.assertEqual(wishes["serim01"], {self.PAGES: {70}})
+        self.assertEqual(wishes["serim01"], {self.PAGES: {3057}})
 
     def test_a_host_with_everything_off_is_kept_empty(self):
         """全部 OFF は「続行したいものが無い」。リストが無いのとは違う"""
@@ -1275,9 +1276,13 @@ class TestHostStateSqlite(unittest.TestCase):
 
     # ── ビット列 ────────────────────────────
     def test_the_bits_are_read_from_the_lowest_bit(self):
-        keep_on, _meta, _w = self._load([[(0, "ひと", {self.CLASSIC: {0, 1, 7, 8, 9, 134, 319}})]])
+        keep_on, _meta, _w = self._load([[(0, "ひと", {self.CLASSIC: {0, 1, 7, 8, 9, 100, 133},
+                                                       "Alternate/オルタネイト": {134, 169, 135},
+                                                       "Unbound/アンバウンド": {200, 283}})]])
 
-        self.assertEqual(keep_on[self.CLASSIC], {0, 1, 7, 8, 9, 134, 319})
+        self.assertEqual(keep_on[self.CLASSIC], {0, 1, 7, 8, 9, 100, 133})
+        self.assertEqual(keep_on["Alternate/オルタネイト"], {1000, 1035, 1001}, "ListTool の 134〜 は 1000〜")
+        self.assertEqual(keep_on["Unbound/アンバウンド"], {2000, 2083}, "ListTool の 200〜 は 2000〜")
 
     def test_a_single_byte_is_not_reversed(self):
         """下位ビットから: 0x01 は ID 0、0x80 は ID 7"""
@@ -1287,7 +1292,8 @@ class TestHostStateSqlite(unittest.TestCase):
 
     def test_empty_or_odd_length_bits(self):
         for raw, expected in ((b"", set()), (bytes(40), set()),
-                              (b"\x00" * 60 + b"\x01", {480})):
+                              (b"\x00" * 16 + b"\x01", {128}),
+                              (b"\x00" * 60 + b"\x01", set())):      # 480 は表に無い番号（捨てる）
             keep_on, meta, _w = self._load([[(0, "ひと", {self.CLASSIC: raw})]])
             self.assertEqual(keep_on.get(self.CLASSIC, set()), expected, raw)
             self.assertEqual(meta["listed"], 1, "行があればリストは持っている")
@@ -1296,15 +1302,15 @@ class TestHostStateSqlite(unittest.TestCase):
     def test_it_reads_the_same_thing_the_json_reader_did(self):
         """以前は JSON 版と結果を突き合わせていた。JSON 版を消したので、同じ入力に
         対して JSON 版が返していた値を直接書いて確かめる"""
-        people = [(0, "さんかしゃA", {self.CLASSIC: {1, 300}, self.FOG: {9}}),
+        people = [(0, "さんかしゃA", {self.CLASSIC: {1, 130}, self.FOG: {9}}),
                   (0, "さんかしゃB", {self.CLASSIC: {2}}),
                   (1, "たいきC", {self.FOG: {4, 5}})]
 
         keep_on, meta, wishes = self._load([people])
 
-        self.assertEqual(keep_on, {self.CLASSIC: {1, 2, 300}},
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 2, 130}},
                          "参加者だけを畳む。Fog (Alternate) は無視する")
-        self.assertEqual(wishes, {"さんかしゃA": {self.CLASSIC: {1, 300}},
+        self.assertEqual(wishes, {"さんかしゃA": {self.CLASSIC: {1, 130}},
                                   "さんかしゃB": {self.CLASSIC: {2}},
                                   "たいきC": {}},
                          "待機も名前では引ける。無視するキーは名前ごとにも入らない")

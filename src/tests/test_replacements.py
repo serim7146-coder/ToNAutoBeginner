@@ -33,12 +33,12 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
             self._decide("Unbound", [self.SELF_INSERTS]).is_continue_round)
         self.assertTrue(
             self._decide("Unbound", [self.SELF_INSERTS],
-                         {self.UNBOUND_KEY: {self.SELF_INSERTS}}).is_continue_round)
+                         {self.UNBOUND_KEY: {own(283)}}).is_continue_round)
 
     def test_the_listed_case_is_unchanged(self):
         """リストに283があれば Bloodthirsty でなくても続行（従来どおり）"""
         decided = self._decide("Unbound", [self.SELF_INSERTS],
-                               {self.UNBOUND_KEY: {self.SELF_INSERTS}})
+                               {self.UNBOUND_KEY: {own(283)}})
 
         self.assertTrue(decided.is_continue_round)
 
@@ -48,7 +48,7 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
         self.assertFalse(
             self._decide("Unbound", [self.PACK], bloodthirsty=True).is_continue_round)
         self.assertTrue(
-            self._decide("Unbound", [self.PACK], {self.UNBOUND_KEY: {self.PACK}},
+            self._decide("Unbound", [self.PACK], {self.UNBOUND_KEY: {own(self.PACK)}},
                          bloodthirsty=True).is_continue_round)
 
     def test_other_rounds_are_not_covered(self):
@@ -178,7 +178,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     必ず続行をやめて普通のリストの判定（283 があるか）にする。干し芋・焼き芋は今までどおり必ず続行"""
 
     UNBOUND_KEY = "Unbound/アンバウンド"
-    SLOT = config.SELF_INSERTS_BLOODTHIRSTY_SLOT
+    SLOT = TerrorIds.SELF_INSERTS_BLOODTHIRSTY
     SELF_INSERTS = config.SELF_INSERTS_ID
 
     def setUp(self):
@@ -224,7 +224,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
                 self_inserts_table_disabled=disabled).is_continue_round
         self.assertTrue(decide({}, False))
         self.assertFalse(decide({}, True), "リストに 283 が無ければ自爆")
-        self.assertTrue(decide({self.UNBOUND_KEY: {self.SELF_INSERTS}}, True), "283 があれば続行")
+        self.assertTrue(decide({self.UNBOUND_KEY: {own(283)}}, True), "283 があれば続行")
 
     def test_disables_reads_the_disabled_table_of_that_key_only(self):
         table = ContinueTable.Table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})},
@@ -245,7 +245,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     def test_disabled_in_the_table_means_no_forced_continue(self):
         self._table(disabled={self.UNBOUND_KEY: frozenset({self.SLOT})})
         self.assertFalse(self._continues(self._monitor()), "283 がリストに無い → 自爆")
-        self.assertTrue(self._continues(self._monitor(keep_on={self.UNBOUND_KEY: {self.SELF_INSERTS}})),
+        self.assertTrue(self._continues(self._monitor(keep_on={self.UNBOUND_KEY: {own(283)}})),
                         "283 がリストにある → 続行")
 
     def test_disabled_in_the_table_lets_the_skip_round_setting_win_again(self):
@@ -463,7 +463,7 @@ class TestReplacementWait(unittest.TestCase):
 
     # ── 待つ・待たない ───────────────────────
     def test_it_waits_when_the_replacement_is_wanted(self):
-        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
 
         self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]),
                          ["_delayed_decision"])
@@ -482,7 +482,7 @@ class TestReplacementWait(unittest.TestCase):
 
     def test_it_does_not_wait_when_both_are_wanted(self):
         monitor = self._monitor("Double Trouble",
-                                {self.DT_KEY: {self.CURIOUS, self.BLOODTHIRSTY}})
+                                {self.DT_KEY: {self.CURIOUS, TerrorIds.BLOODTHIRSTY_CREATURE}})
 
         started = self._killers(monitor, [self.CURIOUS, 5])
 
@@ -491,7 +491,7 @@ class TestReplacementWait(unittest.TestCase):
 
     def test_private_waits_without_a_designation(self):
         """依頼者の報告: Cracked の自爆指定は無かったのに、待たずに自爆した"""
-        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
 
         started = self._killers(monitor, [self.CURIOUS])
 
@@ -502,7 +502,7 @@ class TestReplacementWait(unittest.TestCase):
         for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
                       config.INSTANCE_YAKIIMO):
             monitor = self._monitor("Double Trouble",
-                                    {self.DT_KEY: {self.BLOODTHIRSTY}},
+                                    {self.DT_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}},
                                     instance_type=itype)
 
             self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]),
@@ -510,7 +510,7 @@ class TestReplacementWait(unittest.TestCase):
 
     def test_hands_free_skips_at_once(self):
         SharedState.set_hands_free(True)
-        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
         monitor.st.item_id = 0
 
         started = self._killers(monitor, [self.CURIOUS])
@@ -518,14 +518,14 @@ class TestReplacementWait(unittest.TestCase):
         self.assertEqual(started, ["do_skip"], "放置モードは待たない")
 
     def test_a_public_window_never_waits(self):
-        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}},
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}},
                                 instance_type=config.INSTANCE_PUBLIC)
 
         self.assertEqual(self._killers(monitor, [self.CURIOUS, 5]), [])
 
     # ── 待ち明け ────────────────────────────
     def test_the_signal_during_the_wait_continues(self):
-        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
         self._killers(monitor, [self.CURIOUS])
         with patch.object(LogMonitor.threading, "Thread"):
             monitor._process("The creature is bloodthirsty today...")
@@ -537,14 +537,14 @@ class TestReplacementWait(unittest.TestCase):
         self.assertNotIn("do_skip", started)
 
     def test_no_signal_ends_in_the_original_judgement(self):
-        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
         self._killers(monitor, [self.CURIOUS])
 
         self.assertIn("do_skip", self._delayed(monitor))
 
     def test_the_signal_ends_the_wait_early(self):
         """残り時間を待たずに判定する"""
-        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Cracked", {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
         self._killers(monitor, [self.CURIOUS])
         naps = []
 
@@ -592,7 +592,7 @@ class TestReplacementWait(unittest.TestCase):
     # ── 判定の比較は本番と同じ関数 ──────────────────
     def test_the_comparison_uses_the_real_decision(self):
         """待つかの判断が本番の判定とずれないこと"""
-        monitor = self._monitor("Double Trouble", {self.DT_KEY: {self.BLOODTHIRSTY}})
+        monitor = self._monitor("Double Trouble", {self.DT_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
         monitor.st.terror_ids = [self.CURIOUS, 5]
         calls = []
         real = monitor._plan
@@ -716,7 +716,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
                              ["_delayed_decision"], itype)
 
     def test_a_round_that_already_saw_the_line_does_not_wait(self):
-        monitor = self._monitor(keep_on={self.UNBOUND_KEY: {self.SELF_INSERTS}})
+        monitor = self._monitor(keep_on={self.UNBOUND_KEY: {own(283)}})
         monitor.st.bloodthirsty_creature_variant = True
 
         started = self._started(monitor)
@@ -853,7 +853,7 @@ class TestGlorboContinue(unittest.TestCase):
         return mock
 
     def _monitor(self, glorbo_on_list=True, instance_type=config.INSTANCE_PRIVATE, skip_rounds=()):
-        keep = {self.PUNISHED_KEY: {config.GLORBO_ID}} if glorbo_on_list else {}
+        keep = {self.PUNISHED_KEY: {TerrorIds.GLORBO}} if glorbo_on_list else {}
         cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", skip_rounds=set(skip_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep, lambda _m: None, window_idx=1)
         monitor.st.instance_type = instance_type
@@ -1317,7 +1317,7 @@ class TestGlorboDetect(unittest.TestCase):
         return monitor, monitor._plan("Punished", monitor.st.terror_ids, False)
 
     def test_glorbo_on_the_list_continues(self):
-        monitor, plan = self._plan({self.PUNISHED_KEY: {config.GLORBO_ID}},
+        monitor, plan = self._plan({self.PUNISHED_KEY: {TerrorIds.GLORBO}},
                                    [config.ARKUS_ID])
 
         self.assertEqual(monitor.st.terror_ids, [config.GLORBO_ID])

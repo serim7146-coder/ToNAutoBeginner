@@ -9,6 +9,7 @@ private（私用）インスタンスの判定には一切関わらない。呼�
 
 import config
 import MatchTNL
+import TerrorIds
 
 # 判定結果
 CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウンスもフリーズもしない
@@ -132,7 +133,8 @@ def _decide_sabotage(instance_type, terror_ids, sus_players, host_wishes,
         return NORMAL
 
     murderers = set(sus_players)
-    ids = set(terror_ids)
+    # TEMP: 流れの中の番号がまだ今の番号の間は、リスト（独自の番号）に合わせて直す（Sabotage は Classic だけ）
+    ids = {t for t in (TerrorIds.own_from_legacy(x) for x in terror_ids) if t is not None}
 
     if instance_type in (config.INSTANCE_YAKIIMO, *config.PRIVATE_LIKE_INSTANCES):
         # 選出されたマーダーがマーダー枠で続行を希望している → 自爆

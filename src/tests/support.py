@@ -879,6 +879,30 @@ class _ImmediateThread:
         pass
 
 
+def own(x, eight_pages=False):
+    """前の版のツール（ToN ListTool と同じ形）の番号 → 独自の番号。テストの見本の番号を直すのに使う
+    （表に無い番号は AssertionError。8 Pages の見本は eight_pages=True で list_id から）"""
+    found = TerrorIds.own_from_legacy(x, eight_pages)
+    assert found is not None, f"前の番号 {x} が表にない"
+    return found
+
+
+def own_ids(ids, eight_pages=False):
+    return [own(x, eight_pages) for x in ids]
+
+
+def own_list(data):
+    """{キー: ListTool の番号の集合} → {キー: frozenset(独自の番号)}（ListTool の番号の見本を、読み込みと同じ番号の
+    直し方で直す。表に無い番号は ValueError。配る・外すはしない）"""
+    return TerrorIds.list_from_listtool(data, strict=True)
+
+
+def flow_id(x, eight_pages=False):
+    """ツールの中の流れ（LogMonitor の st.terror_ids など）が持つ、前の番号 x のテラーの番号。
+    流れがまだ今の番号の間は x そのまま（独自の番号に変えるときに、ここを own(x, eight_pages) にする）"""
+    return x
+
+
 def eight_pages_terrors(pages):
     """8pages の表だけ差し替えた TERRORS。pages は {ログ番号: list_id | None}"""
     raw = {
