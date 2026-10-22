@@ -2384,7 +2384,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
         app._apply_freeze_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app._apply_saved_window_settings = \
             lambda: mainGUI.App._apply_saved_window_settings(app)
 

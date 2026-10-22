@@ -1,5 +1,6 @@
 """ToN ListTool の主催リスト・参加者・タブ"""
 from tests.support import *  # noqa: F401,F403
+import ContinueList
 
 
 
@@ -1086,10 +1087,13 @@ class TestHostListGrace(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl",
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_apply_own_list",
                      "_read_host_source", "_apply_host_source"):
             method = getattr(mainGUI.App, name)
             setattr(app, name, (lambda m: lambda *a, **kw: m(app, *a, **kw))(method))
+        # ツールの続行リスト（GN）。主催リストをやめると、これに戻る
+        ContinueList.set_current(*ContinueList.from_tnl(self.tnl))
+        self.addCleanup(ContinueList.set_current, {}, {"list_name": ""})
         return app
 
     def _write(self, participants, wanted=7):
@@ -1608,9 +1612,12 @@ class TestHostListSource(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_load_tnl",
+                     "_warn_host_save_once", "_fall_back_to_tnl", "_apply_own_list",
                      "_read_host_source", "_apply_host_source"):
             setattr(app, name, self._bind(app, name))
+        # ツールの続行リスト（GN）。主催リストをやめると、これに戻る
+        ContinueList.set_current(*ContinueList.from_tnl(self.tnl))
+        self.addCleanup(ContinueList.set_current, {}, {"list_name": ""})
         return app
 
     @staticmethod
@@ -2028,7 +2035,7 @@ class TestHostListSource(unittest.TestCase):
         self._write(3)
         app = self._app()
         self._refresh(app)
-        app.v_tnl = TestHostListSource.FakeVar("")      # tnl 未設定
+        ContinueList.set_current({})        # ツールの続行リストが空
 
         self._refresh(app, running=False)
 
@@ -2118,16 +2125,21 @@ class TestFollowHostSettingRemoved(unittest.TestCase):
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()
         app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
+        app._apply_own_list = lambda log=False: mainGUI.App._apply_own_list(app, log)
+        app._refresh_continue_table_list = lambda: None
         with tempfile.TemporaryDirectory() as tmp:
             tnl = Path(tmp) / "list.tnl"
             tnl.write_text(json.dumps({"list_name": "L", "creator": "",
                                        "created_at": "", "data": {}}),
                            encoding="utf-8")
-            app.v_tnl = TestHostListSource.FakeVar(str(tnl))
+            app.v_tnl = MagicMock()
             saved = {}
             with patch.object(mainGUI, "save_settings", saved.update), \
-                 patch.object(mainGUI, "load_settings", return_value={}):
-                mainGUI.App._load_tnl(app, show_error=False)
+                 patch.object(mainGUI, "load_settings", return_value={}), \
+                 patch.object(mainGUI.filedialog, "askopenfilename", return_value=str(tnl)), \
+                 patch.object(mainGUI.messagebox, "askyesno", return_value=True), \
+                 patch.object(ContinueList, "save_current"):
+                mainGUI.App._import_tnl(app)
 
         self.assertNotIn("follow_host_save", saved)
 
@@ -2191,7 +2203,7 @@ class TestListSourceShared(unittest.TestCase):
         app._apply_keep_on = lambda new: mainGUI.App._apply_keep_on(app, new)
         app._apply_host_wishes = lambda new: mainGUI.App._apply_host_wishes(app, new)
         app._apply_host_tabs = lambda new: mainGUI.App._apply_host_tabs(app, new)
-        app._load_tnl = lambda **kw: None
+        app._apply_own_list = lambda log=False: mainGUI.App._apply_own_list(app, log)
 
         SharedState.set_list_source("host")
         mainGUI.App._fall_back_to_tnl(app, "テスト")

@@ -1,8 +1,9 @@
 """続行表の編集画面（GJ・GK）。ToN ListTool の続行選択画面と同じ並び・色で、テラーのアイコンを押して選ぶ。
 
 - 左: ラウンドの一覧（細い Listbox。Moon は Mystic Moon・Blood Moon・Twilight・Solstice を 1 つにまとめた「Moon」）
-- 上: どちらの表を編集するか（続行無効／デフォ続行）とその表のプリセット（選ぶ・新規・複製・名前変更・削除。GL）・
-  名前の検索・全選択／全解除。押す・全選択・全解除・読み込みは、選んでいるプリセットに効く
+- 上: どれを編集するか（続行無効／デフォ続行／続行リスト）と、続行無効・デフォ続行のプリセット（選ぶ・新規・
+  複製・名前変更・削除。GL。続行リストはプリセットが無いので欄を隠す）・名前の検索・全選択／全解除。押す・
+  全選択・全解除・読み込みは、選んでいるプリセット（続行リストはツールの続行リストそのもの。GN）に効く
 - 中: テラーのアイコンの格子（tk.Canvas に直接描く。間隔は縦横とも 46px）。上から Classic（0〜133・ListTool の
   並び）・Alternate（134〜169・11/9/7/5/3/1 の逆三角）・Unbound（200〜283）・特別（170〜177 ほか）・
   バリアントの段（Classic だけ 190〜192・ほかの 192 があるラウンドは 192・Fog/Midnight の 315/316・
@@ -26,6 +27,7 @@ import cv2
 import numpy as np
 
 import config
+import ContinueList
 import ContinueTable
 import DebugLog
 import MatchTNL
@@ -61,10 +63,15 @@ COLOR_FAINT = "#3c3c3c"      # 検索に合わないものの枠
 COLOR_MATCH = config.GUI_ACC  # 検索に合うものの枠
 COLOR_DISABLED = "#e64040"   # 続行無効の枠
 COLOR_DEFAULT = "#50d250"    # デフォ続行の枠
+COLOR_LIST = "#4FA3FF"       # 続行リストの枠（GN）
 
-WHICH_TEXT = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
-STRONG = {ContinueTable.DISABLED: COLOR_DISABLED, ContinueTable.DEFAULT: COLOR_DEFAULT}
-OTHER = {ContinueTable.DISABLED: ContinueTable.DEFAULT, ContinueTable.DEFAULT: ContinueTable.DISABLED}
+# 編集する表の種類。続行無効・デフォ続行は ContinueTable の表、LIST はツールの続行リスト（ContinueList。GN）
+LIST = "list"
+WHICH_TEXT = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行", LIST: "続行リスト"}
+STRONG = {ContinueTable.DISABLED: COLOR_DISABLED, ContinueTable.DEFAULT: COLOR_DEFAULT, LIST: COLOR_LIST}
+# 選んでいる表のほかに薄く見せる表（先に入っているほうの色。続行リストを選んでいるときは、重ねる 2 つの表）
+OTHERS = {ContinueTable.DISABLED: (ContinueTable.DEFAULT,), ContinueTable.DEFAULT: (ContinueTable.DISABLED,),
+          LIST: (ContinueTable.DEFAULT, ContinueTable.DISABLED)}
 
 LAYOUT_JSON = f"{ICONS_DIR}/layout.json"
 
@@ -416,13 +423,14 @@ class _Cell:
 
 
 class ContinueTableWindow(tk.Toplevel):
-    def __init__(self, master, on_change=None):
+    def __init__(self, master, on_change=None, on_list_change=None):
         super().__init__(master)
         self.title("続行表")
         self.configure(bg=config.GUI_BG)
         self.geometry(f"{CANVAS_WIDTH + 250}x860")
         self.minsize(CANVAS_WIDTH + 230, 420)
         self._on_change = on_change
+        self._on_list_change = on_list_change  # 続行リストを変えた（呼び出し側が全窓へ反映する。GN）
         self._rounds = load_rounds()
         self._photos: dict = {}                # (番号, 不透明度の種類) → PhotoImage（持っていないと消える）
         self._cells: dict = {}                 # 番号 → _Cell（今の格子）
@@ -431,6 +439,7 @@ class ContinueTableWindow(tk.Toplevel):
         self._tip: tuple = ()                  # ツールチップの item の id
         self._save_job = None                  # 保存の予約（after の id）
         self._save_pending = False
+        self._list_save_pending = False        # 続行リスト（ContinueList）の保存の予約
         self._item_choices = item_choices(config.ITEMS)      # [(id, 文字), ...]
         self._rule_rows: list = []             # 決まりの行ごとの部品（_show_rules が作り直す）
         self.v_which = tk.StringVar(value=ContinueTable.DISABLED)
@@ -454,16 +463,19 @@ class ContinueTableWindow(tk.Toplevel):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=10, pady=(10, 4))
         ttk.Label(top, text="編集する表:").pack(side="left")
-        for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT):
+        for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT, LIST):
             ttk.Radiobutton(top, text=WHICH_TEXT[which], variable=self.v_which, value=which,
                             command=self._restyle_all).pack(side="left", padx=(8, 0))
-        ttk.Label(top, text="プリセット:").pack(side="left", padx=(20, 0))
+        # プリセットの欄（続行リストにはプリセットが無いので、選んだら隠す。並びは top の最後なので、戻すときは順に pack し直す）
+        self._preset_widgets = []                  # [(部品, pack の引数), ...]
+        self._add_preset_widget(ttk.Label(top, text="プリセット:"), padx=(20, 0))
         self.cb_preset = ttk.Combobox(top, textvariable=self.v_preset, state="readonly", width=14)
-        self.cb_preset.pack(side="left", padx=(6, 0))
+        self._add_preset_widget(self.cb_preset, padx=(6, 0))
         self.cb_preset.bind("<<ComboboxSelected>>", lambda _e: self._on_preset_picked())
         for text, command in (("新規", self.new_preset), ("複製", self.copy_preset),
                               ("名前変更", self.rename_preset), ("削除", self.delete_preset)):
-            ttk.Button(top, text=text, width=len(text) * 2 + 1, command=command).pack(side="left", padx=(6, 0))
+            self._add_preset_widget(ttk.Button(top, text=text, width=len(text) * 2 + 1, command=command),
+                                    padx=(6, 0))
 
         tools = ttk.Frame(self)
         tools.pack(fill="x", padx=10, pady=(0, 4))
@@ -486,6 +498,10 @@ class ContinueTableWindow(tk.Toplevel):
         body.pack(fill="both", expand=True)
         self._build_round_list(body)
         self._build_canvas(body)
+
+    def _add_preset_widget(self, widget, **pack):
+        widget.pack(side="left", **pack)
+        self._preset_widgets.append((widget, pack))
 
     def _build_item_rules(self):
         """「アイテムで切り替え」の欄（決まりの行を縦にスクロールする欄と「決まりを足す」）"""
@@ -591,8 +607,8 @@ class ContinueTableWindow(tk.Toplevel):
                 self._selected[ContinueTable.DEFAULT], {}))
 
     def _has(self, table: ContinueTable.Table, which: str, tid: int) -> bool:
-        """which の表に、今のラウンドの表のキーのどれかで tid が入っているか"""
-        kind = getattr(table, which)
+        """which の表に、今のラウンドの表のキーのどれかで tid が入っているか（LIST はツールの続行リスト）"""
+        kind = ContinueList.current() if which == LIST else getattr(table, which)
         return any(tid in kind.get(key, ()) for key in self._table_keys())
 
     def _on_round_select(self):
@@ -681,8 +697,9 @@ class ContinueTableWindow(tk.Toplevel):
         table, which = self._edit_table(), self._which()
         if self._has(table, which, tid):
             return "full", STRONG[which], THICK
-        if self._has(table, OTHER[which], tid):
-            return "other", STRONG[OTHER[which]], THIN
+        for other in OTHERS[which]:
+            if self._has(table, other, tid):
+                return "other", STRONG[other], THIN
         if self._searching():
             return "full", COLOR_MATCH, THICK
         return "dim", COLOR_IDLE, THIN
@@ -774,8 +791,9 @@ class ContinueTableWindow(tk.Toplevel):
         if self._on_change is not None:
             self._on_change()
 
-    def _schedule_save(self):
-        self._save_pending = True
+    def _schedule_save(self, table: bool = True):
+        """保存を予約する（table=False は続行リストだけ。続行表のファイルは書かない）"""
+        self._save_pending = self._save_pending or table
         if self._save_job is not None:
             self.after_cancel(self._save_job)
         self._save_job = self.after(SAVE_DELAY_MS, self._flush_save)
@@ -791,6 +809,37 @@ class ContinueTableWindow(tk.Toplevel):
         if self._save_pending:
             self._save_pending = False
             ContinueTable.save(ContinueTable.current())
+        if self._list_save_pending:
+            self._list_save_pending = False
+            ContinueList.save_current()
+
+    def _commit_list(self, change, tids=None):
+        """ツールの続行リストを change(今の dict) の戻り値にして、全窓の判定へ効かせ（呼び出し側）・保存を予約し・
+        変わったセル（None なら全部）の見た目だけ直す。続行表のファイル（continue_table.json）は触らない"""
+        ContinueList.update(change)
+        self._list_save_pending = True
+        self._schedule_save(table=False)
+        if tids is None:
+            self._restyle_all()
+        else:
+            for tid in tids:
+                self._restyle(tid)
+        if self._on_list_change is not None:
+            self._on_list_change()
+
+    def refresh_list(self):
+        """ツールの続行リストが画面の外で変わった（生存で外れた）: 続行リストを見ているなら見た目を直す"""
+        if self._which() == LIST:
+            self._restyle_all()
+
+    def _change_members(self, tids, add: bool):
+        """今の表（続行リストを含む）の、今のラウンドの表のキーすべてへ tids を入れる／外す"""
+        if self._which() == LIST:
+            change = ContinueList.with_ids_added if add else ContinueList.with_ids_removed
+            keys = self._table_keys()
+            self._commit_list(lambda data: change(data, keys, tids))
+        else:
+            self._commit(self._with_members(tids, add=add))
 
     def _with_members(self, tids, add: bool) -> ContinueTable.Table:
         """今の表の、今のラウンドの表のキーすべて（Moon は 4 つ）へ tids を入れた／外した新しい Table"""
@@ -805,6 +854,10 @@ class ContinueTableWindow(tk.Toplevel):
         """押したマスを入れる／外す。Moon は 4 つのキーのどれかに入っていれば「入っている」＝外す"""
         if self._round_key() is None:
             return
+        if self._which() == LIST:
+            keys = self._table_keys()
+            self._commit_list(lambda data: ContinueList.toggled(data, keys, tid), (tid,))
+            return
         present = self._has(self._edit_table(), self._which(), tid)
         self._commit(self._with_members([tid], add=not present), (tid,))
 
@@ -815,12 +868,12 @@ class ContinueTableWindow(tk.Toplevel):
     def select_all(self):
         """見えているマスを全部、今の表に入れる"""
         if self._round_key() is not None:
-            self._commit(self._with_members(self._visible_tids(), add=True))
+            self._change_members(self._visible_tids(), add=True)
 
     def clear_all(self):
         """見えているマスを全部、今の表から外す"""
         if self._round_key() is not None:
-            self._commit(self._with_members(self._visible_tids(), add=False))
+            self._change_members(self._visible_tids(), add=False)
 
     # ── プリセット（GL）──
     def _selected_name(self) -> str:
@@ -828,8 +881,16 @@ class ContinueTableWindow(tk.Toplevel):
         return self._selected[self._which()]
 
     def _show_presets(self):
-        """プリセットの選択肢と、選んでいる名前を今の表の種類のものに合わせる（無い名前を選んでいたら直す）"""
+        """プリセットの選択肢と、選んでいる名前を今の表の種類のものに合わせる（無い名前を選んでいたら直す）。
+        続行リストにはプリセットが無いので、プリセットの欄ごと隠す"""
         store, which = ContinueTable.current(), self._which()
+        if which == LIST:
+            for widget, _pack in self._preset_widgets:
+                widget.pack_forget()
+            return
+        for widget, pack in self._preset_widgets:
+            if not widget.winfo_manager():
+                widget.pack(side="left", **pack)
         names = ContinueTable.preset_names(store, which)
         if self._selected[which] not in names:
             self._selected[which] = ContinueTable.fallback_name(store, which)

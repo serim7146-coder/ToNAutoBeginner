@@ -552,7 +552,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app.logs = []
         app._log = app.logs.append
         written = []
@@ -1130,7 +1130,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app.logs = []
         app._log = app.logs.append
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
@@ -1404,7 +1404,7 @@ class TestGuiTweaks(unittest.TestCase):
     def test_loading_does_not_link(self):
         data = {"freeze_8pages": True, "freeze_punish": True, "freeze_rounds": []}
         with patch.object(mainGUI, "load_settings", return_value=data), \
-             patch.object(self.app, "_load_tnl", lambda show_error=True: None), \
+             patch.object(self.app, "_load_own_list", lambda: None), \
              patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
             self.app._load_saved_settings()
         self.assertTrue(self.app.v_freeze_8pages.get())
@@ -1413,7 +1413,7 @@ class TestGuiTweaks(unittest.TestCase):
 
     def test_the_launch_options_are_loaded_at_start(self):
         self.addCleanup(self.app.v_launch_options.set, "")
-        with patch.object(mainGUI, "load_settings", return_value={"launch_extra_options": "--x"}),              patch.object(self.app, "_load_tnl", lambda show_error=True: None),              patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
+        with patch.object(mainGUI, "load_settings", return_value={"launch_extra_options": "--x"}),              patch.object(self.app, "_load_own_list", lambda: None),              patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
             self.app._load_saved_settings()
         self.assertEqual(self.app.v_launch_options.get(), "--x")
 
@@ -2977,7 +2977,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app._log = lambda _m: None
         old = {"vrchat_exe": "C:/old/launch.exe", "join_world": True,   # join_world は戻した
                "instance_link": "vrchat://launch?ref=vrchat.com&id=wrld_x:1~region(jp)",
@@ -3030,7 +3030,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app._log = lambda _m: None
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
              patch.object(mainGUI, "save_settings", lambda _d: None):

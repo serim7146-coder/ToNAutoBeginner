@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+import ContinueList
 import ContinueTable
 import SharedState
 import WindowOperator
@@ -64,7 +65,8 @@ class LogMonitor:
                  host_participants: set | None = None,
                  host_tabs: dict | None = None,
                  on_round_settings_cleared=None,
-                 lists: MatchTNL.SharedLists | None = None):
+                 lists: MatchTNL.SharedLists | None = None,
+                 on_list_changed=None):
         self.cfg = cfg
         # 続行リスト一式。全窓で共有する1つを持つ（mainGUI が中の dict を差し替える）。
         # 渡されなければ、ほかの引数からこの窓だけのものを作る（監視だけで使うとき・テスト）。
@@ -80,6 +82,9 @@ class LogMonitor:
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
         # 渡さなければ何もしない（監視だけで使うときはこれで足りる）
         self._on_round_settings_cleared = on_round_settings_cleared
+        # 生存して続行リスト（ツールの中のもの）から外したことをGUIへ伝える（GN。窓ごとのスレッドから呼ぶ。
+        # GUI 側が画面のスレッドで全窓へ反映・保存・件数の更新をする）。渡さなければ何もしない
+        self._on_list_changed = on_list_changed
         # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
         self.early_read_capable = False
         self.st = WindowState()
@@ -2054,7 +2059,25 @@ class LogMonitor:
                     self._log("🎉 3勝達成！" + self._after_unlock_text(
                         "以降のDTM/Waldoラウンドはスキップします"))
         st.is_open_special_round_round = False
+        self._remove_survived_from_list()
         self._drop_when_round_ends("生き残った")
+
+    def _remove_survived_from_list(self):
+        """生存したので、ツールの続行リストから、このラウンドの種類の、判定に使ったテラーを外す（GN）。
+        主催リストを使っている間・干し芋/焼き芋・テラーが分からないときは外さない。続行無効・デフォ続行
+        （重ねる表）は触らない。外したら GUI へ伝える（全窓へ反映・保存・件数は画面のスレッドで）"""
+        st = self.st
+        if (SharedState.get_list_source() == "host"
+                or st.instance_type in GroupRound.GROUP_INSTANCES
+                or not st.terror_ids or not st.round_type):
+            return
+        removed = ContinueList.remove_survived_current(st.round_type, st.terror_ids)
+        if not removed:
+            return
+        names = format_terror_ids(list(dict.fromkeys(tid for _key, tid in removed)))
+        self._log(f"[続行リスト] 生存したので外しました: {names} / {st.round_type}")
+        if self._on_list_changed:
+            self._on_list_changed()
 
     def _drop_when_round_ends(self, why: str):
         """死んだ・生き残った行が来たら、そのラウンドで 1 回だけアイテムを落とす（EU。依頼者 2026-10-13
