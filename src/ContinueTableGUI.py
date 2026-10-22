@@ -1,15 +1,16 @@
-"""続行表の編集画面（GI）。ListTool の続行選択画面のように、テラーのアイコンを押して選ぶ。
+"""続行表の編集画面（GJ）。ToN ListTool の続行選択画面と同じ寸法・並び・色で、テラーのアイコンを押して選ぶ。
 
 - 上: どちらの表を編集するか（続行無効／デフォ続行）・ラウンドの選択（小さなドロップダウン）・名前の検索
-- 中: テラーのアイコンの格子（tk.Canvas に直接描く）。1 行 12 個・行ごとに真ん中寄せ（Alternate は 11/9/7/5/3/1 の
-  逆三角）。名前は出さない（マウスを乗せるとツールチップ）。選んでいないものは暗く、今の表に入っているものは
-  明るく＋太い枠（赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60% の明るさ＋その色の細い枠。
-  Bloodthirsty（190〜192）・Fog/Midnight の 315/316 は、格子の下の「バリアントの段」に左寄せで置く
+- 中: テラーのアイコンの格子（tk.Canvas に直接描く）。上から Classic（0〜133・ListTool の並び）・Alternate
+  （134〜169・11/9/7/5/3/1 の逆三角）・Unbound（200〜283）・特別（170〜177 ほか）・バリアントの段
+  （Bloodthirsty 190〜192・Fog/Midnight の 315/316）。ブロックの間は 1 行あける。名前は出さない（マウスを
+  乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
+  （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠
 - 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む／このラウンドを全部外す
 
 押したセルの絵と枠だけを `itemconfigure` で変える（格子は作り直さない）。判定への反映（set_current）は押した
 その場で、保存は 0.3 秒まとめて 1 回（閉じるときは残りを先に書く）。アイコンは assets/icons のシート
-（32px 格子）から OpenCV で切り出して 40px に拡大する（Pillow は使わない）。絵が無い番号は名前の札
+（32px 格子）から OpenCV で切り出し、背景色と混ぜた PNG にする（Pillow は使わない）。絵が無い番号は名前の札
 """
 import base64
 import functools
@@ -31,34 +32,48 @@ ICONS_DIR = "assets/icons"
 ICONS_JSON = f"{ICONS_DIR}/icons.json"
 TERRORS_FILE = "assets/data/terrors.json"
 
-COLUMNS = 12                 # 格子の 1 行の個数
+# 寸法・色は ToN ListTool 2.17 の続行選択画面を 2026-10-22 のスクリーンショット（46.png・47.png）から測った値
+COLUMNS = 12                 # Classic などの格子の 1 行の個数
 ALTERNATE_ROWS = (11, 9, 7, 5, 3, 1)   # Alternate は逆三角
-ICON_SIZE = 40               # 表示するアイコンの大きさ（32px を INTER_NEAREST で 40px へ拡大）
-CELL = 48                    # 1 マスの大きさ（アイコン 40px＋まわりの枠と隙間）
-MARGIN = 4                   # マスの端からアイコンまで
-GRID_WIDTH = COLUMNS * CELL  # 格子の幅（キャンバスが広ければ真ん中に寄せる）
-TOP_PAD = 8                  # 最初の段の上の余白
+CELL_SIZE = 40               # 1 マス（1px の枠を含む 40×40）
+ICON_SIZE = 32               # アイコン（32×32 のまま。拡大しない）
+ICON_INSET = 4               # マスの左上からアイコンまで
+X_PITCH = 69                 # 横の間隔
+Y_PITCH = 53                 # 縦の間隔（Classic・Unbound・特別・バリアントの段）。ブロックの間もこの 1 行ぶんあける
+ALT_Y_PITCH = 99             # Alternate の縦の間隔
+MARGIN = 14                  # 左右の余白（マスの左端まで）
+TOP_PAD = 14                 # 最初のブロックの上の余白
+CANVAS_WIDTH = 2 * MARGIN + (COLUMNS - 1) * X_PITCH + CELL_SIZE    # 827px
+CORNER = 2                   # 枠の角を丸める（斜めに落とす）大きさ
 SAVE_DELAY_MS = 300          # 押してから保存するまで（まとめて 1 回）
 
-# 明るさ（アイコンの絵に掛ける）: 選んでいない／もう片方の表に入っている／今の表に入っている
-LEVELS = {"dim": 0.35, "other": 0.6, "full": 1.0}
-THIN, THICK = 1, 3           # 枠の太さ
+# 不透明度（アイコンの絵を背景と混ぜる割合）: 選んでいない／もう片方の表に入っている／今の表に入っている／検索に合わない
+LEVELS = {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15}
+THIN, THICK = 1, 2           # 枠の太さ
 
-COLOR_GRID_BG = "#2a2a2a"    # 格子の背景（暗い灰色）
-COLOR_IDLE = "#7a7a7a"       # 選んでいないものの枠（灰色）
+COLOR_GRID_BG = "#2d2d2d"    # 格子の背景
+BG_RGB = (0x2D, 0x2D, 0x2D)
+COLOR_IDLE = "#a0a0a0"       # 選んでいないものの枠
 COLOR_FAINT = "#3c3c3c"      # 検索に合わないものの枠
 COLOR_MATCH = config.GUI_ACC  # 検索に合うものの枠
-COLOR_DISABLED = config.GUI_RED
-COLOR_DEFAULT = config.GUI_GRN
+COLOR_DISABLED = "#e64040"   # 続行無効の枠
+COLOR_DEFAULT = "#50d250"    # デフォ続行の枠
 
 WHICH_TEXT = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
 STRONG = {ContinueTable.DISABLED: COLOR_DISABLED, ContinueTable.DEFAULT: COLOR_DEFAULT}
 OTHER = {ContinueTable.DISABLED: ContinueTable.DEFAULT, ContinueTable.DEFAULT: ContinueTable.DISABLED}
 
+LAYOUT_JSON = f"{ICONS_DIR}/layout.json"
+
+# 範囲ごとのブロック（Classic 0〜133・Alternate 134〜169・Unbound 200〜283、残りは特別のブロック）
+CLASSIC_RANGE = range(0, 134)
+ALTERNATE_RANGE = range(134, 170)
+UNBOUND_RANGE = range(200, 284)
+
 # バリアントの段（格子の下に左寄せ）: Bloodthirsty の 3 つと Fog/Midnight の Neo Pilot・Foxy
 BLOODTHIRSTY_IDS = (190, 191, 192)
 VARIANT_IDS = (190, 191, 192, 315, 316)
-NO_VARIANT_ROUNDS = frozenset({"Mystic Moon", "Blood Moon"})   # 13 個すべて本体の格子
+NO_VARIANT_ROUNDS = frozenset({"Mystic Moon", "Blood Moon"})   # 13 個すべて特別のブロック（バリアントの段は作らない）
 # ラウンドごとの名前の上書き（ラウンド名＝キーの「/」の前, 番号）
 ROUND_NAMES = {("Unbound", 192): "Pack of Wild Yet Bloodthirsty Creatures"}
 
@@ -137,39 +152,100 @@ def terror_name(tid: int, round_key: str | None = None) -> str:
 
 
 # ── 格子の並べ方 ─────────────────────────────
-def _split_rows(ids: list, sizes) -> list:
-    """ids を sizes の順に切る。sizes を使い切った残りは COLUMNS 個ずつ"""
-    rows, pos = [], 0
-    for size in sizes:
-        if pos >= len(ids):
-            break
-        rows.append(ids[pos:pos + size])
+@functools.lru_cache(maxsize=1)
+def listtool_order() -> dict:
+    """{"classic": [番号, ...], "alternate": [番号, ...]}（assets/icons/layout.json。ListTool の並び順）。
+    読めなければ空（その場合は番号順）"""
+    try:
+        raw = json.loads(config.resource_path(LAYOUT_JSON).read_text(encoding="utf-8"))
+        return {key: [int(i) for i in raw[key]] for key in ("classic", "alternate")}
+    except (OSError, ValueError, KeyError, TypeError):
+        DebugLog.exception("ContinueTableGUI.listtool_order")
+        return {"classic": [], "alternate": []}
+
+
+def _in_order(ids, order) -> list:
+    """ids を order の並びにする。order に無いものは番号順で後ろに付ける"""
+    present, known = set(ids), set(order)
+    return [i for i in order if i in present] + sorted(i for i in present if i not in known)
+
+
+def grid12(ids) -> list:
+    """[(番号, 列, 行), ...]。12 列で、行の数 = ceil(n/12)。空き（行の数×12 − n）は 1 行に 1 つ、上の行から
+    左端に置く（134 個なら上の 10 行は列 1〜11・下の 2 行は列 0〜11）。空きが行の数より多いとき（個数が少ない）は、
+    左から詰めて最後の行だけ短くする"""
+    ids = list(ids)
+    rows = -(-len(ids) // COLUMNS)
+    empty = rows * COLUMNS - len(ids)
+    one_per_row = empty <= rows
+    cells, pos = [], 0
+    for row in range(rows):
+        gap = 1 if one_per_row and row < empty else 0
+        for col, tid in enumerate(ids[pos:pos + COLUMNS - gap], start=gap):
+            cells.append((tid, col, row))
+        pos += COLUMNS - gap
+    return cells
+
+
+def pyramid(ids) -> list:
+    """[(番号, 列, 行), ...]。11・9・7・5・3・1 の逆三角（真ん中寄せ。列は 0.5 刻みになる）"""
+    ids = list(ids)
+    cells, pos = [], 0
+    for row, size in enumerate(ALTERNATE_ROWS):
+        for k, tid in enumerate(ids[pos:pos + size]):
+            cells.append((tid, (COLUMNS - size) / 2 + k, row))
         pos += size
-    rows.extend(ids[i:i + COLUMNS] for i in range(pos, len(ids), COLUMNS))
-    return rows
+    return cells
 
 
-def layout_for(round_key: str, ids) -> tuple[list, list]:
-    """(本体の格子の段 [[番号, ...], ...], バリアントの段 [番号, ...])。
+def _variant_ids(name: str, ids: list) -> list:
+    """バリアントの段に行く番号。Bloodthirsty（192）があるラウンドは 190・191・192、Fog/Midnight は 315・316 も
+    （Unbound の Bloodthirsty は 192 だけ）。Mystic Moon・Blood Moon は作らない"""
+    if name in NO_VARIANT_ROUNDS:
+        return []
+    wanted = {i for i in VARIANT_IDS if i in ids}
+    if 192 in wanted and name != "Unbound":
+        wanted.update(BLOODTHIRSTY_IDS)
+    return sorted(wanted)
+
+
+def layout_for(round_key: str, ids) -> list:
+    """上から順のブロック [(種類, [(番号, 列, 行), ...], 行の間隔), ...]。種類は classic・alternate・unbound・
+    special・variant（空のブロックは出さない）。ブロックの間は 1 行ぶんあける（描く側）。
 
     - 8 Pages は 8 Pages に出るテラー（eight_pages_ids）だけ
-    - Bloodthirsty（192）があるラウンドは 190・191・192 を、Fog/Midnight は 315・316 も、本体から外して
-      バリアントの段へ（Unbound の Bloodthirsty は 192 だけ）。Mystic Moon・Blood Moon は全部本体
-    - Alternate は 11/9/7/5/3/1 の逆三角・ほかは 12 個ずつ"""
+    - classic: 0〜133 を ListTool の順に 12 列（grid12）。alternate: 134〜169 を ListTool の順に逆三角
+      （36 個そろわなければ 12 列）。unbound: 200〜283 を番号順に 12 列。special: 残り（170〜177・193・194・
+      196〜199・312〜317 など。Mystic/Blood Moon は全部）を番号順に 12 列
+    - variant: 190・191・192（Fog/Midnight は 315・316 も）。左寄せの 1 行"""
     name = round_display_name(round_key)
     ids = list(ids)
     if name == "8 Pages":
         allowed = eight_pages_ids()
         ids = [i for i in ids if i in allowed]
-    variant: list = []
-    if name not in NO_VARIANT_ROUNDS:
-        wanted = {i for i in VARIANT_IDS if i in ids}
-        if 192 in wanted and name != "Unbound":
-            wanted.update(BLOODTHIRSTY_IDS)
-        variant = sorted(wanted)
-        ids = [i for i in ids if i not in wanted]
-    sizes = ALTERNATE_ROWS if name == "Alternate" else ()
-    return _split_rows(ids, sizes), variant
+    variant = _variant_ids(name, ids)
+    ids = [i for i in ids if i not in variant]
+    classic = [i for i in ids if i in CLASSIC_RANGE]
+    alternate = [i for i in ids if i in ALTERNATE_RANGE]
+    unbound = [i for i in ids if i in UNBOUND_RANGE]
+    used = set(classic) | set(alternate) | set(unbound)
+    special = sorted(i for i in ids if i not in used)
+    order = listtool_order()
+    alternate = _in_order(alternate, order["alternate"])
+    blocks = [("classic", grid12(_in_order(classic, order["classic"])), Y_PITCH)]
+    if len(alternate) == sum(ALTERNATE_ROWS):
+        blocks.append(("alternate", pyramid(alternate), ALT_Y_PITCH))
+    else:
+        blocks.append(("alternate", grid12(alternate), Y_PITCH))
+    blocks += [("unbound", grid12(sorted(unbound)), Y_PITCH), ("special", grid12(special), Y_PITCH),
+               ("variant", [(tid, col, 0) for col, tid in enumerate(variant)], Y_PITCH)]
+    return [block for block in blocks if block[1]]
+
+
+def block_height(cells: list, pitch: int) -> int:
+    """ブロックの高さ（最初の行の上から、最後の行のマスの下まで。最後の行は Y_PITCH ぶんで数える）"""
+    rows = max(row for _tid, _col, row in cells) + 1
+    return (rows - 1) * pitch + Y_PITCH
 
 
 @functools.lru_cache(maxsize=1)
@@ -202,8 +278,17 @@ def _sheet(name: str):
         return None
 
 
-def icon_png(tid: int, brightness: float = 1.0) -> bytes | None:
-    """番号のアイコンを切り出し、40px へ拡大した PNG のバイト列（brightness 倍の明るさ。透明はそのまま）。
+def blend_over_bg(img: np.ndarray, alpha: float) -> np.ndarray:
+    """BGR または BGRA の画像を、不透明度 alpha で背景色（BG_RGB）に重ねた BGR（uint8）。
+    元の透明度（A）もかける（icon×a + bg×(1−a)）"""
+    src = img.astype(np.float32)
+    a = src[..., 3:4] / 255.0 * alpha if src.shape[2] == 4 else alpha
+    bg = np.array(BG_RGB[::-1], dtype=np.float32)
+    return np.clip(src[..., :3] * a + bg * (1 - a), 0, 255).round().astype(np.uint8)
+
+
+def icon_png(tid: int, alpha: float = 1.0) -> bytes | None:
+    """番号のアイコンを切り出し、背景色に不透明度 alpha で重ねた 32×32 の PNG のバイト列。
     絵が無い・切り出せないなら None"""
     spot = icon_index().get(tid)
     if spot is None:
@@ -216,10 +301,9 @@ def icon_png(tid: int, brightness: float = 1.0) -> bytes | None:
     crop = sheet[row * cell:(row + 1) * cell, col * cell:(col + 1) * cell]
     if crop.shape[0] != cell or crop.shape[1] != cell:
         return None
-    big = cv2.resize(crop, (ICON_SIZE, ICON_SIZE), interpolation=cv2.INTER_NEAREST)
-    if brightness != 1.0:
-        big[..., :3] = (big[..., :3].astype(np.float32) * brightness).round().astype(np.uint8)
-    ok, png = cv2.imencode(".png", big)
+    if cell != ICON_SIZE:
+        crop = cv2.resize(crop, (ICON_SIZE, ICON_SIZE), interpolation=cv2.INTER_NEAREST)
+    ok, png = cv2.imencode(".png", blend_over_bg(crop, alpha))
     return png.tobytes() if ok else None
 
 
@@ -229,10 +313,21 @@ def tile_color(tid: int) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def scale_color(color: str, factor: float) -> str:
-    """"#rrggbb" の明るさを factor 倍にした色"""
-    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-    return "#%02x%02x%02x" % tuple(min(255, round(v * factor)) for v in (r, g, b))
+def blend_color(color: str, alpha: float) -> str:
+    """"#rrggbb" を不透明度 alpha で背景色に重ねた色"""
+    rgb = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return "#%02x%02x%02x" % tuple(round(v * alpha + bg * (1 - alpha)) for v, bg in zip(rgb, BG_RGB))
+
+
+def frame_points(x: int, y: int, width: int) -> list:
+    """マス（左上 x,y・40×40）の枠の多角形の頂点。角を CORNER だけ斜めに落として少し丸め、太さ width の線が
+    マスの内側に収まるように寄せる"""
+    inset = (width - 1) / 2
+    left, top = x + inset, y + inset
+    right, bottom = x + CELL_SIZE - 1 - inset, y + CELL_SIZE - 1 - inset
+    c = CORNER
+    return [left + c, top, right - c, top, right, top + c, right, bottom - c,
+            right - c, bottom, left + c, bottom, left, bottom - c, left, top + c]
 
 
 # ── 画面 ─────────────────────────────────
@@ -252,13 +347,13 @@ class ContinueTableWindow(tk.Toplevel):
         super().__init__(master)
         self.title("続行表")
         self.configure(bg=config.GUI_BG)
-        self.geometry("680x720")
-        self.minsize(560, 420)
+        self.geometry(f"{CANVAS_WIDTH + 70}x720")
+        self.minsize(CANVAS_WIDTH + 50, 420)
         self._on_change = on_change
         self._rounds = load_rounds()
-        self._photos: dict = {}                # (番号, 明るさの種類) → PhotoImage（持っていないと消える）
+        self._photos: dict = {}                # (番号, 不透明度の種類) → PhotoImage（持っていないと消える）
         self._cells: dict = {}                 # 番号 → _Cell（今の格子）
-        self._x0 = 0                           # 格子を真ん中に寄せる分のずれ
+        self._x0 = 0                           # 格子（幅 CANVAS_WIDTH）を真ん中に寄せる分のずれ
         self._content_height = 0
         self._tip: tuple = ()                  # ツールチップの item の id
         self._save_job = None                  # 保存の予約（after の id）
@@ -334,7 +429,7 @@ class ContinueTableWindow(tk.Toplevel):
         self._set_scrollregion(event.width, event.height)
 
     def _recenter(self, width: int):
-        x0 = max(0, (width - GRID_WIDTH) // 2)
+        x0 = max(0, (width - CANVAS_WIDTH) // 2)
         if x0 != self._x0:
             self.canvas.move("cell", x0 - self._x0, 0)
             self._x0 = x0
@@ -368,46 +463,46 @@ class ContinueTableWindow(tk.Toplevel):
         self._hide_tip()
         self.canvas.delete("cell")
         self._cells = {}
-        main_rows, variant_row = layout_for(self._round_key() or "", self._round_ids())
-        self._x0 = max(0, (self.canvas.winfo_width() - GRID_WIDTH) // 2)
+        self._x0 = max(0, (self.canvas.winfo_width() - CANVAS_WIDTH) // 2)
         y = TOP_PAD
-        for row in main_rows:
-            self._draw_row(row, y, (COLUMNS - len(row)) * CELL // 2)     # 行ごとに真ん中寄せ
-            y += CELL
-        if variant_row:
-            y += CELL if main_rows else 0          # 本体の格子の下に 1 段あけて、左寄せ
-            self._draw_row(variant_row, y, 0)
-            y += CELL
+        for n, (_kind, cells, pitch) in enumerate(layout_for(self._round_key() or "", self._round_ids())):
+            if n:
+                y += Y_PITCH                       # ブロックの間は 1 行ぶんあける
+            for tid, col, row in cells:
+                x = self._x0 + MARGIN + int(col * X_PITCH + 0.5)      # 逆三角の半列ぶんは四捨五入
+                self._cells[tid] = self._draw_cell(tid, x, y + row * pitch)
+            y += block_height(cells, pitch)
         self._content_height = y + TOP_PAD
         self._set_scrollregion(self.canvas.winfo_width(), self.canvas.winfo_height())
         self._restyle_all()
         self.canvas.yview_moveto(0)
 
-    def _draw_row(self, ids: list, y: int, indent: int):
-        for n, tid in enumerate(ids):
-            self._cells[tid] = self._draw_cell(tid, self._x0 + indent + n * CELL, y)
-
     def _draw_cell(self, tid: int, x: int, y: int) -> _Cell:
-        """1 マス: アイコン（無ければ名前の札）＋ 枠。絵の明るさと枠の色・太さは _restyle で決める"""
+        """1 マス（左上 x,y・40×40）: 枠（背景色で塗る＝マス全体が押せる）の上にアイコン（無ければ名前の札）。
+        絵の不透明度と枠の色・太さは _restyle で決める"""
         tags = ("cell", f"t{tid}")
-        ix, iy = x + MARGIN, y + MARGIN
+        frame = self.canvas.create_polygon(frame_points(x, y, THIN), fill=COLOR_GRID_BG, tags=tags)
+        ix, iy = x + ICON_INSET, y + ICON_INSET
         label = None
         if self._photo(tid, "full") is not None:
             face = self.canvas.create_image(ix, iy, anchor="nw", tags=tags)
         else:
             # 絵が無い番号は名前の札（色付きの四角に名前）
-            face = self.canvas.create_rectangle(ix, iy, ix + ICON_SIZE, iy + ICON_SIZE,
+            face = self.canvas.create_rectangle(ix, iy, ix + ICON_SIZE - 1, iy + ICON_SIZE - 1,
                                                 width=0, tags=tags)
             label = self.canvas.create_text(ix + ICON_SIZE // 2, iy + ICON_SIZE // 2,
                                             text=terror_name(tid, self._round_key()),
                                             width=ICON_SIZE - 2, justify="center",
                                             font=(UIFont.UI, 6), tags=tags)
-        frame = self.canvas.create_rectangle(ix - 2, iy - 2, ix + ICON_SIZE + 1, iy + ICON_SIZE + 1,
-                                             tags=tags)
         return _Cell(tid, face, label, frame)
 
+    def _origin(self, cell: _Cell) -> tuple[int, int]:
+        """マスの左上（キャンバス上。窓の幅で寄せ直したあとの今の位置）"""
+        fx, fy = self.canvas.coords(cell.face)[:2]
+        return round(fx) - ICON_INSET, round(fy) - ICON_INSET
+
     def _photo(self, tid: int, level: str):
-        """番号のアイコンの、明るさの種類（dim・other・full）ごとの PhotoImage（作ったら持っておく）。
+        """番号のアイコンの、不透明度の種類（LEVELS: dim・other・full・faint）ごとの PhotoImage（作ったら持っておく）。
         絵が無ければ None"""
         if (tid, level) not in self._photos:
             png = icon_png(tid, LEVELS[level])
@@ -417,11 +512,11 @@ class ContinueTableWindow(tk.Toplevel):
 
     # ── 見た目（セルごとに itemconfigure）──
     def _style_of(self, tid: int) -> tuple[str, str, int]:
-        """(明るさの種類, 枠の色, 枠の太さ)。今の表に入っている→明るく＋太い枠（赤／緑）、もう片方の表→60%＋
-        その色の細い枠、どちらも無い→暗く＋灰色の細い枠。検索の欄に字があれば、合わないものは暗いまま枠も薄く
-        （選んでいる・いないにかかわらず）、合うもので選んでいないものは明るくして枠を目立たせる"""
+        """(不透明度の種類, 枠の色, 枠の太さ)。今の表に入っている→100%＋太い枠（赤／緑）、もう片方の表→60%＋
+        その色の細い枠、どちらも無い→30%＋灰色の細い枠。検索の欄に字があれば、合わないものは 15%＋薄い枠
+        （選んでいる・いないにかかわらず）、合うもので選んでいないものは 100% にして枠を目立たせる"""
         if self._searching() and not self._matches(tid):
-            return "dim", COLOR_FAINT, THIN
+            return "faint", COLOR_FAINT, THIN
         table, key, which = ContinueTable.current(), self._round_key(), self._which()
         if tid in getattr(table, which).get(key, ()):
             return "full", STRONG[which], THICK
@@ -440,8 +535,9 @@ class ContinueTableWindow(tk.Toplevel):
         if cell.label is None:
             self.canvas.itemconfigure(cell.face, image=self._photo(tid, level))
         else:
-            self.canvas.itemconfigure(cell.face, fill=scale_color(tile_color(tid), LEVELS[level]))
-            self.canvas.itemconfigure(cell.label, fill=scale_color("#ffffff", LEVELS[level]))
+            self.canvas.itemconfigure(cell.face, fill=blend_color(tile_color(tid), LEVELS[level]))
+            self.canvas.itemconfigure(cell.label, fill=blend_color("#ffffff", LEVELS[level]))
+        self.canvas.coords(cell.frame, *frame_points(*self._origin(cell), width))
         self.canvas.itemconfigure(cell.frame, outline=color, width=width)
 
     def _restyle_all(self):
@@ -480,7 +576,7 @@ class ContinueTableWindow(tk.Toplevel):
         cell = self._cells.get(tid)
         if cell is None:
             return
-        x0, y0, x1, y1 = self.canvas.coords(cell.frame)
+        x0, y0, x1, y1 = self.canvas.bbox(cell.frame)
         text = self.canvas.create_text(0, 0, text=terror_name(tid, self._round_key()), anchor="center",
                                        fill="#ffffff", font=(UIFont.UI, 9), tags="tip")
         left, top, right, bottom = self.canvas.bbox(text)
