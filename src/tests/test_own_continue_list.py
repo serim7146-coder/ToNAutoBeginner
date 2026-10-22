@@ -12,10 +12,10 @@ FOG = "Fog/霧"
 DOUBLE = "Double Trouble/ダブルトラブル"
 MYSTIC = "Mystic Moon/ミスティックムーン"
 BLOOD = "Blood Moon/ブラッドムーン"
-TWILIGHT = "Twilight/トワイライト"
-SOLSTICE = "Solstice/ソルスティス"
-MOON_KEYS = [MYSTIC, BLOOD, TWILIGHT, SOLSTICE]
 SPECIAL = "Special/Moon"
+MOON_ROUNDS = ("Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Special", "Cold Night")   # Special/Moon の 6 ラウンド
+MOON_A, MOON_B = TerrorIds.MYSTIC_MOON, TerrorIds.BLOOD_MOON        # 4003・4004
+BLOODTHIRSTY = TerrorIds.BLOODTHIRSTY_CREATURE
 LIST = ContinueTableGUI.LIST
 
 
@@ -69,39 +69,30 @@ class TestRemoveSurvived(unittest.TestCase):
         new, _removed = self._remove({CLASSIC: frozenset({3}), FOG: frozenset({1})}, "Classic", [3])
         self.assertEqual(_sets(new), {FOG: {1}})
 
-    def test_a_moon_round_removes_from_all_four_moon_keys(self):
-        data = {key: frozenset({196, 197}) for key in MOON_KEYS}
-        data[CLASSIC] = frozenset({196})
-        for round_type in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
-            new, removed = self._remove(data, round_type, [196])
-            self.assertEqual(_sets(new), {**{key: {197} for key in MOON_KEYS}, CLASSIC: {196}}, round_type)
-            self.assertEqual(sorted(removed), sorted((key, 196) for key in MOON_KEYS), round_type)
+    def test_the_six_special_moon_rounds_remove_from_the_one_special_moon_key(self):
+        """Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night は Special/Moon の 1 つのキー"""
+        data = {SPECIAL: frozenset({MOON_A, MOON_B}), CLASSIC: frozenset({MOON_A})}
+        for round_type in MOON_ROUNDS:
+            new, removed = self._remove(data, round_type, [MOON_A])
+            self.assertEqual(_sets(new), {SPECIAL: {MOON_B}, CLASSIC: {MOON_A}}, round_type)
+            self.assertEqual(removed, [(SPECIAL, MOON_A)], round_type)
 
-    def test_a_moon_round_removes_only_from_the_moon_keys_that_have_it(self):
-        data = {MYSTIC: frozenset({196}), SOLSTICE: frozenset({196, 5}), BLOOD: frozenset({5})}
-        new, removed = self._remove(data, "Twilight", [196])
-        self.assertEqual(_sets(new), {SOLSTICE: {5}, BLOOD: {5}})
-        self.assertEqual(sorted(removed), [(MYSTIC, 196), (SOLSTICE, 196)])
-
-    def test_only_under_special_moon_it_is_removed_there_for_classic_and_moon(self):
-        for round_type in ("Classic", "Mystic Moon", "Solstice"):
-            data = {SPECIAL: frozenset({192, 196}), FOG: frozenset({192})}
-            new, removed = self._remove(data, round_type, [192])
-            self.assertEqual(_sets(new), {SPECIAL: {196}, FOG: {192}}, round_type)
-            self.assertEqual(removed, [(SPECIAL, 192)], round_type)
+    def test_a_special_moon_terror_is_not_removed_from_the_other_rounds_keys(self):
+        for round_type in ("Classic", "Fog"):
+            data = {SPECIAL: frozenset({BLOODTHIRSTY}), FOG: frozenset({BLOODTHIRSTY})}
+            new, removed = self._remove(data, round_type, [BLOODTHIRSTY])
+            if round_type == "Classic":
+                self.assertIs(new, data, "Classic のキーには無く、Special/Moon を予備に見ることはもう無い")
+                self.assertEqual(removed, [])
+            else:
+                self.assertEqual(_sets(new), {SPECIAL: {BLOODTHIRSTY}})
+                self.assertEqual(removed, [(FOG, BLOODTHIRSTY)])
 
     def test_when_the_round_key_has_it_special_moon_is_left_alone(self):
-        data = {CLASSIC: frozenset({192}), SPECIAL: frozenset({192})}
-        new, removed = self._remove(data, "Classic", [192])
-        self.assertEqual(_sets(new), {SPECIAL: {192}})
-        self.assertEqual(removed, [(CLASSIC, 192)])
-
-    def test_special_moon_is_not_looked_at_for_other_rounds(self):
-        """判定が Special/Moon を見るのは Classic と Moon だけ（RoundDecision.SPECIAL_MOON_ROUNDS）"""
-        data = {SPECIAL: frozenset({192})}
-        new, removed = self._remove(data, "Fog", [192])
-        self.assertIs(new, data)
-        self.assertEqual(removed, [])
+        data = {CLASSIC: frozenset({BLOODTHIRSTY}), SPECIAL: frozenset({BLOODTHIRSTY})}
+        new, removed = self._remove(data, "Classic", [BLOODTHIRSTY])
+        self.assertEqual(_sets(new), {SPECIAL: {BLOODTHIRSTY}})
+        self.assertEqual(removed, [(CLASSIC, BLOODTHIRSTY)])
 
     def test_nothing_listed_changes_nothing(self):
         data = {CLASSIC: frozenset({7})}
@@ -115,9 +106,9 @@ class TestRemoveSurvived(unittest.TestCase):
     def test_the_round_keys_follow_the_judgement(self):
         self.assertEqual(ContinueList.round_keys("Classic"), [CLASSIC])
         self.assertEqual(ContinueList.round_keys("Fog (Alternate)"), [FOG], "判定と同じく通常の Fog")
-        self.assertEqual(ContinueList.round_keys("Solstice"), MOON_KEYS)
-        self.assertEqual(set(ContinueList.MOON_ROUNDS), RoundDecision.MOON_ROUND_TYPES)
-        self.assertEqual(ContinueList.round_keys("Moon"), [SPECIAL])
+        for round_type in MOON_ROUNDS:
+            self.assertEqual(ContinueList.round_keys(round_type), [SPECIAL], round_type)
+        self.assertFalse(hasattr(ContinueList, "MOON_ROUNDS"))
 
     def test_after_removal_the_judgement_no_longer_continues(self):
         data = {CLASSIC: frozenset({3})}
@@ -137,10 +128,11 @@ class TestEditHelpers(unittest.TestCase):
         self.assertEqual(_sets(ContinueList.toggled(data, [CLASSIC], 1)), {})
         self.assertEqual(_sets(ContinueList.toggled(data, [CLASSIC], 2)), {CLASSIC: {1, 2}})
 
-    def test_toggling_a_moon_id_present_in_only_one_key_removes_it_everywhere(self):
+    def test_toggling_an_id_present_in_only_one_of_several_keys_removes_it_everywhere(self):
+        keys = [MYSTIC, BLOOD, SPECIAL]
         data = {MYSTIC: frozenset({196})}
-        self.assertEqual(ContinueList.toggled(data, MOON_KEYS, 196), {})
-        self.assertEqual(_sets(ContinueList.toggled({}, MOON_KEYS, 196)), {key: {196} for key in MOON_KEYS})
+        self.assertEqual(ContinueList.toggled(data, keys, 196), {})
+        self.assertEqual(_sets(ContinueList.toggled({}, keys, 196)), {key: {196} for key in keys})
 
     def test_counts(self):
         self.assertEqual(ContinueList.counts({CLASSIC: frozenset({1, 2}), FOG: frozenset({3})}), (2, 3))
@@ -175,7 +167,7 @@ class TestFiles(unittest.TestCase):
         data = {CLASSIC: frozenset({7, 3}), FOG: frozenset({1})}
         self.assertTrue(ContinueList.save(data, {"list_name": "リスト"}))
         raw = json.loads(ContinueList.list_path().read_text(encoding="utf-8"))
-        self.assertEqual(raw, {"version": 1, "list_name": "リスト", "data": {CLASSIC: [3, 7], FOG: [1]}})
+        self.assertEqual(raw, {"version": 2, "list_name": "リスト", "data": {CLASSIC: [3, 7], FOG: [1]}})
         loaded, meta = ContinueList.load()
         self.assertEqual(loaded, data)
         self.assertEqual(meta, {"list_name": "リスト"})
@@ -194,7 +186,7 @@ class TestFiles(unittest.TestCase):
     def test_unusable_values_are_dropped_when_reading(self):
         ContinueList.list_path().parent.mkdir(parents=True, exist_ok=True)
         ContinueList.list_path().write_text(json.dumps(
-            {"version": 1, "data": {CLASSIC: [1, "x", True, 2.5, 4], FOG: [], MYSTIC: "no"}}),
+            {"version": 2, "data": {CLASSIC: [1, "x", True, 2.5, 4], FOG: [], MYSTIC: "no"}}),
             encoding="utf-8")
         data, _meta = ContinueList.load()
         self.assertEqual(_sets(data), {CLASSIC: {1, 4}})
@@ -221,8 +213,8 @@ class TestFiles(unittest.TestCase):
 
     # ── .tnl への書き出し ──
     def test_write_tnl_can_be_read_back_by_the_tnl_reader(self):
-        data = {CLASSIC: frozenset({3, 7, 192}), FOG: frozenset({150}), MYSTIC: frozenset({196}),
-                SPECIAL: frozenset({192, 312})}
+        data = {CLASSIC: frozenset({3, 7, BLOODTHIRSTY}), FOG: frozenset({own(150)}),
+                SPECIAL: frozenset({MOON_A, TerrorIds.RIFT_MONSTERS})}
         path = self.dir / "out.tnl"
         self.assertTrue(ContinueList.write_tnl(data, {"list_name": "出力"}, path))
         keep_on, meta = MatchTNL.load_tnl(str(path))
@@ -239,19 +231,34 @@ class TestFiles(unittest.TestCase):
                          {"format": "tnl_json", "version": 105, "creator": "ToNAutoBeginner", "list_name": "出力"})
         self.assertRegex(raw["created_at"], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
         slots = json.loads((REPO_ROOT / "assets" / "data" / "continue_slots.json").read_text(encoding="utf-8"))
-        self.assertEqual(list(raw["data"]), [key for key, _ids in slots["rounds"]], "枠を全部・同じ順で")
+        tool_keys = [key for key, _ids in slots["rounds"] if key != SPECIAL]
+        moon_keys = [key for key, _ids in slots["listtool"]["moon_keys"]]
+        self.assertEqual(list(raw["data"]), tool_keys + moon_keys, "ラウンドの枠を全部・同じ順で。ListTool にだけあるキーが最後")
+        self.assertEqual(moon_keys, [SPECIAL, MYSTIC, BLOOD])
         for key, ids in slots["rounds"]:
-            self.assertEqual(list(raw["data"][key]), [str(i) for i in ids], key)
-            self.assertTrue(all(v in (0, 1) and isinstance(v, int) for v in raw["data"][key].values()), key)
+            if key == SPECIAL:
+                continue
+            visible = [i for i in ids if i < 4000 or str(i) in slots["listtool"]["variants"]
+                       and key in slots["listtool"]["variants"][str(i)]]
+            expected = [str(TerrorIds.to_listtool(i)) for i in visible]
+            self.assertEqual(list(raw["data"][key]), expected, key)
+        for key, ids in slots["listtool"]["moon_keys"]:
+            self.assertEqual(list(raw["data"][key]), [str(TerrorIds.to_listtool(i)) for i in ids], key)
+        for key, values in raw["data"].items():
+            self.assertTrue(all(v in (0, 1) and isinstance(v, int) for v in values.values()), key)
         self.assertEqual(raw["data"][CLASSIC]["3"], 1)
         self.assertEqual(raw["data"][CLASSIC]["4"], 0)
         self.assertEqual(sum(sum(v.values()) for v in raw["data"].values()), 1)
+        self.assertNotIn("190", raw["data"][CLASSIC], "HHI は ListTool のラウンドのキーに枠が無い")
+        self.assertIn("192", raw["data"][CLASSIC], "Bloodthirsty は ListTool の Classic にも枠がある")
+        self.assertNotIn("1283", raw["data"]["Unbound/アンバウンド"], "Self Inserts (Bloodthirsty) は ListTool に無い")
 
     def test_write_tnl_keeps_ids_and_keys_that_are_not_in_the_slot_table(self):
         data = {CLASSIC: frozenset({9999}), "Future Round/未来": frozenset({5})}
         path = self.dir / "out.tnl"
         ContinueList.write_tnl(data, {}, path)
-        self.assertEqual(MatchTNL.load_tnl(str(path))[0], _sets(data))
+        self.assertEqual(MatchTNL.load_tnl(str(path))[0], {"Future Round/未来": {5}},
+                         "表に無い番号（ListTool の番号が無い）は書かない。枠の表に無いキーは書く")
 
     def test_write_tnl_does_not_touch_the_own_list_file(self):
         ContinueList.save({CLASSIC: frozenset({1})}, {"list_name": "x"})
@@ -356,12 +363,14 @@ class TestLogMonitorRemoval(unittest.TestCase):
         self.assertEqual(self._lines(monitor),
                          [f"[続行リスト] 生存したので外しました: {LogMonitor.format_terror_ids([3, 5])} / Double Trouble"])
 
-    def test_a_moon_round_removes_from_all_four_keys(self):
-        ContinueList.set_current({key: frozenset({196, 5}) for key in MOON_KEYS})
-        monitor = self._monitor("Blood Moon", (196,))
-        monitor._process(LIVED)
-        self.assertEqual(_sets(ContinueList.current()), {key: {5} for key in MOON_KEYS})
-        self.assertEqual(len(self._lines(monitor)), 1, "ログは 1 行")
+    def test_a_moon_round_removes_from_the_special_moon_key(self):
+        for round_type in MOON_ROUNDS:
+            ContinueList.set_current({SPECIAL: frozenset({MOON_A, MOON_B}), CLASSIC: frozenset({MOON_A})})
+            monitor = self._monitor(round_type, (flow_id(196),))
+            monitor._process(LIVED)
+            self.assertEqual(_sets(ContinueList.current()), {SPECIAL: {MOON_B}, CLASSIC: {MOON_A}}, round_type)
+            self.assertEqual(len(self._lines(monitor)), 1, "ログは 1 行")
+            self.assertIn("Mystic Moon", self._lines(monitor)[0], "名前で出す")
 
     def test_a_terror_that_is_not_listed_logs_nothing_and_tells_no_one(self):
         ContinueList.set_current({CLASSIC: frozenset({8})})
@@ -425,12 +434,13 @@ class TestLogMonitorRemoval(unittest.TestCase):
         monitor._process(LIVED)
         self.assertEqual(ContinueList.current(), {})
 
-    def test_the_alternate_offset_ids_that_the_judgement_used_are_the_ones_removed(self):
-        """st.terror_ids は判定に使う番号（Alternate は +134 済み）。そのまま外す"""
-        ContinueList.set_current({"Alternate/オルタネイト": frozenset({136, 140})})
-        monitor = self._monitor("Alternate", (136,))
+    def test_the_ids_that_the_judgement_used_are_the_ones_removed(self):
+        """st.terror_ids は判定に使う番号。それと同じテラーを外す（Alternate の 136 は独自の番号の 1002）"""
+        ContinueList.set_current({"Alternate/オルタネイト": frozenset({own(136), own(140)})})
+        monitor = self._monitor("Alternate", (flow_id(136),))
         monitor._process(LIVED)
-        self.assertEqual(_sets(ContinueList.current()), {"Alternate/オルタネイト": {140}})
+        self.assertEqual(_sets(ContinueList.current()), {"Alternate/オルタネイト": {own(140)}})
+        self.assertEqual(self._lines(monitor), ["[続行リスト] 生存したので外しました: Sanic / Alternate"])
 
 
 # ── 続行表の窓（続行リスト）───────────────────────
@@ -541,23 +551,24 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.assertEqual(set(listed), {t for t in self.win._cells if self.win._matches(t)})
         self.assertLess(len(listed), len(self.win._cells))
 
-    def test_moon_writes_all_four_keys_and_clears_them(self):
-        self._select_round("Moon")
-        self.win.toggle(196)
-        self.assertEqual(_sets(ContinueList.current()), {key: {196} for key in MOON_KEYS})
-        self.win.toggle(196)
+    def test_special_moon_writes_its_one_key_and_clears_it(self):
+        self._select_round("Special/Moon")
+        self.win.toggle(MOON_A)
+        self.assertEqual(_sets(ContinueList.current()), {SPECIAL: {MOON_A}})
+        self.win.toggle(MOON_A)
         self.assertEqual(ContinueList.current(), {})
         self.win.select_all()
-        self.assertEqual(set(ContinueList.current()), set(MOON_KEYS))
+        self.assertEqual(set(ContinueList.current()), {SPECIAL})
+        self.assertEqual(set(ContinueList.current()[SPECIAL]), set(MatchTNL.slots().by_key[SPECIAL]))
         self.win.clear_all()
         self.assertEqual(ContinueList.current(), {})
 
-    def test_moon_shows_a_terror_that_is_in_only_one_key(self):
-        ContinueList.set_current({TWILIGHT: frozenset({196})})
-        self._select_round("Moon")
-        self.assertEqual(self._style(196), ("#4FA3FF", 2.0))
-        self.win.toggle(196)
-        self.assertEqual(ContinueList.current(), {}, "どれかに入っていれば外す")
+    def test_special_moon_shows_a_terror_that_is_in_the_key(self):
+        ContinueList.set_current({SPECIAL: frozenset({MOON_A})})
+        self._select_round("Special/Moon")
+        self.assertEqual(self._style(MOON_A), ("#4FA3FF", 2.0))
+        self.win.toggle(MOON_A)
+        self.assertEqual(ContinueList.current(), {})
 
     def test_saving_is_put_off_and_writes_only_the_list_file(self):
         with patch.object(ContinueList, "save_current", wraps=ContinueList.save_current) as save:
@@ -720,8 +731,8 @@ class TestImportAndExport(_AppCase):
         self.assertEqual(yes.call_count, 1, "確認を出す")
         self.assertIn("置き換え", self.asked[0][1])
         self.assertEqual(error.call_count, 0)
-        self.assertEqual(_sets(self.app.keepOn_set), {FOG: {150}})
-        self.assertEqual(_sets(ContinueList.load()[0]), {FOG: {150}}, "保存した")
+        self.assertEqual(_sets(self.app.keepOn_set), {FOG: {own(150)}}, "ListTool の 150 は独自の番号に直る")
+        self.assertEqual(_sets(ContinueList.load()[0]), {FOG: {own(150)}}, "保存した")
         self.assertEqual(self.app.lbl_tnl.cget("text"), "[リストB] 1ラウンド / 1件 続行対象")
         self.assertEqual(mainGUI.load_settings().get("tnl_path"), str(other), "選んだ .tnl を覚える")
         self.assertEqual(other.read_bytes(), before, ".tnl は書き換えない")

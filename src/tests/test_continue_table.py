@@ -129,13 +129,16 @@ class TestOverlayLabel(unittest.TestCase):
         self.assertEqual(ContinueTable.overlay_label({KEY: {7, 9}}, {KEY: {9}}, "Classic", [7, 9]), "",
                          "もう 1 体が続行なら変わらない")
 
-    def test_the_special_moon_slot_counts_for_classic_and_moons(self):
-        self.assertEqual(ContinueTable.overlay_label({SPECIAL: {192}}, {SPECIAL: set()}, "Classic", [192]),
-                         "（続行無効）")
-        self.assertEqual(ContinueTable.overlay_label({}, {SPECIAL: {192}}, "Blood Moon", [192]),
-                         "（デフォ続行）")
-        self.assertEqual(ContinueTable.overlay_label({}, {SPECIAL: {192}}, "Fog", [192]), "",
-                         "Special/Moon を見るのは Classic と Moon だけ（RoundDecision と同じ）")
+    def test_the_special_moon_key_is_the_key_of_the_special_and_moon_rounds_only(self):
+        moon = own(196)
+        for round_type in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Special", "Cold Night"):
+            self.assertEqual(ContinueTable.overlay_label({SPECIAL: {moon}}, {SPECIAL: set()}, round_type,
+                                                         [flow_id(196)]), "（続行無効）", round_type)
+            self.assertEqual(ContinueTable.overlay_label({}, {SPECIAL: {moon}}, round_type, [flow_id(196)]),
+                             "（デフォ続行）", round_type)
+        for round_type in ("Classic", "Fog"):
+            self.assertEqual(ContinueTable.overlay_label({}, {SPECIAL: {own(192)}}, round_type, [flow_id(192)]), "",
+                             "ほかのラウンドは Special/Moon を予備に見ない（RoundDecision と同じ）")
 
     def test_the_log_round_name_is_mapped_to_the_tnl_key(self):
         self.assertEqual(ContinueTable.overlay_label({}, {"Fog/霧": {7}}, "Fog (Alternate)", [7]),
@@ -165,14 +168,14 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(loaded, store)
         self.assertEqual(list(loaded.disabled_presets), ["後", "先"])
 
-    def test_the_file_has_the_documented_v2_shape(self):
-        store = Store(disabled_presets={BASE: _body({KEY: [9, 5]})}, default_presets={BASE: _body({ALT: [164]})},
+    def test_the_file_has_the_documented_v3_shape(self):
+        store = Store(disabled_presets={BASE: _body({KEY: [9, 5]})}, default_presets={BASE: _body({ALT: [1030]})},
                       windows={1: {DIS: BASE, DFL: None}})
         ContinueTable.save(store, self.path)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(raw, {"version": 2,
+        self.assertEqual(raw, {"version": 3,
                                "disabled_presets": {BASE: {KEY: [5, 9]}},
-                               "default_presets": {BASE: {ALT: [164]}},
+                               "default_presets": {BASE: {ALT: [1030]}},
                                "windows": {"1": {"disabled": BASE, "default": None}},
                                "item_rules": []})
 
@@ -252,19 +255,19 @@ class TestMigrationFromV1(unittest.TestCase):
     def test_the_old_tables_become_the_base_presets(self):
         store = self._v1()
         self.assertEqual(store.disabled_presets, {BASE: _body({KEY: [5, 9]})})
-        self.assertEqual(store.default_presets, {BASE: _body({ALT: [164]})})
+        self.assertEqual(store.default_presets, {BASE: _body({ALT: [own(164)]})}, "番号は独自の番号に移る")
         self.assertEqual(store.windows, {})
         for idx in (1, 4, 8):
             table = ContinueTable.table_for(store, idx)
             self.assertEqual(table.disabled, _body({KEY: [5, 9]}), idx)
-            self.assertEqual(table.default, _body({ALT: [164]}), idx)
+            self.assertEqual(table.default, _body({ALT: [own(164)]}), idx)
 
     def test_use_disabled_false_makes_every_window_none_for_that_kind_only(self):
         store = self._v1(use_disabled=False)
         for idx in range(1, config.MAX_WINDOWS + 1):
             table = ContinueTable.table_for(store, idx)
             self.assertEqual(table.disabled, {}, idx)
-            self.assertEqual(table.default, _body({ALT: [164]}), idx)
+            self.assertEqual(table.default, _body({ALT: [own(164)]}), idx)
         self.assertEqual(store.disabled_presets, {BASE: _body({KEY: [5, 9]})}, "表の中身は消さない")
 
     def test_use_default_false_makes_every_window_none_for_the_default_kind_only(self):
@@ -273,7 +276,7 @@ class TestMigrationFromV1(unittest.TestCase):
             table = ContinueTable.table_for(store, idx)
             self.assertEqual(table.disabled, _body({KEY: [5, 9]}), idx)
             self.assertEqual(table.default, {}, idx)
-        self.assertEqual(store.default_presets, {BASE: _body({ALT: [164]})})
+        self.assertEqual(store.default_presets, {BASE: _body({ALT: [own(164)]})})
 
     def test_a_v1_file_without_a_version_is_migrated_too_and_bad_entries_are_dropped(self):
         self.path.write_text(json.dumps({"disabled": {KEY: [1, "x", True, 3], "bad": "no"}, "default": "no"}),
@@ -282,11 +285,11 @@ class TestMigrationFromV1(unittest.TestCase):
         self.assertEqual(store.disabled_presets, {BASE: _body({KEY: [1, 3]})})
         self.assertEqual(store.default_presets, {BASE: {}})
 
-    def test_saving_after_loading_writes_v2_and_loads_back_the_same(self):
+    def test_saving_after_loading_writes_v3_and_loads_back_the_same(self):
         store = self._v1(use_disabled=False)
         ContinueTable.save(store, self.path)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(raw["version"], 2)
+        self.assertEqual(raw["version"], 3)
         self.assertNotIn("use_disabled", raw)
         self.assertEqual(ContinueTable.load(self.path), store)
 
@@ -475,7 +478,7 @@ class TestCurrent(unittest.TestCase):
 
 
 class TestIconData(unittest.TestCase):
-    """assets/icons・assets/data/continue_slots.json の中身"""
+    """assets/icons・assets/data/terror_ids.json・assets/data/continue_slots.json の中身"""
 
     @classmethod
     def setUpClass(cls):
@@ -493,66 +496,79 @@ class TestIconData(unittest.TestCase):
             img = cv2.imdecode(data, cv2.IMREAD_UNCHANGED)
             self.assertIsNotNone(img, file)
             sheets[name] = img
-        self.assertTrue(self.icons["icons"])
-        for tid, (sheet, col, row) in self.icons["icons"].items():
+        self.assertTrue(TerrorIds.ids())
+        for tid in TerrorIds.ids():
+            sheet, col, row = TerrorIds.icon(tid)
             h, w = sheets[sheet].shape[:2]
             self.assertLessEqual((col + 1) * cell, w, f"{tid}: {sheet} の幅")
             self.assertLessEqual((row + 1) * cell, h, f"{tid}: {sheet} の高さ")
 
+    def test_icons_json_only_has_how_to_cut_the_sheets(self):
+        self.assertEqual(set(self.icons), {"cell", "sheets", "note"}, "アイコンの位置・名前は terror_ids.json にある")
+
     def test_every_slot_has_an_icon(self):
-        """Glorbo（317）も「?」の絵を持つ（GK）。仮の番号 1283 は 192 の絵"""
+        """Glorbo（4012）も「?」の絵を持つ（GK）。Self Inserts (Bloodthirsty) は Bloodthirsty の絵"""
         slots = {i for _key, ids in self.slots["rounds"] for i in ids}
-        missing = sorted(slots - {int(t) for t in self.icons["icons"]})
+        missing = sorted(i for i in slots if TerrorIds.icon(i) is None)
         self.assertEqual(missing, [])
 
-    def test_glorbo_is_the_question_mark_and_self_inserts_bloodthirsty_borrows_192(self):
-        self.assertEqual(self.icons["icons"]["317"], ["terrors", 0, 0])
-        self.assertEqual(self.icons["icons"][str(config.SELF_INSERTS_BLOODTHIRSTY_SLOT)],
-                         self.icons["icons"]["192"])
-        self.assertEqual(self.gui.terror_name(317), "Glorbo")
-        self.assertEqual(self.gui.terror_name(config.SELF_INSERTS_BLOODTHIRSTY_SLOT),
-                         "Self Inserts (Bloodthirsty)")
+    def test_glorbo_is_the_question_mark_and_self_inserts_bloodthirsty_borrows_the_bloodthirsty_one(self):
+        self.assertEqual(TerrorIds.icon(TerrorIds.GLORBO), ("terrors", 0, 0))
+        self.assertEqual(TerrorIds.icon(TerrorIds.SELF_INSERTS_BLOODTHIRSTY),
+                         TerrorIds.icon(TerrorIds.BLOODTHIRSTY_CREATURE))
+        self.assertEqual(self.gui.terror_name(TerrorIds.GLORBO), "Glorbo")
+        self.assertEqual(self.gui.terror_name(TerrorIds.SELF_INSERTS_BLOODTHIRSTY), "Self Inserts (Bloodthirsty)")
 
-    def test_icons_json_has_276_icons_and_the_added_ones(self):
-        self.assertEqual(len(self.icons["icons"]), 276)
-        for tid in (193, 194, 196, 197, 198, 199, 312, 313, 315, 317, 1283):
-            self.assertIn(str(tid), self.icons["icons"], tid)
+    def test_every_terror_in_the_table_has_a_picture(self):
+        self.assertEqual(len(TerrorIds.ids()), 330)
+        self.assertEqual(sum(1 for i in TerrorIds.ids() if TerrorIds.icon(i) is not None), 330)
+        for tid in (3056, 3058, 4003, 4004, 4005, 4006, 4007, 4008, 4010, 4012, 4013):
+            self.assertIsNotNone(TerrorIds.icon(tid), tid)
 
-    def test_names_in_icons_json_come_before_terrors_json(self):
-        self.assertEqual(self.gui.icon_names(), {int(t): n for t, n in self.icons["names"].items()})
-        self.assertEqual(self.gui.terror_name(193), "The Navigator", "terrors.json では Navigator")
-        self.assertEqual(self.gui.terror_name(312), "Riftmonster")
-        self.assertEqual(self.gui.terror_name(315), "Neo Pilot")
-        self.assertEqual(self.gui.terror_name(192), "Wild Yet Bloodthirsty Creature")
-        self.assertEqual(self.gui.terror_name(192, "Unbound/アンバウンド"),
+    def test_the_names_come_from_the_table(self):
+        self.assertEqual(self.gui.terror_name(3056), "The Navigator")
+        self.assertEqual(self.gui.terror_name(TerrorIds.RIFT_MONSTERS), "Rift Monsters")
+        self.assertEqual(self.gui.terror_name(TerrorIds.NEO_PILOT), "Neo Pilot")
+        self.assertEqual(self.gui.terror_name(TerrorIds.FOXY), "Evil Purple Foxy")
+        self.assertEqual(self.gui.terror_name(TerrorIds.BLOODTHIRSTY_CREATURE), "Wild Yet Bloodthirsty Creature")
+        self.assertEqual(self.gui.terror_name(TerrorIds.BLOODTHIRSTY_CREATURE, "Unbound/アンバウンド"),
                          "Pack of Wild Yet Bloodthirsty Creatures")
-        self.assertEqual(self.gui.terror_name(192, "Classic/クラシック"), "Wild Yet Bloodthirsty Creature")
+        self.assertEqual(self.gui.terror_name(TerrorIds.BLOODTHIRSTY_CREATURE, "Classic/クラシック"),
+                         "Wild Yet Bloodthirsty Creature")
 
-    def test_the_screen_leaves_out_the_special_round(self):
+    def test_the_screen_has_special_moon_as_one_tab(self):
         keys = [key for key, _ids in self.gui.load_rounds()]
-        self.assertEqual(len(keys), 17, "Mystic Moon・Blood Moon は 1 つの Moon にまとまる")
-        self.assertNotIn(SPECIAL, keys)
+        self.assertEqual(len(keys), 17)
+        self.assertIn(SPECIAL, keys)
+        self.assertEqual(self.gui.round_display_name(SPECIAL), "Special/Moon")
+        for key in keys:
+            if key != SPECIAL:
+                self.assertEqual(self.gui.round_display_name(key), key.split("/")[0])
+        self.assertNotIn("Moon", [self.gui.round_display_name(k) for k in keys], "Moon のタブは Special/Moon になった")
 
-    def test_the_slot_file_has_the_nineteen_rounds_with_distinct_keys(self):
+    def test_the_slot_file_has_the_seventeen_rounds_with_distinct_keys(self):
         keys = [key for key, _ids in self.slots["rounds"]]
-        self.assertEqual(len(keys), 19)
-        self.assertEqual(len(set(keys)), 19)
+        self.assertEqual(len(keys), 17)
+        self.assertEqual(len(set(keys)), 17)
         self.assertEqual(self.gui.load_rounds()[0][0], KEY)
+        self.assertEqual(self.slots["version"], 2)
         for key in keys:
             self.assertIn(key, set(MatchTNL.LOG_TO_TNL.values()) | {SPECIAL}, key)
+        for key in (MatchTNL.LOG_TO_TNL["Mystic Moon"], MatchTNL.LOG_TO_TNL["Cold Night"]):
+            self.assertEqual(key, SPECIAL)
 
     def test_an_icon_is_cut_and_enlarged_to_a_png(self):
         png = self.gui.icon_png(0)
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_UNCHANGED)
         self.assertEqual(img.shape[:2], (self.gui.ICON_SIZE, self.gui.ICON_SIZE))
-        self.assertIsNotNone(self.gui.icon_png(193), "193 は GI で絵が付いた")
-        self.assertIsNotNone(self.gui.icon_png(317), "317（Glorbo）は GK で「?」の絵が付いた")
+        self.assertIsNotNone(self.gui.icon_png(3056), "The Navigator は GI で絵が付いた")
+        self.assertIsNotNone(self.gui.icon_png(TerrorIds.GLORBO), "Glorbo は GK で「?」の絵が付いた")
         self.assertIsNone(self.gui.icon_png(99999), "絵が無い番号は None（名前の札になる）")
 
-    def test_names_come_from_terrors_json_or_the_number(self):
+    def test_names_come_from_the_table_or_the_number(self):
         self.assertEqual(self.gui.terror_name(0), "Huggy")
-        self.assertEqual(self.gui.terror_name(134), "Decayed Sponge")
-        self.assertEqual(self.gui.terror_name(200), "Guidance & The Booboo's")
+        self.assertEqual(self.gui.terror_name(1000), "Decayed Sponge")
+        self.assertEqual(self.gui.terror_name(2000), "Guidance & The Booboo's")
         self.assertEqual(self.gui.terror_name(99999), "#99999")
         self.assertEqual(self.gui.round_display_name(KEY), "Classic")
 
@@ -643,9 +659,9 @@ class TestWindowList(_MonitorCase):
 
     def test_a_terror_removed_from_the_host_list_comes_back_with_the_default_table(self):
         """生存済みで主催リストから消えた Alternate（キーはあるが空）を、デフォ続行で続行にする"""
-        monitor = self._monitor({ALT: set()}, round_type="Alternate", ids=[150])
+        monitor = self._monitor({ALT: set()}, round_type="Alternate", ids=[flow_id(150)])
         self.assertEqual(self._result_of(monitor), "skip")
-        ContinueTable.set_current(_store(None, {ALT: [150]}))
+        ContinueTable.set_current(_store(None, {ALT: [own(150)]}))
         self.assertEqual(self._result_of(monitor), "continue")
 
     def test_it_also_applies_to_the_host_list_of_a_tab(self):
@@ -668,10 +684,10 @@ class TestWindowList(_MonitorCase):
         ContinueTable.set_current(_store({"Bloodbath/ブラッドバス": [7, 8]}))
         self.assertEqual(self._result_of(monitor), "skip")
 
-    def test_the_special_moon_slot_is_overlaid_too(self):
-        monitor = self._monitor({SPECIAL: {192}}, round_type="Classic", ids=[192])
+    def test_the_special_moon_key_is_overlaid_too(self):
+        monitor = self._monitor({SPECIAL: {own(196)}}, round_type="Mystic Moon", ids=[flow_id(196)])
         self.assertEqual(self._result_of(monitor), "continue")
-        ContinueTable.set_current(_store({SPECIAL: [192]}))
+        ContinueTable.set_current(_store({SPECIAL: [own(196)]}))
         self.assertEqual(self._result_of(monitor), "skip")
 
     def test_the_stored_list_is_not_touched(self):
@@ -843,10 +859,10 @@ class TestPerWindowPresets(_MonitorCase):
 
 
 class TestPerWindowSelfInserts(unittest.TestCase):
-    """Self Inserts (Bloodthirsty) の「続行無効の 1283」もその窓のプリセットで決まる"""
+    """Self Inserts (Bloodthirsty) の「続行無効の 4013」もその窓のプリセットで決まる"""
 
     UNBOUND = "Unbound/アンバウンド"
-    SLOT = config.SELF_INSERTS_BLOODTHIRSTY_SLOT
+    SLOT = TerrorIds.SELF_INSERTS_BLOODTHIRSTY
     SELF_INSERTS = config.SELF_INSERTS_ID
 
     def setUp(self):
@@ -875,7 +891,7 @@ class TestPerWindowSelfInserts(unittest.TestCase):
         self.assertTrue(one._self_inserts_table_disabled())
         self.assertFalse(two._self_inserts_table_disabled())
         self.assertFalse(none._self_inserts_table_disabled(), "「なし」の窓は重ねない")
-        self.assertFalse(one._list_plan([self.SELF_INSERTS], True)[1], "窓 1: 283 がリストに無い → 自爆")
+        self.assertFalse(one._list_plan([self.SELF_INSERTS], True)[1], "窓 1: Self Inserts がリストに無い → 自爆")
         self.assertTrue(two._list_plan([self.SELF_INSERTS], True)[1], "窓 2: 今までどおり必ず続行")
         self.assertTrue(none._list_plan([self.SELF_INSERTS], True)[1])
         self.assertTrue(one._should_skip_by_round(), "窓 1 は自爆指定が効く")
@@ -1053,7 +1069,7 @@ class TestItemRuleSaveLoad(unittest.TestCase):
 
     def test_a_rule_naming_a_missing_preset_loads_as_keep_with_one_log_line(self):
         self.path.write_text(json.dumps({
-            "version": 2, "disabled_presets": {BASE: {}, "無7": {}}, "default_presets": {BASE: {}},
+            "version": 3, "disabled_presets": {BASE: {}, "無7": {}}, "default_presets": {BASE: {}},
             "item_rules": [{"item": 70, "disabled": "消えた", "default": "これも"},
                            {"item": 5, "disabled": "無7", "default": "なし"}]}), encoding="utf-8")
         with patch.object(DebugLog, "write") as write:
@@ -1177,10 +1193,10 @@ class TestItemRuleJudgement(_MonitorCase):
 
 
 class TestItemRuleSelfInserts(unittest.TestCase):
-    """Self Inserts (Bloodthirsty) の「続行無効の 1283」も、決まりで選ばれたプリセットで見る"""
+    """Self Inserts (Bloodthirsty) の「続行無効の 4013」も、決まりで選ばれたプリセットで見る"""
 
     UNBOUND = "Unbound/アンバウンド"
-    SLOT = config.SELF_INSERTS_BLOODTHIRSTY_SLOT
+    SLOT = TerrorIds.SELF_INSERTS_BLOODTHIRSTY
 
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)

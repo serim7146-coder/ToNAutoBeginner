@@ -159,96 +159,105 @@ class TestGroupRoundTable(unittest.TestCase):
 class TestSpecialMoonKey(unittest.TestCase):
     """ToN ListTool は Variant と Moon を Special/Moon の13枠にまとめて記録する。
 
-    ラウンド別のキーは空のままなので、そちらだけ見ていると永久に空振りする。
-    ただし置き換えてはいけない——ID192 はラウンド別のキーにも入っている。
+    ツールの中では、Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night が Special/Moon の 1 つのキーを使い、
+    Classic などが Special/Moon を予備に見ることはない。ListTool の Special/Moon は読み込むときに置き場所の
+    キー（Classic など）へ配ってある（MatchTNL.own_list_from_listtool）ので、同じ指定が今までと同じに効く。
     """
 
     SPECIAL = MatchTNL.SPECIAL_MOON_KEY
     CLASSIC = "Classic/クラシック"
     FOG = "Fog/霧"
+    MOON_ROUNDS = ("Mystic Moon", "Blood Moon", "Twilight", "Solstice", "Special", "Cold Night")
+    # ListTool の番号（このテストの見本は ListTool のファイルの形で書き、読み込みと同じ直し方で通す）
+    HHI, ATRACHED, BLOODTHIRSTY, GIGABYTES, SONIC = 190, 191, 192, 314, 40
 
     def _continue(self, round_type, terror_ids, keep_on, wins=99, cancel_afk=False):
         return RoundDecision.decide_killers(
             keep_on, list(terror_ids), round_type, wins, cancel_afk
         ).is_continue_round
 
+    def _loaded(self, listtool_data):
+        return MatchTNL.own_list_from_listtool(listtool_data)
+
     # ── Variant ─────────────────────────────
-    def test_each_variant_is_found_in_the_special_slot(self):
-        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
-                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
-            self.assertTrue(
-                self._continue("Classic", [tid], {self.SPECIAL: {tid}}), tid)
+    def test_each_variant_of_the_listtool_special_moon_is_found_by_classic(self):
+        for tid in (self.HHI, self.ATRACHED, self.BLOODTHIRSTY, self.GIGABYTES):
+            keep_on = self._loaded({self.SPECIAL: {tid}})
+            self.assertTrue(self._continue("Classic", [flow_id(tid)], keep_on), tid)
 
     def test_a_variant_missing_from_the_slot_does_not_continue(self):
         self.assertFalse(
-            self._continue("Classic", [config.ATRACHED_ID],
-                           {self.SPECIAL: {config.GIGABYTES_ID}}))
+            self._continue("Classic", [flow_id(self.ATRACHED)],
+                           self._loaded({self.SPECIAL: {self.GIGABYTES}})))
 
     def test_an_unmutated_terror_is_not_covered(self):
         """Sonic のまま（Variant確定前）なら Special/Moon に居ない"""
         self.assertFalse(
-            self._continue("Classic", [config.SONIC_ID],
-                           {self.SPECIAL: {config.ATRACHED_ID}}))
+            self._continue("Classic", [flow_id(self.SONIC)],
+                           self._loaded({self.SPECIAL: {self.ATRACHED}})))
 
     def test_an_ordinary_terror_passes_straight_through(self):
-        self.assertFalse(self._continue("Classic", [42], {self.SPECIAL: {191}}))
+        self.assertFalse(self._continue("Classic", [42], self._loaded({self.SPECIAL: {191}})))
 
     # ── ラウンド別キーを取りこぼさない ────────────
-    def test_classic_sees_bloodthirsty_in_the_special_slot(self):
+    def test_classic_sees_bloodthirsty_of_the_listtool_special_moon(self):
         self.assertTrue(
-            self._continue("Classic", [config.BLOODTHIRSTY_CREATURE_ID],
-                           {self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}))
+            self._continue("Classic", [flow_id(self.BLOODTHIRSTY)],
+                           self._loaded({self.SPECIAL: {self.BLOODTHIRSTY}})))
 
     def test_a_round_key_still_wins_on_its_own(self):
-        """ID192 は Fog などラウンド別のキーにも入っている。寄せると落ちる"""
+        """192 は Fog などラウンド別のキーにも入っている。そちらの指定は Special/Moon に寄せられて落ちたりしない"""
         self.assertTrue(
-            self._continue("Fog", [config.BLOODTHIRSTY_CREATURE_ID],
-                           {self.FOG: {config.BLOODTHIRSTY_CREATURE_ID}}))
+            self._continue("Fog", [flow_id(self.BLOODTHIRSTY)],
+                           self._loaded({self.FOG: {self.BLOODTHIRSTY}})))
 
     def test_other_rounds_do_not_look_at_the_special_slot(self):
-        """Special/Moon にだけ192を入れている人が、Fog などで誤続行しないこと"""
+        """Special/Moon にだけ192を入れている人が、Fog などで誤続行しないこと（Classic だけに配られる）"""
+        keep_on = self._loaded({self.SPECIAL: {self.BLOODTHIRSTY}})
+        self.assertEqual(set(keep_on), {self.CLASSIC})
         for round_type in ("Fog", "Ghost", "Midnight", "Punished"):
-            self.assertFalse(
-                self._continue(round_type, [config.BLOODTHIRSTY_CREATURE_ID],
-                               {self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}),
-                round_type)
+            self.assertFalse(self._continue(round_type, [flow_id(self.BLOODTHIRSTY)], keep_on), round_type)
 
     def test_being_in_both_is_fine(self):
-        keep_on = {"Classic/クラシック": {config.BLOODTHIRSTY_CREATURE_ID},
-                   self.SPECIAL: {config.BLOODTHIRSTY_CREATURE_ID}}
+        keep_on = self._loaded({self.CLASSIC: {self.BLOODTHIRSTY}, self.SPECIAL: {self.BLOODTHIRSTY}})
+        self.assertTrue(self._continue("Classic", [flow_id(self.BLOODTHIRSTY)], keep_on))
 
-        self.assertTrue(
-            self._continue("Classic", [config.BLOODTHIRSTY_CREATURE_ID], keep_on))
-
-    def test_the_round_list_is_classic_and_the_four_moons(self):
-        self.assertEqual(
-            RoundDecision.SPECIAL_MOON_ROUNDS,
-            {"Classic", "Mystic Moon", "Blood Moon", "Twilight", "Solstice"})
+    def test_the_six_rounds_use_the_one_special_moon_key(self):
+        for round_type in self.MOON_ROUNDS:
+            self.assertEqual(MatchTNL.LOG_TO_TNL[round_type], self.SPECIAL, round_type)
+        self.assertNotIn("Moon", MatchTNL.LOG_TO_TNL, "Moon はログに出ない")
+        self.assertFalse(hasattr(RoundDecision, "SPECIAL_MOON_ROUNDS"), "予備に見る決まりは無くなった")
 
     def test_a_classic_round_key_still_works(self):
-        self.assertTrue(self._continue("Classic", [42],
-                                       {"Classic/クラシック": {42}}))
+        self.assertTrue(self._continue("Classic", [42], {"Classic/クラシック": {42}}))
 
     def test_an_unrelated_round_key_is_untouched(self):
         self.assertTrue(self._continue("Fog", [7], {self.FOG: {7}}))
         self.assertFalse(self._continue("Fog", [7], {self.FOG: {8}}))
 
     # ── Moon ────────────────────────────────
-    def test_moons_are_found_in_the_special_slot(self):
-        for round_type, tid in (("Mystic Moon", 313), ("Blood Moon", 315),
-                                ("Twilight", 316), ("Solstice", 317)):
+    def test_moons_are_found_in_the_special_moon_key(self):
+        for round_type, tid in (("Mystic Moon", 196), ("Blood Moon", 197), ("Twilight", 198), ("Solstice", 199)):
             self.assertTrue(
-                self._continue(round_type, [tid], {self.SPECIAL: {tid}}),
-                round_type)
+                self._continue(round_type, [flow_id(tid)], self._loaded({self.SPECIAL: {tid}})), round_type)
 
-    def test_a_special_round_type_still_works(self):
-        for round_type in ("Special", "Moon"):
-            self.assertTrue(
-                self._continue(round_type, [313], {self.SPECIAL: {313}}),
-                round_type)
-            self.assertFalse(
-                self._continue(round_type, [313], {self.SPECIAL: {315}}),
-                round_type)
+    def test_a_moon_item_ticked_in_one_listtool_moon_key_works_in_every_moon_round(self):
+        """Mystic Moon のキーにだけ入れていたものが、ほかの Moon・Special・Cold Night でも効く（各テラーは自分の
+        ラウンドにしか出ないので実際には同じ）"""
+        keep_on = self._loaded({"Mystic Moon/ミスティックムーン": {196, 312}})
+        self.assertEqual(set(keep_on), {self.SPECIAL})
+        for round_type in self.MOON_ROUNDS:
+            self.assertTrue(self._continue(round_type, [flow_id(196)], keep_on), round_type)
+
+    def test_special_and_cold_night_use_the_special_moon_key(self):
+        keep_on = self._loaded({self.SPECIAL: {313}})
+        for round_type in ("Special", "Cold Night"):
+            self.assertTrue(self._continue(round_type, [flow_id(313)], keep_on), round_type)
+            self.assertFalse(self._continue(round_type, [flow_id(312)], keep_on), round_type)
+
+    def test_cold_night_continues_for_rift_monsters(self):
+        """今までは Cold Night に当たるキーが無く、いつも自爆だった（わざと変わるところ）"""
+        self.assertTrue(self._continue("Cold Night", [flow_id(312)], self._loaded({self.SPECIAL: {312}})))
 
     # ── 壊れない ────────────────────────────
     def test_a_missing_special_key_is_fine(self):
@@ -258,7 +267,7 @@ class TestSpecialMoonKey(unittest.TestCase):
         self.assertFalse(self._continue("Classic", [191], {}))
 
     def test_an_empty_terror_list_is_fine(self):
-        self.assertFalse(self._continue("Classic", [], {self.SPECIAL: {191}}))
+        self.assertFalse(self._continue("Classic", [], self._loaded({self.SPECIAL: {191}})))
 
     def test_the_open_special_round_path_is_unchanged(self):
         dtm = LogMonitor.DTM_TERROR_ID
@@ -266,22 +275,6 @@ class TestSpecialMoonKey(unittest.TestCase):
 
         self.assertTrue(decision.is_open_special_round_target)
         self.assertTrue(decision.is_continue_round)
-
-    def test_the_real_list_now_covers_atrached(self):
-        """現物で再現していた不具合。Classic/クラシックは空、191はSpecial/Moon"""
-        if not Path(config.HOST_STATE_PATH).exists():
-            self.skipTest("host_state.sqlite3 が無い")
-        keep_on, _meta, _wishes = MatchTNL.load_host_state(
-            config.HOST_STATE_PATH, config.USER_SAVE_PATH)
-        if config.ATRACHED_ID not in keep_on.get(self.SPECIAL, set()):
-            self.skipTest("現物の Special/Moon に191が無い")
-
-        self.assertNotIn(config.ATRACHED_ID, keep_on.get(self.CLASSIC, set()),
-                         "ラウンド別キーには入っていない")
-        self.assertTrue(
-            self._continue("Classic", [config.ATRACHED_ID], keep_on))
-
-
 
 
 class TestSpecialMoonKeyWiring(unittest.TestCase):
@@ -305,9 +298,9 @@ class TestSpecialMoonKeyWiring(unittest.TestCase):
 
     def _monitor(self, instance_type):
         cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
-        monitor = LogMonitor.LogMonitor(
-            cfg, {self.SPECIAL: {config.ATRACHED_ID}}, lambda _m: None,
-            window_idx=1)
+        # ListTool の Special/Moon に Atrached（191）を入れた人のリスト（読み込みで Classic に配られる）
+        keep_on = MatchTNL.own_list_from_listtool({self.SPECIAL: {191}})
+        monitor = LogMonitor.LogMonitor(cfg, keep_on, lambda _m: None, window_idx=1)
         monitor.st.instance_type = instance_type
         monitor.st.in_round = True
         monitor.st.round_type = "Classic"
@@ -321,7 +314,7 @@ class TestSpecialMoonKeyWiring(unittest.TestCase):
             monitor = self._monitor(itype)
 
             # 待ちを止めるのに st.gigabytes を立ててはいけない。_on_killers が
-            # ids を [314] に差し替えるので、判定したいIDごと変わってしまう
+            # ids を Gigabytes に差し替えるので、判定したいIDごと変わってしまう
             with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
                  patch.object(LogMonitor.LogMonitor,
                               "_replacement_changes_decision",
@@ -1195,7 +1188,7 @@ class TestEightPagesListId(unittest.TestCase):
         return started, sent, play
 
     def test_the_list_id_decides_the_continue(self):
-        monitor = self._monitor({self.PAGES: {135}})       # Whiteface
+        monitor = self._monitor({self.PAGES: {own(135, True)}})       # Whiteface（8 Pages の 50 ページ目 = 3050）
 
         started, sent, play = self._run(monitor)
 
@@ -1220,7 +1213,7 @@ class TestEightPagesListId(unittest.TestCase):
         self.assertIn("do_skip", started, "B（2）だけがリストにあっても続行しない")
 
     def test_the_name_shown_is_the_real_terror(self):
-        monitor = self._monitor({self.PAGES: {135}})
+        monitor = self._monitor({self.PAGES: {own(135, True)}})
 
         self._run(monitor)
 
@@ -1228,7 +1221,7 @@ class TestEightPagesListId(unittest.TestCase):
 
     def test_an_unknown_number_is_logged_once_and_does_not_continue(self):
         # 44 は本物の表では登録済み。44 の無いテスト用の表で見る
-        monitor = self._monitor({self.PAGES: {44, 135}},
+        monitor = self._monitor({self.PAGES: {own(135, True)}},
                                 terrors=eight_pages_terrors({50: 135}))
 
         started, sent, _play = self._run(
@@ -2107,7 +2100,7 @@ class TestContinueRoundsByType(unittest.TestCase):
         """FE: 全続行のラウンドでも続行リストを見るので、置き換えで続行かが変わるなら待つ（普通のラウンドと同じ）"""
         monitor = self._monitor(continue_rounds=("Classic",),
                                 skip_rounds=("Classic",),
-                                keep_on={self.CLASSIC_KEY: {config.GIGABYTES_ID}})
+                                keep_on={self.CLASSIC_KEY: {TerrorIds.GIGABYTES}})
 
         started = self._killers(monitor)
 
@@ -2628,9 +2621,11 @@ class TestLogMonitorGroupRules(unittest.TestCase):
             self.assertFalse(monitor.st.is_continue_round, itype)
 
     def test_classic_with_each_variant_uses_the_keep_list(self):
-        for tid in (config.HUNGRY_HOME_INVADER_ID, config.ATRACHED_ID,
-                    config.BLOODTHIRSTY_CREATURE_ID, config.GIGABYTES_ID):
-            monitor = self._classic_monitor(tid, keep_on={"Classic/クラシック": {tid}})
+        for tid, listed in ((config.HUNGRY_HOME_INVADER_ID, TerrorIds.HUNGRY_HOME_INVADER),
+                            (config.ATRACHED_ID, TerrorIds.ATRACHED),
+                            (config.BLOODTHIRSTY_CREATURE_ID, TerrorIds.BLOODTHIRSTY_CREATURE),
+                            (config.GIGABYTES_ID, TerrorIds.GIGABYTES)):
+            monitor = self._classic_monitor(tid, keep_on={"Classic/クラシック": {listed}})
 
             started = self._run_delayed(monitor)
 
@@ -2740,9 +2735,8 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
     # ── 焼き芋 Fog ──────────────────────────
     def test_yakiimo_fog_revealed_as_alternate_uses_the_keep_list(self):
-        alternate = MatchTNL.ALTERNATE_OFFSET + 3
         monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO,
-                                keep_on={self.FOG_KEY: {alternate}})
+                                keep_on={self.FOG_KEY: {TerrorIds.ALTERNATE_BASE + 3}})
         monitor.st.round_type = "Fog"
 
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
@@ -2863,7 +2857,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
     # ── Variant判定待ち ────────────────────
     def test_a_single_terror_classic_waits_when_gigabytes_is_wanted(self):
         """元IDが毎回違うので、1体構成はどれも Gigabytes の候補"""
-        monitor = self._monitor(keep_on={"Classic/クラシック": {config.GIGABYTES_ID}})
+        monitor = self._monitor(keep_on={"Classic/クラシック": {TerrorIds.GIGABYTES}})
 
         started = self._round(monitor, "Classic", [99])
 
@@ -2883,7 +2877,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
                 ("Bloodbath", [config.CURIOUS_CREATURE_ID, 2, 3], ["do_skip"]),
                 ("8 Pages", [config.CURIOUS_CREATURE_ID, 2], [])):
             monitor = self._monitor(
-                keep_on={"Bloodbath/ブラッドバス": {config.BLOODTHIRSTY_CREATURE_ID}})
+                keep_on={"Bloodbath/ブラッドバス": {TerrorIds.BLOODTHIRSTY_CREATURE}})
 
             started = self._round(monitor, round_type, ids)
 
@@ -2891,7 +2885,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
     def test_a_normal_round_waits_when_the_variant_is_wanted(self):
         monitor = self._monitor(
-            keep_on={self.DT_KEY: {config.BLOODTHIRSTY_CREATURE_ID}})
+            keep_on={self.DT_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
 
         started = self._round(monitor, "Double Trouble",
                               [config.CURIOUS_CREATURE_ID, 5])
@@ -2946,7 +2940,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor._running = True
         monitor.st.round_type = "Classic"
         monitor.st.terror_ids = [99]
-        monitor.keepOn_set["Classic/クラシック"] = {config.GIGABYTES_ID}
+        monitor.keepOn_set["Classic/クラシック"] = {TerrorIds.GIGABYTES}
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(ConnectDB, "register_round"):
             monitor._process("The Gigabytes have come.")
@@ -2961,7 +2955,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         monitor._running = True
         monitor.st.round_type = "Classic"
         monitor.st.terror_ids = [config.SONIC_ID]
-        monitor.keepOn_set["Classic/クラシック"] = {config.ATRACHED_ID}
+        monitor.keepOn_set["Classic/クラシック"] = {TerrorIds.ATRACHED}
         with patch.object(LogMonitor.threading, "Thread"), \
              patch.object(ConnectDB, "register_round"):
             monitor._process("Lets play a game...")
@@ -2986,7 +2980,7 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
     def test_the_wait_falls_through_to_the_normal_judgement(self):
         """Variantが確定したら通常判定へ回すこと（待ちの間に抜けている）"""
-        monitor = self._monitor(keep_on={"Classic/クラシック": {config.ATRACHED_ID}})
+        monitor = self._monitor(keep_on={"Classic/クラシック": {TerrorIds.ATRACHED}})
         monitor._running = True
         monitor.st.round_type = "Classic"
         monitor.st.terror_ids = [config.ATRACHED_ID]

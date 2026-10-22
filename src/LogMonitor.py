@@ -1383,7 +1383,7 @@ class LogMonitor:
         if self.st.instance_type in GroupRound.GROUP_INSTANCES:
             return False
         return ContinueTable.disables(self._continue_table(), MatchTNL.LOG_TO_TNL["Unbound"],
-                                      config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
+                                      TerrorIds.SELF_INSERTS_BLOODTHIRSTY)
 
     def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
         """privateで「このラウンドは問答無用で自爆」に当たるか。
@@ -2084,10 +2084,13 @@ class LogMonitor:
                 or st.instance_type in GroupRound.GROUP_INSTANCES
                 or not st.terror_ids or not st.round_type):
             return
-        removed = ContinueList.remove_survived_current(st.round_type, st.terror_ids)
+        # TEMP: 流れの中の番号がまだ今の番号の間は、リスト（独自の番号）に合わせて直す
+        eight_pages = st.round_type == TerrorIds.EIGHT_PAGES_ROUND
+        own = [t for t in (TerrorIds.own_from_legacy(x, eight_pages) for x in st.terror_ids) if t is not None]
+        removed = ContinueList.remove_survived_current(st.round_type, own)
         if not removed:
             return
-        names = format_terror_ids(list(dict.fromkeys(tid for _key, tid in removed)), st.round_type)
+        names = ", ".join(TerrorIds.name(tid) for tid in dict.fromkeys(tid for _key, tid in removed))
         self._log(f"[続行リスト] 生存したので外しました: {names} / {st.round_type}")
         if self._on_list_changed:
             self._on_list_changed()

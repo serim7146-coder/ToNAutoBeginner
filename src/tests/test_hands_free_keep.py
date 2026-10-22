@@ -148,7 +148,7 @@ class TestHandsFreeKeep(_Base):
         monitor._decide("Punished")
         self._assert_skipped(monitor)
         listed = self._monitor("Punished", [config.GLORBO_ID], hands_free=False)
-        keep = {"Punished/パニッシュ": {config.GLORBO_ID}}
+        keep = {"Punished/パニッシュ": {TerrorIds.GLORBO}}
         with patch.object(listed, "_keep_on", return_value=keep):
             self.assertEqual(listed._plan("Punished", listed.st.terror_ids, False), ("glorbo",))
 

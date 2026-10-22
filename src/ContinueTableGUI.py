@@ -1,15 +1,18 @@
 """続行表の編集画面（GJ・GK）。ToN ListTool の続行選択画面と同じ並び・色で、テラーのアイコンを押して選ぶ。
 
-- 左: ラウンドの一覧（細い Listbox。Moon は Mystic Moon・Blood Moon・Twilight・Solstice を 1 つにまとめた「Moon」）
+- 左: ラウンドの一覧（細い Listbox。Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night は 1 つの「Special/Moon」）
 - 上: どれを編集するか（続行無効／デフォ続行／続行リスト）と、続行無効・デフォ続行のプリセット（選ぶ・新規・
   複製・名前変更・削除。GL。続行リストはプリセットが無いので欄を隠す）・名前の検索・全選択／全解除。押す・
   全選択・全解除・読み込みは、選んでいるプリセット（続行リストはツールの続行リストそのもの。GN）に効く
 - 中: テラーのアイコンの格子（tk.Canvas に直接描く。間隔は縦横とも 46px）。上から Classic（0〜133・ListTool の
-  並び）・Alternate（134〜169・11/9/7/5/3/1 の逆三角）・Unbound（200〜283）・特別（170〜177 ほか）・
-  バリアントの段（Classic だけ 190〜192・ほかの 192 があるラウンドは 192・Fog/Midnight の 315/316・
-  Unbound の Self Inserts (Bloodthirsty) の仮の番号）。ブロックの間は 1 行あける。名前は出さない（マウスを
-  乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
-  （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠
+  並び）・Alternate（1000〜1035・11/9/7/5/3/1 の逆三角）・Unbound（2000〜2083）・特別（8 Pages 限定のテラー・
+  Special/Moon の中身）・バリアントの段（4000 番台。HHI・Atrached・Bloodthirsty・Gigabytes・Neo Pilot・Evil Purple Foxy・
+  Glorbo・Self Inserts (Bloodthirsty)。そのラウンドの枠にあるものだけ）。ブロックの間は 1 行あける。名前は出さない
+  （マウスを乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
+  （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠。
+  そのラウンドに出ないテラー（そのラウンドの枠に無いもの。Ghost の BFF や 8 Pages に出ないものなど）のマスは、格子の
+  形はそのままに「選べないマス」: 12% の暗い絵・枠なし・押しても何も起きない・全選択／全解除の対象外・ツールチップは
+  「{名前}（このラウンドには出ません）」。8 Pages のタブは、その行（3000 番台）を ListTool の位置に選べるマスとして置く
 - 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む。その下に「アイテムで切り替え」の欄（GM）: 決まり 1 つ
   = 1 行（アイテム・続行無効・デフォ続行のプリセット・↑↓×）。同じアイテムが上にある行は薄い文字
 
@@ -31,12 +34,11 @@ import ContinueList
 import ContinueTable
 import DebugLog
 import MatchTNL
+import TerrorIds
 import UIFont
 
-SLOTS_FILE = "assets/data/continue_slots.json"
 ICONS_DIR = "assets/icons"
 ICONS_JSON = f"{ICONS_DIR}/icons.json"
-TERRORS_FILE = "assets/data/terrors.json"
 
 # 寸法・色は ToN ListTool 2.17 の続行選択画面を 2026-10-22 のスクリーンショット（46.png・47.png）から測った値
 COLUMNS = 12                 # Classic などの格子の 1 行の個数
@@ -52,8 +54,9 @@ CANVAS_WIDTH = 2 * MARGIN + (COLUMNS - 1) * X_PITCH + CELL_SIZE    # 574px
 CORNER = 2                   # 枠の角を丸める（斜めに落とす）大きさ
 SAVE_DELAY_MS = 300          # 押してから保存するまで（まとめて 1 回）
 
-# 不透明度（アイコンの絵を背景と混ぜる割合）: 選んでいない／もう片方の表に入っている／今の表に入っている／検索に合わない
-LEVELS = {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15}
+# 不透明度（アイコンの絵を背景と混ぜる割合）: 選んでいない／もう片方の表に入っている／今の表に入っている／検索に合わない／
+# そのラウンドに出ない（選べないマス）
+LEVELS = {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15, "gone": 0.12}
 THIN, THICK = 1, 2           # 枠の太さ
 
 COLOR_GRID_BG = "#2d2d2d"    # 格子の背景
@@ -75,24 +78,17 @@ OTHERS = {ContinueTable.DISABLED: (ContinueTable.DEFAULT,), ContinueTable.DEFAUL
 
 LAYOUT_JSON = f"{ICONS_DIR}/layout.json"
 
-# 範囲ごとのブロック（Classic 0〜133・Alternate 134〜169・Unbound 200〜283、残りは特別のブロック）
-CLASSIC_RANGE = range(0, 134)
-ALTERNATE_RANGE = range(134, 170)
-UNBOUND_RANGE = range(200, 284)
+# 範囲ごとのブロック（Classic 0〜999・Alternate 1000〜1999・Unbound 2000〜2999・8 Pages 3000〜3999、
+# 4000 番台は Special/Moon のタブでは特別のブロック、ほかのタブではバリアントの段）
+CLASSIC_RANGE = range(0, TerrorIds.ALTERNATE_BASE)
+ALTERNATE_RANGE = range(TerrorIds.ALTERNATE_BASE, TerrorIds.UNBOUND_BASE)
+UNBOUND_RANGE = range(TerrorIds.UNBOUND_BASE, TerrorIds.EIGHT_PAGES_BASE)
+EIGHT_PAGES_RANGE = range(TerrorIds.EIGHT_PAGES_BASE, TerrorIds.FIXED_BASE)
 
-# バリアントの段（格子の下に左寄せ）: Bloodthirsty の 192・Fog/Midnight の Neo Pilot・Foxy・Unbound の
-# Self Inserts (Bloodthirsty)。HHI（190）と Atrached（191）は Classic だけ
-CLASSIC_VARIANT_IDS = (190, 191, 192)
-VARIANT_IDS = (192, 315, 316, config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
-NO_VARIANT_ROUNDS = frozenset({"Moon", "Mystic Moon", "Blood Moon"})   # すべて特別のブロック（バリアントの段は作らない）
 # ラウンドごとの名前の上書き（ラウンド名＝キーの「/」の前, 番号）
-ROUND_NAMES = {("Unbound", 192): "Pack of Wild Yet Bloodthirsty Creatures"}
-
-# 一覧の「Moon」: 4 つのラウンドのキーをまとめて 1 つに見せる（押す・全選択・全解除は 4 つすべてへ）
-MOON_TAB = "Moon"
-ROUND_KEYS_FOR_TAB = {MOON_TAB: [MatchTNL.LOG_TO_TNL[name]
-                                 for name in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice")]}
-MOON_SLOT_ROUNDS = ("Mystic Moon", "Blood Moon")      # Moon の中身（枠の和）になるラウンド
+ROUND_NAMES = {("Unbound", TerrorIds.BLOODTHIRSTY_CREATURE): "Pack of Wild Yet Bloodthirsty Creatures"}
+SPECIAL_MOON_TAB = "Special/Moon"       # 一覧に出す名前（キーの「/」の前ではなく全部）
+GONE_TIP = "（このラウンドには出ません）"
 
 NOTE = "干し芋・焼き芋（グループのインスタンス）では使いません"
 
@@ -106,92 +102,31 @@ STYLE_RULE_DIM = "Dim.TCombobox"
 
 # ── データ（画面を作らずに読める部分）────────────────────
 def round_display_name(key: str) -> str:
-    """ラウンドのキー（「Classic/クラシック」）→ 一覧に出す名前（「/」の前）"""
+    """ラウンドのキー（「Classic/クラシック」）→ 一覧に出す名前（「/」の前）。Special/Moon だけはそのまま"""
+    if key == MatchTNL.SPECIAL_MOON_KEY:
+        return SPECIAL_MOON_TAB
     return key.split("/", 1)[0]
 
 
 def table_keys(tab_key: str) -> list:
-    """一覧の 1 つが受け持つ表のキー。Moon は 4 つ、ほかは自分だけ"""
-    return list(ROUND_KEYS_FOR_TAB.get(tab_key, [tab_key]))
+    """一覧の 1 つが受け持つ表のキー（今は一覧 1 つにキー 1 つ。Special/Moon もツールのキーが 1 つ）"""
+    return [tab_key]
 
 
-def _moon_tab(slots: list) -> tuple:
-    """(MOON_TAB, 番号) : Mystic Moon と Blood Moon の枠の和（190・191 は Classic だけなので除く）"""
-    ids = {i for key, ids in slots if round_display_name(key) in MOON_SLOT_ROUNDS for i in ids}
-    return MOON_TAB, sorted(ids - {190, 191})
-
-
-@functools.lru_cache(maxsize=1)
 def load_rounds() -> list:
-    """[(一覧のキー, [番号, ...]), ...]。assets/data/continue_slots.json の順。読めなければ空。
-    Special/Moon の枠は出さない。Mystic Moon・Blood Moon は 1 つの「Moon」にまとめる（最初の位置）"""
-    try:
-        raw = json.loads(config.resource_path(SLOTS_FILE).read_text(encoding="utf-8"))
-        slots = [(str(key), [int(i) for i in ids]) for key, ids in raw["rounds"]
-                 if str(key) != MatchTNL.SPECIAL_MOON_KEY]
-    except (OSError, ValueError, KeyError, TypeError):
-        DebugLog.exception("ContinueTableGUI.load_rounds")
-        return []
-    rounds, moon_done = [], False
-    for key, ids in slots:
-        if round_display_name(key) not in MOON_SLOT_ROUNDS:
-            rounds.append((key, ids))
-        elif not moon_done:
-            rounds.append(_moon_tab(slots))
-            moon_done = True
-    return rounds
-
-
-@functools.lru_cache(maxsize=1)
-def icon_names() -> dict:
-    """{番号: 名前}（assets/icons/icons.json の names）。terrors.json に無い・直したい名前。読めなければ空"""
-    try:
-        raw = json.loads(config.resource_path(ICONS_JSON).read_text(encoding="utf-8"))
-        return {int(tid): str(name) for tid, name in raw.get("names", {}).items()}
-    except (OSError, ValueError, TypeError, AttributeError):
-        DebugLog.exception("ContinueTableGUI.icon_names")
-        return {}
-
-
-@functools.lru_cache(maxsize=1)
-def eight_pages_ids() -> frozenset:
-    """8 Pages に出るテラーの続行リストの番号（terrors.json の 8pages の list_id）。読めなければ空"""
-    try:
-        raw = json.loads(config.resource_path(TERRORS_FILE).read_text(encoding="utf-8"))
-        return frozenset(e["list_id"] for e in raw.get("8pages", ())
-                         if isinstance(e.get("list_id"), int))
-    except (OSError, ValueError, TypeError, AttributeError):
-        DebugLog.exception("ContinueTableGUI.eight_pages_ids")
-        return frozenset()
-
-
-@functools.lru_cache(maxsize=1)
-def terror_names() -> dict:
-    """{続行リストの番号: 名前}。icons.json の names が先。次に terrors.json の classic・alternate・unbound は
-    id、8pages は list_id（重なる番号は前者）"""
-    try:
-        raw = json.loads(config.resource_path(TERRORS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        DebugLog.exception("ContinueTableGUI.terror_names")
-        return dict(icon_names())
-    names: dict = {}
-    for section, key in (("classic", "id"), ("alternate", "id"), ("unbound", "id"),
-                         ("8pages", "list_id")):
-        for entry in raw.get(section, ()):
-            tid = entry.get(key)
-            if isinstance(tid, int) and entry.get("name"):
-                names.setdefault(tid, entry["name"])
-    names.update(icon_names())
-    return names
+    """[(一覧のキー, [番号, ...]), ...]。assets/data/continue_slots.json（MatchTNL.slots）の順。読めなければ空。
+    枠はそのラウンドに出るテラーだけ（出ないテラーは格子の形だけ残して選べないマスにする）"""
+    return [(key, list(ids)) for key, ids in MatchTNL.slots().rounds]
 
 
 def terror_name(tid: int, round_key: str | None = None) -> str:
-    """ツールチップ・検索に使う名前。round_key があれば、そのラウンドだけの名前（Unbound の 192）を先に見る"""
+    """ツールチップ・検索に使う名前。round_key があれば、そのラウンドだけの名前（Unbound の Bloodthirsty）を先に見る。
+    表に無ければ `#番号`"""
     if round_key is not None:
         special = ROUND_NAMES.get((round_display_name(round_key), tid))
         if special:
             return special
-    return terror_names().get(tid) or f"#{tid}"
+    return TerrorIds.name(tid)
 
 
 # ── アイテムの決まり（GM）───────────────────────
@@ -278,46 +213,64 @@ def pyramid(ids) -> list:
     return cells
 
 
-def _variant_ids(name: str, ids: list) -> list:
-    """バリアントの段に行く番号。Classic は 190・191・192、ほかは 192 があれば 192（Fog/Midnight は 315・316 も、
-    Unbound は Self Inserts (Bloodthirsty) の仮の番号も）。HHI・Atrached は Classic だけ。Moon は作らない"""
-    if name in NO_VARIANT_ROUNDS:
-        return []
-    if name == "Classic" and 192 in ids:
-        return list(CLASSIC_VARIANT_IDS)
-    return sorted(i for i in VARIANT_IDS if i in ids)
+def _positions(kind: str, order=()) -> list:
+    """そのブロックの格子の位置（ツールの独自の番号）。ListTool の並び（order）が先、無いものは番号順で後ろ"""
+    return _in_order([own for own in TerrorIds.ids() if TerrorIds.kind(own) == kind], order)
+
+
+def _eight_pages_cell(position: int, by_position: dict) -> int:
+    """8 Pages のタブで、格子の位置（Classic・Alternate の番号）に置くマスの番号。その位置に出る 8 Pages の行
+    （3000 番台）があればそれ（選べるマス）、無ければ位置の番号のまま（選べないマス）"""
+    return by_position.get(position, position)
 
 
 def layout_for(round_key: str, ids) -> list:
     """上から順のブロック [(種類, [(番号, 列, 行), ...], 行の間隔), ...]。種類は classic・alternate・unbound・
     special・variant（空のブロックは出さない）。ブロックの間は 1 行ぶんあける（描く側）。
 
-    - 8 Pages は 8 Pages に出るテラー（eight_pages_ids）だけ
-    - classic: 0〜133 を ListTool の順に 12 列（grid12）。alternate: 134〜169 を ListTool の順に逆三角
-      （36 個そろわなければ 12 列）。unbound: 200〜283 を番号順に 12 列。special: 残り（170〜177・193・194・
-      196〜199・312〜317 など。Mystic/Blood Moon は全部）を番号順に 12 列
-    - variant: Classic は 190・191・192、ほかは 192（Fog/Midnight は 315・316 も、Unbound は 1283 も）。
-      左寄せの 1 行"""
-    name = round_display_name(round_key)
+    - 格子の形はラウンドで変えない: そのブロックに選べるテラーが 1 つでもあるラウンドは、Classic の 134 個
+      （ListTool の順に 12 列）・Alternate の 36 個（ListTool の順に逆三角）・Unbound の 84 個（番号順に 12 列）を
+      全部並べる。ids（そのラウンドの枠）に無い位置が「選べないマス」（出ないテラー。描く側が見分ける）
+    - 8 Pages: 8 Pages の行（3000 番台）を、その行の ListTool の番号の位置（Classic・Alternate の格子）に置く。
+      格子に位置の無い 8 Pages 限定のテラー（Baldi など）は特別のブロック（ListTool の番号の順）
+    - special: Special/Moon のタブは枠の中身そのもの（番号順）
+    - variant: 4000 番台（Special/Moon のタブ以外）。枠にあるものだけ、番号順の左寄せの 1 行"""
     ids = list(ids)
-    if name == "8 Pages":
-        allowed = eight_pages_ids()
-        ids = [i for i in ids if i in allowed]
-    variant = _variant_ids(name, ids)
-    ids = [i for i in ids if i not in variant]
-    classic = [i for i in ids if i in CLASSIC_RANGE]
-    alternate = [i for i in ids if i in ALTERNATE_RANGE]
-    unbound = [i for i in ids if i in UNBOUND_RANGE]
-    used = set(classic) | set(alternate) | set(unbound)
-    special = sorted(i for i in ids if i not in used)
+    have = set(ids)
     order = listtool_order()
-    alternate = _in_order(alternate, order["alternate"])
-    blocks = [("classic", grid12(_in_order(classic, order["classic"])), Y_PITCH)]
+    eight_pages = round_key == TerrorIds.EIGHT_PAGES_KEY
+    special_moon = round_key == MatchTNL.SPECIAL_MOON_KEY
+    variant = [] if special_moon else sorted(i for i in ids if i >= TerrorIds.FIXED_BASE)
+    classic = _positions("classic", order["classic"])
+    alternate = _positions("alternate", order["alternate"])
+    unbound = _positions("unbound")
+    special = sorted(i for i in ids if i >= TerrorIds.FIXED_BASE) if special_moon else []
+    if eight_pages:
+        # 8 Pages の行 → 格子の位置（その行の ListTool の番号を通常の索引で引いた番号）。位置の無い行は特別のブロック
+        by_position, loose = {}, []
+        for own in sorted(i for i in ids if i in EIGHT_PAGES_RANGE):
+            row = TerrorIds.row(own)
+            position = TerrorIds.TABLE.by_listtool.get(row.listtool) if row is not None else None
+            if position in CLASSIC_RANGE or position in ALTERNATE_RANGE:
+                by_position[position] = own
+            else:
+                loose.append((row.listtool if row is not None and row.listtool is not None else own, own))
+        used_classic = any(p in by_position for p in classic)
+        used_alternate = any(p in by_position for p in alternate)
+        classic = [_eight_pages_cell(p, by_position) for p in classic] if used_classic else []
+        alternate = [_eight_pages_cell(p, by_position) for p in alternate] if used_alternate else []
+        unbound = []
+        special = [own for _lt, own in sorted(loose)]
+    else:
+        classic = classic if any(i in CLASSIC_RANGE for i in have) else []
+        alternate = alternate if any(i in ALTERNATE_RANGE for i in have) else []
+        unbound = unbound if any(i in UNBOUND_RANGE for i in have) else []
+    blocks = [("classic", grid12(classic), Y_PITCH)]
     if len(alternate) == sum(ALTERNATE_ROWS):
         blocks.append(("alternate", pyramid(alternate), Y_PITCH))
     else:
         blocks.append(("alternate", grid12(alternate), Y_PITCH))
-    blocks += [("unbound", grid12(sorted(unbound)), Y_PITCH), ("special", grid12(special), Y_PITCH),
+    blocks += [("unbound", grid12(unbound), Y_PITCH), ("special", grid12(special), Y_PITCH),
                ("variant", [(tid, col, 0) for col, tid in enumerate(variant)], Y_PITCH)]
     return [block for block in blocks if block[1]]
 
@@ -326,17 +279,6 @@ def block_height(cells: list, pitch: int) -> int:
     """ブロックの高さ（最初の行の上から、最後の行のマスの下まで。最後の行は Y_PITCH ぶんで数える）"""
     rows = max(row for _tid, _col, row in cells) + 1
     return (rows - 1) * pitch + Y_PITCH
-
-
-@functools.lru_cache(maxsize=1)
-def icon_index() -> dict:
-    """{番号: (シートの名前, 列, 段)}（assets/icons/icons.json）。読めなければ空"""
-    try:
-        raw = json.loads(config.resource_path(ICONS_JSON).read_text(encoding="utf-8"))
-        return {int(tid): (str(s), int(c), int(r)) for tid, (s, c, r) in raw["icons"].items()}
-    except (OSError, ValueError, KeyError, TypeError):
-        DebugLog.exception("ContinueTableGUI.icon_index")
-        return {}
 
 
 def icon_cell_size() -> int:
@@ -370,7 +312,7 @@ def blend_over_bg(img: np.ndarray, alpha: float) -> np.ndarray:
 def icon_png(tid: int, alpha: float = 1.0) -> bytes | None:
     """番号のアイコンを切り出し、背景色に不透明度 alpha で重ねた 32×32 の PNG のバイト列。
     絵が無い・切り出せないなら None"""
-    spot = icon_index().get(tid)
+    spot = TerrorIds.icon(tid)
     if spot is None:
         return None
     sheet = _sheet(spot[0])
@@ -434,6 +376,7 @@ class ContinueTableWindow(tk.Toplevel):
         self._rounds = load_rounds()
         self._photos: dict = {}                # (番号, 不透明度の種類) → PhotoImage（持っていないと消える）
         self._cells: dict = {}                 # 番号 → _Cell（今の格子）
+        self._available: frozenset = frozenset()   # 今のラウンドの枠にある番号（選べるマス。ほかは選べないマス）
         self._x0 = 0                           # 格子（幅 CANVAS_WIDTH）を真ん中に寄せる分のずれ
         self._content_height = 0
         self._tip: tuple = ()                  # ツールチップの item の id
@@ -586,14 +529,14 @@ class ContinueTableWindow(tk.Toplevel):
 
     # ── 今の状態 ──
     def _round_key(self) -> str | None:
-        """一覧で選んでいるラウンドのキー（Moon は MOON_TAB）"""
+        """一覧で選んでいるラウンドのキー"""
         return self._rounds[self._index][0] if 0 <= self._index < len(self._rounds) else None
 
     def _round_ids(self) -> list:
         return self._rounds[self._index][1] if 0 <= self._index < len(self._rounds) else []
 
     def _table_keys(self) -> list:
-        """今のラウンドの表のキー（Moon は 4 つ）"""
+        """今のラウンドの表のキー"""
         key = self._round_key()
         return table_keys(key) if key is not None else []
 
@@ -607,7 +550,7 @@ class ContinueTableWindow(tk.Toplevel):
                 self._selected[ContinueTable.DEFAULT], {}))
 
     def _has(self, table: ContinueTable.Table, which: str, tid: int) -> bool:
-        """which の表に、今のラウンドの表のキーのどれかで tid が入っているか（LIST はツールの続行リスト）"""
+        """which の表に、今のラウンドの表のキーで tid が入っているか（LIST はツールの続行リスト）"""
         kind = ContinueList.current() if which == LIST else getattr(table, which)
         return any(tid in kind.get(key, ()) for key in self._table_keys())
 
@@ -640,6 +583,7 @@ class ContinueTableWindow(tk.Toplevel):
         self._hide_tip()
         self.canvas.delete("cell")
         self._cells = {}
+        self._available = frozenset(self._round_ids())
         self._x0 = max(0, (self.canvas.winfo_width() - CANVAS_WIDTH) // 2)
         y = TOP_PAD
         for n, (_kind, cells, pitch) in enumerate(layout_for(self._round_key() or "", self._round_ids())):
@@ -679,7 +623,7 @@ class ContinueTableWindow(tk.Toplevel):
         return round(fx) - ICON_INSET, round(fy) - ICON_INSET
 
     def _photo(self, tid: int, level: str):
-        """番号のアイコンの、不透明度の種類（LEVELS: dim・other・full・faint）ごとの PhotoImage（作ったら持っておく）。
+        """番号のアイコンの、不透明度の種類（LEVELS: dim・other・full・faint・gone）ごとの PhotoImage（作ったら持っておく）。
         絵が無ければ None"""
         if (tid, level) not in self._photos:
             png = icon_png(tid, LEVELS[level])
@@ -691,7 +635,10 @@ class ContinueTableWindow(tk.Toplevel):
     def _style_of(self, tid: int) -> tuple[str, str, int]:
         """(不透明度の種類, 枠の色, 枠の太さ)。今の表に入っている→100%＋太い枠（赤／緑）、もう片方の表→60%＋
         その色の細い枠、どちらも無い→30%＋灰色の細い枠。検索の欄に字があれば、合わないものは 15%＋薄い枠
-        （選んでいる・いないにかかわらず）、合うもので選んでいないものは 100% にして枠を目立たせる"""
+        （選んでいる・いないにかかわらず）、合うもので選んでいないものは 100% にして枠を目立たせる。
+        そのラウンドに出ないテラー（枠に無いマス）は何があっても 12%＋枠なし（選べないマス）"""
+        if tid not in self._available:
+            return "gone", COLOR_GRID_BG, THIN
         if self._searching() and not self._matches(tid):
             return "faint", COLOR_FAINT, THIN
         table, which = self._edit_table(), self._which()
@@ -740,7 +687,7 @@ class ContinueTableWindow(tk.Toplevel):
 
     def _on_click(self):
         tid = self._current_tid()
-        if tid is not None:
+        if tid is not None and tid in self._available:      # 選べないマスは何も起きない
             self.toggle(tid)
 
     def _on_enter(self):
@@ -755,7 +702,8 @@ class ContinueTableWindow(tk.Toplevel):
         if cell is None:
             return
         x0, y0, x1, y1 = self.canvas.bbox(cell.frame)
-        text = self.canvas.create_text(0, 0, text=terror_name(tid, self._round_key()), anchor="center",
+        label = terror_name(tid, self._round_key()) + ("" if tid in self._available else GONE_TIP)
+        text = self.canvas.create_text(0, 0, text=label, anchor="center",
                                        fill="#ffffff", font=(UIFont.UI, 9), tags="tip")
         left, top, right, bottom = self.canvas.bbox(text)
         width, height = right - left + 10, bottom - top + 6
@@ -833,7 +781,7 @@ class ContinueTableWindow(tk.Toplevel):
             self._restyle_all()
 
     def _change_members(self, tids, add: bool):
-        """今の表（続行リストを含む）の、今のラウンドの表のキーすべてへ tids を入れる／外す"""
+        """今の表（続行リストを含む）の、今のラウンドの表のキーへ tids を入れる／外す"""
         if self._which() == LIST:
             change = ContinueList.with_ids_added if add else ContinueList.with_ids_removed
             keys = self._table_keys()
@@ -842,7 +790,7 @@ class ContinueTableWindow(tk.Toplevel):
             self._commit(self._with_members(tids, add=add))
 
     def _with_members(self, tids, add: bool) -> ContinueTable.Table:
-        """今の表の、今のラウンドの表のキーすべて（Moon は 4 つ）へ tids を入れた／外した新しい Table"""
+        """今の表の、今のラウンドの表のキーへ tids を入れた／外した新しい Table"""
         table, which = self._edit_table(), self._which()
         for key in self._table_keys():
             ids = set(getattr(table, which).get(key, ()))
@@ -851,8 +799,8 @@ class ContinueTableWindow(tk.Toplevel):
         return table
 
     def toggle(self, tid: int):
-        """押したマスを入れる／外す。Moon は 4 つのキーのどれかに入っていれば「入っている」＝外す"""
-        if self._round_key() is None:
+        """押したマスを入れる／外す。そのラウンドに出ない（枠に無い）テラーのマスは何も起きない"""
+        if self._round_key() is None or tid not in self._available:
             return
         if self._which() == LIST:
             keys = self._table_keys()
@@ -862,8 +810,9 @@ class ContinueTableWindow(tk.Toplevel):
         self._commit(self._with_members([tid], add=not present), (tid,))
 
     def _visible_tids(self) -> list:
-        """今のラウンドで見えているマスの番号（バリアントの段も含む）。検索で絞っているときは合うものだけ"""
-        return [tid for tid in self._cells if self._matches(tid)]
+        """今のラウンドで見えている選べるマスの番号（バリアントの段も含む。選べないマスは入らない）。
+        検索で絞っているときは合うものだけ"""
+        return [tid for tid in self._cells if tid in self._available and self._matches(tid)]
 
     def select_all(self):
         """見えているマスを全部、今の表に入れる"""

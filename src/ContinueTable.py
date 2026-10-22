@@ -4,8 +4,8 @@
 - デフォ続行: チェックが付いたテラーは続行する（続行無効にあってもこちらが優先）
 
 重ねた後の続行リスト = (下の続行リスト − 続行無効) ∪ デフォ続行。
-表は {ラウンドのキー: 番号の集合}。キーと番号は続行リスト（.tnl）と同じ枠
-（Alternate は +134・Unbound は +200 の番号）。重ねるのは続行リストの dict だけで、
+表は {ラウンドのキー: 番号の集合}。キーは続行リストと同じ（Mystic Moon・Blood Moon・Twilight・Solstice・Special・
+Cold Night のラウンドは Special/Moon の 1 つ）、番号はツールの独自の番号（TerrorIds）。重ねるのは続行リストの dict だけで、
 3クラ済み・完全放置モードの自爆・全続行・全自爆などは今のまま（LogMonitor._keep_on）。
 
 表（GL）は続行無効・デフォ続行それぞれ、名前を付けたプリセットをいくつでも持つ（Store）。
@@ -16,8 +16,10 @@
 （0 は持っていない）で上から最初に当てはまる決まりが、その窓の選んだプリセットを種類ごとに
 上書きする（窓のまま／なし／プリセット名）。当てはまらなければ窓の選択だけ。
 
-保存先は %APPDATA%\\ToNAutoBeginner\\continue_table.json（v2）。v1（表が 1 組だけ）は
+保存先は %APPDATA%\\ToNAutoBeginner\\continue_table.json（v3）。v1（表が 1 組だけ）は
 読むときに「既定」というプリセットへ移す。無い・壊れているときは空の「既定」だけ。
+前の版（v1・v2。番号は ToN ListTool の形）のファイルは、新しい版で初めて読むとき 1 回だけ独自の番号に直して書き換える
+（直す前のファイルは continue_table.json.listtool.bak に残す。窓ごとの選びとアイテムの決まりは触らない）。
 """
 import json
 import os
@@ -25,11 +27,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import config
+import ContinueList
 import DebugLog
 import MatchTNL
 import RoundDecision
 
-VERSION = 2
+VERSION = 3
 FILE_NAME = "continue_table.json"
 
 # 表の種類（Table の属性名と同じ）
@@ -454,8 +457,24 @@ def _from_v1(raw: dict) -> Store:
                  windows=windows)
 
 
+def migrate_legacy(store: Store) -> tuple:
+    """前の版（v1・v2。番号は ToN ListTool の形）の Store → (独自の番号の Store, 落とした [(キー, 番号)])。
+    プリセットの中身を続行リストと同じ決まりで直す（ContinueList.migrate_legacy）。窓ごとの選びとアイテムの決まりは触らない"""
+    dropped: list = []
+
+    def moved(presets: dict) -> dict:
+        out = {}
+        for name, body in presets.items():
+            out[name], lost = ContinueList.migrate_legacy(body)
+            dropped.extend(lost)
+        return out
+    return replace(store, disabled_presets=moved(store.disabled_presets),
+                   default_presets=moved(store.default_presets)), dropped
+
+
 def load(path=None) -> Store:
-    """無い・壊れている → 空の「既定」だけの Store（壊れていたら debug.log に 1 行）。v1 は v2 の形へ移して返す"""
+    """無い・壊れている → 空の「既定」だけの Store（壊れていたら debug.log に 1 行）。v1 は v2 の形へ移し、
+    前の版（v1・v2）は独自の番号に直して返す（初めて読むとき 1 回だけ書き換える。.bak は残す）"""
     path = Path(path) if path is not None else table_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -468,12 +487,24 @@ def load(path=None) -> Store:
         DebugLog.write("[続行表] 形が違うので空で始めます")
         return Store()
     if "disabled_presets" not in raw and "default_presets" not in raw and raw.get("version") != 2:
-        return _from_v1(raw)
-    disabled_presets = _presets_from(raw.get("disabled_presets"))
-    default_presets = _presets_from(raw.get("default_presets"))
-    return Store(disabled_presets=disabled_presets, default_presets=default_presets,
-                 windows=_windows_from(raw.get("windows")),
-                 item_rules=_rules_from(raw.get("item_rules"), disabled_presets, default_presets))
+        store = _from_v1(raw)
+    else:
+        disabled_presets = _presets_from(raw.get("disabled_presets"))
+        default_presets = _presets_from(raw.get("default_presets"))
+        store = Store(disabled_presets=disabled_presets, default_presets=default_presets,
+                      windows=_windows_from(raw.get("windows")),
+                      item_rules=_rules_from(raw.get("item_rules"), disabled_presets, default_presets))
+    version = raw.get("version")
+    if isinstance(version, int) and not isinstance(version, bool) and version >= VERSION:
+        return store
+    if not any(body for presets in (store.disabled_presets, store.default_presets) for body in presets.values()):
+        return store                # 直す番号が無い（プリセットが空）。書き換えない
+    store, dropped = migrate_legacy(store)
+    saved = ContinueList.persist_migration(path, _to_json(store), "続行表")
+    total = sum(len(ids) for presets in (store.disabled_presets, store.default_presets)
+                for body in presets.values() for ids in body.values())
+    ContinueList.note_migration("続行表", path.name, saved, dropped, f"{sum(counts(store))}プリセット / {total}件")
+    return store
 
 
 def _body_json(body: dict) -> dict:
@@ -545,7 +576,7 @@ def disables(table: Table, key: str, slot: int) -> bool:
 
 def overlay_label(base: dict, effective: dict, round_type: str, ids) -> str:
     """重ねる前と後で続行の判定が変わったら '（デフォ続行）' か '（続行無効）'。変わらなければ ''。
-    判定は RoundDecision と同じ（ラウンドのキー → 無ければ Special/Moon 枠も見る）"""
+    判定は RoundDecision と同じ（ラウンドのキーだけを見る）"""
     before = RoundDecision.list_continues(base, ids, round_type)
     after = RoundDecision.list_continues(effective, ids, round_type)
     if before == after:
@@ -562,14 +593,15 @@ def from_tnl(path) -> dict:
 
 
 def from_tnnl(path) -> dict:
-    """ListTool の強制スキップ（.tnnl）→ {キー: frozenset}。targets_dict の番号"""
+    """ListTool の強制スキップ（.tnnl）→ {キー: frozenset}。targets_dict の番号（ListTool の番号）を独自の番号に直し、
+    Special/Moon などは置き場所へ配り、そのラウンドに出ないテラーは外す"""
     raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     targets = raw.get("targets_dict") if isinstance(raw, dict) else None
     if not isinstance(targets, dict):
         raise ValueError("targets_dict がありません")
     table = _table_of(targets)
-    return {key: ids for key, ids in table.items()
-            if key not in MatchTNL.HOST_SAVE_IGNORED_KEYS}
+    listed = {key: ids for key, ids in table.items() if key not in MatchTNL.HOST_SAVE_IGNORED_KEYS}
+    return {key: frozenset(ids) for key, ids in MatchTNL.own_list_from_listtool(listed, ".tnnl").items()}
 
 
 # ── 表の組み立て（画面が使う）──────────────────────

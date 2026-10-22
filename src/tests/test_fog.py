@@ -472,7 +472,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.play.reset_mock()
             SharedState.continue_round_reset()
             monitor = self._monitor(access="public", capable=False,
-                                    keep={self.FOG_KEY: {tid}})
+                                    keep={self.FOG_KEY: {own(tid)}})
 
             self._identify_by(monitor, how)
 
@@ -1361,7 +1361,7 @@ class TestFogStunned(unittest.TestCase):
                 for c in self.thread.call_args_list if "target" in c.kwargs].count("do_skip")
 
     def test_ok_instance_decides_by_the_stun(self):
-        monitor = self._monitor("invite", keep={self.FOG_KEY: {self.WITCH}})
+        monitor = self._monitor("invite", keep={self.FOG_KEY: {own(self.WITCH)}})
 
         monitor._process(self.STUN)
 
@@ -1373,7 +1373,7 @@ class TestFogStunned(unittest.TestCase):
 
     def test_ng_instance_decides_by_the_stun_too(self):
         """スタンは通常のログ。看破 NG のインスタンスでも表示して判定する"""
-        monitor = self._monitor("public", keep={self.FOG_KEY: {self.WITCH}})
+        monitor = self._monitor("public", keep={self.FOG_KEY: {own(self.WITCH)}})
 
         monitor._process(self.STUN)
 
@@ -1496,7 +1496,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
         forced.assert_called_once()
 
     def test_an_alternate_terror_in_the_list_continues(self):
-        monitor = self._monitor(keep_on={"Fog/霧": {self.WALPURGISNACHT}})
+        monitor = self._monitor(keep_on={"Fog/霧": {own(self.WALPURGISNACHT)}})
 
         self._enrage(monitor, "Walpurgisnacht")
 
@@ -1571,7 +1571,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
     def test_private_decisions_are_unchanged(self):
         """実ログに出た Fog の alternate テラーを、両方の枠で突き合わせる。
         LOG_TO_TNL がどちらも `Fog/霧` へ寄せているので結論は同じになる"""
-        keep_on = {"Fog/霧": {137, 154, 163, 164, 168, 192, 315, 316}}
+        keep_on = {"Fog/霧": {own(i) for i in (137, 154, 163, 164, 168, 192, 315, 316)}}
         for tid in (167, 157, 151, 159, 137, 161, 153, 142, 162, 156, 160):
             plain = RoundDecision.decide_killers(keep_on, [tid], "Fog", 0, True)
             alt = RoundDecision.decide_killers(keep_on, [tid], self.FOG_ALT,
@@ -1581,7 +1581,7 @@ class TestEnrageFogAlternate(unittest.TestCase):
 
     def test_the_tnl_lookup_is_unchanged(self):
         monitor = self._monitor(config.INSTANCE_PRIVATE,
-                                keep_on={"Fog/霧": {self.WALPURGISNACHT}})
+                                keep_on={"Fog/霧": {own(self.WALPURGISNACHT)}})
 
         self._enrage(monitor, "Walpurgisnacht")
 
@@ -1902,7 +1902,7 @@ class TestFogFoxy(unittest.TestCase):
                 for c in mock_thread.call_args_list if "target" in c.kwargs]
 
     def test_it_is_judged_as_foxy(self):
-        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}})
+        monitor = self._monitor({self.FOG_KEY: {TerrorIds.FOXY}})
 
         started = self._lines(monitor, self.FOXY_LINE)
 
@@ -1912,7 +1912,7 @@ class TestFogFoxy(unittest.TestCase):
 
     def test_sanic_in_the_list_does_not_count(self):
         """以前は Sanic(136) として判定していた"""
-        monitor = self._monitor({self.FOG_KEY: {config.SANIC_ID}})
+        monitor = self._monitor({self.FOG_KEY: {own(136)}})
 
         started = self._lines(monitor, self.FOXY_LINE)
 
@@ -1927,14 +1927,14 @@ class TestFogFoxy(unittest.TestCase):
 
     def test_the_fog_skip_designation_still_applies(self):
         """st.round_type を書き換えていた頃は、ここで自爆指定が外れていた"""
-        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}},
+        monitor = self._monitor({self.FOG_KEY: {TerrorIds.FOXY}},
                                 skip_rounds=("Fog",))
 
         self.assertTrue(monitor._should_skip_by_round([config.FOXY_ID], False))
 
     def test_yakiimo_judges_it_by_the_list(self):
         """焼き芋はオルタ枠の Fog だけをリスト判定に回す"""
-        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}},
+        monitor = self._monitor({self.FOG_KEY: {TerrorIds.FOXY}},
                                 instance_type=config.INSTANCE_YAKIIMO)
 
         started = self._lines(monitor, self.FOXY_LINE)
@@ -1967,7 +1967,7 @@ class TestFogFoxy(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [config.FOXY_ID])
 
     def test_a_revealed_sanic_waits_for_foxy_when_it_matters(self):
-        monitor = self._monitor({self.FOG_KEY: {config.FOXY_ID}})
+        monitor = self._monitor({self.FOG_KEY: {TerrorIds.FOXY}})
 
         started = self._lines(
             monitor,
@@ -2259,7 +2259,7 @@ class TestFogJoy(unittest.TestCase):
         self.assertTrue(ReadJson.is_alternate_terror(config.JOY_ID, config.TERRORS))
 
     def test_fog_is_judged_as_joy(self):
-        monitor = self._monitor({self.FOG_KEY: {config.JOY_ID}})
+        monitor = self._monitor({self.FOG_KEY: {own(164)}})
 
         started = self._joy(monitor)
 
@@ -2283,7 +2283,7 @@ class TestFogJoy(unittest.TestCase):
         self.assertEqual(monitor.st.round_type, "Fog")
 
     def test_yakiimo_falls_to_the_list(self):
-        monitor = self._monitor({self.FOG_KEY: {config.JOY_ID}},
+        monitor = self._monitor({self.FOG_KEY: {own(164)}},
                                 instance_type=config.INSTANCE_YAKIIMO)
 
         started = self._joy(monitor)

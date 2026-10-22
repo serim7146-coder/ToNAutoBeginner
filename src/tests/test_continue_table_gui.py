@@ -13,6 +13,7 @@ KEY = "Classic/クラシック"
 ALT = "Alternate/オルタネイト"
 UNBOUND = "Unbound/アンバウンド"
 EIGHT = "8 Pages/8ページ"
+SPECIAL_MOON = MatchTNL.SPECIAL_MOON_KEY
 
 
 def _fresh_store(case):
@@ -94,13 +95,29 @@ class TestGrid12(unittest.TestCase):
             self.assertEqual(len(cols), size)
 
 
+FROZEN = SRC_DIR / "tests" / "data" / "terror_ids"
+# 出ないテラー（tontrack.me の disabled_rounds。キーは前の番号）と、その画面のタブ
+DISABLED_ROUND_TABS = {"ghost": ["Ghost"], "fog": ["Fog"], "punished": ["Punished"], "midnight": ["Midnight"],
+                       "bloodbath": ["Bloodbath", "Double Trouble", "Bloodbath EX"]}
+
+
+def _disabled_by_tab():
+    raw = json.loads((FROZEN / "disabled_rounds.json").read_text(encoding="utf-8"))
+    by_tab = {}
+    for legacy, (_name, rounds) in raw.items():
+        for round_name in rounds:
+            for tab in DISABLED_ROUND_TABS.get(round_name, ()):
+                by_tab.setdefault(tab, set()).add(own(int(legacy)))
+    return by_tab
+
+
 class TestLayout(unittest.TestCase):
     """layout_for: 画面を作らずに、ブロックの並びと各マスの位置を確かめる"""
 
     def test_classic_follows_the_listtool_order_not_the_id_order(self):
         blocks, kinds = _blocks(KEY)
         classic = blocks["classic"]
-        self.assertEqual(sorted(_tids(classic)), list(range(134)), "192 は本体に無い")
+        self.assertEqual(sorted(_tids(classic)), list(range(134)), "4002 などは本体に無い")
         self.assertEqual(classic[0], (0, 1, 0), "1 マス目は 0（行 0 の列 1）")
         at = {(col, row): tid for tid, col, row in classic}
         self.assertEqual(at[(0, 10)], 122)
@@ -110,121 +127,162 @@ class TestLayout(unittest.TestCase):
 
     def test_alternate_is_an_inverted_pyramid_in_the_listtool_order(self):
         blocks, kinds = _blocks(ALT)
-        self.assertEqual(kinds, ["alternate"])
+        self.assertEqual(kinds, ["alternate", "variant"])
         cells = blocks["alternate"]
         self.assertEqual(_row_sizes(cells), [11, 9, 7, 5, 3, 1])
-        self.assertEqual(sorted(_tids(cells)), list(range(134, 170)))
+        self.assertEqual(sorted(_tids(cells)), list(range(1000, 1036)))
         row0 = [tid for tid, _col, row in sorted(cells, key=lambda c: c[1]) if row == 0]
-        self.assertEqual(row0[5], 169, "1 段目の 6 番目（紫のハート）")
-        self.assertEqual(row0[:3], [149, 150, 141])
+        self.assertEqual(row0[5], own(169), "1 段目の 6 番目（紫のハート）")
+        self.assertEqual(row0[:3], [own(149), own(150), own(141)])
         pitch = next(p for k, _c, p in ContinueTableGUI.layout_for(ALT, _slot_ids(ALT)) if k == "alternate")
         self.assertEqual(pitch, 46, "逆三角の段の間も 46px")
+        self.assertEqual(_tids(blocks["variant"]), [TerrorIds.NEO_PILOT, TerrorIds.FOXY], "Alternate には Neo Pilot・Foxy")
 
-    def test_alternate_falls_back_to_twelve_columns_if_not_all_36_are_there(self):
-        blocks = ContinueTableGUI.layout_for(ALT, list(range(134, 169)))
-        self.assertEqual(len(blocks), 1)
-        kind, cells, pitch = blocks[0]
-        self.assertEqual((kind, pitch), ("alternate", 46))
-        self.assertTrue(all(col == int(col) for _t, col, _r in cells), "逆三角ではない")
-        self.assertEqual(_row_sizes(cells), [11, 12, 12])
-        self.assertEqual(_tids(cells)[:3], [149, 150, 141], "順は alternate の順")
+    def test_the_shape_of_a_grid_does_not_change_when_some_terrors_are_missing(self):
+        """そのラウンドに出ないテラーは、マスの形を詰めずに「選べないマス」にする"""
+        blocks = ContinueTableGUI.layout_for(ALT, list(range(1000, 1035)))
+        kinds = [kind for kind, _cells, _pitch in blocks]
+        self.assertEqual(kinds, ["alternate"])
+        cells = blocks[0][1]
+        self.assertEqual(_row_sizes(cells), [11, 9, 7, 5, 3, 1], "36 個ぶんの逆三角のまま")
+        self.assertEqual(sorted(_tids(cells)), list(range(1000, 1036)))
+        classic = ContinueTableGUI.layout_for(KEY, [0, 1, 2])[0]
+        self.assertEqual(len(classic[1]), 134, "Classic も 134 マス全部")
 
-    def test_classic_round_has_the_bloodthirsty_three_in_the_variant_row(self):
+    def test_a_missing_layout_file_falls_back_to_the_id_order_without_changing_the_shape(self):
+        with patch.object(ContinueTableGUI, "listtool_order", return_value={"classic": [], "alternate": []}):
+            blocks = ContinueTableGUI.layout_for(ALT, [1000, 1001])
+        cells = blocks[0][1]
+        self.assertEqual(_tids(cells), list(range(1000, 1036)))
+        self.assertEqual(_row_sizes(cells), [11, 9, 7, 5, 3, 1])
+
+    def test_classic_round_has_the_four_variants_in_the_variant_row(self):
         blocks, kinds = _blocks(KEY)
         self.assertEqual(kinds, ["classic", "variant"])
-        self.assertEqual(blocks["variant"], [(190, 0, 0), (191, 1, 0), (192, 2, 0)], "左寄せの 1 行")
+        self.assertEqual(blocks["variant"], [(TerrorIds.HUNGRY_HOME_INVADER, 0, 0), (TerrorIds.ATRACHED, 1, 0),
+                                             (TerrorIds.BLOODTHIRSTY_CREATURE, 2, 0), (TerrorIds.GIGABYTES, 3, 0)],
+                         "左寄せの 1 行（Gigabytes は Special/Moon と Classic）")
 
-    def test_every_other_round_with_192_has_only_192_in_the_variant_row(self):
-        """HHI（190）と Atrached（191）は Classic だけ（GK）。Classic.exe・Randomizer にも 192 が付いた"""
-        for name in ("Classic.exe", "Randomizer", "Ghost", "Punished", "Bloodbath", "Double Trouble",
-                     "Bloodbath EX", "Sabotage star", "Sabotage murder"):
+    def test_every_other_round_with_bloodthirsty_has_only_it_in_the_variant_row(self):
+        """HHI と Atrached は Classic だけ。Classic.exe・Randomizer にも Bloodthirsty が付いた。Punished には Glorbo"""
+        for name in ("Classic.exe", "Randomizer", "Ghost", "Bloodbath", "Double Trouble", "Bloodbath EX",
+                     "Sabotage star", "Sabotage murder"):
             blocks, _kinds = _blocks(_round_key(name))
-            self.assertEqual(_tids(blocks["variant"]), [192], name)
-            self.assertNotIn(192, _tids(blocks["classic"]) + _tids(blocks.get("alternate", [])), name)
+            self.assertEqual(_tids(blocks["variant"]), [TerrorIds.BLOODTHIRSTY_CREATURE], name)
+            self.assertNotIn(TerrorIds.BLOODTHIRSTY_CREATURE,
+                             _tids(blocks["classic"]) + _tids(blocks.get("alternate", [])), name)
+        blocks, _kinds = _blocks(_round_key("Punished"))
+        self.assertEqual(_tids(blocks["variant"]), [TerrorIds.BLOODTHIRSTY_CREATURE, TerrorIds.GLORBO])
 
-    def test_190_and_191_are_in_no_slot_but_classics_variant_row(self):
+    def test_the_hhi_and_atrached_are_in_the_slots_of_classic_only(self):
         for key, ids in ContinueTableGUI.load_rounds():
-            self.assertFalse({190, 191} & set(ids), key)
-        raw = json.loads((REPO_ROOT / "assets" / "data" / "continue_slots.json").read_text(encoding="utf-8"))
-        for key, ids in raw["rounds"]:
-            self.assertFalse({190, 191} & set(ids), key)
-        for key, ids in ContinueTableGUI.load_rounds():
-            variant = [t for kind, cells, _p in ContinueTableGUI.layout_for(key, ids) if kind == "variant"
-                       for t in _tids(cells)]
-            self.assertEqual({190, 191} <= set(variant), key == KEY, key)
+            self.assertEqual({TerrorIds.HUNGRY_HOME_INVADER, TerrorIds.ATRACHED} <= set(ids), key == KEY, key)
+            self.assertEqual(bool({TerrorIds.HUNGRY_HOME_INVADER, TerrorIds.ATRACHED} & set(ids)), key == KEY, key)
 
-    def test_rounds_without_192_have_no_variant_row(self):
-        for name in ("Cracked", "Alternate"):
+    def test_rounds_without_a_variant_have_no_variant_row(self):
+        for name in ("Cracked",):
             self.assertNotIn("variant", _blocks(_round_key(name))[1], name)
 
     def test_fog_and_midnight_are_classic_then_alternate_then_variant(self):
         for name in ("Fog", "Midnight"):
             blocks, kinds = _blocks(_round_key(name))
             self.assertEqual(kinds, ["classic", "alternate", "variant"], name)
-            self.assertEqual(_tids(blocks["variant"]), [192, 315, 316], name)
+            self.assertEqual(_tids(blocks["variant"]),
+                             [TerrorIds.BLOODTHIRSTY_CREATURE, TerrorIds.NEO_PILOT, TerrorIds.FOXY], name)
             self.assertEqual(_row_sizes(blocks["alternate"]), [11, 9, 7, 5, 3, 1], name)
             self.assertEqual(sorted(_tids(blocks["classic"])), list(range(134)), name)
 
-    def test_unbound_is_a_twelve_column_block_in_id_order_with_192_and_self_inserts_in_the_variant_row(self):
+    def test_ghost_has_no_neo_pilot_or_foxy(self):
+        """Ghost には Sanic・Fusion Pilot が出ないので、その置き換えの Foxy・Neo Pilot も置かない"""
+        self.assertFalse({TerrorIds.NEO_PILOT, TerrorIds.FOXY} & set(_slot_ids(_round_key("Ghost"))))
+
+    def test_unbound_is_a_twelve_column_block_in_id_order_with_bloodthirsty_and_self_inserts_in_the_variant_row(self):
         blocks, kinds = _blocks(UNBOUND)
         self.assertEqual(kinds, ["unbound", "variant"])
-        self.assertEqual(_tids(blocks["unbound"]), list(range(200, 284)))
+        self.assertEqual(_tids(blocks["unbound"]), list(range(2000, 2084)))
         self.assertEqual(_row_sizes(blocks["unbound"]), [12] * 7)
-        self.assertEqual(blocks["variant"], [(192, 0, 0), (config.SELF_INSERTS_BLOODTHIRSTY_SLOT, 1, 0)])
+        self.assertEqual(blocks["variant"], [(TerrorIds.BLOODTHIRSTY_CREATURE, 0, 0),
+                                             (TerrorIds.SELF_INSERTS_BLOODTHIRSTY, 1, 0)])
 
-    def test_the_moon_tab_is_the_union_of_the_two_moon_slots_without_190_and_191(self):
-        blocks, kinds = _blocks(ContinueTableGUI.MOON_TAB)
+    def test_the_special_moon_tab_is_the_moon_four_rift_meatball_and_gigabytes(self):
+        blocks, kinds = _blocks(SPECIAL_MOON)
         self.assertEqual(kinds, ["special"], "バリアントの段は作らない")
-        self.assertEqual(_tids(blocks["special"]), [192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317])
+        self.assertEqual(_tids(blocks["special"]), [4003, 4004, 4005, 4006, 4007, 4008, 4009])
 
-    def test_the_moon_tab_keeps_the_union_even_if_the_two_slots_differ(self):
-        slots = [("Mystic Moon/x", [190, 192, 196]), ("Classic/c", [1]), ("Blood Moon/y", [191, 192, 317])]
-        self.assertEqual(ContinueTableGUI._moon_tab(slots), ("Moon", [192, 196, 317]))
+    def test_rounds_that_do_not_have_a_terror_draw_it_as_a_position_not_a_missing_cell(self):
+        """出ないテラー（Ghost の BFF など）の位置は格子に残る。選べるのは枠にあるものだけ"""
+        disabled = _disabled_by_tab()
+        self.assertEqual(sorted(disabled), ["Bloodbath", "Bloodbath EX", "Double Trouble", "Fog", "Ghost",
+                                            "Midnight", "Punished"])
+        for tab, gone in disabled.items():
+            key = _round_key(tab)
+            ids = set(_slot_ids(key))
+            blocks, _kinds = _blocks(key)
+            shown = {t for cells in blocks.values() for t in _tids(cells)}
+            self.assertTrue(gone <= shown, f"{tab}: 出ないテラーも格子に位置がある")
+            self.assertFalse(gone & ids, f"{tab}: 出ないテラーは枠に無い（選べない）")
+            self.assertEqual((shown & set(range(0, 1036))) - ids, gone,
+                             f"{tab}: 格子の中で選べないのは、出ないテラーだけ")
 
-    def test_eight_pages_shows_only_ids_that_eight_pages_has(self):
-        blocks, kinds = _blocks(EIGHT)
-        shown = {t for cells in blocks.values() for t in _tids(cells)}
-        allowed = ContinueTableGUI.eight_pages_ids()
+    def test_the_counts_of_terrors_that_do_not_appear(self):
+        by_tab = _disabled_by_tab()
+        self.assertEqual({tab: len(ids) for tab, ids in by_tab.items()},
+                         {"Ghost": 22, "Fog": 1, "Bloodbath": 4, "Double Trouble": 4, "Bloodbath EX": 4,
+                          "Midnight": 4, "Punished": 2})
+
+    def test_eight_pages_puts_its_rows_at_the_listtool_positions_and_leaves_the_rest_unselectable(self):
+        key = EIGHT
+        ids = set(_slot_ids(key))
+        blocks, kinds = _blocks(key)
+        self.assertEqual(kinds, ["classic", "alternate", "special"])
+        self.assertEqual(ids, TerrorIds.eight_pages_ids(), "枠は 8 Pages の行（3000 番台）の 62 個だけ")
+        self.assertEqual(len(ids), 62)
+        classic, alternate = blocks["classic"], blocks["alternate"]
+        self.assertEqual(len(classic), 134)
+        self.assertEqual(len(alternate), 36)
+        # 位置は Classic・Alternate の格子と同じ（ListTool の並び）。出る行がそこにあればその行（選べる）
+        by_position = {0: 3014, own(135): 3050}
+        order = ContinueTableGUI.listtool_order()
+        for position, row in by_position.items():
+            if position < 1000:
+                self.assertEqual(_tids(classic)[order["classic"].index(position)], row)
+            else:
+                self.assertEqual(_tids(alternate)[order["alternate"].index(position)], row)
+        selectable = [t for cells in blocks.values() for t in _tids(cells) if t in ids]
+        self.assertEqual(sorted(selectable), sorted(ids), "62 個すべてが格子のどこかに選べるマスとしてある")
+        unselectable = [t for cells in blocks.values() for t in _tids(cells) if t not in ids]
+        self.assertEqual(len(unselectable), 134 + 36 - 54, "出ない 116 個のうち、格子に位置のあるものは選べないマス")
+        # 8 Pages 限定は特別のブロック（ListTool の番号の順）
+        self.assertEqual(_tids(blocks["special"]), [3032, 3045, 3046, 3037, 3061, 3000, 3056, 3058])
         self.assertNotIn("variant", kinds)
-        self.assertTrue(shown <= allowed)
-        self.assertEqual(shown, allowed & set(_slot_ids(EIGHT)))
-        self.assertLess(len(shown), len(_slot_ids(EIGHT)), "出ないテラーは絞られる")
-        self.assertTrue({170, 171, 172, 173, 174, 193, 194} <= shown)
-        self.assertEqual(_tids(blocks["special"])[:3], [170, 171, 172], "特別のブロックは番号順")
-        self.assertFalse({3, 5, 6, 7, 10} & shown, "list_id に無い番号")
-        small, _k = _blocks(EIGHT, [0, 3, 177])
-        self.assertEqual({t for cells in small.values() for t in _tids(cells)}, {0, 177})
 
-    def test_ids_outside_every_range_are_not_lost(self):
-        blocks, _kinds = _blocks(KEY, [0, 195, 300])
-        self.assertEqual(_tids(blocks["special"]), [195, 300])
+    def test_eight_pages_with_few_rows_still_draws_the_whole_grid(self):
+        small, kinds = _blocks(EIGHT, [3014, 3046])
+        self.assertEqual(kinds, ["classic", "special"])
+        self.assertEqual(len(small["classic"]), 134)
+        self.assertEqual(_tids(small["special"]), [3046])
 
-    def test_eight_pages_ids_come_from_the_list_ids_of_terrors_json(self):
-        raw = json.loads((REPO_ROOT / "assets" / "data" / "terrors.json").read_text(encoding="utf-8"))
-        self.assertEqual(ContinueTableGUI.eight_pages_ids(),
-                         frozenset(e["list_id"] for e in raw["8pages"]))
+    def test_ids_in_no_range_are_not_lost_in_the_variant_row(self):
+        blocks, _kinds = _blocks(KEY, [0, 4999, 4500])
+        self.assertEqual(_tids(blocks["variant"]), [4500, 4999])
 
     def test_layout_json_has_every_classic_and_alternate_id_once(self):
         order = ContinueTableGUI.listtool_order()
         self.assertEqual(sorted(order["classic"]), list(range(134)))
-        self.assertEqual(sorted(order["alternate"]), list(range(134, 170)))
+        self.assertEqual(sorted(order["alternate"]), list(range(1000, 1036)))
 
-    def test_there_is_no_special_round_in_the_screen(self):
+    def test_special_moon_is_one_tab_in_the_place_of_the_moon(self):
         keys = [k for k, _ in ContinueTableGUI.load_rounds()]
-        self.assertNotIn("Special/Moon", keys)
         self.assertEqual(len(keys), 17)
         self.assertEqual(len(set(ContinueTableGUI.round_display_name(k) for k in keys)), 17)
-
-    def test_the_four_moon_rounds_are_one_moon_in_the_place_of_mystic_moon(self):
         names = [ContinueTableGUI.round_display_name(k) for k, _ in ContinueTableGUI.load_rounds()]
-        self.assertEqual(names.count("Moon"), 1)
-        for gone in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
+        self.assertEqual(names.count("Special/Moon"), 1)
+        for gone in ("Moon", "Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
             self.assertNotIn(gone, names)
-        self.assertEqual(names[names.index("Moon") - 1], "Unbound", "Mystic Moon の位置")
-        self.assertEqual(ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"],
-                         ["Mystic Moon/ミスティックムーン", "Blood Moon/ブラッドムーン",
-                          "Twilight/トワイライト", "Solstice/ソルスティス"])
-        self.assertEqual(ContinueTableGUI.table_keys("Moon"), ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"])
+        self.assertEqual(names[names.index("Special/Moon") - 1], "Unbound", "Moon のタブの位置")
+        self.assertFalse(hasattr(ContinueTableGUI, "MOON_TAB"))
+        self.assertFalse(hasattr(ContinueTableGUI, "ROUND_KEYS_FOR_TAB"))
+        self.assertEqual(ContinueTableGUI.table_keys(SPECIAL_MOON), [SPECIAL_MOON])
         self.assertEqual(ContinueTableGUI.table_keys(KEY), [KEY])
 
     def test_a_round_without_ids_makes_no_blocks(self):
@@ -240,7 +298,8 @@ class TestIconLook(unittest.TestCase):
         self.assertEqual(g.COLOR_GRID_BG, "#2d2d2d")
 
     def test_opacity_levels_are_30_60_100_and_15_percent(self):
-        self.assertEqual(ContinueTableGUI.LEVELS, {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15})
+        self.assertEqual(ContinueTableGUI.LEVELS,
+                         {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15, "gone": 0.12})
 
     def test_blending_over_the_background_is_icon_times_alpha_plus_bg_times_rest(self):
         red = np.array([[[0, 0, 200, 255]]], dtype=np.uint8)      # BGRA の赤
@@ -332,10 +391,10 @@ class TestWindow(_WindowCase):
         self.assertNotIn("Special", values)
         self.assertEqual(lst.curselection(), (0,))
 
-    def test_moon_is_one_entry_and_the_four_moon_rounds_are_not_in_the_list(self):
+    def test_special_moon_is_one_entry_and_the_moon_rounds_are_not_in_the_list(self):
         values = list(self.win.list_rounds.get(0, "end"))
-        self.assertEqual(values.count("Moon"), 1)
-        for gone in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
+        self.assertEqual(values.count("Special/Moon"), 1)
+        for gone in ("Moon", "Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
             self.assertNotIn(gone, values)
 
     def test_choosing_in_the_list_shows_that_round(self):
@@ -346,7 +405,8 @@ class TestWindow(_WindowCase):
         self.win._on_round_select()               # 隠れた窓にはイベントが届かないので受け口を直接呼ぶ
         self.assertEqual(self.win._round_key(), UNBOUND)
         self.assertEqual(sorted(self.win._cells),
-                         [192] + list(range(200, 284)) + [config.SELF_INSERTS_BLOODTHIRSTY_SLOT])
+                         list(range(2000, 2084)) + [TerrorIds.BLOODTHIRSTY_CREATURE,
+                                                    TerrorIds.SELF_INSERTS_BLOODTHIRSTY])
 
     def test_choosing_the_same_round_again_does_not_redraw(self):
         with patch.object(self.win, "_show_round") as show:
@@ -366,9 +426,9 @@ class TestWindow(_WindowCase):
         self.assertNotIn("このラウンドを全部外す", texts)
 
     def test_the_first_round_has_one_cell_per_terror_including_the_variant_row(self):
-        self.assertEqual(sorted(self.win._cells), list(range(134)) + [190, 191, 192])
+        self.assertEqual(sorted(self.win._cells), list(range(134)) + [4000, 4001, 4002, 4009])
         self.assertIsNotNone(self.win._photo(0, "full"), "アイコンがある番号は絵")
-        self.assertIsNotNone(self.win._photo(317, "full"), "Glorbo にも絵がある")
+        self.assertIsNotNone(self.win._photo(TerrorIds.GLORBO, "full"), "Glorbo にも絵がある")
 
     def _pos(self, tid):
         """マスの左上 (x, y)（キャンバス上）"""
@@ -393,28 +453,28 @@ class TestWindow(_WindowCase):
 
     def test_the_variant_row_is_left_aligned_one_empty_row_below_the_grid(self):
         left, last_row = self._pos(122)[0], self._pos(83)[1]
-        self.assertEqual(self._pos(190)[0], left, "バリアントの段は左寄せ")
-        self.assertEqual(self._pos(191)[0] - self._pos(190)[0], 46)
-        self.assertEqual(self._pos(190)[1] - last_row, 46 + 46, "最後の行の下に 1 行（46px）あけた下")
+        self.assertEqual(self._pos(4000)[0], left, "バリアントの段は左寄せ")
+        self.assertEqual(self._pos(4001)[0] - self._pos(4000)[0], 46)
+        self.assertEqual(self._pos(4000)[1] - last_row, 46 + 46, "最後の行の下に 1 行（46px）あけた下")
 
     def test_fog_blocks_are_classic_alternate_variant_with_a_46px_gap_between(self):
         self._select_round("Fog")
         classic_last = max(self._pos(t)[1] for t in range(134))
-        alt = {t: self._pos(t) for t in range(134, 170)}
+        alt = {t: self._pos(t) for t in range(1000, 1036)}
         alt_top, alt_last = min(y for _x, y in alt.values()), max(y for _x, y in alt.values())
         self.assertEqual(alt_top - classic_last, 46 + 46, "Classic の最後の行の下に 1 行あけて Alternate")
         self.assertEqual(alt_last - alt_top, 5 * 46, "Alternate の縦も 46px")
-        variant_top = self._pos(192)[1]
+        variant_top = self._pos(4002)[1]
         self.assertEqual(variant_top - alt_last, 46 + 46, "Alternate の最後の行の下に 1 行あけてバリアント")
-        self.assertEqual(self._pos(315)[1], variant_top)
+        self.assertEqual(self._pos(4010)[1], variant_top)
         self.assertEqual(self.win._content_height, variant_top + 46 + ContinueTableGUI.TOP_PAD,
                          "最後のブロックの下に余白")
 
     def test_alternate_rows_are_an_inverted_pyramid_on_screen(self):
         self._select_round("Alternate")
-        self.assertEqual(sorted(self.win._cells), list(range(134, 170)))
+        self.assertEqual(sorted(self.win._cells), list(range(1000, 1036)) + [4010, 4011])
         rows = {}
-        for tid in self.win._cells:
+        for tid in range(1000, 1036):
             x, y = self._pos(tid)
             rows.setdefault(y, []).append((x, tid))
         ys = sorted(rows)
@@ -426,56 +486,64 @@ class TestWindow(_WindowCase):
             xs = [x for x, _t in row]
             self.assertTrue(all(b - a == 46 for a, b in zip(xs, xs[1:])))
             self.assertAlmostEqual((xs[0] + xs[-1]) / 2, centre0, delta=1)
-        self.assertEqual(ordered[0][5][1], 169, "1 段目の 6 番目")
-        self.assertEqual(self.win._content_height, ContinueTableGUI.TOP_PAD * 2 + 5 * 46 + 46)
+        self.assertEqual(ordered[0][5][1], own(169), "1 段目の 6 番目")
+        self.assertEqual(self.win._content_height,
+                         ContinueTableGUI.TOP_PAD * 2 + 5 * 46 + 46 + 46 + 46, "逆三角・1 行あけてバリアントの段")
 
     def test_switching_the_round_changes_the_grid(self):
         self._select_round("Unbound")
         self.assertEqual(sorted(self.win._cells),
-                         [192] + list(range(200, 284)) + [config.SELF_INSERTS_BLOODTHIRSTY_SLOT])
-        self._select_round("Moon")
-        self.assertEqual(sorted(self.win._cells), [192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317])
+                         list(range(2000, 2084)) + [TerrorIds.BLOODTHIRSTY_CREATURE,
+                                                    TerrorIds.SELF_INSERTS_BLOODTHIRSTY])
+        self._select_round("Special/Moon")
+        self.assertEqual(sorted(self.win._cells), [4003, 4004, 4005, 4006, 4007, 4008, 4009])
         self._select_round("8 Pages")
-        self.assertEqual(set(self.win._cells), ContinueTableGUI.eight_pages_ids() & set(_slot_ids(EIGHT)))
+        self.assertEqual(set(self.win._cells) & TerrorIds.eight_pages_ids(), TerrorIds.eight_pages_ids(),
+                         "8 Pages の 62 個はどれも格子のどこかにある")
+        self.assertEqual(set(self.win._available), TerrorIds.eight_pages_ids())
+        self.assertEqual(len(self.win._cells), 134 + 36 + 8)
 
     def test_the_tooltip_shows_the_name_from_icons_json_and_unbound_192_is_the_pack(self):
         def shown(tid):
             self.win._show_tip(tid)
             return self.win.canvas.itemcget(self.win._tip[0], "text")
         self.assertEqual(shown(0), "Huggy")
-        self.assertEqual(shown(190), "Hungry Home Invader")
-        self.assertEqual(shown(192), "Wild Yet Bloodthirsty Creature")
+        self.assertEqual(shown(4000), "Hungry Home Invader")
+        self.assertEqual(shown(4002), "Wild Yet Bloodthirsty Creature")
         self._select_round("Unbound")
-        self.assertEqual(shown(192), "Pack of Wild Yet Bloodthirsty Creatures")
-        self.assertEqual(shown(config.SELF_INSERTS_BLOODTHIRSTY_SLOT), "Self Inserts (Bloodthirsty)")
+        self.assertEqual(shown(4002), "Pack of Wild Yet Bloodthirsty Creatures")
+        self.assertEqual(shown(TerrorIds.SELF_INSERTS_BLOODTHIRSTY), "Self Inserts (Bloodthirsty)")
         self._select_round("8 Pages")
-        self.assertEqual(shown(193), "The Navigator")
-        self._select_round("Moon")
-        self.assertEqual(shown(312), "Riftmonster")
-        self.assertEqual(shown(317), "Glorbo")
+        self.assertEqual(shown(3056), "The Navigator")
+        self._select_round("Special/Moon")
+        self.assertEqual(shown(4007), "Rift Monsters")
+        self._select_round("Punished")
+        self.assertEqual(shown(TerrorIds.GLORBO), "Glorbo")
         self.win._hide_tip()
         self.assertEqual(self.win.canvas.find_withtag("tip"), ())
 
     def test_glorbo_shows_the_question_mark_icon(self):
-        self._select_round("Moon")
-        self.assertIsNone(self.win._cells[317].label, "名前の札ではなく絵")
+        self._select_round("Punished")
+        self.assertIsNone(self.win._cells[TerrorIds.GLORBO].label, "名前の札ではなく絵")
         sheet = ContinueTableGUI._sheet("terrors")
         crop = sheet[0:32, 0:32]                             # terrors.png の列 0・段 0
         expected = ContinueTableGUI.blend_over_bg(crop, 1.0)
-        decoded = cv2.imdecode(np.frombuffer(ContinueTableGUI.icon_png(317), np.uint8), cv2.IMREAD_UNCHANGED)
+        decoded = cv2.imdecode(np.frombuffer(ContinueTableGUI.icon_png(TerrorIds.GLORBO), np.uint8),
+                               cv2.IMREAD_UNCHANGED)
         self.assertEqual(int(np.abs(decoded[..., :3].astype(int) - expected.astype(int)).max()), 0)
 
     def test_a_cell_with_no_icon_is_a_name_tile_and_dims_with_its_state(self):
         self.addCleanup(setattr, ContinueTableGUI, "icon_png", ContinueTableGUI.icon_png)
         ContinueTableGUI.icon_png = lambda tid, alpha=1.0: None      # 絵が無い番号の扱いを確かめる
-        self._select_round("Moon")
-        cell = self.win._cells[317]
+        self._select_round("Punished")
+        glorbo = TerrorIds.GLORBO
+        cell = self.win._cells[glorbo]
         self.assertIsNotNone(cell.label)
         canvas = self.win.canvas
         dim_fill = canvas.itemcget(cell.face, "fill")
-        self.win.toggle(317)
+        self.win.toggle(glorbo)
         self.assertNotEqual(canvas.itemcget(cell.face, "fill"), dim_fill)
-        self.assertEqual(canvas.itemcget(cell.face, "fill"), ContinueTableGUI.tile_color(317))
+        self.assertEqual(canvas.itemcget(cell.face, "fill"), ContinueTableGUI.tile_color(glorbo))
         self.assertEqual(canvas.itemcget(cell.label, "text"), "Glorbo")
 
     def test_clicking_a_cell_puts_it_in_the_table(self):
@@ -498,14 +566,14 @@ class TestWindow(_WindowCase):
         self.assertEqual(self._style(5)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
 
     def test_a_variant_cell_goes_into_the_rounds_key(self):
-        self.win.toggle(190)
-        self.win.toggle(192)
-        self.assertEqual(_cur().disabled, {KEY: frozenset({190, 192})})
+        self.win.toggle(4000)
+        self.win.toggle(4002)
+        self.assertEqual(_cur().disabled, {KEY: frozenset({4000, 4002})})
         self._select_round("Unbound")
-        self.win.toggle(192)
-        self.win.toggle(config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
+        self.win.toggle(4002)
+        self.win.toggle(TerrorIds.SELF_INSERTS_BLOODTHIRSTY)
         self.assertEqual(_cur().disabled[UNBOUND],
-                         frozenset({192, config.SELF_INSERTS_BLOODTHIRSTY_SLOT}))
+                         frozenset({4002, TerrorIds.SELF_INSERTS_BLOODTHIRSTY}))
 
     def test_a_click_changes_only_that_cell_and_does_not_rebuild_the_grid(self):
         canvas = self.win.canvas
@@ -524,9 +592,9 @@ class TestWindow(_WindowCase):
         after = {tid: self._style(tid) for tid in self.win._cells}
         self.assertEqual([t for t in after if after[t] != before[t]], [5])
 
-    def test_four_opacity_variants_are_cached_per_icon(self):
+    def test_five_opacity_variants_are_cached_per_icon(self):
         photos = {lv: self.win._photo(5, lv) for lv in ContinueTableGUI.LEVELS}
-        self.assertEqual(len({str(p) for p in photos.values()}), 4, "4 種は別の絵")
+        self.assertEqual(len({str(p) for p in photos.values()}), 5, "5 種は別の絵")
         for level, photo in photos.items():
             self.assertIs(self.win._photo(5, level), photo, "作り直さず持っておく")
 
@@ -557,9 +625,9 @@ class TestWindow(_WindowCase):
     def test_each_round_has_its_own_entries(self):
         self.win.toggle(5)
         self._select_round("Alternate")
-        self.win.toggle(150)
+        self.win.toggle(own(150))
         self.assertEqual(_cur().disabled,
-                         {KEY: frozenset({5}), ALT: frozenset({150})})
+                         {KEY: frozenset({5}), ALT: frozenset({own(150)})})
         self._select_round("Classic")
         self.assertEqual(self._style(5)[1], 2.0, "戻ると選んだ状態で描かれる")
 
@@ -579,7 +647,7 @@ class TestWindow(_WindowCase):
     def test_the_search_uses_the_names_of_the_round(self):
         self._select_round("Unbound")
         self.win.v_search.set("pack of wild yet bloodthirsty")
-        self.assertEqual(self._style(192)[0], ContinueTableGUI.COLOR_MATCH)
+        self.assertEqual(self._style(4002)[0], ContinueTableGUI.COLOR_MATCH)
 
     def test_clear_all_takes_everything_out_of_the_current_table_only(self):
         self.win.toggle(5)
@@ -591,18 +659,18 @@ class TestWindow(_WindowCase):
         self.assertEqual(_cur().disabled, {KEY: frozenset({5})})
 
     def test_clear_all_also_clears_the_variant_row(self):
-        for tid in (5, 190, 191, 192):
+        for tid in (5, 4000, 4001, 4002):
             self.win.toggle(tid)
         self.win.clear_all()
         self.assertEqual(_cur().disabled, {})
-        self.assertEqual(self._style(192)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
+        self.assertEqual(self._style(4002)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
 
     def test_select_all_puts_every_visible_cell_including_the_variant_row_into_the_current_table(self):
         self.win.select_all()
         self.assertEqual(_cur().disabled,
-                         {KEY: frozenset(list(range(134)) + [190, 191, 192])})
+                         {KEY: frozenset(list(range(134)) + [4000, 4001, 4002, 4009])})
         self.assertEqual(_cur().default, {}, "もう片方は変えない")
-        self.assertEqual(self._style(190)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
+        self.assertEqual(self._style(4000)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
         self.assertEqual(len(self.changed), 1)
         self.win.v_which.set(ContinueTable.DEFAULT)
         self.win.select_all()
@@ -611,7 +679,9 @@ class TestWindow(_WindowCase):
     def test_select_all_leaves_other_rounds_alone(self):
         self._select_round("8 Pages")
         self.win.select_all()
-        self.assertEqual(_cur().disabled[EIGHT], frozenset(self.win._cells))
+        self.assertEqual(_cur().disabled[EIGHT], TerrorIds.eight_pages_ids(),
+                         "選べないマス（出ない 116 個の位置）は入らない")
+        self.assertEqual(_cur().disabled[EIGHT], frozenset(self.win._available))
         self.assertNotIn(KEY, _cur().disabled)
 
     def test_select_all_and_clear_all_with_a_search_touch_only_the_matches(self):
@@ -629,38 +699,100 @@ class TestWindow(_WindowCase):
         self.assertEqual(effective[KEY], set(), "判定の表にその場で入る")
         self.assertFalse(ContinueTable.table_path().exists(), "保存はまとめて")
         self.win._flush_save()
-        self.assertEqual(self._saved().disabled[KEY], frozenset(list(range(134)) + [190, 191, 192]))
+        self.assertEqual(self._saved().disabled[KEY], frozenset(list(range(134)) + [4000, 4001, 4002, 4009]))
         self.win.clear_all()
         self.win._flush_save()
         self.assertEqual(self._saved().disabled, {})
 
-    def test_the_moon_writes_to_all_four_keys_and_clears_them(self):
-        keys = ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"]
-        self._select_round("Moon")
-        self.win.toggle(317)
-        self.assertEqual(_cur().disabled, {k: frozenset({317}) for k in keys})
-        self.win.toggle(317)
+    def test_special_moon_writes_its_one_key_and_clears_it(self):
+        self._select_round("Special/Moon")
+        self.win.toggle(4007)
+        self.assertEqual(_cur().disabled, {SPECIAL_MOON: frozenset({4007})})
+        self.win.toggle(4007)
         self.assertEqual(_cur().disabled, {})
         self.win.select_all()
-        every = frozenset({192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317})
-        self.assertEqual(_cur().disabled, {k: every for k in keys})
+        every = frozenset({4003, 4004, 4005, 4006, 4007, 4008, 4009})
+        self.assertEqual(_cur().disabled, {SPECIAL_MOON: every})
         self.win.clear_all()
         self.assertEqual(_cur().disabled, {})
 
-    def test_the_moon_shows_a_cell_as_in_if_any_of_the_four_has_it(self):
-        keys = ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"]
-        ContinueTable.set_current(Store(disabled_presets={"既定": {keys[2]: frozenset({312})}}))     # Twilight だけ
-        self._select_round("Moon")
-        self.assertEqual(self._style(312)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
-        self.assertEqual(self._style(313)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
-        self.win.toggle(312)                      # 入っているので外す（4 つすべてから）
+    def test_special_moon_shows_a_cell_as_in_when_the_key_has_it(self):
+        ContinueTable.set_current(Store(disabled_presets={"既定": {SPECIAL_MOON: frozenset({4007})}}))
+        self._select_round("Special/Moon")
+        self.assertEqual(self._style(4007)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
+        self.assertEqual(self._style(4008)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
+        self.win.toggle(4007)
         self.assertEqual(_cur().disabled, {})
 
-    def test_a_moon_click_does_not_touch_other_rounds(self):
+    def test_a_special_moon_click_does_not_touch_other_rounds(self):
         self.win.toggle(5)
-        self._select_round("Moon")
-        self.win.toggle(317)
+        self._select_round("Special/Moon")
+        self.win.toggle(4007)
         self.assertEqual(_cur().disabled[KEY], frozenset({5}))
+
+    # ── 出ないテラーの選べないマス ──
+    def test_a_terror_that_does_not_appear_in_the_round_is_an_unselectable_cell(self):
+        self._select_round("Ghost")
+        gone = own(87)                                             # BFF（Ghost に出ない）
+        self.assertIn(gone, self.win._cells, "格子に位置が残る")
+        self.assertNotIn(gone, self.win._available)
+        self.assertEqual(self._style(gone), (ContinueTableGUI.COLOR_GRID_BG, 1.0, self._photo_name(gone, "gone")),
+                         "12% の暗い絵・枠の色なし")
+        self.assertEqual(ContinueTableGUI.LEVELS["gone"], 0.12)
+        self.assertEqual(self._style(own(86))[0], ContinueTableGUI.COLOR_IDLE, "出るテラーは今までの見た目")
+
+    def test_clicking_an_unselectable_cell_does_nothing(self):
+        self._select_round("Ghost")
+        gone = own(87)
+        with patch.object(self.win, "_current_tid", return_value=gone):
+            self.win._on_click()
+        self.win.toggle(gone)
+        self.assertEqual(_cur().disabled, {})
+        self.assertEqual(self.changed, [], "表は変わらない・メイン画面の件数も更新しない")
+        self.assertEqual(self._style(gone)[:2], (ContinueTableGUI.COLOR_GRID_BG, 1.0))
+
+    def test_select_all_and_clear_all_leave_the_unselectable_cells_out(self):
+        self._select_round("Ghost")
+        self.win.select_all()
+        listed = _cur().disabled[_round_key("Ghost")]
+        self.assertEqual(listed, frozenset(self.win._available), "枠にあるものだけ")
+        self.assertFalse(listed & _disabled_by_tab()["Ghost"])
+        self.assertEqual(len(self.win._cells) - len(listed), len(_disabled_by_tab()["Ghost"]))
+        self.win.clear_all()
+        self.assertEqual(_cur().disabled, {})
+
+    def test_the_tooltip_of_an_unselectable_cell_says_it_does_not_appear(self):
+        self._select_round("Ghost")
+        self.win._show_tip(own(87))
+        self.assertEqual(self.win.canvas.itemcget(self.win._tip[0], "text"), "BFF（このラウンドには出ません）")
+        self.win._show_tip(own(86))
+        self.assertEqual(self.win.canvas.itemcget(self.win._tip[0], "text"), TerrorIds.name(own(86)))
+
+    def test_a_search_does_not_light_up_an_unselectable_cell(self):
+        self._select_round("Ghost")
+        self.win.v_search.set("bff")
+        self.assertEqual(self._style(own(87))[:2], (ContinueTableGUI.COLOR_GRID_BG, 1.0))
+
+    def test_every_round_draws_its_unselectable_cells_as_the_disabled_list_says(self):
+        for tab, gone in _disabled_by_tab().items():
+            self._select_round(tab)
+            self.assertEqual({t for t in self.win._cells if t not in self.win._available}, gone, tab)
+            for tid in gone:
+                self.assertEqual(self._style(tid)[:2], (ContinueTableGUI.COLOR_GRID_BG, 1.0), (tab, tid))
+
+    def test_the_eight_pages_tab_lets_you_pick_only_its_rows(self):
+        self._select_round("8 Pages")
+        self.win.toggle(own(5))                                   # 8 Pages に出ない Tails Doll の位置
+        self.assertEqual(_cur().disabled, {})
+        self.win.toggle(3014)                                     # Huggy（ページ 14）の位置に置いた行
+        self.assertEqual(_cur().disabled, {EIGHT: frozenset({3014})})
+        self.assertEqual(self._style(3014)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
+        self.assertEqual(self._pos(3014), self._pos(3014))
+        self.assertNotIn(0, self.win._cells, "Huggy の位置にはその行だけがある")
+        self.win.select_all()
+        self.assertEqual(_cur().disabled[EIGHT], TerrorIds.eight_pages_ids())
+        self.win.clear_all()
+        self.assertEqual(_cur().disabled, {})
 
     def test_the_notice_about_group_instances_is_shown(self):
         self.assertIn("干し芋・焼き芋", ContinueTableGUI.NOTE)
