@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import ContinueTable
 import ContinueTableGUI
-from ContinueTable import Table
+from ContinueTable import Table, Store
 
 KEY = "Classic/クラシック"
 ALT = "Alternate/オルタネイト"
@@ -18,9 +18,14 @@ EIGHT = "8 Pages/8ページ"
 def _fresh_store(case):
     """今の表を空に・保存先（テスト用の一時フォルダ）の続行表のファイルを消す。終わったら同じに戻す"""
     ContinueTable.table_path().unlink(missing_ok=True)
-    ContinueTable.set_current(Table())
+    ContinueTable.set_current(Store())
     case.addCleanup(ContinueTable.table_path().unlink, missing_ok=True)
-    case.addCleanup(ContinueTable.set_current, Table())
+    case.addCleanup(ContinueTable.set_current, Store())
+
+
+def _cur() -> Table:
+    """今の保存内容の、窓 1 の表。編集の窓は「既定」のプリセットを編集し、窓 1 は何も選んでいない（＝既定）ので同じもの"""
+    return ContinueTable.table_for(ContinueTable.current(), 1)
 
 
 def _slot_ids(key):
@@ -299,7 +304,8 @@ class _WindowCase(unittest.TestCase):
         return str(self.win._photo(tid, level))
 
     def _saved(self) -> Table:
-        return ContinueTable.load()
+        """保存したファイルの窓 1 の表（編集の窓は「既定」を編集する）"""
+        return ContinueTable.table_for(ContinueTable.load(), 1)
 
     def _select_round(self, name):
         names = list(self.win.list_rounds.get(0, "end"))
@@ -475,7 +481,7 @@ class TestWindow(_WindowCase):
     def test_clicking_a_cell_puts_it_in_the_table(self):
         with patch.object(self.win, "_current_tid", return_value=5):
             self.win._on_click()                              # マウスの下のセルを押した
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({5})}, "判定にはその場で効く")
+        self.assertEqual(_cur().disabled, {KEY: frozenset({5})}, "判定にはその場で効く")
         self.assertEqual(len(self.changed), 1, "メイン画面の件数を更新する")
         self.assertEqual(self._style(5)[0], ContinueTableGUI.COLOR_DISABLED)
 
@@ -488,17 +494,17 @@ class TestWindow(_WindowCase):
     def test_clicking_again_takes_it_out(self):
         self.win.toggle(5)
         self.win.toggle(5)
-        self.assertEqual(ContinueTable.current().disabled, {})
+        self.assertEqual(_cur().disabled, {})
         self.assertEqual(self._style(5)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
 
     def test_a_variant_cell_goes_into_the_rounds_key(self):
         self.win.toggle(190)
         self.win.toggle(192)
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({190, 192})})
+        self.assertEqual(_cur().disabled, {KEY: frozenset({190, 192})})
         self._select_round("Unbound")
         self.win.toggle(192)
         self.win.toggle(config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
-        self.assertEqual(ContinueTable.current().disabled[UNBOUND],
+        self.assertEqual(_cur().disabled[UNBOUND],
                          frozenset({192, config.SELF_INSERTS_BLOODTHIRSTY_SLOT}))
 
     def test_a_click_changes_only_that_cell_and_does_not_rebuild_the_grid(self):
@@ -545,14 +551,14 @@ class TestWindow(_WindowCase):
         self.win.v_which.set(ContinueTable.DEFAULT)
         self.win.toggle(5)
         self.win.toggle(6)
-        self.assertEqual(ContinueTable.current().default, {KEY: frozenset({5, 6})})
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({5})}, "もう片方は変えない")
+        self.assertEqual(_cur().default, {KEY: frozenset({5, 6})})
+        self.assertEqual(_cur().disabled, {KEY: frozenset({5})}, "もう片方は変えない")
 
     def test_each_round_has_its_own_entries(self):
         self.win.toggle(5)
         self._select_round("Alternate")
         self.win.toggle(150)
-        self.assertEqual(ContinueTable.current().disabled,
+        self.assertEqual(_cur().disabled,
                          {KEY: frozenset({5}), ALT: frozenset({150})})
         self._select_round("Classic")
         self.assertEqual(self._style(5)[1], 2.0, "戻ると選んだ状態で描かれる")
@@ -581,45 +587,45 @@ class TestWindow(_WindowCase):
         self.win.toggle(6)
         self.win.toggle(7)
         self.win.clear_all()
-        self.assertEqual(ContinueTable.current().default, {})
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({5})})
+        self.assertEqual(_cur().default, {})
+        self.assertEqual(_cur().disabled, {KEY: frozenset({5})})
 
     def test_clear_all_also_clears_the_variant_row(self):
         for tid in (5, 190, 191, 192):
             self.win.toggle(tid)
         self.win.clear_all()
-        self.assertEqual(ContinueTable.current().disabled, {})
+        self.assertEqual(_cur().disabled, {})
         self.assertEqual(self._style(192)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
 
     def test_select_all_puts_every_visible_cell_including_the_variant_row_into_the_current_table(self):
         self.win.select_all()
-        self.assertEqual(ContinueTable.current().disabled,
+        self.assertEqual(_cur().disabled,
                          {KEY: frozenset(list(range(134)) + [190, 191, 192])})
-        self.assertEqual(ContinueTable.current().default, {}, "もう片方は変えない")
+        self.assertEqual(_cur().default, {}, "もう片方は変えない")
         self.assertEqual(self._style(190)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
         self.assertEqual(len(self.changed), 1)
         self.win.v_which.set(ContinueTable.DEFAULT)
         self.win.select_all()
-        self.assertEqual(ContinueTable.current().default, ContinueTable.current().disabled)
+        self.assertEqual(_cur().default, _cur().disabled)
 
     def test_select_all_leaves_other_rounds_alone(self):
         self._select_round("8 Pages")
         self.win.select_all()
-        self.assertEqual(ContinueTable.current().disabled[EIGHT], frozenset(self.win._cells))
-        self.assertNotIn(KEY, ContinueTable.current().disabled)
+        self.assertEqual(_cur().disabled[EIGHT], frozenset(self.win._cells))
+        self.assertNotIn(KEY, _cur().disabled)
 
     def test_select_all_and_clear_all_with_a_search_touch_only_the_matches(self):
         self.win.toggle(1)
         self.win.v_search.set("huggy")
         self.win.select_all()
-        self.assertEqual(ContinueTable.current().disabled[KEY], frozenset({0, 1}), "合う 0 だけ足す")
+        self.assertEqual(_cur().disabled[KEY], frozenset({0, 1}), "合う 0 だけ足す")
         self.win.clear_all()
-        self.assertEqual(ContinueTable.current().disabled[KEY], frozenset({1}), "合う 0 だけ外す")
+        self.assertEqual(_cur().disabled[KEY], frozenset({1}), "合う 0 だけ外す")
 
     def test_select_all_reaches_the_decision_at_once_and_is_saved_later(self):
         self.win.select_all()
-        effective = ContinueTable.apply({KEY: {7}}, ContinueTable.current())
-        self.assertNotIn(5, ContinueTable.apply({KEY: {5}}, ContinueTable.current())[KEY], "続行無効が判定に効く")
+        effective = ContinueTable.apply({KEY: {7}}, _cur())
+        self.assertNotIn(5, ContinueTable.apply({KEY: {5}}, _cur())[KEY], "続行無効が判定に効く")
         self.assertEqual(effective[KEY], set(), "判定の表にその場で入る")
         self.assertFalse(ContinueTable.table_path().exists(), "保存はまとめて")
         self.win._flush_save()
@@ -632,29 +638,29 @@ class TestWindow(_WindowCase):
         keys = ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"]
         self._select_round("Moon")
         self.win.toggle(317)
-        self.assertEqual(ContinueTable.current().disabled, {k: frozenset({317}) for k in keys})
+        self.assertEqual(_cur().disabled, {k: frozenset({317}) for k in keys})
         self.win.toggle(317)
-        self.assertEqual(ContinueTable.current().disabled, {})
+        self.assertEqual(_cur().disabled, {})
         self.win.select_all()
         every = frozenset({192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317})
-        self.assertEqual(ContinueTable.current().disabled, {k: every for k in keys})
+        self.assertEqual(_cur().disabled, {k: every for k in keys})
         self.win.clear_all()
-        self.assertEqual(ContinueTable.current().disabled, {})
+        self.assertEqual(_cur().disabled, {})
 
     def test_the_moon_shows_a_cell_as_in_if_any_of_the_four_has_it(self):
         keys = ContinueTableGUI.ROUND_KEYS_FOR_TAB["Moon"]
-        ContinueTable.set_current(Table(disabled={keys[2]: frozenset({312})}))     # Twilight だけ
+        ContinueTable.set_current(Store(disabled_presets={"既定": {keys[2]: frozenset({312})}}))     # Twilight だけ
         self._select_round("Moon")
         self.assertEqual(self._style(312)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
         self.assertEqual(self._style(313)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
         self.win.toggle(312)                      # 入っているので外す（4 つすべてから）
-        self.assertEqual(ContinueTable.current().disabled, {})
+        self.assertEqual(_cur().disabled, {})
 
     def test_a_moon_click_does_not_touch_other_rounds(self):
         self.win.toggle(5)
         self._select_round("Moon")
         self.win.toggle(317)
-        self.assertEqual(ContinueTable.current().disabled[KEY], frozenset({5}))
+        self.assertEqual(_cur().disabled[KEY], frozenset({5}))
 
     def test_the_notice_about_group_instances_is_shown(self):
         self.assertIn("干し芋・焼き芋", ContinueTableGUI.NOTE)
@@ -681,7 +687,7 @@ class TestSaving(_WindowCase):
         with patch.object(ContinueTable, "save", wraps=ContinueTable.save) as save:
             for tid in (5, 6, 7):
                 self.win.toggle(tid)
-            self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({5, 6, 7})})
+            self.assertEqual(_cur().disabled, {KEY: frozenset({5, 6, 7})})
             self.assertEqual(save.call_count, 0, "押した時点では書かない")
             self.assertFalse(ContinueTable.table_path().exists())
             self.assertTrue(_wait(self.win, lambda: save.call_count > 0))
@@ -745,7 +751,7 @@ class TestImport(_WindowCase):
         self.win.toggle(1)
         self._file("a.tnl", {"data": {KEY: {"5": 1, "6": 1}}})
         self.win._import_tnl()
-        self.assertEqual(ContinueTable.current().default, {KEY: frozenset({5, 6})}, "置き換え")
+        self.assertEqual(_cur().default, {KEY: frozenset({5, 6})}, "置き換え")
         self.win._flush_save()
         self.assertEqual(self._saved().default, {KEY: frozenset({5, 6})})
         self.assertIn("*.tnl", self.asked)
@@ -756,20 +762,20 @@ class TestImport(_WindowCase):
         self.win.v_which.set(ContinueTable.DEFAULT)
         self._file("a.tnnl", {"targets_dict": {KEY: [2, 3]}})
         self.win._import_tnnl()
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({2, 3})})
-        self.assertEqual(ContinueTable.current().default, {})
+        self.assertEqual(_cur().disabled, {KEY: frozenset({2, 3})})
+        self.assertEqual(_cur().default, {})
 
     def test_declining_the_confirmation_changes_nothing(self):
         self.answer = False
         self._file("a.tnnl", {"targets_dict": {KEY: [2]}})
         self.win._import_tnnl()
-        self.assertEqual(ContinueTable.current(), Table())
+        self.assertEqual(ContinueTable.current(), Store())
         self.assertEqual(self.changed, [])
 
     def test_cancelling_the_file_dialog_changes_nothing(self):
         self.path = ""
         self.win._import_tnl()
-        self.assertEqual(ContinueTable.current(), Table())
+        self.assertEqual(ContinueTable.current(), Store())
         self.assertFalse([a for a in self.asked if "置き換え" in str(a)], "確認も出さない")
 
     def test_a_broken_file_is_reported_and_changes_nothing(self):
@@ -780,29 +786,298 @@ class TestImport(_WindowCase):
         with patch.object(DebugLog, "exception"):
             self.win._import_tnl()
         self.assertEqual(len(self.errors), 1)
-        self.assertEqual(ContinueTable.current().disabled, {KEY: frozenset({5})})
+        self.assertEqual(_cur().disabled, {KEY: frozenset({5})})
+
+
+def _widgets(widget, cls):
+    """widget の下にある cls の部品すべて"""
+    found = [widget] if isinstance(widget, cls) else []
+    for child in widget.winfo_children():
+        found.extend(_widgets(child, cls))
+    return found
+
+
+class TestPresetControls(_WindowCase):
+    """GL: 編集の窓のプリセット（ドロップダウンと 新規・複製・名前変更・削除）。名前を聞く・確認は偽物"""
+
+    def setUp(self):
+        super().setUp()
+        self.patch_save = patch.object(ContinueTableGUI, "SAVE_DELAY_MS", 30)
+        self.patch_save.start()
+        self.addCleanup(self.patch_save.stop)
+        self.names = []                    # 名前を聞かれたときの答え（None は取り消し）
+        self.asked = []                    # 聞かれた (題, 初期値)
+        self.confirms = []
+        self.errors = []
+        self.answer = True
+        self.win._ask_name = lambda title, initial="": (self.asked.append((title, initial)), self.names.pop(0))[1]
+        self.win._confirm = lambda text: (self.confirms.append(text), self.answer)[1]
+        self.win._error = self.errors.append
+
+    def _store(self):
+        return ContinueTable.current()
+
+    def _names(self, which=ContinueTable.DISABLED):
+        return ContinueTable.preset_names(self._store(), which)
+
+    def _press(self, text):
+        button = next(b for b in _widgets(self.win, ttk.Button) if b.cget("text") == text)
+        button.invoke()
+
+    def test_it_shows_the_base_preset_with_a_dropdown_and_four_buttons_next_to_the_switch(self):
+        self.assertEqual(self.win.v_preset.get(), "既定")
+        self.assertEqual(list(self.win.cb_preset["values"]), ["既定"])
+        self.assertEqual(str(self.win.cb_preset.cget("state")), "readonly")
+        texts = {b.cget("text") for b in _widgets(self.win, ttk.Button)}
+        self.assertTrue({"新規", "複製", "名前変更", "削除"} <= texts)
+        radios = _widgets(self.win, ttk.Radiobutton)
+        self.assertEqual(radios[0].master, self.win.cb_preset.master, "切り替えと同じ段にある")
+
+    def test_new_makes_an_empty_preset_selects_it_and_saves(self):
+        self.win.toggle(5)                                  # 既定に 5
+        self.names = ["Boss用"]
+        self._press("新規")
+        self.assertEqual(self._names(), ["既定", "Boss用"])
+        self.assertEqual(self.win.v_preset.get(), "Boss用")
+        self.assertEqual(list(self.win.cb_preset["values"]), ["既定", "Boss用"])
+        self.assertEqual(self._store().disabled_presets["Boss用"], {})
+        self.win.toggle(6)                                  # 選んだプリセットに入る
+        self.assertEqual(self._store().disabled_presets["Boss用"], {KEY: frozenset({6})})
+        self.assertEqual(self._store().disabled_presets["既定"], {KEY: frozenset({5})}, "既定は変わらない")
+        self.assertEqual(self._style(5)[0], ContinueTableGUI.COLOR_IDLE, "格子は選んだプリセットの中身")
+        self.win._flush_save()
+        self.assertEqual(ContinueTable.load().disabled_presets["Boss用"], {KEY: frozenset({6})})
+        self.assertEqual(self.errors, [])
+        self.assertTrue(self.changed, "メイン画面へ知らせる")
+
+    def test_new_with_a_taken_name_or_empty_name_is_refused_and_cancel_does_nothing(self):
+        before = self._store()
+        self.names = ["既定", "  ", "なし", None]
+        for _ in self.names[:]:
+            self._press("新規")
+        self.assertEqual(len(self.errors), 3, "同名・空・「なし」はそれぞれ理由を出す")
+        self.assertEqual(self._store(), before)
+        self.assertEqual(self.win.v_preset.get(), "既定")
+
+    def test_copy_asks_with_a_default_name_and_copies_the_content(self):
+        self.win.toggle(5)
+        self.names = ["既定 のコピー"]
+        self._press("複製")
+        self.assertEqual(self.asked[-1][1], "既定 のコピー", "名前の既定は「〇〇 のコピー」")
+        self.assertEqual(self._names(), ["既定", "既定 のコピー"])
+        self.assertEqual(self.win.v_preset.get(), "既定 のコピー")
+        self.assertEqual(self._store().disabled_presets["既定 のコピー"], {KEY: frozenset({5})})
+        self.win.toggle(5)                                  # コピーの方だけ外す
+        self.assertEqual(self._store().disabled_presets["既定 のコピー"], {})
+        self.assertEqual(self._store().disabled_presets["既定"], {KEY: frozenset({5})})
+
+    def test_copy_with_a_taken_name_is_refused(self):
+        self.names = ["既定"]
+        self._press("複製")
+        self.assertEqual(len(self.errors), 1)
+        self.assertEqual(self._names(), ["既定"])
+
+    def test_rename_changes_the_name_and_windows_that_used_it_follow(self):
+        self.names = ["B"]
+        self._press("新規")
+        ContinueTable.set_current(ContinueTable.with_choice(self._store(), 2, ContinueTable.DISABLED, "B"))
+        self.names = ["B改"]
+        self._press("名前変更")
+        self.assertEqual(self.asked[-1][1], "B", "今の名前が初期値")
+        self.assertEqual(self._names(), ["既定", "B改"])
+        self.assertEqual(self.win.v_preset.get(), "B改")
+        self.assertEqual(ContinueTable.choice_for(self._store(), 2, ContinueTable.DISABLED), "B改")
+
+    def test_rename_to_a_name_in_use_is_refused_but_keeping_the_name_is_fine(self):
+        self.names = ["B"]
+        self._press("新規")
+        self.names = ["既定"]
+        self._press("名前変更")
+        self.assertEqual(len(self.errors), 1)
+        self.assertEqual(self._names(), ["既定", "B"])
+        self.names = ["B"]
+        self._press("名前変更")
+        self.assertEqual(len(self.errors), 1, "同じ名前のままは何もしない（エラーにしない）")
+
+    def test_delete_asks_first_and_windows_that_used_it_go_back_to_the_base(self):
+        self.names = ["B"]
+        self._press("新規")
+        ContinueTable.set_current(ContinueTable.with_choice(self._store(), 3, ContinueTable.DISABLED, "B"))
+        self.answer = False
+        self._press("削除")
+        self.assertEqual(len(self.confirms), 1)
+        self.assertIn("B", self.confirms[0])
+        self.assertEqual(self._names(), ["既定", "B"], "いいえなら消さない")
+        self.answer = True
+        self._press("削除")
+        self.assertEqual(self._names(), ["既定"])
+        self.assertEqual(self.win.v_preset.get(), "既定", "消えた名前を選んだままにしない")
+        self.assertEqual(ContinueTable.choice_for(self._store(), 3, ContinueTable.DISABLED), "既定")
+        self.win.toggle(5)
+        self.assertEqual(self._store().disabled_presets["既定"], {KEY: frozenset({5})}, "以後は既定を編集する")
+
+    def test_the_last_preset_cannot_be_deleted(self):
+        self._press("削除")
+        self.assertEqual(self.confirms, [], "確認も出さない")
+        self.assertEqual(len(self.errors), 1)
+        self.assertEqual(self._names(), ["既定"])
+
+    def test_deleting_the_base_preset_sends_windows_to_the_first_one(self):
+        self.names = ["B"]
+        self._press("新規")
+        self.win.v_preset.set("既定")
+        self.win._on_preset_picked()
+        self._press("削除")
+        self.assertEqual(self._names(), ["B"])
+        self.assertEqual(self.win.v_preset.get(), "B")
+        self.assertEqual(ContinueTable.choice_for(self._store(), 1, ContinueTable.DISABLED), "B")
+
+    def test_picking_in_the_dropdown_switches_what_the_grid_edits_and_shows(self):
+        self.win.toggle(5)
+        self.names = ["B"]
+        self._press("新規")
+        self.assertEqual(self._style(5)[0], ContinueTableGUI.COLOR_IDLE, "B は空")
+        self.win.v_preset.set("既定")
+        self.win._on_preset_picked()
+        self.assertEqual(self._style(5)[0], ContinueTableGUI.COLOR_DISABLED, "既定の 5 が出る")
+        self.win.select_all()
+        self.assertEqual(self._store().disabled_presets["B"], {}, "全選択は選んでいるプリセットだけ")
+        self.assertTrue(self._store().disabled_presets["既定"][KEY] > {5})
+        self.win.clear_all()
+        self.assertEqual(self._store().disabled_presets["既定"], {})
+
+    def test_the_two_kinds_have_their_own_presets_and_selections(self):
+        self.names = ["無効B"]
+        self._press("新規")
+        self.win.v_which.set(ContinueTable.DEFAULT)
+        self.assertEqual(list(self.win.cb_preset["values"]), ["既定"], "デフォ続行のプリセットは別")
+        self.assertEqual(self.win.v_preset.get(), "既定")
+        self.names = ["デフォB"]
+        self._press("新規")
+        self.assertEqual(self._names(ContinueTable.DEFAULT), ["既定", "デフォB"])
+        self.assertEqual(self._names(ContinueTable.DISABLED), ["既定", "無効B"])
+        self.win.toggle(7)
+        self.assertEqual(self._store().default_presets["デフォB"], {KEY: frozenset({7})})
+        self.win.v_which.set(ContinueTable.DISABLED)
+        self.assertEqual(self.win.v_preset.get(), "無効B", "戻すと、その種類で選んでいたもの")
+        self.assertEqual(self._style(7)[0], ContinueTableGUI.COLOR_DEFAULT, "もう片方の表（デフォB）の 7 は細い枠で出る")
+
+    def test_imports_go_into_the_selected_presets(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tnl = Path(tmp.name) / "a.tnl"
+        tnl.write_text(json.dumps({"data": {KEY: {"5": 1}}}), encoding="utf-8")
+        tnnl = Path(tmp.name) / "a.tnnl"
+        tnnl.write_text(json.dumps({"targets_dict": {KEY: [2, 3]}}), encoding="utf-8")
+        self.win._ask_file = lambda title, pattern: str(tnl if pattern == "*.tnl" else tnnl)
+        self.names = ["無効B"]
+        self._press("新規")                                 # 続行無効の無効B を選ぶ
+        self.win.v_which.set(ContinueTable.DEFAULT)
+        self.names = ["デフォB"]
+        self._press("新規")
+        self.win._import_tnl()
+        self.win._import_tnnl()
+        store = self._store()
+        self.assertEqual(store.default_presets["デフォB"], {KEY: frozenset({5})}, ".tnl → デフォ続行の選んでいるもの")
+        self.assertEqual(store.disabled_presets["無効B"], {KEY: frozenset({2, 3})}, ".tnnl → 続行無効の選んでいるもの")
+        self.assertEqual(store.default_presets["既定"], {})
+        self.assertEqual(store.disabled_presets["既定"], {})
+        self.assertIn("デフォB", self.confirms[0], "確認の文にプリセット名が出る")
+
+    def test_closing_writes_the_pending_preset_changes(self):
+        self.names = ["B"]
+        self._press("新規")
+        self.win.destroy()
+        self.assertIn("B", ContinueTable.load().disabled_presets)
 
 
 class TestMainWindow(unittest.TestCase):
     def setUp(self):
         _fresh_store(self)
+        self.app = self._app()
+
+    def _app(self):
         with patch.object(mainGUI.App, "_start_host_save_polling"):
-            self.app = mainGUI.App()
-        self.addCleanup(self.app.destroy)
+            app = mainGUI.App()
+        self.addCleanup(app.destroy)
+        return app
 
-    def test_the_count_label_and_the_two_checks(self):
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "無効 0件・デフォ 0件")
-        self.assertTrue(self.app.v_ct_disabled.get())
-        self.assertTrue(self.app.v_ct_default.get())
+    def _pick(self, tab, which, label):
+        """窓のドロップダウンで label を選んだことにする（hidden な窓には合成イベントが届かないので受け口を呼ぶ）"""
+        tab.v_ct_choice[which].set(label)
+        tab._on_continue_pick(which)
 
-    def test_turning_a_check_off_is_saved_and_takes_effect(self):
-        ContinueTable.set_current(ContinueTable.with_toggled(Table(), ContinueTable.DISABLED, KEY, 7))
-        self.app.v_ct_disabled.set(False)
-        self.app._on_continue_table_use()
-        self.assertFalse(ContinueTable.current().use_disabled)
-        self.assertFalse(ContinueTable.load().use_disabled, "保存される")
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "無効 1件・デフォ 0件")
-        self.assertEqual(ContinueTable.apply({KEY: {7}}, ContinueTable.current()), {KEY: {7}})
+    def test_the_count_label_counts_presets(self):
+        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 1 個")
+
+    def test_the_global_checkboxes_are_gone(self):
+        self.assertFalse(hasattr(self.app, "v_ct_disabled"))
+        self.assertFalse(hasattr(self.app, "v_ct_default"))
+        frame = next(f for f in _widgets(self.app, ttk.LabelFrame) if f.cget("text") == "続行表")
+        self.assertEqual([b.cget("text") for b in _widgets(frame, ttk.Checkbutton)], [])
+
+    def test_every_window_row_has_the_two_dropdowns_listing_presets_and_none(self):
+        self.assertGreaterEqual(len(self.app.tabs), 2)
+        for tab in self.app.tabs:
+            for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT):
+                box = tab.cb_ct_choice[which]
+                self.assertEqual(list(box["values"]), ["既定", "なし"], tab.idx)
+                self.assertEqual(tab.v_ct_choice[which].get(), "既定", "まだ選んでいない窓は既定")
+                self.assertEqual(str(box.cget("state")), "readonly")
+        labels = [w.cget("text") for w in _widgets(self.app.tabs[0], ttk.Label)]
+        self.assertIn("続行無効:", labels)
+        self.assertIn("デフォ続行:", labels)
+
+    def test_choosing_none_in_one_window_saves_and_applies_to_that_window_only(self):
+        ContinueTable.set_current(ContinueTable.with_preset_body(
+            ContinueTable.current(), ContinueTable.DISABLED, "既定", {KEY: [7]}))
+        first, second = self.app.tabs[0], self.app.tabs[1]
+        self._pick(first, ContinueTable.DISABLED, "なし")
+        store = ContinueTable.current()
+        self.assertIsNone(ContinueTable.choice_for(store, 1, ContinueTable.DISABLED))
+        self.assertEqual(ContinueTable.table_for(store, 1).disabled, {}, "窓 1 は続行無効を重ねない")
+        self.assertEqual(ContinueTable.table_for(store, 2).disabled, {KEY: frozenset({7})}, "窓 2 はそのまま")
+        self.assertEqual(ContinueTable.apply({KEY: {7}}, ContinueTable.table_for(store, 1)), {KEY: {7}})
+        self.assertEqual(ContinueTable.apply({KEY: {7}}, ContinueTable.table_for(store, 2)), {KEY: set()})
+        self.assertEqual(second.v_ct_choice[ContinueTable.DISABLED].get(), "既定")
+        saved = ContinueTable.load()
+        self.assertIsNone(ContinueTable.choice_for(saved, 1, ContinueTable.DISABLED), "保存される")
+        self.assertEqual(ContinueTable.choice_for(saved, 2, ContinueTable.DISABLED), "既定")
+
+    def test_choosing_a_preset_per_window(self):
+        store = ContinueTable.with_new_preset(ContinueTable.current(), ContinueTable.DEFAULT, "デフォB")
+        ContinueTable.set_current(store)
+        self.app._refresh_continue_table_count()
+        second = self.app.tabs[1]
+        self.assertEqual(list(second.cb_ct_choice[ContinueTable.DEFAULT]["values"]), ["既定", "デフォB", "なし"])
+        self._pick(second, ContinueTable.DEFAULT, "デフォB")
+        self.assertEqual(ContinueTable.choice_for(ContinueTable.current(), 2, ContinueTable.DEFAULT), "デフォB")
+        self.assertEqual(ContinueTable.choice_for(ContinueTable.current(), 1, ContinueTable.DEFAULT), "既定")
+        self.assertEqual(ContinueTable.choice_for(ContinueTable.load(), 2, ContinueTable.DEFAULT), "デフォB")
+        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 2 個")
+
+    def test_the_choice_survives_a_change_of_the_window_count(self):
+        self._pick(self.app.tabs[1], ContinueTable.DISABLED, "なし")
+        self.app._rebuild_tabs(3)
+        self.assertEqual(self.app.tabs[1].v_ct_choice[ContinueTable.DISABLED].get(), "なし")
+        self.assertEqual(self.app.tabs[2].v_ct_choice[ContinueTable.DISABLED].get(), "既定")
+
+    def test_the_editor_window_changes_refresh_the_dropdowns_of_every_window(self):
+        self.app._open_continue_table()
+        editor = self.app._continue_table_window
+        editor._ask_name = lambda title, initial="": "B"
+        editor._error = lambda text: None
+        editor.new_preset()
+        for tab in self.app.tabs:
+            self.assertEqual(list(tab.cb_ct_choice[ContinueTable.DISABLED]["values"]), ["既定", "B", "なし"])
+        self._pick(self.app.tabs[0], ContinueTable.DISABLED, "B")
+        editor._confirm = lambda text: True
+        editor.delete_preset()                              # 選んでいる B を消す
+        self.assertEqual(self.app.tabs[0].v_ct_choice[ContinueTable.DISABLED].get(), "既定",
+                         "消したプリセットを使っていた窓は既定へ")
+        self.assertEqual(list(self.app.tabs[0].cb_ct_choice[ContinueTable.DISABLED]["values"]), ["既定", "なし"])
+        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 1 個")
+        editor.destroy()
 
     def test_the_button_opens_one_window_and_a_change_updates_the_count(self):
         self.app._open_continue_table()
@@ -810,21 +1085,35 @@ class TestMainWindow(unittest.TestCase):
         self.assertIsInstance(first, ContinueTableGUI.ContinueTableWindow)
         self.app._open_continue_table()
         self.assertIs(self.app._continue_table_window, first, "2 回目は同じ窓")
-        first.toggle(5)
+        first._ask_name = lambda title, initial="": "B"
+        first.new_preset()
         first.v_which.set(ContinueTable.DEFAULT)
-        first.toggle(6)
-        first.toggle(7)
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "無効 1件・デフォ 2件")
+        first._ask_name = lambda title, initial="": "C"
+        first.new_preset()
+        first._ask_name = lambda title, initial="": "D"
+        first.new_preset()
+        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 2 個・デフォ 3 個")
         first.destroy()
         self.app._open_continue_table()
         self.assertIsNot(self.app._continue_table_window, first, "閉じたら作り直す")
 
-    def test_the_saved_table_is_loaded_at_start(self):
-        saved = ContinueTable.with_toggled(Table(use_default=False), ContinueTable.DEFAULT, ALT, 150)
+    def test_the_saved_store_is_loaded_at_start_and_shown_per_window(self):
+        saved = Store(disabled_presets={"既定": {}, "A": {KEY: frozenset({7})}},
+                      default_presets={"既定": {ALT: frozenset({150})}},
+                      windows={2: {ContinueTable.DISABLED: "A", ContinueTable.DEFAULT: None}})
         ContinueTable.save(saved)
-        with patch.object(mainGUI.App, "_start_host_save_polling"):
-            app = mainGUI.App()
-        self.addCleanup(app.destroy)
+        app = self._app()
         self.assertEqual(ContinueTable.current(), saved)
-        self.assertFalse(app.v_ct_default.get())
-        self.assertEqual(app.lbl_ct_count.cget("text"), "無効 0件・デフォ 1件")
+        self.assertEqual(app.tabs[0].v_ct_choice[ContinueTable.DISABLED].get(), "既定")
+        self.assertEqual(app.tabs[1].v_ct_choice[ContinueTable.DISABLED].get(), "A")
+        self.assertEqual(app.tabs[1].v_ct_choice[ContinueTable.DEFAULT].get(), "なし")
+        self.assertEqual(app.lbl_ct_count.cget("text"), "プリセット 無効 2 個・デフォ 1 個")
+
+    def test_a_v1_file_with_a_check_off_shows_none_in_every_window(self):
+        ContinueTable.table_path().write_text(json.dumps(
+            {"version": 1, "use_disabled": False, "use_default": True,
+             "disabled": {KEY: [7]}, "default": {}}), encoding="utf-8")
+        app = self._app()
+        for tab in app.tabs:
+            self.assertEqual(tab.v_ct_choice[ContinueTable.DISABLED].get(), "なし", tab.idx)
+            self.assertEqual(tab.v_ct_choice[ContinueTable.DEFAULT].get(), "既定", tab.idx)

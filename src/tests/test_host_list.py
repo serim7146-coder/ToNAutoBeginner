@@ -110,7 +110,7 @@ class TestAppTabLifecycle(unittest.TestCase):
 
         class NewTab:
             def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None,
-                         section_collapsed=None, on_section_toggled=None):
+                         section_collapsed=None, on_section_toggled=None, on_continue_choice=None):
                 self.parent = parent
                 self.idx = idx
                 self.on_log_selected = on_log_selected
@@ -128,6 +128,7 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._on_tab_log_selected = lambda tab: None
         app._apply_tab_settings_live = lambda tab: None
         app._apply_saved_window_settings = lambda: None
+        app._on_continue_choice = lambda tab, which, name: None
         app._tab_sections = {}
         app._on_tab_section_toggled = lambda _key, _collapsed: None
         app.tabs = [OldTab(0), OldTab(1)]
