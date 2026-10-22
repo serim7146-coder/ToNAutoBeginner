@@ -209,6 +209,30 @@ def game_id(own) -> int:
     return found.log if found is not None and found.log is not None else own
 
 
+def statistics_id(own) -> int:
+    """統計で数えるときの番号。8 Pages の行（3000 番台）は、ListTool の番号を通常の索引で引いた同じテラーに
+    足して数える（8 Pages の Huggy は Huggy の数に入る）。通常の番号が無い 8 Pages 限定のテラー
+    （Baldi など）は 3000 番台のまま"""
+    found = TABLE.rows.get(own)
+    if found is None or found.kind != "eight_pages" or found.listtool is None:
+        return own
+    return TABLE.by_listtool.get(found.listtool, own)
+
+
+_stat_members: dict | None = None
+
+
+def statistics_ids(own) -> frozenset:
+    """own として数える番号の集合: own と、own にまとめて数える 8 Pages の番号。1 テラーの内訳を引くときに使う"""
+    global _stat_members
+    if _stat_members is None:
+        members: dict = {}
+        for number in TABLE.rows:
+            members.setdefault(statistics_id(number), set()).add(number)
+        _stat_members = {key: frozenset(value) for key, value in members.items()}
+    return _stat_members.get(own) or frozenset({own})
+
+
 _reported: set = set()
 _reported_lock = threading.Lock()
 

@@ -13,6 +13,7 @@ import config
 import DebugLog
 import RoundStore
 import TaskStats
+import TerrorIds
 
 try:
     from dotenv import load_dotenv
@@ -132,6 +133,13 @@ def send_Users(VRChat_uid: str) -> int | None:
     return int(value)
 
 
+# ラウンドの送り先（DB v2）。テラーの番号はツールの独自の番号、人数つき。
+# 無印の関数 register_round・表 ToNRounds は古い版の人が使い続けるので、新しい版からは送らない
+# （無印の取り込みは LegacyRoundsTable に一時的に置いてある。supabase/migrate_terror_ids_v2.sql）
+REGISTER_ROUND_RPC = "rpc/register_round_v2"
+ROUNDS_TABLE = "ToNRounds_v2"
+
+
 def round_type_id(round_name: str) -> int:
     """ログのラウンド名 → 番号（ToN Save Manager の ToNRoundType）。表に無ければ 999"""
     return config.ROUND_TYPE_IDS.get(str(round_name or "").strip(),
@@ -155,12 +163,11 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
                    transformed_uid: int | None, quiet: bool = False,
                    instance_key: int | None = None, round_time: float | None = None,
                    players: int | None = None):
-    """ラウンドを DB v1（"ToNRounds"）へ送る（関数 register_round を通す）。
+    """ラウンドを DB v2（"ToNRounds_v2"）へ送る（関数 register_round_v2 を通す）。
 
     instance_key が同じで開始の差が15秒以内なら、DB 側で1行にまとめる（ソロなら None）。
-    round_time はそのラウンドの開始の行の時刻（epoch）。テラーは先頭3つ。
-    players はラウンド開始の瞬間のインスタンスの人数（自分を含む。分からなければ None）で、手元の保存に入れる
-    （DB の v2 へ送るのは別の変更）。
+    round_time はそのラウンドの開始の行の時刻（epoch）。テラーは先頭3つ（ツールの独自の番号）。
+    players はラウンド開始の瞬間のインスタンスの人数（自分を含む。分からなければ None → DB の NULL）。
     quiet なら送信について何も出さない（霧の看破・Enrage 系）
     """
     say = (lambda _m: None) if quiet else print
@@ -170,7 +177,10 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     if not _configured():
         say("Supabase設定がないためラウンド統計送信をスキップします。")
         return
-    ids = (list(terror_ids or []) + [None, None, None])[:3]
+    # TEMP: LogMonitor が独自の番号に変えるまでは今の番号で届く。ここで独自の番号に直す（変換できない番号は送らない）
+    own = [TerrorIds.own_from_legacy(t, eight_pages=(round_id == TerrorIds.EIGHT_PAGES_ROUND_ID))
+           for t in (terror_ids or [])]
+    ids = ([t for t in own if t is not None] + [None, None, None])[:3]
     payload = {
         "p_instance": instance_key,
         "p_time": db_time(round_time),
@@ -178,12 +188,13 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
         "p_map": map_id,
         "p_t1": ids[0], "p_t2": ids[1], "p_t3": ids[2],
         "p_uid": transformed_uid,
+        "p_players": players,
     }
 
     def _send():
         try:
             req = urllib.request.Request(
-                _url("rpc/register_round"),
+                _url(REGISTER_ROUND_RPC),
                 data=json.dumps(payload).encode(),
                 headers={"Content-Type": "application/json", **_headers()},
                 method="POST")
@@ -203,8 +214,8 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
     TaskStats.thread("ConnectDB._send", _send, daemon=True).start()
 
 
-def fetch_rounds(since: int | None, my_uids, page_size: int = 1000):
-    """"ToNRounds" の行を time の昇順で取る（統計画面 v1 の差分取り）。1 ページずつ返す
+def fetch_rounds(since: int | None, my_uids, page_size: int = 1000, table: str = ROUNDS_TABLE):
+    """table（既定は "ToNRounds_v2"。無印は LegacyRoundsTable）の行を time の昇順で取る（統計画面の差分取り）。1 ページずつ返す
     イテレータ（全ページを一度に持たない。初回の全件取りで DB の行数ぶんのメモリを使わないため）。
 
     since があれば time >= since。my_uids があれば「1人目が自分でない行」か「1人目が
@@ -220,15 +231,15 @@ def fetch_rounds(since: int | None, my_uids, page_size: int = 1000):
     if my_uids:
         listed = ",".join(str(int(u)) for u in sorted(my_uids))
         uid_filter = f"&or=(transformed_uid.not.in.({listed}),other_uids.not.is.null)"
-    return _fetch_pages(since, uid_filter, page_size)
+    return _fetch_pages(since, uid_filter, page_size, table)
 
 
-def _fetch_pages(since, uid_filter: str, page_size: int):
+def _fetch_pages(since, uid_filter: str, page_size: int, table: str = ROUNDS_TABLE):
     cursor = since
     while True:
         time_filter = f"&time=gte.{int(cursor)}" if cursor is not None else ""
         req = urllib.request.Request(
-            _url(f"ToNRounds?select=*&order=time.asc{time_filter}{uid_filter}&limit={page_size}"),
+            _url(f"{table}?select=*&order=time.asc{time_filter}{uid_filter}&limit={page_size}"),
             headers=_headers(accept=True))
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as res:
             data = json.loads(res.read().decode("utf-8"))
@@ -241,7 +252,7 @@ def _fetch_pages(since, uid_filter: str, page_size: int):
 
 
 def round_row(row: dict) -> dict:
-    """"ToNRounds" の1行を、統計画面が使う形（round 名・terror_ids・created_at など）に直す。
+    """DB の1行を、統計画面が使う形（round 名・terror_ids・created_at など）に直す。
     other_uids（同じラウンドを見たほかの人）があっても1件"""
     number = row.get("round")
     ts = row.get("time")
