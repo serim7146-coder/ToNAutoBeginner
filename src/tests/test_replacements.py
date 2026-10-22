@@ -184,12 +184,17 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
-        self.addCleanup(ContinueTable.set_current, ContinueTable.Table())
+        self.addCleanup(ContinueTable.set_current, ContinueTable.Store())
         self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
         self.addCleanup(SharedState.continue_round_reset)
 
-    def _table(self, **kwargs):
-        ContinueTable.set_current(ContinueTable.Table(**kwargs))
+    def _table(self, disabled=None, default=None, use_disabled=True):
+        """窓 1 が「既定」の 2 つのプリセットを使う保存内容にする（use_disabled=False は窓 1 の続行無効を「なし」に）"""
+        windows = {} if use_disabled else {1: {ContinueTable.DISABLED: None}}
+        ContinueTable.set_current(ContinueTable.Store(
+            disabled_presets={ContinueTable.DEFAULT_PRESET: disabled or {}},
+            default_presets={ContinueTable.DEFAULT_PRESET: default or {}},
+            windows=windows))
 
     def _monitor(self, instance_type=config.INSTANCE_PRIVATE, skip_rounds=(), keep_on=None):
         cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", skip_rounds=set(skip_rounds))
@@ -229,9 +234,12 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
         self.assertFalse(ContinueTable.disables(table, "Classic/クラシック", self.SLOT),
                          "デフォ続行は続行無効ではない")
         self.assertFalse(ContinueTable.disables(table, "Fog/霧", self.SLOT))
-        off = ContinueTable.Table(disabled=table.disabled, use_disabled=False)
-        self.assertFalse(ContinueTable.disables(off, self.UNBOUND_KEY, self.SLOT),
-                         "続行無効の表が OFF なら無効にしない")
+        store = ContinueTable.Store(
+            disabled_presets={ContinueTable.DEFAULT_PRESET: table.disabled},
+            windows={2: {ContinueTable.DISABLED: None}})
+        self.assertTrue(ContinueTable.disables(ContinueTable.table_for(store, 1), self.UNBOUND_KEY, self.SLOT))
+        self.assertFalse(ContinueTable.disables(ContinueTable.table_for(store, 2), self.UNBOUND_KEY, self.SLOT),
+                         "その窓の続行無効が「なし」なら無効にしない")
 
     # ── LogMonitor ──
     def test_disabled_in_the_table_means_no_forced_continue(self):
@@ -272,7 +280,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     def test_the_normal_list_decision_is_unchanged_by_the_slot(self):
         """1283 は普通のリストの判定には出てこない（重ねても 283 の判定は変わらない）"""
         self._table(default={self.UNBOUND_KEY: frozenset({self.SLOT})})
-        effective = ContinueTable.apply({}, ContinueTable.current())
+        effective = ContinueTable.apply({}, ContinueTable.table_for(ContinueTable.current(), 1))
         self.assertFalse(RoundDecision.list_continues(effective, [self.SELF_INSERTS], "Unbound"))
 
 

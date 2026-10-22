@@ -1,4 +1,3 @@
-import dataclasses
 import os
 import hashlib
 import json
@@ -303,9 +302,10 @@ class WindowTab(ttk.Frame):
     SECTIONS = ("assign", "rounds")
 
     def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
-                 section_collapsed=None, on_section_toggled=None):
+                 section_collapsed=None, on_section_toggled=None, on_continue_choice=None):
         super().__init__(parent)
         self.idx = idx
+        self._on_continue_choice = on_continue_choice
         self._section_collapsed = dict(section_collapsed or {})
         self._on_section_toggled = on_section_toggled
         self.sections: dict = {}
@@ -442,6 +442,22 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
+        # ── 続行表（GL）のプリセット: 窓ごとに、続行無効・デフォ続行それぞれ 1 つ（「なし」＝その表を使わない）。
+        # 選びは保存内容（ContinueTable）が持つので、窓数を変えて作り直しても残る
+        tf = ttk.Frame(p)
+        tf.pack(fill="x", padx=10, pady=(4, 0))
+        self.v_ct_choice = {}
+        self.cb_ct_choice = {}
+        for n, (which, text) in enumerate(((ContinueTable.DISABLED, "続行無効:"),
+                                           (ContinueTable.DEFAULT, "デフォ続行:"))):
+            ttk.Label(tf, text=text).pack(side="left", padx=(12 if n else 0, 0))
+            self.v_ct_choice[which] = tk.StringVar()
+            box = ttk.Combobox(tf, textvariable=self.v_ct_choice[which], state="readonly", width=14)
+            box.pack(side="left", padx=(4, 0))
+            box.bind("<<ComboboxSelected>>", lambda _e, w=which: self._on_continue_pick(w))
+            self.cb_ct_choice[which] = box
+        self.refresh_continue_choices()
+
         # ── ラウンドごとの自爆設定（privateのみ） ──
         rounds = self._section(
             p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
@@ -456,6 +472,20 @@ class WindowTab(ttk.Frame):
         self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0))
+
+    def refresh_continue_choices(self):
+        """続行表のプリセットの選択肢（各プリセットの名前＋「なし」）と、この窓の選びを今の保存内容に合わせる"""
+        store = ContinueTable.current()
+        for which, box in self.cb_ct_choice.items():
+            box["values"] = [*ContinueTable.preset_names(store, which), ContinueTable.NONE_LABEL]
+            name = ContinueTable.choice_for(store, self.idx + 1, which)
+            self.v_ct_choice[which].set(ContinueTable.NONE_LABEL if name is None else name)
+
+    def _on_continue_pick(self, which: str):
+        """ドロップダウンで選んだ: 保存して判定へ（「なし」は None）"""
+        label = self.v_ct_choice[which].get()
+        if self._on_continue_choice is not None:
+            self._on_continue_choice(self, which, None if label == ContinueTable.NONE_LABEL else label)
 
     def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0)):
         """ラウンド一覧のチェックボックスを1つ並べる。
@@ -909,11 +939,9 @@ class App(tk.Tk):
         self.minsize(880, 600)
         self.configure(bg=config.GUI_BG)
         self.v_tnl       = tk.StringVar()
-        # 続行表（GH）。保存してあるものを読んで全窓の判定に効かせる。ON/OFF はメインのチェックが持つ
-        table = ContinueTable.load()
-        ContinueTable.set_current(table)
-        self.v_ct_disabled = tk.BooleanVar(value=table.use_disabled)
-        self.v_ct_default = tk.BooleanVar(value=table.use_default)
+        # 続行表（GH）。保存してあるものを読んで全窓の判定に効かせる。どのプリセットを使うか（「なし」＝OFF）は
+        # 窓ごと（各窓の設定の行）
+        ContinueTable.set_current(ContinueTable.load())
         self.v_win_count = tk.IntVar(value=4)
         # 手で変えた窓数（settings.json の win_count）。自動検出で入った値は
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
@@ -1679,10 +1707,6 @@ class App(tk.Tk):
         fct = ttk.LabelFrame(self, text="続行表", padding=8)
         fct.pack(fill="x", padx=12, pady=4)
         ttk.Button(fct, text="続行表", command=self._open_continue_table).pack(side="left")
-        ttk.Checkbutton(fct, text="続行無効", variable=self.v_ct_disabled,
-                        command=self._on_continue_table_use).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(fct, text="デフォ続行", variable=self.v_ct_default,
-                        command=self._on_continue_table_use).pack(side="left", padx=(12, 0))
         self.lbl_ct_count = ttk.Label(fct, text="")
         self.lbl_ct_count.pack(side="left", padx=(12, 0))
         self._refresh_continue_table_count()
@@ -2089,6 +2113,7 @@ class App(tk.Tk):
         for i in range(count):
             tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected,
                             on_settings_changed=self._apply_tab_settings_live,
+                            on_continue_choice=self._on_continue_choice,
                             section_collapsed=self._tab_sections,
                             on_section_toggled=self._on_tab_section_toggled)
             self.nb.add(tab, text=f"窓{i + 1}")
@@ -3248,18 +3273,19 @@ class App(tk.Tk):
         self._continue_table_window = ContinueTableWindow(
             self, on_change=self._refresh_continue_table_count)
 
-    def _on_continue_table_use(self):
-        """「続行無効」「デフォ続行」のチェックを変えた: 保存してすぐ判定に効かせる"""
-        table = dataclasses.replace(ContinueTable.current(),
-                                    use_disabled=bool(self.v_ct_disabled.get()),
-                                    use_default=bool(self.v_ct_default.get()))
-        ContinueTable.set_current(table)
-        ContinueTable.save(table)
+    def _on_continue_choice(self, tab, which: str, name):
+        """窓の「続行無効」「デフォ続行」のプリセット（name。None は「なし」）を変えた: 保存してすぐ判定に効かせる"""
+        store = ContinueTable.with_choice(ContinueTable.current(), tab.idx + 1, which, name)
+        ContinueTable.set_current(store)
+        ContinueTable.save(store)
         self._refresh_continue_table_count()
 
     def _refresh_continue_table_count(self):
+        """件数の表示と、各窓の選択肢（プリセットが増減・改名・削除されたあと）を今の保存内容に合わせる"""
         disabled, default = ContinueTable.counts(ContinueTable.current())
-        self.lbl_ct_count.configure(text=f"無効 {disabled}件・デフォ {default}件")
+        self.lbl_ct_count.configure(text=f"プリセット 無効 {disabled} 個・デフォ {default} 個")
+        for tab in getattr(self, "tabs", []):
+            tab.refresh_continue_choices()
 
     # ── 不具合の報告 ────────────────────────
     def _open_report(self):

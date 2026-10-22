@@ -841,14 +841,18 @@ class LogMonitor:
         return {name: wish for name, wish in source.items()
                 if name in present}
 
+    def _continue_table(self):
+        """この窓が重ねる続行表（GL）。窓ごとに選んだ 2 つのプリセット（「なし」の種類は空）"""
+        return ContinueTable.table_for(ContinueTable.current(), self.window_idx)
+
     def _keep_on(self) -> dict:
-        """この窓の続行リスト。続行表（GH）を重ねたもの。
+        """この窓の続行リスト。続行表（GH）を重ねたもの（その窓の 2 つのプリセット）。
         干し芋・焼き芋（グループのインスタンス）には重ねない。「リストが無いので止める」の判定は
         重ねる前のリスト（_keep_on_base / _effective_wishes）で見る"""
         base = self._keep_on_base()
         if self.st.instance_type in GroupRound.GROUP_INSTANCES:
             return base
-        return ContinueTable.apply(base, ContinueTable.current())
+        return ContinueTable.apply(base, self._continue_table())
 
     def _keep_on_base(self) -> dict:
         """この窓の続行リスト（続行表を重ねる前）"""
@@ -1357,11 +1361,11 @@ class LogMonitor:
         st.list_lost_reason = ""
 
     def _self_inserts_table_disabled(self) -> bool:
-        """続行表の続行無効に Self Inserts (Bloodthirsty) があるか（あれば必ず続行をやめ、普通のリストの判定にする）。
+        """この窓の続行無効のプリセットに Self Inserts (Bloodthirsty) があるか（あれば必ず続行をやめ、普通のリストの判定にする）。
         干し芋・焼き芋（グループのインスタンス）は続行表を使わないので、今までどおり必ず続行"""
         if self.st.instance_type in GroupRound.GROUP_INSTANCES:
             return False
-        return ContinueTable.disables(ContinueTable.current(), MatchTNL.LOG_TO_TNL["Unbound"],
+        return ContinueTable.disables(self._continue_table(), MatchTNL.LOG_TO_TNL["Unbound"],
                                       config.SELF_INSERTS_BLOODTHIRSTY_SLOT)
 
     def _should_skip_by_round(self, ids=None, bloodthirsty=None) -> bool:
