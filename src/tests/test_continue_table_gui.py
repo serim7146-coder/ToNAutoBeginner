@@ -27,77 +27,168 @@ def _slot_ids(key):
     return dict(ContinueTableGUI.load_rounds())[key]
 
 
-def _flat(rows):
-    return [i for row in rows for i in row]
+def _blocks(key, ids=None):
+    """layout_for の結果を {種類: [(番号, 列, 行), ...]} と種類の並びにする"""
+    blocks = ContinueTableGUI.layout_for(key, _slot_ids(key) if ids is None else ids)
+    return {kind: cells for kind, cells, _pitch in blocks}, [kind for kind, _c, _p in blocks]
+
+
+def _tids(cells):
+    return [tid for tid, _col, _row in cells]
+
+
+def _row_sizes(cells):
+    sizes = {}
+    for _tid, _col, row in cells:
+        sizes[row] = sizes.get(row, 0) + 1
+    return [sizes[r] for r in sorted(sizes)]
+
+
+def _round_key(name):
+    return next(k for k, _ in ContinueTableGUI.load_rounds() if k.startswith(name + "/"))
+
+
+class TestGrid12(unittest.TestCase):
+    """grid12 / pyramid: 空きを上の行の左端に置く規則（ListTool の寸法）"""
+
+    def test_134_has_twelve_rows_ten_with_a_gap_at_the_left_and_two_full(self):
+        cells = ContinueTableGUI.grid12(list(range(134)))
+        self.assertEqual(_row_sizes(cells), [11] * 10 + [12] * 2)
+        by_row = {}
+        for _tid, col, row in cells:
+            by_row.setdefault(row, []).append(col)
+        for row in range(10):
+            self.assertEqual(by_row[row], list(range(1, 12)), row)
+        for row in (10, 11):
+            self.assertEqual(by_row[row], list(range(12)), row)
+        self.assertEqual(_tids(cells), list(range(134)), "渡した順のまま")
+
+    def test_a_full_grid_has_no_gap(self):
+        cells = ContinueTableGUI.grid12(list(range(24)))
+        self.assertEqual(_row_sizes(cells), [12, 12])
+        self.assertEqual(min(col for _t, col, _r in cells), 0)
+
+    def test_one_gap_per_row_from_the_top(self):
+        cells = ContinueTableGUI.grid12(list(range(23)))     # 2 行・空き 1
+        self.assertEqual(_row_sizes(cells), [11, 12])
+        self.assertEqual(min(col for _t, col, r in cells if r == 0), 1)
+        self.assertEqual(min(col for _t, col, r in cells if r == 1), 0)
+
+    def test_when_gaps_outnumber_rows_it_fills_from_the_left(self):
+        cells = ContinueTableGUI.grid12(list(range(13)))     # 2 行・空き 11 は 1 行に 1 つでは置けない
+        self.assertEqual(_row_sizes(cells), [12, 1])
+        self.assertEqual(min(col for _t, col, _r in cells), 0)
+        self.assertEqual(ContinueTableGUI.grid12([]), [])
+
+    def test_pyramid_is_centred_11_9_7_5_3_1(self):
+        cells = ContinueTableGUI.pyramid(list(range(36)))
+        self.assertEqual(_row_sizes(cells), [11, 9, 7, 5, 3, 1])
+        for row, size in enumerate(ContinueTableGUI.ALTERNATE_ROWS):
+            cols = [col for _t, col, r in cells if r == row]
+            self.assertEqual(cols[0] + cols[-1], ContinueTableGUI.COLUMNS - 1, "12 列の真ん中に寄る")
+            self.assertEqual(len(cols), size)
 
 
 class TestLayout(unittest.TestCase):
-    """layout_for: 画面を作らずに、本体の格子とバリアントの段の並びを確かめる"""
+    """layout_for: 画面を作らずに、ブロックの並びと各マスの位置を確かめる"""
 
-    def _layout(self, key):
-        return ContinueTableGUI.layout_for(key, _slot_ids(key))
+    def test_classic_follows_the_listtool_order_not_the_id_order(self):
+        blocks, kinds = _blocks(KEY)
+        classic = blocks["classic"]
+        self.assertEqual(sorted(_tids(classic)), list(range(134)), "192 は本体に無い")
+        self.assertEqual(classic[0], (0, 1, 0), "1 マス目は 0（行 0 の列 1）")
+        at = {(col, row): tid for tid, col, row in classic}
+        self.assertEqual(at[(0, 10)], 122)
+        self.assertEqual(at[(0, 11)], 83)
+        self.assertEqual(_tids(classic), ContinueTableGUI.listtool_order()["classic"])
+        self.assertEqual(_row_sizes(classic), [11] * 10 + [12] * 2)
 
-    def test_alternate_is_an_inverted_pyramid(self):
-        rows, variant = self._layout(ALT)
-        self.assertEqual([len(r) for r in rows], [11, 9, 7, 5, 3, 1])
-        self.assertEqual(_flat(rows), list(range(134, 170)))
-        self.assertEqual(variant, [])
+    def test_alternate_is_an_inverted_pyramid_in_the_listtool_order(self):
+        blocks, kinds = _blocks(ALT)
+        self.assertEqual(kinds, ["alternate"])
+        cells = blocks["alternate"]
+        self.assertEqual(_row_sizes(cells), [11, 9, 7, 5, 3, 1])
+        self.assertEqual(sorted(_tids(cells)), list(range(134, 170)))
+        row0 = [tid for tid, _col, row in sorted(cells, key=lambda c: c[1]) if row == 0]
+        self.assertEqual(row0[5], 169, "1 段目の 6 番目（紫のハート）")
+        self.assertEqual(row0[:3], [149, 150, 141])
+        pitch = next(p for k, _c, p in ContinueTableGUI.layout_for(ALT, _slot_ids(ALT)) if k == "alternate")
+        self.assertEqual(pitch, 99)
 
-    def test_classic_has_twelve_per_row_and_the_bloodthirsty_three_in_the_variant_row(self):
-        rows, variant = self._layout(KEY)
-        self.assertEqual(_flat(rows), list(range(134)), "192 は本体に無い")
-        self.assertTrue(all(len(r) == 12 for r in rows[:-1]))
-        self.assertEqual(len(rows[-1]), 134 % 12)
-        self.assertEqual(variant, [190, 191, 192])
+    def test_alternate_falls_back_to_twelve_columns_if_not_all_36_are_there(self):
+        blocks = ContinueTableGUI.layout_for(ALT, list(range(134, 169)))
+        self.assertEqual(len(blocks), 1)
+        kind, cells, pitch = blocks[0]
+        self.assertEqual((kind, pitch), ("alternate", 53))
+        self.assertTrue(all(col == int(col) for _t, col, _r in cells), "逆三角ではない")
+        self.assertEqual(_row_sizes(cells), [11, 12, 12])
+        self.assertEqual(_tids(cells)[:3], [149, 150, 141], "順は alternate の順")
+
+    def test_classic_round_has_the_bloodthirsty_three_in_the_variant_row(self):
+        blocks, kinds = _blocks(KEY)
+        self.assertEqual(kinds, ["classic", "variant"])
+        self.assertEqual(blocks["variant"], [(190, 0, 0), (191, 1, 0), (192, 2, 0)], "左寄せの 1 行")
 
     def test_every_round_with_192_puts_the_three_in_the_variant_row(self):
         for name in ("Ghost", "Punished", "Bloodbath", "Double Trouble", "Bloodbath EX",
                      "Sabotage star", "Sabotage murder"):
-            key = next(k for k, _ in ContinueTableGUI.load_rounds() if k.startswith(name + "/"))
-            rows, variant = self._layout(key)
-            self.assertEqual(variant, [190, 191, 192], name)
-            self.assertNotIn(192, _flat(rows), name)
+            blocks, _kinds = _blocks(_round_key(name))
+            self.assertEqual(_tids(blocks["variant"]), [190, 191, 192], name)
+            self.assertNotIn(192, _tids(blocks["classic"]) + _tids(blocks.get("alternate", [])), name)
 
     def test_rounds_without_192_have_no_variant_row(self):
         for name in ("Classic.exe", "Randomizer", "Cracked", "Alternate"):
-            key = next(k for k, _ in ContinueTableGUI.load_rounds() if k.startswith(name + "/"))
-            self.assertEqual(self._layout(key)[1], [], name)
+            self.assertNotIn("variant", _blocks(_round_key(name))[1], name)
 
-    def test_fog_and_midnight_add_neo_pilot_and_foxy(self):
+    def test_fog_and_midnight_are_classic_then_alternate_then_variant(self):
         for name in ("Fog", "Midnight"):
-            key = next(k for k, _ in ContinueTableGUI.load_rounds() if k.startswith(name + "/"))
-            rows, variant = self._layout(key)
-            self.assertEqual(variant, [190, 191, 192, 315, 316], name)
-            self.assertFalse({190, 191, 192, 315, 316} & set(_flat(rows)), name)
+            blocks, kinds = _blocks(_round_key(name))
+            self.assertEqual(kinds, ["classic", "alternate", "variant"], name)
+            self.assertEqual(_tids(blocks["variant"]), [190, 191, 192, 315, 316], name)
+            self.assertEqual(_row_sizes(blocks["alternate"]), [11, 9, 7, 5, 3, 1], name)
+            self.assertEqual(sorted(_tids(blocks["classic"])), list(range(134)), name)
 
-    def test_unbound_variant_row_is_only_192(self):
-        rows, variant = self._layout(UNBOUND)
-        self.assertEqual(variant, [192])
-        self.assertEqual(_flat(rows), list(range(200, 284)))
+    def test_unbound_is_a_twelve_column_block_in_id_order_with_192_alone_in_the_variant_row(self):
+        blocks, kinds = _blocks(UNBOUND)
+        self.assertEqual(kinds, ["unbound", "variant"])
+        self.assertEqual(_tids(blocks["unbound"]), list(range(200, 284)))
+        self.assertEqual(_row_sizes(blocks["unbound"]), [12] * 7)
+        self.assertEqual(blocks["variant"], [(192, 0, 0)])
 
-    def test_the_moons_keep_all_thirteen_in_the_main_grid(self):
+    def test_the_moons_put_all_thirteen_in_the_special_block_without_a_variant_row(self):
         for key in ("Mystic Moon/ミスティックムーン", "Blood Moon/ブラッドムーン"):
-            rows, variant = self._layout(key)
-            self.assertEqual(variant, [])
-            self.assertEqual(_flat(rows), [190, 191, 192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317])
-            self.assertEqual([len(r) for r in rows], [12, 1])
+            blocks, kinds = _blocks(key)
+            self.assertEqual(kinds, ["special"])
+            self.assertEqual(_tids(blocks["special"]),
+                             [190, 191, 192, 196, 197, 198, 199, 312, 313, 314, 315, 316, 317])
 
     def test_eight_pages_shows_only_ids_that_eight_pages_has(self):
-        rows, variant = self._layout(EIGHT)
-        shown = set(_flat(rows))
+        blocks, kinds = _blocks(EIGHT)
+        shown = {t for cells in blocks.values() for t in _tids(cells)}
         allowed = ContinueTableGUI.eight_pages_ids()
-        self.assertEqual(variant, [])
+        self.assertNotIn("variant", kinds)
         self.assertTrue(shown <= allowed)
         self.assertEqual(shown, allowed & set(_slot_ids(EIGHT)))
         self.assertLess(len(shown), len(_slot_ids(EIGHT)), "出ないテラーは絞られる")
         self.assertTrue({170, 171, 172, 173, 174, 193, 194} <= shown)
+        self.assertEqual(_tids(blocks["special"])[:3], [170, 171, 172], "特別のブロックは番号順")
         self.assertFalse({3, 5, 6, 7, 10} & shown, "list_id に無い番号")
-        self.assertEqual(_flat(ContinueTableGUI.layout_for(EIGHT, [0, 3, 177])[0]), [0, 177])
+        small, _k = _blocks(EIGHT, [0, 3, 177])
+        self.assertEqual({t for cells in small.values() for t in _tids(cells)}, {0, 177})
+
+    def test_ids_outside_every_range_are_not_lost(self):
+        blocks, _kinds = _blocks(KEY, [0, 195, 300])
+        self.assertEqual(_tids(blocks["special"]), [195, 300])
 
     def test_eight_pages_ids_come_from_the_list_ids_of_terrors_json(self):
         raw = json.loads((REPO_ROOT / "assets" / "data" / "terrors.json").read_text(encoding="utf-8"))
         self.assertEqual(ContinueTableGUI.eight_pages_ids(),
                          frozenset(e["list_id"] for e in raw["8pages"]))
+
+    def test_layout_json_has_every_classic_and_alternate_id_once(self):
+        order = ContinueTableGUI.listtool_order()
+        self.assertEqual(sorted(order["classic"]), list(range(134)))
+        self.assertEqual(sorted(order["alternate"]), list(range(134, 170)))
 
     def test_there_is_no_special_round_in_the_screen(self):
         keys = [k for k, _ in ContinueTableGUI.load_rounds()]
@@ -105,29 +196,53 @@ class TestLayout(unittest.TestCase):
         self.assertEqual(len(keys), 18)
         self.assertEqual(len(set(ContinueTableGUI.round_display_name(k) for k in keys)), 18)
 
-    def test_a_round_without_ids_makes_empty_rows(self):
-        self.assertEqual(ContinueTableGUI.layout_for(KEY, []), ([], []))
+    def test_a_round_without_ids_makes_no_blocks(self):
+        self.assertEqual(ContinueTableGUI.layout_for(KEY, []), [])
 
 
 class TestIconLook(unittest.TestCase):
-    def test_brightness_levels_are_35_60_and_100_percent(self):
-        self.assertEqual(ContinueTableGUI.LEVELS, {"dim": 0.35, "other": 0.6, "full": 1.0})
+    def test_measured_geometry(self):
+        g = ContinueTableGUI
+        self.assertEqual((g.CELL_SIZE, g.ICON_SIZE, g.ICON_INSET, g.X_PITCH, g.Y_PITCH, g.ALT_Y_PITCH),
+                         (40, 32, 4, 69, 53, 99))
+        self.assertEqual(g.CANVAS_WIDTH, 827)
+        self.assertEqual(g.COLOR_GRID_BG, "#2d2d2d")
 
-    def test_the_png_is_darker_by_the_factor_and_keeps_its_size(self):
+    def test_opacity_levels_are_30_60_100_and_15_percent(self):
+        self.assertEqual(ContinueTableGUI.LEVELS, {"dim": 0.3, "other": 0.6, "full": 1.0, "faint": 0.15})
+
+    def test_blending_over_the_background_is_icon_times_alpha_plus_bg_times_rest(self):
+        red = np.array([[[0, 0, 200, 255]]], dtype=np.uint8)      # BGRA の赤
+        out = ContinueTableGUI.blend_over_bg(red, 0.3)
+        self.assertLessEqual(np.abs(out[0, 0].astype(int) - np.array([32, 32, 92])).max(), 1)
+        clear = np.array([[[0, 0, 200, 0]]], dtype=np.uint8)      # 透明は背景そのまま
+        self.assertEqual(tuple(ContinueTableGUI.blend_over_bg(clear, 1.0)[0, 0]), (45, 45, 45))
+        self.assertEqual(tuple(ContinueTableGUI.blend_over_bg(red[..., :3], 1.0)[0, 0]), (0, 0, 200))
+
+    def test_the_png_is_32px_and_blended_by_the_alpha(self):
         decode = lambda b: cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_UNCHANGED)
         full = decode(ContinueTableGUI.icon_png(0))
-        for factor in (0.35, 0.6):
-            dim = decode(ContinueTableGUI.icon_png(0, factor))
-            self.assertEqual(dim.shape, full.shape)
-            expected = (full[..., :3].astype(float) * factor).round()
-            self.assertLessEqual(np.abs(dim[..., :3].astype(float) - expected).max(), 1)
-            if full.shape[2] == 4:
-                self.assertTrue((dim[..., 3] == full[..., 3]).all(), "透明はそのまま")
-        self.assertIsNone(ContinueTableGUI.icon_png(317, 0.35))
+        self.assertEqual(full.shape[:2], (32, 32))
+        for alpha in (0.3, 0.6, 0.15):
+            part = decode(ContinueTableGUI.icon_png(0, alpha))
+            self.assertEqual(part.shape, full.shape)
+            expected = full[..., :3].astype(float) * alpha + 45 * (1 - alpha)
+            self.assertLessEqual(np.abs(part[..., :3].astype(float) - expected).max(), 2)
+        self.assertIsNone(ContinueTableGUI.icon_png(317, 0.3))
 
-    def test_scale_color(self):
-        self.assertEqual(ContinueTableGUI.scale_color("#ffffff", 0.35), "#595959")
-        self.assertEqual(ContinueTableGUI.scale_color("#102030", 1.0), "#102030")
+    def test_blend_color(self):
+        self.assertEqual(ContinueTableGUI.blend_color("#ffffff", 0.3), "#6c6c6c")
+        self.assertEqual(ContinueTableGUI.blend_color("#102030", 1.0), "#102030")
+
+    def test_frame_points_stay_inside_the_cell(self):
+        for width in (1, 2):
+            pts = ContinueTableGUI.frame_points(100, 200, width)
+            xs, ys = pts[0::2], pts[1::2]
+            self.assertGreaterEqual(min(xs), 100)
+            self.assertLessEqual(max(xs), 139)
+            self.assertGreaterEqual(min(ys), 200)
+            self.assertLessEqual(max(ys), 239)
+            self.assertEqual(len(pts), 16, "角を落とした 8 角形")
 
 
 def _wait(win, condition, seconds=3.0):
@@ -188,31 +303,64 @@ class TestWindow(_WindowCase):
         self.assertIsNotNone(self.win._photo(0, "full"), "アイコンがある番号は絵")
         self.assertIsNone(self.win._photo(317, "full"), "絵が無い番号は名前の札")
 
-    def test_the_grid_is_centered_in_rows_and_the_variant_row_is_left_aligned_below(self):
-        def left(tid):
-            return self.win.canvas.coords(self.win._cells[tid].frame)[0]
+    def _pos(self, tid):
+        """マスの左上 (x, y)（キャンバス上）"""
+        return self.win._origin(self.win._cells[tid])
 
-        def top(tid):
-            return self.win.canvas.coords(self.win._cells[tid].frame)[1]
-        cell = ContinueTableGUI.CELL
-        self.assertEqual(left(1) - left(0), cell)
-        self.assertEqual(top(12) - top(0), cell, "13 個目は次の段")
-        self.assertEqual(left(132) - left(0), (12 - 2) * cell // 2, "最後の段（2 個）は真ん中寄せ")
-        self.assertEqual(left(190), left(0), "バリアントの段は左寄せ")
-        self.assertEqual(top(190) - top(132), 2 * cell, "本体の最後の段から 1 段あけた下")
+    def test_cells_are_40px_with_the_icon_32px_inset_4px(self):
+        x, y = self._pos(0)
+        cell = self.win._cells[0]
+        self.assertEqual(self.win.canvas.coords(cell.face), [x + 4, y + 4])
+        xs = self.win.canvas.coords(cell.frame)[0::2]
+        self.assertLessEqual(max(xs) - min(xs), 39)
+        self.assertEqual(self.win._photo(0, "full").width(), 32)
+        self.assertEqual(self.win.canvas.cget("bg"), "#2d2d2d")
+
+    def test_classic_is_laid_out_with_the_listtool_pitches_and_gaps(self):
+        (x0, y0), (x1, y1) = self._pos(0), self._pos(1)
+        self.assertEqual((x1 - x0, y1 - y0), (69, 0), "0 の隣は 1 で横 69px")
+        self.assertEqual(self._pos(12)[1] - y0, 53, "次の行は縦 53px")
+        left = x0 - 69                                            # 上の行は左端を 1 つ空ける
+        self.assertEqual(self._pos(122), (left, y0 + 10 * 53), "下の 2 行は左端から")
+        self.assertEqual(self._pos(83), (left, y0 + 11 * 53))
+
+    def test_the_variant_row_is_left_aligned_one_empty_row_below_the_grid(self):
+        left, last_row = self._pos(122)[0], self._pos(83)[1]
+        self.assertEqual(self._pos(190)[0], left, "バリアントの段は左寄せ")
+        self.assertEqual(self._pos(191)[0] - self._pos(190)[0], 69)
+        self.assertEqual(self._pos(190)[1] - last_row, 53 + 53, "最後の行の下に 1 行（53px）あけた下")
+
+    def test_fog_blocks_are_classic_alternate_variant_with_a_53px_gap_between(self):
+        self._select_round("Fog")
+        classic_last = max(self._pos(t)[1] for t in range(134))
+        alt = {t: self._pos(t) for t in range(134, 170)}
+        alt_top, alt_last = min(y for _x, y in alt.values()), max(y for _x, y in alt.values())
+        self.assertEqual(alt_top - classic_last, 53 + 53, "Classic の最後の行の下に 1 行あけて Alternate")
+        self.assertEqual(alt_last - alt_top, 5 * 99, "Alternate の縦は 99px")
+        variant_top = self._pos(190)[1]
+        self.assertEqual(variant_top - alt_last, 53 + 53, "Alternate の最後の行の下に 1 行あけてバリアント")
+        self.assertEqual(self._pos(315)[1], variant_top)
+        self.assertEqual(self.win._content_height, variant_top + 53 + ContinueTableGUI.TOP_PAD,
+                         "最後のブロックの下に余白")
 
     def test_alternate_rows_are_an_inverted_pyramid_on_screen(self):
         self._select_round("Alternate")
         self.assertEqual(sorted(self.win._cells), list(range(134, 170)))
-        cell = ContinueTableGUI.CELL
-        tops = {}
-        for tid, c in self.win._cells.items():
-            tops.setdefault(self.win.canvas.coords(c.frame)[1], []).append(tid)
-        self.assertEqual([len(v) for _, v in sorted(tops.items())], [11, 9, 7, 5, 3, 1])
-        first, last = sorted(tops.items())[0][1], sorted(tops.items())[-1][1]
-        centre = lambda tid: self.win.canvas.coords(self.win._cells[tid].frame)[0] + 21.5
-        self.assertAlmostEqual(centre(last[0]), (centre(first[0]) + centre(first[-1])) / 2, delta=1)
-        self.assertEqual(self.win._content_height, ContinueTableGUI.TOP_PAD * 2 + 6 * cell)
+        rows = {}
+        for tid in self.win._cells:
+            x, y = self._pos(tid)
+            rows.setdefault(y, []).append((x, tid))
+        ys = sorted(rows)
+        ordered = [sorted(rows[y]) for y in ys]
+        self.assertEqual([len(r) for r in ordered], [11, 9, 7, 5, 3, 1])
+        self.assertEqual([b - a for a, b in zip(ys, ys[1:])], [99] * 5)
+        centre0 = (ordered[0][0][0] + ordered[0][-1][0]) / 2
+        for row in ordered:
+            xs = [x for x, _t in row]
+            self.assertTrue(all(b - a == 69 for a, b in zip(xs, xs[1:])))
+            self.assertAlmostEqual((xs[0] + xs[-1]) / 2, centre0, delta=1)
+        self.assertEqual(ordered[0][5][1], 169, "1 段目の 6 番目")
+        self.assertEqual(self.win._content_height, ContinueTableGUI.TOP_PAD * 2 + 5 * 99 + 53)
 
     def test_switching_the_round_changes_the_grid(self):
         self._select_round("Unbound")
@@ -294,9 +442,9 @@ class TestWindow(_WindowCase):
         after = {tid: self._style(tid) for tid in self.win._cells}
         self.assertEqual([t for t in after if after[t] != before[t]], [5])
 
-    def test_three_brightness_variants_are_cached_per_icon(self):
+    def test_four_opacity_variants_are_cached_per_icon(self):
         photos = {lv: self.win._photo(5, lv) for lv in ContinueTableGUI.LEVELS}
-        self.assertEqual(len({str(p) for p in photos.values()}), 3, "3 種は別の絵")
+        self.assertEqual(len({str(p) for p in photos.values()}), 4, "4 種は別の絵")
         for level, photo in photos.items():
             self.assertIs(self.win._photo(5, level), photo, "作り直さず持っておく")
 
@@ -304,16 +452,16 @@ class TestWindow(_WindowCase):
         dis, dfl = ContinueTableGUI.COLOR_DISABLED, ContinueTableGUI.COLOR_DEFAULT
         self.assertEqual(self._style(5), (ContinueTableGUI.COLOR_IDLE, 1.0, self._photo_name(5, "dim")))
         self.win.toggle(5)                                           # 続行無効に入れる
-        self.assertEqual(self._style(5), (dis, 3.0, self._photo_name(5, "full")))
+        self.assertEqual(self._style(5), (dis, 2.0, self._photo_name(5, "full")))
         self.win.v_which.set(ContinueTable.DEFAULT)                   # デフォ続行の編集へ
         self.win._restyle_all()
         self.assertEqual(self._style(5), (dis, 1.0, self._photo_name(5, "other")), "もう片方: 60%＋細い枠")
         self.assertEqual(self._style(6), (ContinueTableGUI.COLOR_IDLE, 1.0, self._photo_name(6, "dim")))
         self.win.toggle(6)
-        self.assertEqual(self._style(6), (dfl, 3.0, self._photo_name(6, "full")))
+        self.assertEqual(self._style(6), (dfl, 2.0, self._photo_name(6, "full")))
         self.win.v_which.set(ContinueTable.DISABLED)
         self.win._restyle_all()
-        self.assertEqual(self._style(5), (dis, 3.0, self._photo_name(5, "full")))
+        self.assertEqual(self._style(5), (dis, 2.0, self._photo_name(5, "full")))
         self.assertEqual(self._style(6), (dfl, 1.0, self._photo_name(6, "other")))
 
     def test_the_default_table_is_green_and_the_other_table_is_not_changed(self):
@@ -331,7 +479,7 @@ class TestWindow(_WindowCase):
         self.assertEqual(ContinueTable.current().disabled,
                          {KEY: frozenset({5}), ALT: frozenset({150})})
         self._select_round("Classic")
-        self.assertEqual(self._style(5)[1], 3.0, "戻ると選んだ状態で描かれる")
+        self.assertEqual(self._style(5)[1], 2.0, "戻ると選んだ状態で描かれる")
 
     def test_the_name_search_keeps_the_grid_and_lights_up_the_matches(self):
         items = self.win.canvas.find_all()
@@ -339,12 +487,12 @@ class TestWindow(_WindowCase):
         self.win.v_search.set("huggy")
         self.win.update()
         self.assertEqual(self.win.canvas.find_all(), items, "格子は作り直さない")
-        self.assertEqual(self._style(0), (ContinueTableGUI.COLOR_MATCH, 3.0, self._photo_name(0, "full")))
-        self.assertEqual(self._style(1), (ContinueTableGUI.COLOR_FAINT, 1.0, self._photo_name(1, "dim")),
+        self.assertEqual(self._style(0), (ContinueTableGUI.COLOR_MATCH, 2.0, self._photo_name(0, "full")))
+        self.assertEqual(self._style(1), (ContinueTableGUI.COLOR_FAINT, 1.0, self._photo_name(1, "faint")),
                          "合わないものは暗いまま枠も薄く")
         self.win.v_search.set("")
         self.assertEqual(self._style(0)[:2], (ContinueTableGUI.COLOR_IDLE, 1.0))
-        self.assertEqual(self._style(1)[:2], (ContinueTableGUI.COLOR_DISABLED, 3.0))
+        self.assertEqual(self._style(1)[:2], (ContinueTableGUI.COLOR_DISABLED, 2.0))
 
     def test_the_search_uses_the_names_of_the_round(self):
         self._select_round("Unbound")
