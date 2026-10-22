@@ -63,7 +63,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `MatchTNL.py` | .tnl と ToN ListTool の主催リスト（`host_state.sqlite3`）の読み込み、ログのテラーID → 続行リストのIDの変換（Alternate +134・Unbound +200）。全窓で共有する `SharedLists`。ビット列 → ID の集合の変換は同じビット列なら覚えた結果を使う。 |
 | `RoundDecision.py` | 続行するか・3クラ解放（DTM/Waldo）の対象かの判定。`list_continues` は続行リストだけで見た判定（`decide_killers` と続行表のラベルが使う）。 |
 | `ContinueTable.py` | 続行表（GH）。続行無効・デフォ続行の 2 つの表（`Table`。ON/OFF つき）と、続行リストへ重ねる `apply`、判定の行に付ける `overlay_label`、.tnl／.tnnl の取り込み、保存・読み込み（`continue_table.json`。一時ファイルに書いて置き換える）。今の表は `current()`／`set_current()` で全窓・画面が共有し、中身は書き換えず差し替える。 |
-| `ContinueTableGUI.py` | 続行表の編集画面（`ContinueTableWindow`）。ラウンドの一覧（`assets/data/continue_slots.json`）・テラーのアイコンの格子（`assets/icons` のシートを OpenCV で切り出して 40px に拡大し PNG にして `tk.PhotoImage` へ。絵が無い番号は名前の札）。変えるたびに保存して `set_current`。 |
+| `ContinueTableGUI.py` | 続行表の編集画面（`ContinueTableWindow`）。ラウンドは上の段の Combobox で選ぶ（`assets/data/continue_slots.json`。Special/Moon の枠は出さない）・テラーのアイコンの格子は `tk.Canvas` に直接描く（`layout_for` が本体の段とバリアントの段を決める。`assets/icons` のシートを OpenCV で切り出して 40px に拡大し、明るさ 3 種の PNG を `tk.PhotoImage` にして持つ。絵が無い番号は名前の札。名前は `icons.json` の `names` が先）。押したセルだけ `itemconfigure` し、`set_current` はその場で・保存は `after(300)` でまとめ、閉じるときに残りを保存。 |
 | `GroupRound.py` | 干し芋／焼き芋のインスタンスのルール（と、プライベートの Sabotage）。 |
 | `RoundSequence.py` | ラウンドの並び（通常・特殊）から Moon の解放状況を推定する。 |
 | `TerrorReplacement.py` | 置き換えテラー（Atrached・Hungry Home Invader・Bloodthirsty・Foxy・Glorbo・Gigabytes など）の合図の行（`SIGNALS`）と差し替えの表（`TABLE`）。 |

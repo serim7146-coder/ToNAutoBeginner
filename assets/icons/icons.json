@@ -4,7 +4,7 @@
   "terrors": "terrors.png",
   "unbound": "unbound.png"
  },
- "note": "terrors.png は ToN Overlay から、unbound.png は Overlay の Unbound に tontrack.me の 20 個（43〜46・48〜63）を重ねたもの（依頼者 2026-10-22）。番号は続行リストの枠。無い番号は名前の札",
+ "note": "terrors.png は ToN Overlay から、unbound.png は Overlay の Unbound に tontrack.me の 20 個（43〜46・48〜63）を重ねたもの（依頼者 2026-10-22）。番号は続行リストの枠。無い番号は名前の札。196〜199・312・313・315 の番号の当てはめは仮（依頼者が直す）",
  "icons": {
   "0": [
    "terrors",
@@ -901,6 +901,36 @@
    21,
    8
   ],
+  "193": [
+   "terrors",
+   26,
+   8
+  ],
+  "194": [
+   "terrors",
+   27,
+   8
+  ],
+  "196": [
+   "terrors",
+   0,
+   9
+  ],
+  "197": [
+   "terrors",
+   1,
+   9
+  ],
+  "198": [
+   "terrors",
+   2,
+   9
+  ],
+  "199": [
+   "terrors",
+   3,
+   9
+  ],
   "200": [
    "unbound",
    0,
@@ -1321,9 +1351,24 @@
    20,
    3
   ],
+  "312": [
+   "terrors",
+   4,
+   9
+  ],
+  "313": [
+   "terrors",
+   5,
+   9
+  ],
   "314": [
    "terrors",
    8,
+   9
+  ],
+  "315": [
+   "terrors",
+   6,
    9
   ],
   "316": [
@@ -1331,5 +1376,22 @@
    7,
    9
   ]
+ },
+ "names": {
+  "190": "Hungry Home Invader",
+  "191": "Atrached",
+  "192": "Wild Yet Bloodthirsty Creature",
+  "193": "The Navigator",
+  "194": ".;.[;.;[..;[';'/.[]'];']/'=.];';[;-=].-=/;-=;][;-=/;'./=-;.",
+  "196": "Mystic Moon",
+  "197": "Blood Moon",
+  "198": "Twilight",
+  "199": "Solstice",
+  "312": "Riftmonster",
+  "313": "Meatball Man",
+  "314": "The Gigabytes",
+  "315": "Neo Pilot",
+  "316": "Foxy",
+  "317": "Glorbo"
  }
 }

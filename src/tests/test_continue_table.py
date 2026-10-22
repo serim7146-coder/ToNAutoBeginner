@@ -265,10 +265,30 @@ class TestIconData(unittest.TestCase):
             self.assertLessEqual((col + 1) * cell, w, f"{tid}: {sheet} の幅")
             self.assertLessEqual((row + 1) * cell, h, f"{tid}: {sheet} の高さ")
 
-    def test_only_the_ten_known_slots_have_no_icon(self):
+    def test_only_glorbo_has_no_icon(self):
         slots = {i for _key, ids in self.slots["rounds"] for i in ids}
         missing = sorted(slots - {int(t) for t in self.icons["icons"]})
-        self.assertEqual(missing, [193, 194, 196, 197, 198, 199, 312, 313, 315, 317])
+        self.assertEqual(missing, [317])
+
+    def test_icons_json_has_274_icons_and_the_added_ones(self):
+        self.assertEqual(len(self.icons["icons"]), 274)
+        for tid in (193, 194, 196, 197, 198, 199, 312, 313, 315):
+            self.assertIn(str(tid), self.icons["icons"], tid)
+
+    def test_names_in_icons_json_come_before_terrors_json(self):
+        self.assertEqual(self.gui.icon_names(), {int(t): n for t, n in self.icons["names"].items()})
+        self.assertEqual(self.gui.terror_name(193), "The Navigator", "terrors.json では Navigator")
+        self.assertEqual(self.gui.terror_name(312), "Riftmonster")
+        self.assertEqual(self.gui.terror_name(315), "Neo Pilot")
+        self.assertEqual(self.gui.terror_name(192), "Wild Yet Bloodthirsty Creature")
+        self.assertEqual(self.gui.terror_name(192, "Unbound/アンバウンド"),
+                         "Pack of Wild Yet Bloodthirsty Creatures")
+        self.assertEqual(self.gui.terror_name(192, "Classic/クラシック"), "Wild Yet Bloodthirsty Creature")
+
+    def test_the_screen_leaves_out_the_special_round(self):
+        keys = [key for key, _ids in self.gui.load_rounds()]
+        self.assertEqual(len(keys), 18)
+        self.assertNotIn(SPECIAL, keys)
 
     def test_the_slot_file_has_the_nineteen_rounds_with_distinct_keys(self):
         keys = [key for key, _ids in self.slots["rounds"]]
@@ -282,7 +302,8 @@ class TestIconData(unittest.TestCase):
         png = self.gui.icon_png(0)
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_UNCHANGED)
         self.assertEqual(img.shape[:2], (self.gui.ICON_SIZE, self.gui.ICON_SIZE))
-        self.assertIsNone(self.gui.icon_png(193), "絵が無い番号は None（名前の札になる）")
+        self.assertIsNotNone(self.gui.icon_png(193), "193 は GI で絵が付いた")
+        self.assertIsNone(self.gui.icon_png(317), "絵が無い番号は None（名前の札になる）")
 
     def test_names_come_from_terrors_json_or_the_number(self):
         self.assertEqual(self.gui.terror_name(0), "Huggy")
