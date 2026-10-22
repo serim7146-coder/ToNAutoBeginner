@@ -1,7 +1,6 @@
 import time
 from datetime import datetime
 import threading
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +22,7 @@ import LogParser
 import MatchTNL
 import RoundDecision
 import RoundSequence
+import TerrorIds
 import TerrorReplacement
 import UtilsWatch
 import GroupRound
@@ -33,16 +33,18 @@ from State import WindowConfig, WindowState
 DTM_TERROR_ID = ReadJson.terror_id("Don't Touch Me", config.TERRORS)
 
 
-@lru_cache(maxsize=512)
-def _terror_name_cached(tid: int) -> str:
-    return ReadJson.terror_name(tid, config.TERRORS) or f"ID:{tid}"
-
-
 _UNSET = object()       # 「まだ計算していない」を None（対応づけできない）と分ける
 
 
-def format_terror_ids(ids: list[int]) -> str:
-    return ", ".join(_terror_name_cached(tid) for tid in ids)
+def format_terror_ids(ids: list[int], round_type: str = "") -> str:
+    """ログに出すテラーの名前（名前が無ければ `#番号`）。番号は今のツールの番号で、独自の番号へ直して引く
+    （8 Pages のラウンドの番号は 8 Pages の索引から）"""
+    eight_pages = round_type == TerrorIds.EIGHT_PAGES_ROUND
+
+    def one(tid):
+        own = TerrorIds.own_from_legacy(tid, eight_pages)
+        return TerrorIds.name(own) if own is not None else f"#{tid}"
+    return ", ".join(one(tid) for tid in ids)
 
 
 # 所持アイテムをなくした理由（公開ログ）。Punished などのラウンド開始は「<種類> 開始」
@@ -225,7 +227,8 @@ class LogMonitor:
         if event.map_id:
             parts.append(f"マップ={event.map_id}")
         if event.terror_ids:
-            parts.append(f"テラー={list(event.terror_ids)}")
+            # 独自の番号（ログの番号そのままではない）
+            parts.append(f"テラー={TerrorIds.from_log(event.terror_ids, event.round_type, self.st.round_type)}")
         if event.kind == LogParser.EVENT_ITEM_EQUIP:
             parts.append(f"アイテム={event.item_id}")
         if event.kind == LogParser.EVENT_PAGE_COLLECTED:
@@ -2074,7 +2077,7 @@ class LogMonitor:
         removed = ContinueList.remove_survived_current(st.round_type, st.terror_ids)
         if not removed:
             return
-        names = format_terror_ids(list(dict.fromkeys(tid for _key, tid in removed)))
+        names = format_terror_ids(list(dict.fromkeys(tid for _key, tid in removed)), st.round_type)
         self._log(f"[続行リスト] 生存したので外しました: {names} / {st.round_type}")
         if self._on_list_changed:
             self._on_list_changed()
@@ -2158,7 +2161,7 @@ class LogMonitor:
             round_type = GroupRound.FOG_ALTERNATE_ROUND_TYPE
         # st.round_type は書き換えない。ラウンド指定自爆（cfg.skip_rounds）が
         # 「Fog」で持っているので、書き換えるとその指定が黙って効かなくなる
-        self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid])}")
+        self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid], round_type)}")
         # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
         # 「前倒し済み」と見なされて素通りしてしまう
         self._on_killers([tid], round_type, revealed=True)
@@ -2201,7 +2204,7 @@ class LogMonitor:
         # 名前は判定より先に出す。この下には設定・インスタンス種別による
         # early return が5つあり、そこを通ると何が出たのか分からなくなるため。
         verb = "revealed" if revealed else "set"
-        self._log(f"Terror {verb}: {format_terror_ids(st.terror_ids)} / {round_type}")
+        self._log(f"Terror {verb}: {format_terror_ids(st.terror_ids, round_type)} / {round_type}")
 
         if not self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
@@ -2212,8 +2215,8 @@ class LogMonitor:
             # 食い違いは残す——前倒しの精度は半分なので、外したときに分かるように
             if st.enrage_identified not in ids:
                 self._log(
-                    f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified])})と "
-                    f"revealed({format_terror_ids(ids)})が食い違いました")
+                    f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified], round_type)})と "
+                    f"revealed({format_terror_ids(ids, round_type)})が食い違いました")
             return
 
         # 他の人がいるのに主催リストが取れない窓、この窓にいる誰の希望も
@@ -2361,18 +2364,18 @@ class LogMonitor:
         st = self.st
         if not RoundDecision.open_special_active(st.open_special_round_wins,
                                                  self._after_unlock()):
-            return f"放置モード(3クラ済み): 即自爆 {ids} / {st.round_type}"
+            return f"放置モード(3クラ済み): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
         if not RoundDecision.open_special_round_type(st.round_type):
-            return f"放置モード(複数体のラウンド): 即自爆 {ids} / {st.round_type}"
+            return f"放置モード(複数体のラウンド): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
         if not st.item_id:
             has_dtm = self.cfg.cancel_afk and DTM_TERROR_ID in ids
             if not has_dtm:
-                return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {ids} / "
+                return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {format_terror_ids(ids, st.round_type)} / "
                         f"{st.round_type}")
         has_cancel_afk = bool(self.cfg.cancel_afk and
                               RoundDecision.open_special_ids(ids, self._holds_plush()))
         if not has_cancel_afk:
-            return f"放置モード(DTM/Waldo続行対象外): 即自爆 {ids} / {st.round_type}"
+            return f"放置モード(DTM/Waldo続行対象外): 即自爆 {format_terror_ids(ids, st.round_type)} / {st.round_type}"
         return None
 
     def _decide(self, round_type: str):
@@ -2447,7 +2450,7 @@ class LogMonitor:
         if st.utils_wait_seq == st.round_seq:
             return True                 # もう待っている
         st.utils_wait_seq = st.round_seq
-        self._log(f"判定: {format_terror_ids(st.terror_ids)} / {round_type}"
+        self._log(f"判定: {format_terror_ids(st.terror_ids, round_type)} / {round_type}"
                   f"（このツールの判定: {self._outcome(plan)}）→ Utils の判断を待ちます")
         # 数えるのは Utils の時刻が「起点の行の時刻 − UTILS_EARLY_SEC」以後の行（すでにファイルにある行も。EB2）
         anchor = st.utils_anchor_time or time.time()
@@ -2543,7 +2546,7 @@ class LogMonitor:
                "【プレイ】" if st.is_continue_round else "【スキップ】")
         if st.is_continue_round and self._is_all_continue_round():
             tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
-        self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}"
+        self._log(f"判定: {format_terror_ids(all_ids, round_type)} / {round_type} {tag}"
                   + self._overlay_label(all_ids))
 
         if st.is_continue_round:
@@ -2719,7 +2722,7 @@ class LogMonitor:
         public = RoundDecision.normalize_killer_ids(list(ids)[:1], round_type)[0]
         if public == DTM_TERROR_ID:
             return
-        message = f"看破（オブジェクトなし）が外れました（公開: {format_terror_ids([public])}）"
+        message = f"看破（オブジェクトなし）が外れました（公開: {format_terror_ids([public], round_type)}）"
         if self._may_show_fog_info():
             self._log(f"⚠ {message}")
         self._debug(message)
