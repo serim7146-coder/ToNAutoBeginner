@@ -47,6 +47,7 @@ BASE_ARGS = [
     "--include-data-files=assets/ToNAutoBeginnerIcon.ico=assets/ToNAutoBeginnerIcon.ico",
     "--include-data-files=assets/data/maps.json=assets/data/maps.json",
     "--include-data-files=assets/data/terrors.json=assets/data/terrors.json",
+    "--include-data-files=assets/data/terror_ids.json=assets/data/terror_ids.json",
     "--include-data-files=assets/data/item.json=assets/data/item.json",
     "--include-data-files=assets/data/continue_slots.json=assets/data/continue_slots.json",
     "--include-data-dir=assets/voice=assets/voice",
