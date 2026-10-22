@@ -297,7 +297,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
 
         self.assertEqual(self._skipped(), 1)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
         self.assertTrue(any("🔎 テラー判明(看破)" in m for m in monitor.logs), monitor.logs)
 
     def test_ok_capable_judges_by_early_read_and_continues(self):
@@ -378,7 +378,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         self.assertFalse(self._judged(monitor))
         self.assertEqual(monitor.logs, before, "何も出さない")
         self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True,
-                                          instance_key=ANY, round_time=ANY)
+                                          instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_turning_the_button_on_works_from_the_next_decision(self):
         FogEarlyRead.set_early_read_enabled(False)
@@ -410,7 +410,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
             self.assertEqual(any("🔎 テラー判明(看破)" in m for m in monitor.logs), allowed, access)
             if not allowed:
                 self.assertEqual(monitor.logs, before, access)
-            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
 
     # ── NG・看破できる ──────────────────────────
     def test_ng_writes_no_fog_names_to_the_debug_log(self):
@@ -436,7 +436,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
 
         self.assertFalse(self._judged(monitor), "自爆・アナウンス・フリーズ・録画のどれもしない")
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
 
     # ── NG・看破できない ────────────────────────
     JOY_LINE = "2026.09.21 22:04:50 Debug      -  JOY WILL SOON AWAKEN..."
@@ -497,7 +497,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
         monitor._process(self.SNAIL_AGAIN)
         self.assertEqual(self._skipped(), 0, "看破では判定しない")
         self.assertFalse(any("🔎" in m for m in monitor.logs), monitor.logs)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
 
         monitor._on_enrage("Immortal Snail")
         self.assertEqual(self._skipped(), 1, "Enrage でその場で自爆する")
@@ -558,7 +558,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
         self.assertEqual(self._skipped(), 1)
         self.assertEqual(monitor.st.early_read_tid, self.SNAIL)
-        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+        self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
         self.assertEqual(sum("🔎 テラー判明(看破)" in m for m in monitor.logs), 1, monitor.logs)
 
     def test_the_same_terror_again_is_not_judged_twice(self):
@@ -598,7 +598,7 @@ class TestFogEarlyReadUse(unittest.TestCase):
 
             self.assertTrue(monitor.st.early_read_void, access)
             self.assertEqual(monitor.st.early_read_tid, self.SNAIL, access)
-            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY)
+            self.send.assert_called_once_with("Fog", [self.SNAIL], 0, None, quiet=True, instance_key=ANY, round_time=ANY, players=ANY)
             self.assertEqual(self._judged(monitor), judged, access)
             voided = [m for m in monitor.logs if "別々のテラー名が見えました" in m]
             if access == "public":
@@ -834,7 +834,7 @@ class TestFogNoObjectDtm(unittest.TestCase):
         self.assertTrue(any("🔎 テラー判明(看破（オブジェクトなし）)" in m for m in monitor.logs),
                         monitor.logs)
         self.send.assert_called_once_with("Fog", [self.DTM], 0, None, quiet=True,
-                                          instance_key=ANY, round_time=ANY)
+                                          instance_key=ANY, round_time=ANY, players=ANY)
         monitor._process(self._at(9))
         self.assertEqual(self._skipped(), 1, "1回だけ")
 
@@ -858,7 +858,7 @@ class TestFogNoObjectDtm(unittest.TestCase):
             self.assertEqual(self._skipped(), 0)
             self.assertFalse(monitor.st.is_continue_round)
             self.send.assert_called_once_with("Fog", [self.DTM], 0, None, quiet=True,
-                                              instance_key=ANY, round_time=ANY)
+                                              instance_key=ANY, round_time=ANY, players=ANY)
 
     # ── 判断しない ────────────────────────────
     def test_an_early_read_name_first(self):
@@ -1383,7 +1383,7 @@ class TestFogStunned(unittest.TestCase):
         self.assertTrue(any("テラー判明(Stunned)" in m for m in monitor.logs), monitor.logs)
         # Walpurgisnacht はオルタネイトのテラー。DB へは Fog (Alternate) で送る
         self.send.assert_called_once_with("Fog (Alternate)", [self.WITCH], 0, None, quiet=False,
-                                          instance_key=ANY, round_time=ANY)
+                                          instance_key=ANY, round_time=ANY, players=ANY)
         self.assertEqual(monitor.st.round_type, "Fog", "st.round_type は変えない")
 
     def test_an_unknown_name_is_logged_in_any_instance(self):

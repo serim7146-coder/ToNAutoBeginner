@@ -153,11 +153,14 @@ def db_time(epoch: float | None) -> int:
 
 def register_round(round_name: str, terror_ids: list[int], map_id: int,
                    transformed_uid: int | None, quiet: bool = False,
-                   instance_key: int | None = None, round_time: float | None = None):
+                   instance_key: int | None = None, round_time: float | None = None,
+                   players: int | None = None):
     """ラウンドを DB v1（"ToNRounds"）へ送る（関数 register_round を通す）。
 
     instance_key が同じで開始の差が15秒以内なら、DB 側で1行にまとめる（ソロなら None）。
     round_time はそのラウンドの開始の行の時刻（epoch）。テラーは先頭3つ。
+    players はラウンド開始の瞬間のインスタンスの人数（自分を含む。分からなければ None）で、手元の保存に入れる
+    （DB の v2 へ送るのは別の変更）。
     quiet なら送信について何も出さない（霧の看破・Enrage 系）
     """
     say = (lambda _m: None) if quiet else print
@@ -195,7 +198,7 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
         # DB が受け取ってから、手元にも「自分の行」として貯める（統計画面は自分の行を DB から
         # 取りに行かない）。送れなかった行は貯めない（手元と DB をずらさない）
         RoundStore.default_store().add_own(
-            payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid)
+            payload["p_time"], round_id, map_id, ids[0], ids[1], ids[2], transformed_uid, players)
 
     TaskStats.thread("ConnectDB._send", _send, daemon=True).start()
 

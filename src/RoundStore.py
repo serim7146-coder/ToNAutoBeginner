@@ -10,6 +10,7 @@ DB から取ったラウンドと、自分が送ったラウンドを貯める�
   だけでは足りない。取り直した行は上書き（other_uids の更新を取り込む）
 - 表 meta: my_uids（このPCから送ったことのある transformed_uid。複数ありうる）・
   initial_done（初回の全件取得が済んだか）・synced_to（DB から取った行の最大の time）
+- 列 players: ラウンド開始の瞬間のインスタンスの人数（自分を含む）。分からない行・今までの行は NULL
 
 どのスレッドから呼んでもよい（鍵）。失敗しても例外を外へ出さない（統計が取れない
 だけで、ツールの動きは止めない）。
@@ -34,7 +35,8 @@ create table if not exists rounds (
     terror3 integer,
     transformed_uid integer,
     other_uids text,
-    origin text not null
+    origin text not null,
+    players integer
 );
 create unique index if not exists rounds_key
     on rounds(time, ifnull(transformed_uid, -99999), round, ifnull(map_id, -1), ifnull(terror1, -1));
@@ -92,6 +94,10 @@ class RoundStore:
         con = sqlite3.connect(str(self.path), timeout=10)
         if not self._ready:
             con.executescript(_SCHEMA)
+            # 人数の列が無い店（前の版が作ったもの）へ足す。今までの行は NULL
+            if "players" not in {row[1] for row in con.execute("pragma table_info(rounds)")}:
+                con.execute("alter table rounds add column players integer")
+                con.commit()
             self._ready = True
         return con
 
@@ -126,7 +132,7 @@ class RoundStore:
         return set(uids_list(self.get_meta("my_uids")))
 
     # ── 自分の行 ───────────────────────────────
-    def add_own(self, time: int, round_id: int, map_id, t1, t2, t3, uid) -> bool:
+    def add_own(self, time: int, round_id: int, map_id, t1, t2, t3, uid, players=None) -> bool:
         """自分が送ったラウンドを1行（origin own）。uid が無ければ貯めない
         （DB でも誰の行か分からないので、自分の分として扱えない）"""
         if uid is None:
@@ -135,8 +141,8 @@ class RoundStore:
         def work(con):
             con.execute(
                 "insert or ignore into rounds(time, round, map_id, terror1, terror2, terror3,"
-                " transformed_uid, other_uids, origin) values (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
-                (int(time), int(round_id), map_id, t1, t2, t3, int(uid), ORIGIN_OWN))
+                " transformed_uid, other_uids, origin, players) values (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                (int(time), int(round_id), map_id, t1, t2, t3, int(uid), ORIGIN_OWN, players))
             mine = set(uids_list(self._meta(con, "my_uids")))
             if int(uid) not in mine:
                 mine.add(int(uid))
@@ -187,8 +193,8 @@ class RoundStore:
                           row.get("transformed_uid"), uids_text(others), ORIGIN_DB)
                 con.execute(
                     "insert or replace into rounds(time, round, map_id, terror1, terror2,"
-                    " terror3, transformed_uid, other_uids, origin)"
-                    " values (?, ?, ?, ?, ?, ?, ?, ?, ?)", values)
+                    " terror3, transformed_uid, other_uids, origin, players)"
+                    " values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (*values, row.get("players")))
                 for uid in set(others) & mine:
                     con.execute(
                         "delete from rounds where origin = ? and transformed_uid = ?"
