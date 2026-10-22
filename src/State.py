@@ -80,6 +80,8 @@ class WindowState:
     last_begin_press_at: float = 0.0    # ツールが Begin を実際に押した時刻（壁時計）
     pending_verified_time: float = 0.0  # 本物として採用したVerifiedの時刻（ラウンド開始待ち）
     statistics_sent: bool = False
+    # ラウンド開始の瞬間のインスタンスの人数（自分を含む）。分からなければ None（DB・統計の players）
+    round_players: int | None = None
     transformed_uid: int | None = None
     local_player_name: str = ""
     local_user_id: str = ""

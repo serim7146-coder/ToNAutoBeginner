@@ -891,6 +891,14 @@ class LogMonitor:
             st.unmatched_logged.update(missing)
             self._log(f"[主催リスト] 希望が見つからない入室者: {', '.join(missing)}")
 
+    def _player_count(self) -> int | None:
+        """今のインスタンスの人数（自分を含む）。入退室を信用できないとき（起動時に復元できなかった窓）は None。
+        自分の入室の行が欠けていても自分は数える（自分は必ず 1 人）"""
+        st = self.st
+        if not st.players_known:
+            return None
+        return max(1, len(st.players | ({st.local_user_id} if st.local_user_id else set())))
+
     def _other_players(self) -> set:
         return {uid for uid in self.st.players if uid != self.st.local_user_id}
 
@@ -1638,6 +1646,8 @@ class LogMonitor:
         st.map_id                      = event.map_id
         st.statistics_sent             = False
         st.statistics_quiet            = False
+        # 人数はラウンド開始の瞬間のもの（テラーが決まるころには入退室で変わっているため、ここで覚える）
+        st.round_players               = self._player_count()
         # テラーを持たないラウンドは、この行（開始）でテラー無しで送る。後から
         # Killers の行（ムーンの 0 0 0 など）が来ても送り直さない（statistics_sent）
         if ConnectDB.round_type_id(event.round_type) in config.NULL_TERROR_ROUND_IDS:
@@ -2614,6 +2624,7 @@ class LogMonitor:
             quiet=st.statistics_quiet,
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
+            players=st.round_players,
         )
 
     def _send_null_terror_round(self):
@@ -2629,6 +2640,7 @@ class LogMonitor:
             st.transformed_uid,
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
+            players=st.round_players,
         )
 
     def _round_type_for_db(self, terror_ids) -> str:
@@ -2664,7 +2676,8 @@ class LogMonitor:
         st.statistics_sent = True
         ConnectDB.register_round(
             self._round_type_for_db([tid]), [tid], st.map_id, st.transformed_uid, quiet=True,
-            instance_key=self._db_instance_key(), round_time=st.round_start_time)
+            instance_key=self._db_instance_key(), round_time=st.round_start_time,
+            players=st.round_players)
 
     def _on_network_object(self, name: str):
         """看破: 霧の間に [NetworkProcessing] に出たオブジェクト名を照合する。

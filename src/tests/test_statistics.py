@@ -93,7 +93,7 @@ class TestNullTerrorRounds(unittest.TestCase):
             monitor = self._monitor()
             self._round(monitor, name)
             self.send.assert_called_once_with(name, [], 12, -13, instance_key=None,
-                                              round_time=monitor.st.round_start_time)
+                                              round_time=monitor.st.round_start_time, players=1)
             self.assertTrue(monitor.st.round_start_time)
             self._round_tail(monitor, name)
             self.assertEqual(self.send.call_count, 1, f"{name}: 二重に送らない")
@@ -1133,7 +1133,7 @@ class TestLogMonitorDbV1(unittest.TestCase):
 
         send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False,
                                      instance_key=ConnectDB.instance_key("wrld_now:2"),
-                                     round_time=LogParser.log_time(start))
+                                     round_time=LogParser.log_time(start), players=ANY)
 
 
 
@@ -1155,7 +1155,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
         with patch.object(ConnectDB, "register_round") as mock_send:
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
         self.assertTrue(monitor.st.statistics_sent)
 
     def test_a_single_classic_waits_for_gigabytes(self):
@@ -1176,7 +1176,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("Verified Round End")
 
-        mock_send.assert_called_once_with("Classic", [1], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [1], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_gigabytes_sends_the_replaced_id(self):
         monitor = self._monitor()
@@ -1185,7 +1185,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1], "Classic", revealed=False)
             monitor._process("The Gigabytes have come.")
 
-        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.GIGABYTES_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_statistics_are_sent_only_once_per_round(self):
         monitor = self._monitor()
@@ -1195,7 +1195,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._on_killers([1, 2, 3], "Bloodbath", revealed=False)
             monitor._on_killers([4], "Bloodbath", revealed=True)
 
-        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Bloodbath", [1, 2, 3], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
         self.assertEqual(monitor.st.terror_ids, [1, 2, 3, 4])
 
     def test_round_start_resets_statistics_sent_flag(self):
@@ -1222,7 +1222,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_bloodthirsty_log_after_killers_updates_delayed_statistics(self):
         monitor = self._monitor()
@@ -1234,7 +1234,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_bloodthirsty_variant_is_not_limited_to_classic(self):
         monitor = self._monitor()
@@ -1246,7 +1246,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(TerrorReplacement.signal("bloodthirsty_creature_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
-        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Bloodbath", [config.BLOODTHIRSTY_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_hungry_home_invader_log_after_classic_slender_converts_id(self):
         monitor = self._monitor()
@@ -1257,7 +1257,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process(TerrorReplacement.signal("hungry_home_invader_variant").sample)
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_hungry_home_invader_log_before_classic_slender_converts_id(self):
         monitor = self._monitor()
@@ -1270,7 +1270,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.HUNGRY_HOME_INVADER_ID])
-        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.HUNGRY_HOME_INVADER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_hungry_home_invader_is_ignored_outside_classic(self):
         monitor = self._monitor()
@@ -1282,7 +1282,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
 
         self.assertEqual(monitor.st.terror_ids, [config.SLENDER_ID])
         self.assertFalse(monitor.st.hungry_home_invader_variant)
-        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Bloodbath", [config.SLENDER_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_curious_creature_statistics_send_on_round_end_if_not_bloodthirsty(self):
         monitor = self._monitor()
@@ -1295,7 +1295,7 @@ class TestLogMonitorStatisticsRegistration(unittest.TestCase):
             monitor._process("Verified Round End")
 
         self.assertEqual(monitor.st.terror_ids, [config.CURIOUS_CREATURE_ID])
-        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY)
+        mock_send.assert_called_once_with("Classic", [config.CURIOUS_CREATURE_ID], 12, 99, quiet=False, instance_key=ANY, round_time=ANY, players=ANY)
 
     def test_verified_end_does_not_send_statistics(self):
         """待つものが無い構成なら、終了時に改めて送らない"""
