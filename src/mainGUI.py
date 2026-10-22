@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional
 
 import config
+import ContinueList
 import ContinueTable
 import DebugLog
 import UIFont
@@ -1695,11 +1696,11 @@ class App(tk.Tk):
         s.configure("TSeparator",        background=config.GUI_SUB)
 
         # ① TNL
-        f1 = ttk.LabelFrame(self, text="① 続行リスト(.tnl)", padding=8)
+        # 続行リストはツールの中に持つ（GN）。.tnl は読み込み・書き出しの入り口
+        f1 = ttk.LabelFrame(self, text="① 続行リスト", padding=8)
         f1.pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Entry(f1, textvariable=self.v_tnl, width=58).pack(side="left", padx=(0, 6))
-        ttk.Button(f1, text="参照…",    command=self._browse_tnl).pack(side="left")
-        ttk.Button(f1, text="再読み込み", command=self._load_tnl).pack(side="left", padx=(4, 0))
+        ttk.Button(f1, text=".tnl から読み込む", command=self._import_tnl).pack(side="left")
+        ttk.Button(f1, text=".tnl に書き出す", command=self._export_tnl).pack(side="left", padx=(4, 0))
         self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
 
@@ -2591,14 +2592,103 @@ class App(tk.Tk):
             self._log("[放置モード] OFF")
         self._schedule_settings_save()
 
-    def _browse_tnl(self):
+    # ── ツールの続行リスト（GN）────────────────────
+    def _import_tnl(self):
+        """「.tnl から読み込む」: 選んだ .tnl でツールの続行リストを置き換える（確認あり）。.tnl は書き換えない"""
         p = filedialog.askopenfilename(
             title="tnlファイルを選択",
             filetypes=[("TNL files", "*.tnl"), ("All", "*.*")]
         )
-        if p:
-            self.v_tnl.set(p)
-            self._load_tnl()
+        if not p:
+            return
+        if not messagebox.askyesno("続行リスト", "ツールの続行リストを、選んだ .tnl の中身で置き換えます。"
+                                   "ツールの中で直した分は失われます。よいですか？"):
+            return
+        try:
+            data, meta = ContinueList.from_tnl(p)
+        except Exception as e:
+            DebugLog.exception("mainGUI._import_tnl")
+            messagebox.showerror("TNL読み込みエラー", str(e))
+            return
+        self.v_tnl.set(p)
+        save_settings({**load_settings(), "tnl_path": p})       # 次に選ぶときの目印・初回の作成元
+        ContinueList.set_current(data, meta)
+        ContinueList.save_current()
+        self._apply_own_list(log=True)
+        self._refresh_continue_table_list()
+
+    def _export_tnl(self):
+        """「.tnl に書き出す」: ツールの続行リストを .tnl に書き出す（保存先を聞く。ListTool のフォルダは既定にしない）"""
+        p = filedialog.asksaveasfilename(
+            title="tnlファイルの保存先", defaultextension=".tnl",
+            initialfile="続行リスト.tnl",
+            filetypes=[("TNL files", "*.tnl"), ("All", "*.*")]
+        )
+        if not p:
+            return
+        if ContinueList.write_tnl(ContinueList.current(), ContinueList.current_meta(), p):
+            self._log(f"[続行リスト] .tnl に書き出しました: {Path(p).name}")
+        else:
+            messagebox.showerror("エラー", "書き出せませんでした。保存先を確かめてください。")
+
+    def _load_own_list(self):
+        """起動時: ツールの続行リストを読む。ファイルが無い（初めて）ときだけ、設定の .tnl から作って保存する
+        （以後は .tnl を読まない）。作れなければ空で始める（保存しない＝次の起動でまた試す）"""
+        loaded = ContinueList.load()
+        if loaded is None:
+            loaded = self._own_list_from_saved_tnl()
+        data, meta = loaded if loaded is not None else ({}, {"list_name": ""})
+        ContinueList.set_current(data, meta)
+        self._apply_own_list(log=True)
+
+    def _own_list_from_saved_tnl(self):
+        """初回: 設定の .tnl（tnl_path）からツールの続行リストを作って保存する。(data, meta)。作れなければ None"""
+        p = self.v_tnl.get().strip()
+        if not p:
+            return None
+        if not Path(p).exists():
+            self._log(f"[続行リスト] 前のtnlが見つかりません: {p}")
+            return None
+        try:
+            data, meta = ContinueList.from_tnl(p)
+        except Exception as e:
+            DebugLog.exception("mainGUI._own_list_from_saved_tnl")
+            self._log(f"[続行リスト] tnlの読み込みエラー: {e}")
+            return None
+        ContinueList.save(data, meta)
+        self._log("[続行リスト] 設定の .tnl からツールの続行リストを作りました")
+        return data, meta
+
+    def _apply_own_list(self, log: bool = False):
+        """ツールの続行リストを、全窓の下のリストにして件数を出す。主催リストを使っている間は下のリストを
+        変えない（ツールの中のリストの中身だけ変わる）"""
+        if SharedState.get_list_source() == "host":
+            return
+        self._apply_keep_on(ContinueList.current())
+        rounds, total = ContinueList.counts(self.keepOn_set)
+        name = ContinueList.current_meta().get("list_name") or "続行リスト"
+        msg = f"[{name}] {rounds}ラウンド / {total}件 続行対象"
+        self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
+        if log:
+            self._log(f"[続行リスト] {msg}")
+
+    def _on_own_list_changed(self):
+        """窓の LogMonitor が生存でリストから外した（窓ごとのスレッドから呼ばれる）: 画面のスレッドへ渡す"""
+        self._after_from_worker(self._finish_own_list_change)
+
+    def _finish_own_list_change(self):
+        """画面のスレッドで: 全窓へ反映・件数・保存。続行表の窓が開いていれば見た目も直す"""
+        self._apply_own_list()
+        ContinueList.save_current()
+        self._refresh_continue_table_list()
+
+    def _refresh_continue_table_list(self):
+        window = getattr(self, "_continue_table_window", None)
+        try:
+            if window is not None and window.winfo_exists():
+                window.refresh_list()
+        except tk.TclError:
+            pass
 
     def _apply_keep_on(self, new_set: dict):
         """続行リストを差し替える（新しい dict の代入。走行中の全窓に即座に効く）。
@@ -2677,11 +2767,9 @@ class App(tk.Tk):
         # 参加者別の希望を残すと Sabotage の判定に古い希望が効いてしまう
         self._apply_host_wishes({})
         self._apply_host_tabs({})
-        # tnlが未設定だと _load_tnl は何もせず、主催リストが居座る。それでは
-        # 「古いリストで判定しない」という目的を果たせないので先に空にする
-        # （tnlが読めればこの直後に上書きされる。読めなければ続行0件）
-        self._apply_keep_on({})
-        self._load_tnl(show_error=False)
+        # 主催リストが居座ったままだと「古いリストで判定しない」という目的を果たせない。
+        # ツールの続行リスト（GN）に戻す（未設定・空なら続行0件）
+        self._apply_own_list()
 
     def _host_list_lost(self, reason: str):
         """主催リストが取れない。続いたときだけ tnl へ切り替える。
@@ -2792,29 +2880,6 @@ class App(tk.Tk):
             self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
             self._log(msg)
 
-    def _load_tnl(self, show_error: bool = True):
-        p = self.v_tnl.get().strip()
-        if not p or not Path(p).exists():
-            if show_error:
-                messagebox.showerror("エラー", "tnlファイルが見つかりません")
-            else:
-                self._log(f"[TNL] 前回のtnlが見つかりません: {p}")
-            return
-        try:
-            keep_on, meta = MatchTNL.load_tnl(p)
-            self._apply_keep_on(keep_on)
-            total = sum(len(v) for v in self.keepOn_set.values())
-            msg = f"[{meta['list_name']}] {len(self.keepOn_set)}ラウンド / {total}件 続行対象"
-            self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
-            self._log(f"[TNL] {msg}")
-            save_settings({**load_settings(), "tnl_path": p})
-        except Exception as e:
-            DebugLog.exception("mainGUI._load_tnl")
-            if show_error:
-                messagebox.showerror("TNL読み込みエラー", str(e))
-            else:
-                self._log(f"[TNL] 読み込みエラー: {e}")
-
     STALE_KEY_LABELS = {"emergency_stop_key": ("停止", "v_emergency_key"),
                         "start_key": ("マクロ開始", "v_start_key"),
                         "suicide_cancel_key": ("自爆キャンセル", "v_suicide_cancel_key"),
@@ -2830,7 +2895,7 @@ class App(tk.Tk):
         self._schedule_settings_save()
 
     def _load_saved_settings(self):
-        """起動時: 前回選んだtnlを復元して即読み込む"""
+        """起動時: 前回の設定を復元する。ツールの続行リストも読む（初回だけ、前回選んだtnlから作る）"""
         data = load_settings()
         self.v_desktop_mode.set(bool(data.get("desktop_mode", config.LAUNCH_DESKTOP_MODE)))
         self.v_use_osc.set(bool(data.get("use_osc", config.OSC_ENABLED)))
@@ -2952,11 +3017,8 @@ class App(tk.Tk):
         self._window_layout = _as_window_layout(data.get("window_layout"))   # 壊れた値は捨てる（DX）
         App._refresh_forget_layout_button(self)
         self._apply_saved_window_settings()
-        tnl_path = data.get("tnl_path", "")
-        if not tnl_path:
-            return
-        self.v_tnl.set(tnl_path)
-        self._load_tnl(show_error=False)
+        self.v_tnl.set(data.get("tnl_path", ""))
+        self._load_own_list()
 
     def _apply_saved_window_settings(self):
         """保存済みの窓ごと設定（profile ID）を反映する。
@@ -3242,7 +3304,8 @@ class App(tk.Tk):
                 cfg, None, self._log,
                 window_idx=tab.idx + 1,
                 lists=self.lists,
-                on_round_settings_cleared=self._clear_tab_round_settings)
+                on_round_settings_cleared=self._clear_tab_round_settings,
+                on_list_changed=self._on_own_list_changed)
             self.monitors.append(mon)
             mon.start()
 
@@ -3271,7 +3334,7 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         self._continue_table_window = ContinueTableWindow(
-            self, on_change=self._refresh_continue_table_count)
+            self, on_change=self._refresh_continue_table_count, on_list_change=self._apply_own_list)
 
     def _on_continue_choice(self, tab, which: str, name):
         """窓の「続行無効」「デフォ続行」のプリセット（name。None は「なし」）を変えた: 保存してすぐ判定に効かせる"""

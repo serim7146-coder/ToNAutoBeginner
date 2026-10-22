@@ -152,7 +152,7 @@ class TestTheSetting(unittest.TestCase):
             app.v_freeze_rounds = {}
             for name in ("_add_tool_row", "_refresh_emergency_key_label", "_refresh_start_key_label",
                          "_apply_freeze_settings", "_apply_obs_settings", "_apply_saved_window_settings",
-                         "_load_tnl", "_log", "_load_window_volume_settings", "_load_fog_early_read_setting",
+                         "_load_own_list", "_log", "_load_window_volume_settings", "_load_fog_early_read_setting",
                          "_load_launch_options_setting"):
                 setattr(app, name, lambda *a, **k: None)
             with patch.object(mainGUI, "load_settings", return_value=dict(data)), \

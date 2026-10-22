@@ -1892,7 +1892,7 @@ class TestStartKeySettings(unittest.TestCase):
         app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
-        app._load_tnl = lambda show_error=True: None
+        app._load_own_list = lambda: None
         app.logs = []
         app._log = app.logs.append
         with patch.object(mainGUI, "load_settings", return_value=dict(data)), \
