@@ -224,7 +224,7 @@ LogMonitor._process(line)
 2. ログのテラーIDを独自の番号へ（`LogMonitor._own_killer_ids` → `TerrorIds.from_log`: Alternate 枠は 1000＋、Unbound は 2000＋、8 Pages は 3000＋ページ。**この 1 か所だけ**。以後の判定・続行リスト・続行表・統計・DB は全部この番号。ToN ListTool の番号に直すのは .tnl・.tnnl・主催リストの出入りだけ）。
 3. インスタンスの種類で分ける:
    - private（Invite・Invite+・Friends・Friends+）: 自爆・Begin・放置モード・ラウンドごとの指定を使う。Run は判定を通らず、全続行で選んでいればラウンド開始の時点で全続行（リスポーンしない）として扱う。移動・クリック・カーソル・チェイスなどの操作（OSC・マウス）は private の窓だけ（`ActionExecutor.can_operate`。種類が分からない窓もしない）。前面化・音・判定・グループの自爆（キー）は見ない。
-   - 干し芋・焼き芋: `GroupRound.decide`（Classic・Bloodbath など問答無用の自爆、Moon、Fog、Sabotage）。`NORMAL` なら続行リストへ。
+   - 干し芋・焼き芋: `GroupRound.decide`（Classic・Bloodbath など問答無用の自爆、Moon、Fog、Sabotage）。`NORMAL` なら続行リストへ。`CONTINUE`（全続行: 8 Pages・Run・Bloodbath EX・1 回目の Moon・干し芋の Fog）は、`LogMonitor._group_decision` がその窓の続行リスト（`RoundDecision.list_continues`。続行表は重ねない）でそのテラーが続行になるかを見て、なれば `GroupRound.CONTINUE_LISTED`（扱いは `WANTED` と同じ。ログは「グループ判定: … 【全続行 → 続行リストで続行】」）に上げる。ならない・テラーが分からない（Run・Moon の 0 0 0・Fog の公開前）ときは全続行のまま。テラーが分かって `_on_killers` をもう一度通ると、そこでもう一度見る（アナウンスは 1 ラウンド 1 回）。
    - それ以外: 操作しない（判定のログだけ）。
    - private と干し芋・焼き芋で、他の人がいるのに主催リストが無い窓・その窓にいる誰も続行リストを持っていない窓は、自爆を止める（他人の周回を自分のリストで裁かない）。
 4. `RoundDecision.decide_killers`: 続行リスト（Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night はツールの `Special/Moon` のキーで見る）・3クラ解放（DTM/Waldo）・Self Inserts の Bloodthirsty（リストで表せないので必ず続行）。
