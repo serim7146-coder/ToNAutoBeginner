@@ -2129,11 +2129,11 @@ class LogMonitor:
 
     def _remove_survived_from_list(self):
         """生存したので、ツールの続行リストから、このラウンドの種類の、判定に使ったテラーを外す（GN）。
-        主催リストを使っている間・干し芋/焼き芋・テラーが分からないときは外さない。続行無効・デフォ続行
-        （重ねる表）は触らない。外したら GUI へ伝える（全窓へ反映・保存・件数は画面のスレッドで）"""
+        主催リストを使っている間も、ツールの中の続行リストからは外す（判定に使う下のリストは主催リストのまま。
+        GUI 側 _apply_own_list が差し替えない）。干し芋/焼き芋・テラーが分からないときは外さない。
+        続行無効・デフォ続行（重ねる表）は触らない。外したら GUI へ伝える（全窓へ反映・保存・件数は画面のスレッドで）"""
         st = self.st
-        if (SharedState.get_list_source() == "host"
-                or st.instance_type in GroupRound.GROUP_INSTANCES
+        if (st.instance_type in GroupRound.GROUP_INSTANCES
                 or not st.terror_ids or not st.round_type):
             return
         removed = ContinueList.remove_survived_current(st.round_type, st.terror_ids)
