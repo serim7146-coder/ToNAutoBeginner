@@ -385,12 +385,40 @@ class TestLogMonitorRemoval(unittest.TestCase):
         self.assertEqual(self._lines(monitor), [])
         self.assertEqual(self.changed, [])
 
-    def test_the_host_list_is_never_edited(self):
-        ContinueList.set_current({CLASSIC: frozenset({7})})
+    def test_while_the_host_list_is_used_the_own_list_is_edited_too(self):
+        """主催リストを使っている間も、ツールの中の続行リストからは外す（ログも GUI への通知も同じ）"""
+        ContinueList.set_current({CLASSIC: frozenset({7, 8}), FOG: frozenset({7})})
         SharedState.set_list_source("host")
         monitor = self._monitor()
         monitor._process(LIVED)
-        self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {7}})
+        self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {8}, FOG: {7}})
+        self.assertEqual(self._lines(monitor),
+                         [f"[続行リスト] 生存したので外しました: {LogMonitor.format_terror_ids([7])} / Classic"])
+        self.assertEqual(self.changed, [1])
+
+    def test_a_moon_round_removes_from_the_special_moon_key_while_the_host_list_is_used(self):
+        ContinueList.set_current({SPECIAL: frozenset({MOON_A, MOON_B}), CLASSIC: frozenset({MOON_A})})
+        SharedState.set_list_source("host")
+        monitor = self._monitor(MOON_ROUNDS[0], (flow_id(196),))
+        monitor._process(LIVED)
+        self.assertEqual(_sets(ContinueList.current()), {SPECIAL: {MOON_B}, CLASSIC: {MOON_A}})
+        self.assertEqual((len(self._lines(monitor)), self.changed), (1, [1]))
+
+    def test_group_instances_do_not_edit_the_own_list_while_the_host_list_is_used(self):
+        SharedState.set_list_source("host")
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            ContinueList.set_current({CLASSIC: frozenset({7})})
+            monitor = self._monitor(itype=itype)
+            monitor._process(LIVED)
+            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {7}}, itype)
+            self.assertEqual((self._lines(monitor), self.changed), ([], []), itype)
+
+    def test_unknown_terrors_do_not_edit_the_own_list_while_the_host_list_is_used(self):
+        ContinueList.set_current({FOG: frozenset({7})})
+        SharedState.set_list_source("host")
+        monitor = self._monitor("Fog", ())
+        monitor._process(LIVED)
+        self.assertEqual(_sets(ContinueList.current()), {FOG: {7}})
         self.assertEqual((self._lines(monitor), self.changed), ([], []))
 
     def test_after_going_back_to_the_own_list_it_is_edited_again(self):
@@ -949,6 +977,23 @@ class TestWholeFlow(_AppCase):
         self.assertEqual(_sets(self.app.keepOn_set), {CLASSIC: {99}})
         self.app._finish_own_list_change()
         self.assertEqual(_sets(self.app.keepOn_set), {CLASSIC: {99}})
+
+    def test_surviving_while_the_host_list_is_active_edits_and_saves_the_own_list_only(self):
+        """主催リストの間に生存: ツールの中のリストだけが減って保存され、判定に使う下のリストは主催リストのまま"""
+        SharedState.set_list_source("host")
+        self.app._apply_keep_on({CLASSIC: {99, 7}})
+        host_list = self.app.keepOn_set
+        monitor = self._monitor()
+        monitor._process(LIVED)
+        self.app.update()                                       # 画面のスレッドでの反映
+        self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {3}}, "ツールの中のリストは減る")
+        self.assertEqual(_sets(ContinueList.load()[0]), {CLASSIC: {3}}, "保存した")
+        self.assertIs(self.app.keepOn_set, host_list, "判定に使う下のリストは差し替えない")
+        self.assertEqual(_sets(self.app.keepOn_set), {CLASSIC: {99, 7}})
+        self.assertTrue(RoundDecision.list_continues(monitor.keepOn_set, [7], "Classic"), "主催リストで判定する")
+        self.assertTrue(any("生存したので外しました" in m for m in monitor.logs))
+        self.app._fall_back_to_tnl("テスト")
+        self.assertEqual(_sets(self.app.keepOn_set), {CLASSIC: {3}}, "戻ると外した後のリスト")
 
     def test_going_back_from_the_host_list_uses_the_own_list(self):
         SharedState.set_list_source("host")
