@@ -128,6 +128,34 @@ def decide(
     return NORMAL
 
 
+def is_all_continue_regardless_of_terror(
+    instance_type: str,
+    round_type: str,
+    *,
+    moon_repeat: bool = False,
+    skip_moons=(),
+) -> bool:
+    """テラーが分からなくても、`decide` が必ず CONTINUE（全続行）を返すラウンドか。
+
+    霧や 8 Pages はテラーが出るまで時間がかかる（8 Pages は最初のページまで）。そのあいだ音量を
+    「全続行」にするために、テラー不明の時点で使う。決まりは `decide` と同じ:
+    ALWAYS_CONTINUE_ROUNDS・1回目の moon（自爆指定・2回目・焼き芋の Mystic Moon/Solstice は除く）・
+    干し芋の Fog。焼き芋の Fog は Killers 行の種別で決まる（SKIP になりうる）ので含めない。
+    """
+    if instance_type not in GROUP_INSTANCES:
+        return False
+    if round_type in ALWAYS_CONTINUE_ROUNDS:
+        return True
+    if round_type in MOONS:
+        if round_type in skip_moons or moon_repeat:
+            return False
+        return not (instance_type == config.INSTANCE_YAKIIMO
+                    and round_type in YAKIIMO_SKIP_FIRST_MOONS)
+    if round_type in FOG_ROUND_TYPES:
+        return instance_type == config.INSTANCE_HOSHIIMO
+    return False
+
+
 def _decide_sabotage(instance_type, terror_ids, sus_players, host_wishes,
                      follow_host) -> str:
     if not follow_host or not host_wishes:

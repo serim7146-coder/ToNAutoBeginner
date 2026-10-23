@@ -99,6 +99,8 @@ class WindowState:
     open_special_continue: bool = False
     # 全続行（private のラウンド指定 cfg.continue_rounds で続行）のラウンドか。音量の「全続行」（EZ）
     all_continue_round: bool = False
+    # テラー不明の時点で全続行の状態にしたラウンドの round_seq（-1 = 無し）。テラーが分かったときの判定で同じ行を二度出さない
+    all_continue_early_seq: int = -1
     # 窓の音量の分類をそのラウンドの RoundOver まで保つ（FH）。(分類, round_seq)。WindowVolume.category_of が持つ
     volume_hold: Optional[tuple] = None
     # RoundOver の後（次のラウンド開始まで）か。続行・全続行・突入フリーズの音量は RoundOver で戻す（FH）
