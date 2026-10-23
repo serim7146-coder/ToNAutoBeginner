@@ -3,7 +3,9 @@
 - 左: ラウンドの一覧（細い Listbox。Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night は 1 つの「Special/Moon」）
 - 上: どれを編集するか（続行無効／デフォ続行／続行リスト）と、続行無効・デフォ続行のプリセット（選ぶ・新規・
   複製・名前変更・削除。GL。続行リストはプリセットが無いので欄を隠す）・名前の検索・全選択／全解除。押す・
-  全選択・全解除・読み込みは、選んでいるプリセット（続行リストはツールの続行リストそのもの。GN）に効く
+  全選択・全解除・読み込みは、選んでいるプリセット（続行リストはツールの続行リストそのもの。GN）に効く。
+  プリセットが 0 個の種類（最初はどちらも 0 個）は、「新規」だけ押せて、格子の上に案内を出し、押す・全選択・
+  全解除・読み込みは何もしない
 - 中: テラーのアイコンの格子（tk.Canvas に直接描く。間隔は縦横とも 46px）。上から Classic（0〜133・ListTool の
   並び）・Alternate（1000〜1035・11/9/7/5/3/1 の逆三角）・Unbound（2000〜2083）・特別（8 Pages 限定のテラー・
   Special/Moon の中身）・バリアントの段（4000 番台。HHI・Atrached・Bloodthirsty・Gigabytes・Neo Pilot・Evil Purple Foxy・
@@ -14,7 +16,7 @@
   形はそのままに「選べないマス」: 12% の暗い絵・枠なし・押しても何も起きない・全選択／全解除の対象外・ツールチップは
   「{名前}（このラウンドには出ません）」。8 Pages のタブは、その行（3000 番台）を ListTool の位置に選べるマスとして置く
 - 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む。その下に「アイテムで切り替え」の欄（GM）: 決まり 1 つ
-  = 1 行（アイテム・続行無効・デフォ続行のプリセット・↑↓×）。同じアイテムが上にある行は薄い文字
+  = 1 行（アイテム・続行無効・デフォ続行のプリセット・↑↓×）。同じアイテムが上にある行は薄い文字。足すボタンは「Add」
 
 押したセルの絵と枠だけを `itemconfigure` で変える（格子は作り直さない）。判定への反映（set_current）は押した
 その場で、保存は 0.3 秒まとめて 1 回（閉じるときは残りを先に書く）。アイコンは assets/icons のシート
@@ -94,7 +96,7 @@ NOTE = "干し芋・焼き芋（グループのインスタンス）では使い
 
 # 「アイテムで切り替え」の欄（GM）
 RULES_TITLE = "アイテムで切り替え"
-RULES_NOTE = "窓が持っているアイテムで、上から最初に当てはまる決まりのプリセットを使います（薄い行は、上に同じアイテムがあるので使われません）"
+NO_PRESET_GUIDE = "「新規」でプリセットを作ってください"      # プリセットが 0 個の種類を見ているとき（格子の上に出す）
 RULES_AREA_HEIGHT = 112      # 決まりの行を並べる欄の高さ（行が増えたら縦にスクロール）
 COLOR_RULE_DIM = "#7f849c"   # 使われない決まりの文字
 STYLE_RULE_DIM = "Dim.TCombobox"
@@ -390,7 +392,7 @@ class ContinueTableWindow(tk.Toplevel):
         self.v_which = tk.StringVar(value=LIST)
         # 編集しているプリセットの名前（表の種類ごと）。窓ごとの選びとは別（編集の対象を選ぶだけ）
         store = ContinueTable.current()
-        self._selected = {which: ContinueTable.fallback_name(store, which)
+        self._selected = {which: ContinueTable.first_name(store, which)
                           for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT)}
         self.v_preset = tk.StringVar()
         self.v_search = tk.StringVar()
@@ -417,10 +419,12 @@ class ContinueTableWindow(tk.Toplevel):
         self.cb_preset = ttk.Combobox(top, textvariable=self.v_preset, state="readonly", width=14)
         self._add_preset_widget(self.cb_preset, padx=(6, 0))
         self.cb_preset.bind("<<ComboboxSelected>>", lambda _e: self._on_preset_picked())
+        self._preset_buttons = {}                  # 文字 → ボタン（「新規」以外はプリセットが 0 個のとき押せない）
         for text, command in (("新規", self.new_preset), ("複製", self.copy_preset),
                               ("名前変更", self.rename_preset), ("削除", self.delete_preset)):
-            self._add_preset_widget(ttk.Button(top, text=text, width=len(text) * 2 + 1, command=command),
-                                    padx=(6, 0))
+            button = ttk.Button(top, text=text, width=len(text) * 2 + 1, command=command)
+            self._preset_buttons[text] = button
+            self._add_preset_widget(button, padx=(6, 0))
 
         tools = ttk.Frame(self)
         tools.pack(fill="x", padx=10, pady=(0, 4))
@@ -457,15 +461,14 @@ class ContinueTableWindow(tk.Toplevel):
         self._preset_widgets.append((widget, pack))
 
     def _build_item_rules(self):
-        """「アイテムで切り替え」の欄（決まりの行を縦にスクロールする欄と「決まりを足す」）"""
+        """「アイテムで切り替え」の欄（決まりの行を縦にスクロールする欄と「Add」）"""
         style = ttk.Style(self)
         style.configure(STYLE_RULE_DIM, foreground=COLOR_RULE_DIM)
         style.map(STYLE_RULE_DIM, foreground=[("readonly", COLOR_RULE_DIM), ("disabled", COLOR_RULE_DIM)])
         box = ttk.LabelFrame(self, text=RULES_TITLE, padding=6)
         box.pack(side="bottom", fill="x", padx=10, pady=(0, 10))
-        ttk.Label(box, text=RULES_NOTE, foreground=config.GUI_YLW).pack(anchor="w")
         area = ttk.Frame(box)
-        area.pack(fill="x", pady=(4, 0))
+        area.pack(fill="x")
         self.rules_canvas = tk.Canvas(area, height=RULES_AREA_HEIGHT, bg=config.GUI_BG, highlightthickness=0)
         bar = ttk.Scrollbar(area, orient="vertical", command=self.rules_canvas.yview)
         self.rules_canvas.configure(yscrollcommand=bar.set)
@@ -477,7 +480,7 @@ class ContinueTableWindow(tk.Toplevel):
             scrollregion=self.rules_canvas.bbox("all")))
         self.rules_canvas.bind("<Enter>", lambda _e: self.rules_canvas.bind_all("<MouseWheel>", self._rules_wheel))
         self.rules_canvas.bind("<Leave>", lambda _e: self.rules_canvas.unbind_all("<MouseWheel>"))
-        ttk.Button(box, text="決まりを足す", command=self.add_rule).pack(anchor="w", pady=(4, 0))
+        ttk.Button(box, text="Add", command=self.add_rule).pack(anchor="w", pady=(4, 0))
         self._show_rules()
 
     def _rules_wheel(self, event):
@@ -498,6 +501,9 @@ class ContinueTableWindow(tk.Toplevel):
         """格子を描くキャンバス（縦にスクロール）。押す・乗せるは全マス共通の 1 組の束縛"""
         box = ttk.Frame(parent)
         box.pack(side="left", fill="both", expand=True, padx=10, pady=6)
+        # 格子の上の案内の 1 行（プリセットが 0 個の種類を見ているときだけ字が入る。空でも行の高さは変わらない）
+        self.v_guide = tk.StringVar()
+        ttk.Label(box, textvariable=self.v_guide, foreground=config.GUI_YLW).pack(side="top", anchor="w")
         self.canvas = tk.Canvas(box, bg=COLOR_GRID_BG, highlightthickness=0)
         bar = ttk.Scrollbar(box, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=bar.set)
@@ -808,9 +814,14 @@ class ContinueTableWindow(tk.Toplevel):
             table = ContinueTable.with_ids(table, which, key, ids)
         return table
 
+    def _no_preset(self) -> bool:
+        """今見ている表の種類にプリセットが 1 つも無いか（続行リストは常に False）。True の間は編集しない"""
+        return self._which() != LIST and self._selected[self._which()] is None
+
     def toggle(self, tid: int):
-        """押したマスを入れる／外す。そのラウンドに出ない（枠に無い）テラーのマスは何も起きない"""
-        if self._round_key() is None or tid not in self._available:
+        """押したマスを入れる／外す。そのラウンドに出ない（枠に無い）テラーのマスは何も起きない。
+        プリセットが 0 個の種類も何も起きない（格子の上に案内が出ている）"""
+        if self._round_key() is None or tid not in self._available or self._no_preset():
             return
         if self._which() == LIST:
             keys = self._table_keys()
@@ -826,35 +837,44 @@ class ContinueTableWindow(tk.Toplevel):
 
     def select_all(self):
         """見えているマスを全部、今の表に入れる"""
-        if self._round_key() is not None:
+        if self._round_key() is not None and not self._no_preset():
             self._change_members(self._visible_tids(), add=True)
 
     def clear_all(self):
         """見えているマスを全部、今の表から外す"""
-        if self._round_key() is not None:
+        if self._round_key() is not None and not self._no_preset():
             self._change_members(self._visible_tids(), add=False)
 
     # ── プリセット（GL）──
-    def _selected_name(self) -> str:
-        """今の表の種類で編集しているプリセットの名前"""
+    def _selected_name(self) -> str | None:
+        """今の表の種類で編集しているプリセットの名前（プリセットが 0 個なら None）"""
         return self._selected[self._which()]
+
+    def _show_guide(self):
+        """格子の上の案内: プリセットが 0 個の種類を見ているときだけ"""
+        self.v_guide.set(NO_PRESET_GUIDE if self._no_preset() else "")
 
     def _show_presets(self):
         """プリセットの選択肢と、選んでいる名前を今の表の種類のものに合わせる（無い名前を選んでいたら直す）。
         続行リストにはプリセットが無いので、プリセットの欄ごと隠す"""
         store, which = ContinueTable.current(), self._which()
+        for kind in self._selected:               # 消えた名前を選んだままにしない（見ていない種類も）
+            if self._selected[kind] not in ContinueTable.preset_names(store, kind):
+                self._selected[kind] = ContinueTable.first_name(store, kind)
         if which == LIST:
             for widget, _pack in self._preset_widgets:
                 widget.pack_forget()
+            self._show_guide()
             return
         for widget, pack in self._preset_widgets:
             if not widget.winfo_manager():
                 widget.pack(side="left", **pack)
         names = ContinueTable.preset_names(store, which)
-        if self._selected[which] not in names:
-            self._selected[which] = ContinueTable.fallback_name(store, which)
         self.cb_preset["values"] = names
-        self.v_preset.set(self._selected[which])
+        self.v_preset.set(self._selected[which] or "")
+        for text, button in self._preset_buttons.items():       # プリセットが 0 個なら「新規」だけ押せる
+            button.configure(state="normal" if names or text == "新規" else "disabled")
+        self._show_guide()
 
     def _on_preset_picked(self):
         """ドロップダウンで選んだ: そのプリセットの格子へ（保存するものは無い）"""
@@ -896,6 +916,8 @@ class ContinueTableWindow(tk.Toplevel):
     def copy_preset(self):
         """名前を聞いて、選んでいるプリセットの写しを作って選ぶ（名前の既定は「〇〇 のコピー」）"""
         which, source = self._which(), self._selected_name()
+        if source is None:
+            return
         initial = ContinueTable.unique_name(ContinueTable.current(), which, f"{source} のコピー")
         name = self._ask_valid_name("複製の名前", initial)
         if name is not None:
@@ -905,20 +927,21 @@ class ContinueTableWindow(tk.Toplevel):
     def rename_preset(self):
         """選んでいるプリセットの名前を変える（同じ名前は不可。これを使っていた窓はそのまま新しい名前を使う）"""
         which, old = self._which(), self._selected_name()
+        if old is None:
+            return
         name = self._ask_valid_name("新しい名前", old, ignore=old)
         if name is not None and name != old:
             self._apply_presets(
                 ContinueTable.with_renamed_preset(ContinueTable.current(), which, old, name), select=name)
 
     def delete_preset(self):
-        """選んでいるプリセットを、確認してから消す（最後の 1 つは消せない。使っていた窓は「既定」へ）"""
+        """選んでいるプリセットを、確認してから消す（最後の 1 つも消せる。使っていた窓は「なし」へ）"""
         which, name = self._which(), self._selected_name()
         store = ContinueTable.current()
-        if not ContinueTable.can_delete(store, which):
-            self._error("最後の 1 つのプリセットは削除できません。")
+        if name is None or not ContinueTable.can_delete(store, which):
             return
         if not self._confirm(f"{WHICH_TEXT[which]}のプリセット「{name}」を削除します。よいですか？\n"
-                             f"これを使っていた窓は「{ContinueTable.DEFAULT_PRESET}」になります。"):
+                             f"これを使っていた窓は「{ContinueTable.NONE_LABEL}」になります。"):
             return
         self._apply_presets(ContinueTable.with_deleted_preset(store, which, name))
 
@@ -1028,7 +1051,11 @@ class ContinueTableWindow(tk.Toplevel):
         self._import(ContinueTable.DISABLED, ".tnnl", "*.tnnl", ContinueTable.from_tnnl)
 
     def _import(self, which: str, ext: str, pattern: str, reader):
-        """ファイルを選ぶ → 「今の表を置き換えます」の確認 → 読み込んで置き換える"""
+        """ファイルを選ぶ → 「今の表を置き換えます」の確認 → 読み込んで置き換える。
+        その種類のプリセットが 0 個なら、ファイルも聞かずに案内だけ出す"""
+        if self._selected[which] is None:
+            messagebox.showinfo("続行表", f"{WHICH_TEXT[which]}: {NO_PRESET_GUIDE}", parent=self)
+            return
         path = self._ask_file(f"{ext} を選択", pattern)
         if not path:
             return

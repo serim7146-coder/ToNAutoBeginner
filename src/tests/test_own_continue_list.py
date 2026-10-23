@@ -417,7 +417,10 @@ class TestLogMonitorRemoval(unittest.TestCase):
         self.assertEqual((self._lines(monitor), self.changed), ([], []))
 
     def test_the_overlay_tables_are_not_touched(self):
-        store = ContinueTable.with_preset_body(self.table_before, ContinueTable.DEFAULT, "既定", {CLASSIC: [7]})
+        store = ContinueTable.with_preset_body(
+            ContinueTable.with_new_preset(self.table_before, ContinueTable.DEFAULT, "基本"),
+            ContinueTable.DEFAULT, "基本", {CLASSIC: [7]})
+        store = ContinueTable.with_choice(store, 2, ContinueTable.DEFAULT, "基本")
         ContinueTable.set_current(store)
         self.addCleanup(ContinueTable.set_current, self.table_before)
         ContinueList.set_current({CLASSIC: frozenset({7})})
@@ -453,7 +456,7 @@ class _ListWindowCase(unittest.TestCase):
     def setUp(self):
         _reset_list(self)
         ContinueTable.table_path().unlink(missing_ok=True)
-        ContinueTable.set_current(ContinueTable.Store())
+        ContinueTable.set_current(ContinueTable.Store(disabled_presets={"基本": {}}, default_presets={"基本": {}}))
         self.addCleanup(ContinueTable.table_path().unlink, missing_ok=True)
         self.addCleanup(ContinueTable.set_current, ContinueTable.Store())
         patcher = patch.object(ContinueTableGUI, "SAVE_DELAY_MS", 30)
@@ -527,7 +530,7 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.assertEqual([w.winfo_manager() for w in widgets], [""] * 6)
         self.win.v_which.set(ContinueTable.DISABLED)
         self.assertEqual([w.winfo_manager() for w in widgets], ["pack"] * 6)
-        self.assertEqual(self.win.v_preset.get(), "既定")
+        self.assertEqual(self.win.v_preset.get(), "基本")
 
     def test_clicking_toggles_the_own_list_and_applies_at_once(self):
         self.win.toggle(5)
@@ -552,8 +555,8 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.assertEqual(self.list_changed, [])
 
     def test_the_other_two_tables_still_show_their_thin_frames(self):
-        store = ContinueTable.with_preset_body(ContinueTable.current(), ContinueTable.DISABLED, "既定", {CLASSIC: [1, 3]})
-        store = ContinueTable.with_preset_body(store, ContinueTable.DEFAULT, "既定", {CLASSIC: [2, 3]})
+        store = ContinueTable.with_preset_body(ContinueTable.current(), ContinueTable.DISABLED, "基本", {CLASSIC: [1, 3]})
+        store = ContinueTable.with_preset_body(store, ContinueTable.DEFAULT, "基本", {CLASSIC: [2, 3]})
         ContinueTable.set_current(store)
         self.win._restyle_all()
         self.assertEqual(self._style(1), (ContinueTableGUI.COLOR_DISABLED, 1.0))
@@ -634,7 +637,7 @@ class TestListInTheTableWindow(_ListWindowCase):
 
     def test_the_item_rules_and_imports_are_still_there(self):
         texts = [b.cget("text") for b in _widgets_of(self.win, ttk.Button)]
-        for text in (".tnl をデフォ続行へ読み込む", ".tnnl を続行無効へ読み込む", "決まりを足す", "全選択", "全解除"):
+        for text in (".tnl をデフォ続行へ読み込む", ".tnnl を続行無効へ読み込む", "Add", "全選択", "全解除"):
             self.assertIn(text, texts)
 
 

@@ -534,7 +534,7 @@ class TestListMigration(unittest.TestCase):
 
 
 class TestTableMigration(unittest.TestCase):
-    """continue_table.json（v1・v2 → v3）"""
+    """continue_table.json（v1・v2 → v4。番号を独自の番号に直し、「既定」は「デフォルト」にする）"""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -550,28 +550,30 @@ class TestTableMigration(unittest.TestCase):
           "windows": {"1": {"disabled": "別", "default": None}},
           "item_rules": [{"item": 70, "disabled": "別"}]}
 
-    def test_v2_moves_to_v3_keeping_windows_and_item_rules(self):
+    def test_v2_moves_to_v4_keeping_windows_and_item_rules(self):
         self.path.write_text(json.dumps(self.V2, ensure_ascii=False), encoding="utf-8")
         original = self.path.read_bytes()
         store = ContinueTable.load(self.path)
-        self.assertEqual({k: set(v) for k, v in store.disabled_presets["既定"].items()},
+        self.assertEqual({k: set(v) for k, v in store.disabled_presets["デフォルト"].items()},
                          {CLASSIC: {5, 4000}, ALT: {1001}, SPECIAL: {4003}, PUNISHED: {4012}, UNBOUND: {4013}})
         self.assertEqual({k: set(v) for k, v in store.disabled_presets["別"].items()}, {EIGHT: {3014}})
-        self.assertEqual({k: set(v) for k, v in store.default_presets["既定"].items()},
+        self.assertEqual({k: set(v) for k, v in store.default_presets["デフォルト"].items()},
                          {FOG: {1016}, SPECIAL: {4004}}, "Fog の 13 は出ない・Blood Moon は Special/Moon へ")
-        self.assertEqual(store.windows, {1: {"disabled": "別", "default": None}})
+        self.assertEqual(store.windows[1], {"disabled": "別", "default": None})
+        self.assertEqual(store.windows[2], {"disabled": "デフォルト", "default": "デフォルト"},
+                         "選んでいなかった窓は今まで「既定」を使っていたので、名前を変えたプリセットを選んだ状態にする")
         self.assertEqual(store.item_rules, (ContinueTable.ItemRule(70, "別", ContinueTable.KEEP),))
         self.assertEqual(self.bak.read_bytes(), original)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 3)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 4)
 
-    def test_v1_moves_to_v3_and_the_second_time_changes_nothing(self):
+    def test_v1_moves_to_v4_and_the_second_time_changes_nothing(self):
         self.path.write_text(json.dumps({"version": 1, "use_disabled": True, "use_default": False,
                                          "disabled": {CLASSIC: [5], ALT: [164]}, "default": {UNBOUND: [283]}}),
                              encoding="utf-8")
         store = ContinueTable.load(self.path)
-        self.assertEqual({k: set(v) for k, v in store.disabled_presets["既定"].items()},
+        self.assertEqual({k: set(v) for k, v in store.disabled_presets["デフォルト"].items()},
                          {CLASSIC: {5}, ALT: {1030}})
-        self.assertEqual({k: set(v) for k, v in store.default_presets["既定"].items()}, {UNBOUND: {2083}})
+        self.assertEqual({k: set(v) for k, v in store.default_presets["デフォルト"].items()}, {UNBOUND: {2083}})
         self.assertEqual(store.windows[1]["default"], None, "use_default が false だった種類は全窓「なし」")
         body = self.path.read_bytes()
         with patch.object(DebugLog, "write") as write:
@@ -586,7 +588,7 @@ class TestTableMigration(unittest.TestCase):
         with patch.object(ContinueList.shutil, "copy2", side_effect=OSError("disk")), patch.object(DebugLog, "write"):
             store = ContinueTable.load(self.path)
         self.assertEqual(self.path.read_bytes(), original)
-        self.assertIn(5, store.disabled_presets["既定"][CLASSIC])
+        self.assertIn(5, store.disabled_presets["デフォルト"][CLASSIC])
         self.assertFalse(self.bak.exists())
 
     def test_an_existing_backup_is_not_overwritten(self):
@@ -600,7 +602,7 @@ class TestTableMigration(unittest.TestCase):
                                          "default_presets": {"既定": {}}, "windows": {}}), encoding="utf-8")
         with patch.object(DebugLog, "write") as write:
             store = ContinueTable.load(self.path)
-        self.assertEqual(store.disabled_presets["既定"], {CLASSIC: frozenset({5})})
+        self.assertEqual(store.disabled_presets["デフォルト"], {CLASSIC: frozenset({5})})
         self.assertEqual(len([c for c in write.call_args_list if "表に無い番号を落としました" in c.args[0]]), 1)
 
 
