@@ -79,5 +79,5 @@ def eight_pages_allowed(item_id, items: dict) -> bool | None:
 
 
 def label(item_id, items: dict) -> str:
-    """ログ用の呼び名。表に無ければ id=…"""
-    return item_name(item_id, items) or f"id={item_id}"
+    """ログ用の呼び名。表に無ければ #番号（テラーの書き方と同じ）"""
+    return item_name(item_id, items) or f"#{item_id}"

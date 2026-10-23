@@ -8,6 +8,7 @@ import BeginMiss
 import config
 import DebugLog
 import FetchMiss
+import ItemCatalog
 import ItemFetch
 import ScreenCapture
 import SharedState
@@ -1996,7 +1997,7 @@ class ActionExecutor:
             client_height=lambda: WindowOperator.client_height(self._cfg.hwnd),
             speed=self._receiver_speed if receiver is not None else None,
             on_miss=lambda shot, why: FetchMiss.save(shot, st.window_idx, why))
-        name = f"{shop} Shop の id={item_id}"
+        name = f"{shop} Shop の #{item_id}"
         self._fetched_round = st.round_seq          # 柵を越えて店へ行く（EY: 押し直しは Begin の前へ戻ってから）
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
@@ -2049,7 +2050,7 @@ class ActionExecutor:
         if held:
             self._plush_retries = 0
             DebugLog.write(f"{head} "
-                           + ("もう持っている" if held == plush else f"別のアイテム（id={held}）を持っている")
+                           + ("もう持っている" if held == plush else f"別のアイテム（{ItemCatalog.label(held, config.ITEMS)}）を持っている")
                            + " → やり直さない")
             return
         if (not plush or SharedState.get_item_begin_mode() or not SharedState.get_item_fetch()

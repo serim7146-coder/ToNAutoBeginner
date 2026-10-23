@@ -1273,7 +1273,7 @@ class TestItemRuleData(unittest.TestCase):
 
     def test_duplicate_texts_get_the_id_added(self):
         items = {1: ItemCatalog.Item("A", "S", True), 2: ItemCatalog.Item("A", "S", False)}
-        self.assertEqual(ContinueTableGUI.item_choices(items)[1:], [(1, "S / A"), (2, "S / A (id=2)")])
+        self.assertEqual(ContinueTableGUI.item_choices(items)[1:], [(1, "S / A"), (2, "S / A (#2)")])
 
     def test_an_empty_table_still_offers_not_holding(self):
         self.assertEqual(ContinueTableGUI.item_choices({}), [(0, "持っていない")])
@@ -1437,8 +1437,8 @@ class TestItemRules(_WindowCase):
         ContinueTable.set_current(ContinueTable.with_rule_added(ContinueTable.current(), 4321))
         self.win._show_rules()
         row = self._rows()[0]
-        self.assertEqual(row["v_item"].get(), "id=4321（表に無い）")
-        self.assertIn("id=4321（表に無い）", row["cb_item"]["values"])
+        self.assertEqual(row["v_item"].get(), "#4321（表に無い）")
+        self.assertIn("#4321（表に無い）", row["cb_item"]["values"])
         self._pick(0, disabled="なし")
         self.assertEqual(self._rules(), (ContinueTable.ItemRule(4321, None, ContinueTable.KEEP),),
                          "表に無い id のまま残る")

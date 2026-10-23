@@ -278,11 +278,12 @@ class TestThePlushRetry(unittest.TestCase):
     def test_holding_another_item_stops_it(self):
         self.ex.request_plush_retry("x")
         self.st.held_item_id = 29
-        self.ex._retry_plush(9)
+        with patch.object(config, "ITEMS", _item_table()):
+            self.ex._retry_plush(9)
         self.st.held_item_id = 0
         self.ex._retry_plush(9)
         self.assertEqual(self.calls, [])
-        self.assertTrue(any("別のアイテム（id=29）を持っている → やり直さない" in m for m in self.written), self.written)
+        self.assertTrue(any("別のアイテム（Emerald Coil）を持っている → やり直さない" in m for m in self.written), self.written)
 
     def test_conditions_not_met_skip_without_using_a_try(self):
         self.ex.request_plush_retry("x")

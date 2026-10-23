@@ -321,11 +321,20 @@ class TestHeldItem(unittest.TestCase):
     def _start(round_type):
         return f"This round is taking place at Sewers (12) and the round type is {round_type}"
 
+    def test_public_log_shows_item_names_never_ids(self):
+        monitor = self._monitor()
+        self._feed(monitor, "Equipping 29.", "Equipping 77.", "Equipping 0.")
+        lines = [m.split("] ", 1)[1] for m in monitor.logs if "アイテム" in m]
+        self.assertIn("✅ アイテム装備: Emerald Coil", lines)
+        self.assertIn("✅ アイテム装備: #77", lines)
+        self.assertIn("アイテムを外した", lines)
+        self.assertFalse([m for m in lines if "id=" in m], lines)
+
     def test_equipping_holds_it_and_logs_the_name_once(self):
         monitor = self._monitor()
         self._feed(monitor, "Equipping 29.", "Equipping 29. Was using 29", "Equipping 77.")
         self.assertEqual(self._held_logs(monitor),
-                         ["所持アイテム: Emerald Coil (id=29)", "所持アイテム: id=77（表に無い）"])
+                         ["所持アイテム: Emerald Coil", "所持アイテム: #77（表に無い）"])
         self.assertEqual(monitor.held_item(), (77, None))
         self._feed(monitor, "Equipping 36.")
         self.assertEqual(monitor.held_item(), (36, "Hamburger"))
@@ -350,7 +359,7 @@ class TestHeldItem(unittest.TestCase):
         self._feed(monitor, "Equipping 77.", "You died.")
         self.assertEqual(monitor.st.held_item_id, 0)
         self.assertEqual(self._held_logs(monitor)[-1],
-                         "所持アイテム: なし（id=77 を Run 死亡 でロスト）")
+                         "所持アイテム: なし（#77 を Run 死亡 でロスト）")
         monitor = self._monitor("Classic", in_round=True)
         self._feed(monitor, "Equipping 29.", "You died.")
         self.assertEqual(monitor.st.held_item_id, 29)
@@ -428,14 +437,14 @@ class TestHeldItem(unittest.TestCase):
             monitor = self._monitor()
             self._feed(monitor, "Equipping 29.", self._start("8 Pages"), "Page Collected - 1/8")
             self.assertEqual(monitor.st.held_item_id, 29)
-            self.assertIn("所持アイテム: id=29（表に無い）", self._held_logs(monitor))
+            self.assertIn("所持アイテム: #29（表に無い）", self._held_logs(monitor))
 
     # ── インスタンス移動 ─────────────────────────
     def test_moving_to_another_instance_loses_it(self):
         monitor = self._monitor()
         self._feed(monitor, "Equipping 29.", "[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
         self.assertEqual(monitor.st.held_item_id, 0)
-        self.assertEqual(self._held_logs(monitor), ["所持アイテム: Emerald Coil (id=29)",
+        self.assertEqual(self._held_logs(monitor), ["所持アイテム: Emerald Coil",
                                                     "所持アイテム: なし（インスタンス移動）"])
 
     def test_moving_without_an_item_logs_nothing(self):
@@ -545,7 +554,7 @@ class TestHeldItemRestored(unittest.TestCase):
     def test_the_last_item_after_joining(self):
         monitor, log = self._restore([self.JOIN, "Equipping 36.", "Equipping 29."])
         self.assertEqual(monitor.st.held_item_id, 29)
-        self.assertEqual(log, "所持アイテム（入室後のログから）: Emerald Coil (id=29)")
+        self.assertEqual(log, "所持アイテム（入室後のログから）: Emerald Coil")
 
     def test_an_item_before_joining_is_not_used(self):
         monitor, log = self._restore(["Equipping 29.", self.JOIN, self._start("Classic")])
@@ -554,7 +563,7 @@ class TestHeldItemRestored(unittest.TestCase):
 
     def test_an_item_not_in_the_table(self):
         monitor, log = self._restore([self.JOIN, "Equipping 77."])
-        self.assertEqual(log, "所持アイテム（入室後のログから）: id=77（表に無い）")
+        self.assertEqual(log, "所持アイテム（入室後のログから）: #77（表に無い）")
 
     def test_the_same_rules_as_while_watching(self):
         cases = [

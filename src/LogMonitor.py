@@ -970,7 +970,7 @@ class LogMonitor:
         if not held:
             return "なし"
         name = ItemCatalog.item_name(held, config.ITEMS)
-        return f"{name} (id={held})" if name else f"id={held}（表に無い）"
+        return name if name else f"#{held}（表に無い）"
 
     def _hold_item(self, item_id: int):
         """装備した。同じアイテムの装備が続いたときはログを出さない"""
@@ -2046,9 +2046,9 @@ class LogMonitor:
             st.item_equipped_after_death = True
         if not st.item_id:
             # 「Equipping 0」は外しただけ。装備待ちは続ける
-            self._log("アイテムを外した (id=0)")
+            self._log("アイテムを外した")
             return
-        self._log(f"✅ アイテム装備 (id={st.item_id})")
+        self._log(f"✅ アイテム装備: {ItemCatalog.label(st.item_id, config.ITEMS)}")
         if (not self._auto_begin_active() and st.equip_freeze_held):
             # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
             st.waiting_for_equip = False
