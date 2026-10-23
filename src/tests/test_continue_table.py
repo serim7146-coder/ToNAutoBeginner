@@ -1166,7 +1166,7 @@ class TestItemRuleJudgement(_MonitorCase):
         ContinueTable.set_current(_rule_store(Rule(9999, "無7")))
         monitor = self._held(9999)
         monitor._decide_with_keep_on_set("Classic")
-        self.assertTrue(self._judgement_line(monitor).endswith("〔id=9999 の決まり〕"), monitor.logs)
+        self.assertTrue(self._judgement_line(monitor).endswith("〔#9999 の決まり〕"), monitor.logs)
 
     def test_the_item_label_follows_the_table_label_in_the_same_line(self):
         ContinueTable.set_current(_rule_store(Rule(PLUSH, KEEP, "足9")))

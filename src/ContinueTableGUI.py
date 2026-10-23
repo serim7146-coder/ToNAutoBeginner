@@ -141,7 +141,7 @@ def item_choices(items: dict) -> list:
         for item_id, item in entries:
             text = f"{shop} / {item.name}"
             if text in seen:
-                text = f"{text} (id={item_id})"
+                text = f"{text} (#{item_id})"
             seen.add(text)
             choices.append((item_id, text))
     return choices
@@ -149,7 +149,7 @@ def item_choices(items: dict) -> list:
 
 def unknown_item_text(item_id: int) -> str:
     """item.json に無い id（保存した決まりに残っていたとき）の選択肢の文字"""
-    return f"id={item_id}（表に無い）"
+    return f"#{item_id}（表に無い）"
 
 
 def pick_text(pick) -> str:
