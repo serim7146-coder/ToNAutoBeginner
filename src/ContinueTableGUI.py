@@ -365,7 +365,7 @@ class _Cell:
 
 
 class ContinueTableWindow(tk.Toplevel):
-    def __init__(self, master, on_change=None, on_list_change=None):
+    def __init__(self, master, on_change=None, on_list_change=None, on_import_tnl=None, on_export_tnl=None):
         super().__init__(master)
         self.title("続行表")
         self.configure(bg=config.GUI_BG)
@@ -373,6 +373,8 @@ class ContinueTableWindow(tk.Toplevel):
         self.minsize(CANVAS_WIDTH + 230, 420)
         self._on_change = on_change
         self._on_list_change = on_list_change  # 続行リストを変えた（呼び出し側が全窓へ反映する。GN）
+        self._on_import_tnl = on_import_tnl    # 「.tnl を続行リストへ読み込む」（呼び出し側が持つ。parent= で窓を渡す。無ければボタンを出さない）
+        self._on_export_tnl = on_export_tnl    # 「続行リストを .tnl に書き出す」（同上）
         self._rounds = load_rounds()
         self._photos: dict = {}                # (番号, 不透明度の種類) → PhotoImage（持っていないと消える）
         self._cells: dict = {}                 # 番号 → _Cell（今の格子）
@@ -385,7 +387,7 @@ class ContinueTableWindow(tk.Toplevel):
         self._list_save_pending = False        # 続行リスト（ContinueList）の保存の予約
         self._item_choices = item_choices(config.ITEMS)      # [(id, 文字), ...]
         self._rule_rows: list = []             # 決まりの行ごとの部品（_show_rules が作り直す）
-        self.v_which = tk.StringVar(value=ContinueTable.DISABLED)
+        self.v_which = tk.StringVar(value=LIST)
         # 編集しているプリセットの名前（表の種類ごと）。窓ごとの選びとは別（編集の対象を選ぶだけ）
         store = ContinueTable.current()
         self._selected = {which: ContinueTable.fallback_name(store, which)
@@ -406,7 +408,7 @@ class ContinueTableWindow(tk.Toplevel):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=10, pady=(10, 4))
         ttk.Label(top, text="編集する表:").pack(side="left")
-        for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT, LIST):
+        for which in (LIST, ContinueTable.DISABLED, ContinueTable.DEFAULT):
             ttk.Radiobutton(top, text=WHICH_TEXT[which], variable=self.v_which, value=which,
                             command=self._restyle_all).pack(side="left", padx=(8, 0))
         # プリセットの欄（続行リストにはプリセットが無いので、選んだら隠す。並びは top の最後なので、戻すときは順に pack し直す）
@@ -432,10 +434,18 @@ class ContinueTableWindow(tk.Toplevel):
         self._build_item_rules()
         bottom = ttk.Frame(self)
         bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
-        ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む",
-                   command=self._import_tnl).pack(side="left")
+        # 続行リストの 2 つ（呼び出し側の関数。無ければ出さない）｜少しあけて｜プリセットの表へ読み込む 2 つ
+        if self._on_import_tnl is not None:
+            ttk.Button(bottom, text=".tnl を続行リストへ読み込む",
+                       command=lambda: self._on_import_tnl(parent=self)).pack(side="left")
+        if self._on_export_tnl is not None:
+            ttk.Button(bottom, text="続行リストを .tnl に書き出す",
+                       command=lambda: self._on_export_tnl(parent=self)).pack(side="left", padx=(6, 0))
+        gap = 20 if (self._on_import_tnl is not None or self._on_export_tnl is not None) else 0
         ttk.Button(bottom, text=".tnnl を続行無効へ読み込む",
-                   command=self._import_tnnl).pack(side="left", padx=(6, 0))
+                   command=self._import_tnnl).pack(side="left", padx=(gap, 0))
+        ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む",
+                   command=self._import_tnl).pack(side="left", padx=(6, 0))
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)

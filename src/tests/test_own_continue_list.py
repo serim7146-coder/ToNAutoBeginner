@@ -24,6 +24,11 @@ def _sets(data):
     return {key: set(ids) for key, ids in data.items()}
 
 
+def _press(widget, text):
+    """窓の中の、文字が text のボタンを押す（呼ばれるのは偽物の関数だけ）"""
+    next(b for b in _widgets_of(widget, ttk.Button) if b.cget("text") == text).invoke()
+
+
 def _reset_list(case):
     """今のリストを空に・保存先（テスト用の一時フォルダ）のファイルを消す。終わったら同じに戻す"""
     def clean():
@@ -461,7 +466,6 @@ class _ListWindowCase(unittest.TestCase):
             self.root, on_change=lambda: self.changed.append(1),
             on_list_change=lambda: self.list_changed.append(ContinueList.current()))
         self.win.update()
-        self.win.v_which.set(LIST)
 
     def _style(self, tid):
         cell = self.win._cells[tid]
@@ -478,10 +482,38 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.assertEqual(ContinueTableGUI.WHICH_TEXT[LIST], "続行リスト")
         self.assertEqual(ContinueTableGUI.COLOR_LIST, "#4FA3FF")
         radios = [w.cget("text") for w in _widgets_of(self.win, ttk.Radiobutton)]
-        self.assertEqual(radios, ["続行無効", "デフォ続行", "続行リスト"])
+        self.assertEqual(radios, ["続行リスト", "続行無効", "デフォ続行"], "続行リストが先頭")
+        self.assertEqual(self.win.v_which.get(), LIST, "最初に選ばれているのは続行リスト")
+        self.assertEqual(self.win._which(), LIST)
         self.win.toggle(5)
         self.assertEqual(self._style(5), ("#4FA3FF", 2.0))
         self.assertEqual(self._style(6)[1], 1.0, "入っていないものは細い灰色の枠")
+
+    def test_the_bottom_buttons_are_in_order_with_the_list_pair_first(self):
+        win = ContinueTableGUI.ContinueTableWindow(
+            self.root, on_import_tnl=lambda **k: None, on_export_tnl=lambda **k: None)
+        self.addCleanup(win.destroy)
+        bottom = next(b for b in _widgets_of(win, ttk.Button) if b.cget("text") == ".tnnl を続行無効へ読み込む").master
+        self.assertEqual([b.cget("text") for b in bottom.pack_slaves()],
+                         [".tnl を続行リストへ読み込む", "続行リストを .tnl に書き出す",
+                          ".tnnl を続行無効へ読み込む", ".tnl をデフォ続行へ読み込む"])
+
+    def test_the_list_buttons_call_the_callbacks_with_the_window_as_parent(self):
+        calls = []
+        win = ContinueTableGUI.ContinueTableWindow(
+            self.root, on_import_tnl=lambda **k: calls.append(("import", k)),
+            on_export_tnl=lambda **k: calls.append(("export", k)))
+        self.addCleanup(win.destroy)
+        _press(win, ".tnl を続行リストへ読み込む")
+        _press(win, "続行リストを .tnl に書き出す")
+        self.assertEqual(calls, [("import", {"parent": win}), ("export", {"parent": win})])
+
+    def test_without_callbacks_the_list_buttons_are_not_made(self):
+        texts = [b.cget("text") for b in _widgets_of(self.win, ttk.Button)]
+        self.assertNotIn(".tnl を続行リストへ読み込む", texts)
+        self.assertNotIn("続行リストを .tnl に書き出す", texts)
+        self.assertIn(".tnnl を続行無効へ読み込む", texts, "ほかのボタンは残る")
+        self.assertIn(".tnl をデフォ続行へ読み込む", texts)
 
     def test_the_preset_controls_are_hidden_for_the_list_and_back_for_the_others(self):
         widgets = [w for w, _pack in self.win._preset_widgets]
@@ -656,7 +688,7 @@ class TestStartup(_AppCase):
         self.assertEqual(_sets(app.keepOn_set), {CLASSIC: {3, 7}})
         self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {3, 7}})
         self.assertEqual(_sets(ContinueList.load()[0]), {CLASSIC: {3, 7}}, "保存した")
-        self.assertEqual(app.lbl_tnl.cget("text"), "[リストA] 1ラウンド / 2件 続行対象")
+        self.assertEqual(app.lbl_tnl.cget("text"), "1ラウンド / 2件 続行対象")
         self.assertEqual(tnl.read_bytes(), before, ".tnl は書き換えない")
 
     def test_after_that_the_tnl_is_never_read_again(self):
@@ -666,7 +698,7 @@ class TestStartup(_AppCase):
         with patch.object(MatchTNL, "load_tnl", side_effect=AssertionError("tnl を読んだ")):
             app = self._app()
         self.assertEqual(_sets(app.keepOn_set), {CLASSIC: {3, 7}})
-        self.assertEqual(app.lbl_tnl.cget("text"), "[リストA] 1ラウンド / 2件 続行対象")
+        self.assertEqual(app.lbl_tnl.cget("text"), "1ラウンド / 2件 続行対象")
 
     def test_edits_survive_a_restart(self):
         app = self._app({"tnl_path": str(self._tnl())})
@@ -679,7 +711,7 @@ class TestStartup(_AppCase):
         app = self._app({})
         self.assertEqual(app.keepOn_set, {})
         self.assertFalse(ContinueList.list_path().exists(), "次の起動でまた作れるように、空は保存しない")
-        self.assertEqual(app.lbl_tnl.cget("text"), "[続行リスト] 0ラウンド / 0件 続行対象")
+        self.assertEqual(app.lbl_tnl.cget("text"), "0ラウンド / 0件 続行対象")
 
     def test_a_missing_tnl_is_reported_and_leaves_the_list_empty(self):
         app = self._app({"tnl_path": str(self.dir / "gone.tnl")})
@@ -701,13 +733,28 @@ class TestStartup(_AppCase):
             app = self._app({"tnl_path": str(self._tnl())})
         self.assertEqual(app.keepOn_set, {})
 
-    def test_the_tnl_area_has_import_and_export_buttons(self):
+    def test_the_main_window_has_no_tnl_buttons_and_no_list_frame(self):
         app = self._app({})
         texts = [b.cget("text") for b in _widgets_of(app, ttk.Button)]
-        self.assertIn(".tnl から読み込む", texts)
-        self.assertIn(".tnl に書き出す", texts)
+        self.assertNotIn(".tnl から読み込む", texts)
+        self.assertNotIn(".tnl に書き出す", texts)
         self.assertNotIn("再読み込み", texts)
         self.assertNotIn("参照…", texts)
+        frames = [w.cget("text") for w in _widgets_of(app, ttk.LabelFrame)]
+        self.assertNotIn("① 続行リスト", frames)
+        self.assertNotIn("① 続行リスト(.tnl)", frames)
+        self.assertEqual(frames.count("続行表"), 0, "古い「続行表」の枠は残っていない")
+
+    def test_the_continue_table_frame_is_the_first_section_and_holds_the_list_status(self):
+        app = self._app({})
+        first = next(w for w in app.pack_slaves() if isinstance(w, ttk.LabelFrame))
+        self.assertEqual(first.cget("text"), "① 続行表", "最初の枠")
+        self.assertIs(app.lbl_tnl.master, first, "リストの状態の文字は続行表の枠の中")
+        row = first.pack_slaves()
+        self.assertIsInstance(row[0], ttk.Button)
+        self.assertEqual(row[0].cget("text"), "続行表")
+        self.assertEqual(row[1:], [app.lbl_tnl], "続行表のボタン → リストの状態の文字（プリセットの件数は出さない）")
+        self.assertFalse(hasattr(app, "lbl_ct_count"))
 
 
 class TestImportAndExport(_AppCase):
@@ -733,9 +780,73 @@ class TestImportAndExport(_AppCase):
         self.assertEqual(error.call_count, 0)
         self.assertEqual(_sets(self.app.keepOn_set), {FOG: {own(150)}}, "ListTool の 150 は独自の番号に直る")
         self.assertEqual(_sets(ContinueList.load()[0]), {FOG: {own(150)}}, "保存した")
-        self.assertEqual(self.app.lbl_tnl.cget("text"), "[リストB] 1ラウンド / 1件 続行対象")
+        self.assertEqual(self.app.lbl_tnl.cget("text"), "1ラウンド / 1件 続行対象")
         self.assertEqual(mainGUI.load_settings().get("tnl_path"), str(other), "選んだ .tnl を覚える")
         self.assertEqual(other.read_bytes(), before, ".tnl は書き換えない")
+
+    def test_the_status_and_log_do_not_show_the_list_name_but_the_meta_keeps_it(self):
+        other = self._tnl("b.tnl", {FOG: {"150": 1}}, "リストB")
+        self._import(other)
+        self.assertEqual(self.app.lbl_tnl.cget("text"), "1ラウンド / 1件 続行対象")
+        self.assertIn("[続行リスト] 1ラウンド / 1件 続行対象", self.logs)
+        self.assertNotIn("リストB", self.app.lbl_tnl.cget("text"))
+        self.assertEqual(ContinueList.current_meta().get("list_name"), "リストB", "名前は覚えておく（書き出しに使う）")
+
+    def test_import_passes_the_parent_to_every_dialog(self):
+        other = self._tnl("b.tnl", {FOG: {"150": 1}}, "リストB")
+        win = object()
+        with patch.object(mainGUI.filedialog, "askopenfilename", return_value=str(other)) as ask, \
+             patch.object(mainGUI.messagebox, "askyesno", return_value=True) as yes:
+            self.app._import_tnl(parent=win)
+        self.assertIs(ask.call_args.kwargs.get("parent"), win)
+        self.assertIs(yes.call_args.kwargs.get("parent"), win)
+        self.assertEqual(_sets(self.app.keepOn_set), {FOG: {own(150)}}, "中身は今まで通り置き換わる")
+
+    def test_import_error_dialog_gets_the_parent(self):
+        bad = self.dir / "bad.tnl"
+        bad.write_text("not json", encoding="utf-8")
+        win = object()
+        with patch.object(DebugLog, "exception"), \
+             patch.object(mainGUI.filedialog, "askopenfilename", return_value=str(bad)), \
+             patch.object(mainGUI.messagebox, "askyesno", return_value=True), \
+             patch.object(mainGUI.messagebox, "showerror") as error:
+            self.app._import_tnl(parent=win)
+        self.assertIs(error.call_args.kwargs.get("parent"), win)
+
+    def test_without_a_parent_the_dialogs_get_none(self):
+        with patch.object(mainGUI.filedialog, "askopenfilename", return_value="") as ask:
+            self.app._import_tnl()
+        self.assertIsNone(ask.call_args.kwargs.get("parent"), "今まで通り（親を渡さない）")
+        with patch.object(mainGUI.filedialog, "asksaveasfilename", return_value="") as save:
+            self.app._export_tnl()
+        self.assertIsNone(save.call_args.kwargs.get("parent"))
+
+    def test_export_passes_the_parent_to_the_dialogs(self):
+        win = object()
+        with patch.object(mainGUI.filedialog, "asksaveasfilename", return_value=str(self.dir / "p.tnl")) as ask:
+            self.app._export_tnl(parent=win)
+        self.assertIs(ask.call_args.kwargs.get("parent"), win)
+        self.assertNotIn("initialdir", ask.call_args.kwargs)
+        bad = self.dir / "dir2.tnl"
+        bad.mkdir()
+        with patch.object(mainGUI.filedialog, "asksaveasfilename", return_value=str(bad)), \
+             patch.object(mainGUI.messagebox, "showerror") as error:
+            self.app._export_tnl(parent=win)
+        self.assertIs(error.call_args.kwargs.get("parent"), win)
+
+    def test_the_table_window_buttons_run_the_app_functions_over_the_window(self):
+        self.app._open_continue_table()
+        window = self.app._continue_table_window
+        self.addCleanup(window.destroy)
+        other = self._tnl("c.tnl", {FOG: {"150": 1}}, "リストC")
+        with patch.object(mainGUI.filedialog, "askopenfilename", return_value=str(other)) as ask, \
+             patch.object(mainGUI.messagebox, "askyesno", return_value=True):
+            _press(window, ".tnl を続行リストへ読み込む")
+        self.assertIs(ask.call_args.kwargs.get("parent"), window, "ダイアログは続行表の窓の上")
+        self.assertEqual(_sets(self.app.keepOn_set), {FOG: {own(150)}})
+        with patch.object(mainGUI.filedialog, "asksaveasfilename", return_value="") as save:
+            _press(window, "続行リストを .tnl に書き出す")
+        self.assertIs(save.call_args.kwargs.get("parent"), window)
 
     def test_declining_changes_nothing(self):
         other = self._tnl("b.tnl", {FOG: {"150": 1}})
@@ -823,7 +934,7 @@ class TestWholeFlow(_AppCase):
         self.assertIsNot(self.app.keepOn_set, before, "新しい dict を代入する")
         self.assertIs(second.keepOn_set, self.app.keepOn_set, "全窓が同じものを見る")
         self.assertEqual(_sets(ContinueList.load()[0]), {CLASSIC: {3}}, "保存した")
-        self.assertEqual(self.app.lbl_tnl.cget("text"), "[リストA] 1ラウンド / 1件 続行対象")
+        self.assertEqual(self.app.lbl_tnl.cget("text"), "1ラウンド / 1件 続行対象")
         self.assertFalse(RoundDecision.list_continues(second.keepOn_set, [7], "Classic"))
         self.assertTrue(RoundDecision.list_continues(second.keepOn_set, [3], "Classic"))
 
@@ -862,7 +973,7 @@ class TestWholeFlow(_AppCase):
         self.assertEqual(_sets(self.app.keepOn_set), {CLASSIC: {3, 7, 8}})
         self.assertIsNot(self.app.keepOn_set, before)
         self.assertIs(monitor.keepOn_set, self.app.keepOn_set)
-        self.assertEqual(self.app.lbl_tnl.cget("text"), "[リストA] 1ラウンド / 3件 続行対象")
+        self.assertEqual(self.app.lbl_tnl.cget("text"), "1ラウンド / 3件 続行対象")
         window._flush_save()
         self.assertEqual(_sets(ContinueList.load()[0]), {CLASSIC: {3, 7, 8}})
         window.destroy()
