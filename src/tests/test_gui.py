@@ -1552,6 +1552,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
             app.monitors.append(m)
         app._entry_stop = threading.Event()
         app._refresh_start_stop_button = lambda: None
+        app._refresh_continue_choices = lambda *a, **k: None
         app.lbl_win_warn = MagicMock()
         app.logs = []
         app._log = app.logs.append
@@ -1746,6 +1747,7 @@ class TestStartWithoutTnl(unittest.TestCase):
         app._log = app.logs.append
         app._running = False
         app._refresh_start_stop_button = lambda: None
+        app._refresh_continue_choices = lambda *a, **k: None
         app.lbl_win_warn = MagicMock()
         for name in ("v_voice_continue", "v_voice_fog", "v_voice_item_lost",
                      "v_voice_intermission", "v_voice_foxy"):

@@ -550,7 +550,7 @@ class TestTableMigration(unittest.TestCase):
           "windows": {"1": {"disabled": "別", "default": None}},
           "item_rules": [{"item": 70, "disabled": "別"}]}
 
-    def test_v2_moves_to_v4_keeping_windows_and_item_rules(self):
+    def test_v2_moves_to_v5_keeping_windows_and_item_rules(self):
         self.path.write_text(json.dumps(self.V2, ensure_ascii=False), encoding="utf-8")
         original = self.path.read_bytes()
         store = ContinueTable.load(self.path)
@@ -559,14 +559,16 @@ class TestTableMigration(unittest.TestCase):
         self.assertEqual({k: set(v) for k, v in store.disabled_presets["別"].items()}, {EIGHT: {3014}})
         self.assertEqual({k: set(v) for k, v in store.default_presets["デフォルト"].items()},
                          {FOG: {1016}, SPECIAL: {4004}}, "Fog の 13 は出ない・Blood Moon は Special/Moon へ")
-        self.assertEqual(store.windows[1], {"disabled": "別", "default": None})
-        self.assertEqual(store.windows[2], {"disabled": "デフォルト", "default": "デフォルト"},
-                         "選んでいなかった窓は今まで「既定」を使っていたので、名前を変えたプリセットを選んだ状態にする")
+        self.assertEqual(ContinueTable.display_name(store, 1, "disabled"), "別")
+        self.assertEqual(ContinueTable.display_name(store, 1, "default"), "なし")
+        self.assertEqual(ContinueTable.display_name(store, 2, "disabled"), "デフォルト")
+        self.assertEqual(ContinueTable.display_name(store, 2, "default"), "デフォルト",
+                         "選んでいなかった窓は今まで「既定」を使っていたので、名前を変えたプリセットを写した状態にする")
         self.assertEqual(store.item_rules, (ContinueTable.ItemRule(70, "別", ContinueTable.KEEP),))
         self.assertEqual(self.bak.read_bytes(), original)
-        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 4)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8"))["version"], 5)
 
-    def test_v1_moves_to_v4_and_the_second_time_changes_nothing(self):
+    def test_v1_moves_to_v5_and_the_second_time_changes_nothing(self):
         self.path.write_text(json.dumps({"version": 1, "use_disabled": True, "use_default": False,
                                          "disabled": {CLASSIC: [5], ALT: [164]}, "default": {UNBOUND: [283]}}),
                              encoding="utf-8")
@@ -574,7 +576,7 @@ class TestTableMigration(unittest.TestCase):
         self.assertEqual({k: set(v) for k, v in store.disabled_presets["デフォルト"].items()},
                          {CLASSIC: {5}, ALT: {1030}})
         self.assertEqual({k: set(v) for k, v in store.default_presets["デフォルト"].items()}, {UNBOUND: {2083}})
-        self.assertEqual(store.windows[1]["default"], None, "use_default が false だった種類は全窓「なし」")
+        self.assertEqual(ContinueTable.display_name(store, 1, "default"), "なし", "use_default が false だった種類は全窓「なし」")
         body = self.path.read_bytes()
         with patch.object(DebugLog, "write") as write:
             again = ContinueTable.load(self.path)

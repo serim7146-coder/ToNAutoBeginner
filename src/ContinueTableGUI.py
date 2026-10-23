@@ -1,22 +1,24 @@
-"""続行表の編集画面（GJ・GK）。ToN ListTool の続行選択画面と同じ並び・色で、テラーのアイコンを押して選ぶ。
+"""続行リスト・窓の表の編集画面（GJ・GK・GR）。ToN ListTool の続行選択画面と同じ並び・色で、テラーのアイコンを押して選ぶ。
+
+2 つの形がある（ContinueTableWindow の window_idx で決まる）:
+- 続行リストの画面（window_idx なし）: ツールの続行リストだけを編集する（GN）。切り替え・プリセットの欄・アイテムの決まりの欄は出さない。
+  下に「.tnl を続行リストへ読み込む」「続行リストを .tnl に書き出す」（呼び出し側の関数）
+- 窓の表の画面（window_idx と kind）: その窓の続行無効かデフォ続行の表を編集する（題名「窓N の続行無効」）。上の段に
+  プリセットの操作（プリセット名の選択・「プリセットとして保存…」「名前変更」「削除」。プリセットは窓の表の写しの元になる
+  ひな形で、窓の表は変えない）。下に「アイテムで切り替え（全窓共通）」の欄（GM）と、.tnnl を続行無効へ／.tnl をデフォ続行へ
+  読み込むボタン。押す・全選択・全解除・読み込みは、その窓の表に効く。もう片方の表は細い枠で重ねて見せる
 
 - 左: ラウンドの一覧（細い Listbox。Mystic Moon・Blood Moon・Twilight・Solstice・Special・Cold Night は 1 つの「Special/Moon」）
-- 上: どれを編集するか（続行無効／デフォ続行／続行リスト）と、続行無効・デフォ続行のプリセット（選ぶ・新規・
-  複製・名前変更・削除。GL。続行リストはプリセットが無いので欄を隠す）・名前の検索・全選択／全解除。押す・
-  全選択・全解除・読み込みは、選んでいるプリセット（続行リストはツールの続行リストそのもの。GN）に効く。
-  プリセットが 0 個の種類（最初はどちらも 0 個）は、「新規」だけ押せて、格子の上に案内を出し、押す・全選択・
-  全解除・読み込みは何もしない
+- 上: 名前の検索・全選択／全解除
 - 中: テラーのアイコンの格子（tk.Canvas に直接描く。間隔は縦横とも 46px）。上から Classic（0〜133・ListTool の
   並び）・Alternate（1000〜1035・11/9/7/5/3/1 の逆三角）・Unbound（2000〜2083）・特別（8 Pages 限定のテラー・
   Special/Moon の中身）・バリアントの段（4000 番台。HHI・Atrached・Bloodthirsty・Gigabytes・Neo Pilot・Evil Purple Foxy・
   Glorbo・Self Inserts (Bloodthirsty)。そのラウンドの枠にあるものだけ）。ブロックの間は 1 行あける。名前は出さない
   （マウスを乗せるとツールチップ）。選んでいないものは背景に 30% で重ね、今の表に入っているものは 100%＋2px の枠
-  （赤＝続行無効・緑＝デフォ続行）、もう片方の表に入っているものは 60%＋その色の 1px の枠。
+  （赤＝続行無効・緑＝デフォ続行・青＝続行リスト）、もう片方の表に入っているものは 60%＋その色の 1px の枠。
   そのラウンドに出ないテラー（そのラウンドの枠に無いもの。Ghost の BFF や 8 Pages に出ないものなど）のマスは、格子の
   形はそのままに「選べないマス」: 12% の暗い絵・枠なし・押しても何も起きない・全選択／全解除の対象外・ツールチップは
   「{名前}（このラウンドには出ません）」。8 Pages のタブは、その行（3000 番台）を ListTool の位置に選べるマスとして置く
-- 下: .tnl をデフォ続行へ・.tnnl を続行無効へ読み込む。その下に「アイテムで切り替え」の欄（GM）: 決まり 1 つ
-  = 1 行（アイテム・続行無効・デフォ続行のプリセット・↑↓×）。同じアイテムが上にある行は薄い文字。足すボタンは「Add」
 
 押したセルの絵と枠だけを `itemconfigure` で変える（格子は作り直さない）。判定への反映（set_current）は押した
 その場で、保存は 0.3 秒まとめて 1 回（閉じるときは残りを先に書く）。アイコンは assets/icons のシート
@@ -76,7 +78,7 @@ WHICH_TEXT = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "�
 STRONG = {ContinueTable.DISABLED: COLOR_DISABLED, ContinueTable.DEFAULT: COLOR_DEFAULT, LIST: COLOR_LIST}
 # 選んでいる表のほかに薄く見せる表（先に入っているほうの色。続行リストを選んでいるときは、重ねる 2 つの表）
 OTHERS = {ContinueTable.DISABLED: (ContinueTable.DEFAULT,), ContinueTable.DEFAULT: (ContinueTable.DISABLED,),
-          LIST: (ContinueTable.DEFAULT, ContinueTable.DISABLED)}
+          LIST: ()}
 
 LAYOUT_JSON = f"{ICONS_DIR}/layout.json"
 
@@ -93,10 +95,10 @@ SPECIAL_MOON_TAB = "Special/Moon"       # 一覧に出す名前（キーの「/�
 GONE_TIP = "（このラウンドには出ません）"
 
 NOTE = "干し芋・焼き芋（グループのインスタンス）では使いません"
+KIND_TITLE = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
 
 # 「アイテムで切り替え」の欄（GM）
-RULES_TITLE = "アイテムで切り替え"
-NO_PRESET_GUIDE = "「新規」でプリセットを作ってください"      # プリセットが 0 個の種類を見ているとき（格子の上に出す）
+RULES_TITLE = "アイテムで切り替え（全窓共通）"
 RULES_AREA_HEIGHT = 112      # 決まりの行を並べる欄の高さ（行が増えたら縦にスクロール）
 COLOR_RULE_DIM = "#7f849c"   # 使われない決まりの文字
 STYLE_RULE_DIM = "Dim.TCombobox"
@@ -367,9 +369,12 @@ class _Cell:
 
 
 class ContinueTableWindow(tk.Toplevel):
-    def __init__(self, master, on_change=None, on_list_change=None, on_import_tnl=None, on_export_tnl=None):
+    def __init__(self, master, on_change=None, on_list_change=None, on_import_tnl=None, on_export_tnl=None,
+                 window_idx: int | None = None, kind: str = ContinueTable.DISABLED):
         super().__init__(master)
-        self.title("続行表")
+        # window_idx（窓の番号。1 始まり）が None なら続行リストの画面、あれば窓の表の画面（kind はその種類）
+        self._window_idx = window_idx
+        self.title("続行リスト" if window_idx is None else f"窓{window_idx} の{KIND_TITLE[kind]}")
         self.configure(bg=config.GUI_BG)
         self.geometry(f"{CANVAS_WIDTH + 250}x860")
         self.minsize(CANVAS_WIDTH + 230, 420)
@@ -389,12 +394,8 @@ class ContinueTableWindow(tk.Toplevel):
         self._list_save_pending = False        # 続行リスト（ContinueList）の保存の予約
         self._item_choices = item_choices(config.ITEMS)      # [(id, 文字), ...]
         self._rule_rows: list = []             # 決まりの行ごとの部品（_show_rules が作り直す）
-        self.v_which = tk.StringVar(value=LIST)
-        # 編集しているプリセットの名前（表の種類ごと）。窓ごとの選びとは別（編集の対象を選ぶだけ）
-        store = ContinueTable.current()
-        self._selected = {which: ContinueTable.first_name(store, which)
-                          for which in (ContinueTable.DISABLED, ContinueTable.DEFAULT)}
-        self.v_preset = tk.StringVar()
+        self.v_which = tk.StringVar(value=LIST if window_idx is None else kind)
+        self.v_preset = tk.StringVar()         # 窓の表の画面: プリセットの操作（名前変更・削除）の対象
         self.v_search = tk.StringVar()
         self._index = 0                        # 左の一覧で選んでいるラウンド
         self._build()
@@ -407,58 +408,51 @@ class ContinueTableWindow(tk.Toplevel):
 
     # ── 組み立て ──
     def _build(self):
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=10, pady=(10, 4))
-        ttk.Label(top, text="編集する表:").pack(side="left")
-        for which in (LIST, ContinueTable.DISABLED, ContinueTable.DEFAULT):
-            ttk.Radiobutton(top, text=WHICH_TEXT[which], variable=self.v_which, value=which,
-                            command=self._restyle_all).pack(side="left", padx=(8, 0))
-        # プリセットの欄（続行リストにはプリセットが無いので、選んだら隠す。並びは top の最後なので、戻すときは順に pack し直す）
-        self._preset_widgets = []                  # [(部品, pack の引数), ...]
-        self._add_preset_widget(ttk.Label(top, text="プリセット:"), padx=(20, 0))
-        self.cb_preset = ttk.Combobox(top, textvariable=self.v_preset, state="readonly", width=14)
-        self._add_preset_widget(self.cb_preset, padx=(6, 0))
-        self.cb_preset.bind("<<ComboboxSelected>>", lambda _e: self._on_preset_picked())
-        self._preset_buttons = {}                  # 文字 → ボタン（「新規」以外はプリセットが 0 個のとき押せない）
-        for text, command in (("新規", self.new_preset), ("複製", self.copy_preset),
-                              ("名前変更", self.rename_preset), ("削除", self.delete_preset)):
-            button = ttk.Button(top, text=text, width=len(text) * 2 + 1, command=command)
-            self._preset_buttons[text] = button
-            self._add_preset_widget(button, padx=(6, 0))
+        if self._window_idx is not None:
+            # プリセットの操作の段（窓の表の画面だけ）。プリセットは窓の表の写しの元になるひな形で、窓の表は変えない
+            top = ttk.Frame(self)
+            top.pack(fill="x", padx=10, pady=(10, 4))
+            ttk.Label(top, text="プリセット:").pack(side="left")
+            self.cb_preset = ttk.Combobox(top, textvariable=self.v_preset, state="readonly", width=14)
+            self.cb_preset.pack(side="left", padx=(6, 0))
+            self._preset_buttons = {}              # 文字 → ボタン（保存以外は、プリセットが無いと押せない）
+            for text, command in (("プリセットとして保存…", self.save_preset), ("名前変更", self.rename_preset),
+                                  ("削除", self.delete_preset)):
+                button = ttk.Button(top, text=text, command=command)
+                button.pack(side="left", padx=(12 if text.startswith("プリセット") else 6, 0))
+                self._preset_buttons[text] = button
 
         tools = ttk.Frame(self)
-        tools.pack(fill="x", padx=10, pady=(0, 4))
+        tools.pack(fill="x", padx=10, pady=(10 if self._window_idx is None else 0, 4))
         ttk.Label(tools, text="名前で検索:").pack(side="left")
         ttk.Entry(tools, textvariable=self.v_search, width=18).pack(side="left", padx=(6, 0))
         ttk.Button(tools, text="全選択", command=self.select_all).pack(side="left", padx=(20, 0))
         ttk.Button(tools, text="全解除", command=self.clear_all).pack(side="left", padx=(6, 0))
-        ttk.Label(self, text=NOTE, foreground=config.GUI_YLW).pack(anchor="w", padx=10)
+        if self._window_idx is not None:
+            ttk.Label(self, text=NOTE, foreground=config.GUI_YLW).pack(anchor="w", padx=10)
 
         # 下の段（欄・ボタン）は side="bottom" で先に置く（窓が低いときに削れるのは格子のほう）
-        self._build_item_rules()
+        if self._window_idx is not None:
+            self._build_item_rules()
         bottom = ttk.Frame(self)
         bottom.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
-        # 続行リストの 2 つ（呼び出し側の関数。無ければ出さない）｜少しあけて｜プリセットの表へ読み込む 2 つ
-        if self._on_import_tnl is not None:
-            ttk.Button(bottom, text=".tnl を続行リストへ読み込む",
-                       command=lambda: self._on_import_tnl(parent=self)).pack(side="left")
-        if self._on_export_tnl is not None:
-            ttk.Button(bottom, text="続行リストを .tnl に書き出す",
-                       command=lambda: self._on_export_tnl(parent=self)).pack(side="left", padx=(6, 0))
-        gap = 20 if (self._on_import_tnl is not None or self._on_export_tnl is not None) else 0
-        ttk.Button(bottom, text=".tnnl を続行無効へ読み込む",
-                   command=self._import_tnnl).pack(side="left", padx=(gap, 0))
-        ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む",
-                   command=self._import_tnl).pack(side="left", padx=(6, 0))
+        if self._window_idx is None:
+            # 続行リストの 2 つ（呼び出し側の関数。無ければ出さない）
+            if self._on_import_tnl is not None:
+                ttk.Button(bottom, text=".tnl を続行リストへ読み込む",
+                           command=lambda: self._on_import_tnl(parent=self)).pack(side="left")
+            if self._on_export_tnl is not None:
+                ttk.Button(bottom, text="続行リストを .tnl に書き出す",
+                           command=lambda: self._on_export_tnl(parent=self)).pack(side="left", padx=(6, 0))
+        elif self.v_which.get() == ContinueTable.DISABLED:
+            ttk.Button(bottom, text=".tnnl を続行無効へ読み込む", command=self._import_tnnl).pack(side="left")
+        else:
+            ttk.Button(bottom, text=".tnl をデフォ続行へ読み込む", command=self._import_tnl).pack(side="left")
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True)
         self._build_round_list(body)
         self._build_canvas(body)
-
-    def _add_preset_widget(self, widget, **pack):
-        widget.pack(side="left", **pack)
-        self._preset_widgets.append((widget, pack))
 
     def _build_item_rules(self):
         """「アイテムで切り替え」の欄（決まりの行を縦にスクロールする欄と「Add」）"""
@@ -501,9 +495,6 @@ class ContinueTableWindow(tk.Toplevel):
         """格子を描くキャンバス（縦にスクロール）。押す・乗せるは全マス共通の 1 組の束縛"""
         box = ttk.Frame(parent)
         box.pack(side="left", fill="both", expand=True, padx=10, pady=6)
-        # 格子の上の案内の 1 行（プリセットが 0 個の種類を見ているときだけ字が入る。空でも行の高さは変わらない）
-        self.v_guide = tk.StringVar()
-        ttk.Label(box, textvariable=self.v_guide, foreground=config.GUI_YLW).pack(side="top", anchor="w")
         self.canvas = tk.Canvas(box, bg=COLOR_GRID_BG, highlightthickness=0)
         bar = ttk.Scrollbar(box, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=bar.set)
@@ -557,13 +548,13 @@ class ContinueTableWindow(tk.Toplevel):
         return table_keys(key) if key is not None else []
 
     def _edit_table(self) -> ContinueTable.Table:
-        """編集しているプリセット 2 つ（続行無効・デフォ続行）の中身"""
+        """編集している窓の 2 つの表（続行無効・デフォ続行）の中身。続行リストの画面では空（重ねる表は見せない）"""
+        if self._window_idx is None:
+            return ContinueTable.Table()
         store = ContinueTable.current()
         return ContinueTable.Table(
-            disabled=ContinueTable.presets_of(store, ContinueTable.DISABLED).get(
-                self._selected[ContinueTable.DISABLED], {}),
-            default=ContinueTable.presets_of(store, ContinueTable.DEFAULT).get(
-                self._selected[ContinueTable.DEFAULT], {}))
+            disabled=ContinueTable.body_of(store, self._window_idx, ContinueTable.DISABLED),
+            default=ContinueTable.body_of(store, self._window_idx, ContinueTable.DEFAULT))
 
     def _has(self, table: ContinueTable.Table, which: str, tid: int) -> bool:
         """which の表に、今のラウンドの表のキーで tid が入っているか（LIST はツールの続行リスト）"""
@@ -740,9 +731,9 @@ class ContinueTableWindow(tk.Toplevel):
 
     # ── 変える（判定へはすぐ、保存は 0.3 秒まとめて 1 回）──
     def _commit(self, table: ContinueTable.Table, tids=None):
-        """編集している 2 つのプリセットを table の中身にして、判定に効かせ（set_current）・保存を予約し・
+        """編集している窓の 2 つの表を table の中身にして、判定に効かせ（set_current）・保存を予約し・
         変わったセル（None なら全部）の見た目だけ直す"""
-        self._commit_store(ContinueTable.with_edited_table(ContinueTable.current(), self._selected, table), tids)
+        self._commit_store(ContinueTable.with_window_table(ContinueTable.current(), self._window_idx, table), tids)
 
     def _commit_store(self, store: ContinueTable.Store, tids=None):
         ContinueTable.set_current(store)
@@ -814,14 +805,9 @@ class ContinueTableWindow(tk.Toplevel):
             table = ContinueTable.with_ids(table, which, key, ids)
         return table
 
-    def _no_preset(self) -> bool:
-        """今見ている表の種類にプリセットが 1 つも無いか（続行リストは常に False）。True の間は編集しない"""
-        return self._which() != LIST and self._selected[self._which()] is None
-
     def toggle(self, tid: int):
-        """押したマスを入れる／外す。そのラウンドに出ない（枠に無い）テラーのマスは何も起きない。
-        プリセットが 0 個の種類も何も起きない（格子の上に案内が出ている）"""
-        if self._round_key() is None or tid not in self._available or self._no_preset():
+        """押したマスを入れる／外す。そのラウンドに出ない（枠に無い）テラーのマスは何も起きない"""
+        if self._round_key() is None or tid not in self._available:
             return
         if self._which() == LIST:
             keys = self._table_keys()
@@ -837,60 +823,54 @@ class ContinueTableWindow(tk.Toplevel):
 
     def select_all(self):
         """見えているマスを全部、今の表に入れる"""
-        if self._round_key() is not None and not self._no_preset():
+        if self._round_key() is not None:
             self._change_members(self._visible_tids(), add=True)
 
     def clear_all(self):
         """見えているマスを全部、今の表から外す"""
-        if self._round_key() is not None and not self._no_preset():
+        if self._round_key() is not None:
             self._change_members(self._visible_tids(), add=False)
 
-    # ── プリセット（GL）──
-    def _selected_name(self) -> str | None:
-        """今の表の種類で編集しているプリセットの名前（プリセットが 0 個なら None）"""
-        return self._selected[self._which()]
-
-    def _show_guide(self):
-        """格子の上の案内: プリセットが 0 個の種類を見ているときだけ"""
-        self.v_guide.set(NO_PRESET_GUIDE if self._no_preset() else "")
+    # ── プリセット（ひな形。窓の表は変えない）──
+    def _target_name(self) -> str | None:
+        """プリセットの操作（名前変更・削除）の対象の名前。プリセットが無ければ None"""
+        return self.v_preset.get() or None
 
     def _show_presets(self):
-        """プリセットの選択肢と、選んでいる名前を今の表の種類のものに合わせる（無い名前を選んでいたら直す）。
-        続行リストにはプリセットが無いので、プリセットの欄ごと隠す"""
-        store, which = ContinueTable.current(), self._which()
-        for kind in self._selected:               # 消えた名前を選んだままにしない（見ていない種類も）
-            if self._selected[kind] not in ContinueTable.preset_names(store, kind):
-                self._selected[kind] = ContinueTable.first_name(store, kind)
-        if which == LIST:
-            for widget, _pack in self._preset_widgets:
-                widget.pack_forget()
-            self._show_guide()
+        """プリセットの選択肢と、操作の対象を今の表の種類のものに合わせる。対象が消えていたら、窓の表と同じ中身の
+        プリセット（表示の名前）、無ければ先頭にする。窓の表の画面だけ"""
+        if self._window_idx is None:
             return
-        for widget, pack in self._preset_widgets:
-            if not widget.winfo_manager():
-                widget.pack(side="left", **pack)
+        store, which = ContinueTable.current(), self._which()
         names = ContinueTable.preset_names(store, which)
+        if self.v_preset.get() not in names:
+            shown = ContinueTable.display_name(store, self._window_idx, which)
+            self.v_preset.set(shown if shown in names else (names[0] if names else ""))
         self.cb_preset["values"] = names
-        self.v_preset.set(self._selected[which] or "")
-        for text, button in self._preset_buttons.items():       # プリセットが 0 個なら「新規」だけ押せる
-            button.configure(state="normal" if names or text == "新規" else "disabled")
-        self._show_guide()
+        for text, button in self._preset_buttons.items():       # プリセットが無ければ、名前変更・削除は押せない
+            button.configure(state="normal" if names or text.startswith("プリセット") else "disabled")
 
-    def _on_preset_picked(self):
-        """ドロップダウンで選んだ: そのプリセットの格子へ（保存するものは無い）"""
-        self._selected[self._which()] = self.v_preset.get()
+    def refresh_tables(self):
+        """画面の外で窓の表・プリセットが変わった（メイン画面のドロップダウンで写した・名前が変わった）: 見た目を直す。
+        プリセットの操作の対象は、窓の表が今どのプリセットと同じに見えるか（表示の名前）に合わせる"""
+        if self._window_idx is not None:
+            shown = ContinueTable.display_name(ContinueTable.current(), self._window_idx, self._which())
+            if shown in ContinueTable.preset_names(ContinueTable.current(), self._which()):
+                self.v_preset.set(shown)
+        self._show_presets()
+        self._show_rules()
         self._restyle_all()
 
     def _ask_name(self, title: str, initial: str = "") -> str | None:
         """プリセットの名前を聞く（取り消しは None）"""
-        return simpledialog.askstring("続行表", title, initialvalue=initial, parent=self)
+        return simpledialog.askstring("窓の表", title, initialvalue=initial, parent=self)
 
     def _apply_presets(self, store: ContinueTable.Store, select: str | None = None):
         """プリセットを変えた Store を効かせる: 判定へ・保存の予約・選択肢の作り直し・格子の見た目"""
         if select is not None:
-            self._selected[self._which()] = select
+            self.v_preset.set(select)
         ContinueTable.set_current(store)
-        self._show_presets()                          # 消えた名前を選んだままにしない（見た目より先に）
+        self._show_presets()                          # 消えた名前を選んだままにしない
         self._show_rules()                            # 決まりの選択肢（プリセット名）も作り直す
         self._commit_store(store)
 
@@ -906,27 +886,29 @@ class ContinueTableWindow(tk.Toplevel):
             return None
         return name
 
-    def new_preset(self):
-        """名前を聞いて、空のプリセットを作って選ぶ"""
-        name = self._ask_valid_name(f"新しい{WHICH_TEXT[self._which()]}のプリセットの名前")
-        if name is not None:
-            self._apply_presets(
-                ContinueTable.with_new_preset(ContinueTable.current(), self._which(), name), select=name)
-
-    def copy_preset(self):
-        """名前を聞いて、選んでいるプリセットの写しを作って選ぶ（名前の既定は「〇〇 のコピー」）"""
-        which, source = self._which(), self._selected_name()
-        if source is None:
+    def save_preset(self):
+        """名前を聞いて、今の窓の表をプリセットとして保存する。同じ名前があれば、上書きの確認（同じプリセットを
+        写していたほかの窓は、中身が変わらないので表示が「-」になる）"""
+        which, store = self._which(), ContinueTable.current()
+        name = self._ask_name(f"{KIND_TITLE[which]}のプリセットの名前", self._target_name() or "")
+        if name is None:
             return
-        initial = ContinueTable.unique_name(ContinueTable.current(), which, f"{source} のコピー")
-        name = self._ask_valid_name("複製の名前", initial)
-        if name is not None:
-            self._apply_presets(
-                ContinueTable.with_copied_preset(ContinueTable.current(), which, source, name), select=name)
+        name = name.strip()
+        if name in ContinueTable.presets_of(store, which):
+            if not self._confirm(f"{KIND_TITLE[which]}のプリセット「{name}」を上書きします。よいですか？\n"
+                                 "このプリセットを写していたほかの窓の表示は「-」になります（窓の表は変わりません）。"):
+                return
+        else:
+            error = ContinueTable.name_error(store, which, name)
+            if error:
+                self._error(error)
+                return
+        body = ContinueTable.body_of(store, self._window_idx, which)
+        self._apply_presets(ContinueTable.with_saved_preset(store, which, name, body, self._window_idx), select=name)
 
     def rename_preset(self):
-        """選んでいるプリセットの名前を変える（同じ名前は不可。これを使っていた窓はそのまま新しい名前を使う）"""
-        which, old = self._which(), self._selected_name()
+        """対象のプリセットの名前を変える（同じ名前は不可。窓の表は変わらない）"""
+        which, old = self._which(), self._target_name()
         if old is None:
             return
         name = self._ask_valid_name("新しい名前", old, ignore=old)
@@ -935,13 +917,13 @@ class ContinueTableWindow(tk.Toplevel):
                 ContinueTable.with_renamed_preset(ContinueTable.current(), which, old, name), select=name)
 
     def delete_preset(self):
-        """選んでいるプリセットを、確認してから消す（最後の 1 つも消せる。使っていた窓は「なし」へ）"""
-        which, name = self._which(), self._selected_name()
+        """対象のプリセットを、確認してから消す（最後の 1 つも消せる。窓の表は変わらない）"""
+        which, name = self._which(), self._target_name()
         store = ContinueTable.current()
         if name is None or not ContinueTable.can_delete(store, which):
             return
-        if not self._confirm(f"{WHICH_TEXT[which]}のプリセット「{name}」を削除します。よいですか？\n"
-                             f"これを使っていた窓は「{ContinueTable.NONE_LABEL}」になります。"):
+        if not self._confirm(f"{KIND_TITLE[which]}のプリセット「{name}」を削除します。よいですか？\n"
+                             "窓の表は変わりません。"):
             return
         self._apply_presets(ContinueTable.with_deleted_preset(store, which, name))
 
@@ -954,7 +936,9 @@ class ContinueTableWindow(tk.Toplevel):
         return mapping
 
     def _show_rules(self):
-        """決まりの行を今の保存内容から作り直す（足す・動かす・消す・プリセットの増減のあと）"""
+        """決まりの行を今の保存内容から作り直す（足す・動かす・消す・プリセットの増減のあと）。窓の表の画面だけ"""
+        if self._window_idx is None:
+            return
         for child in self.rules_frame.winfo_children():
             child.destroy()
         self._rule_rows = []
@@ -1051,15 +1035,13 @@ class ContinueTableWindow(tk.Toplevel):
         self._import(ContinueTable.DISABLED, ".tnnl", "*.tnnl", ContinueTable.from_tnnl)
 
     def _import(self, which: str, ext: str, pattern: str, reader):
-        """ファイルを選ぶ → 「今の表を置き換えます」の確認 → 読み込んで置き換える。
-        その種類のプリセットが 0 個なら、ファイルも聞かずに案内だけ出す"""
-        if self._selected[which] is None:
-            messagebox.showinfo("続行表", f"{WHICH_TEXT[which]}: {NO_PRESET_GUIDE}", parent=self)
+        """ファイルを選ぶ → 「今の表を置き換えます」の確認 → 読み込んで、この窓の表に置き換える"""
+        if self._window_idx is None:
             return
         path = self._ask_file(f"{ext} を選択", pattern)
         if not path:
             return
-        if not self._confirm(f"{WHICH_TEXT[which]}のプリセット「{self._selected[which]}」の今の中身を、"
+        if not self._confirm(f"窓{self._window_idx} の{KIND_TITLE[which]}の今の中身を、"
                              f"{ext} の中身に置き換えます。よいですか？"):
             return
         try:

@@ -59,7 +59,8 @@ class LogMonitor:
                  host_tabs: dict | None = None,
                  on_round_settings_cleared=None,
                  lists: MatchTNL.SharedLists | None = None,
-                 on_list_changed=None):
+                 on_list_changed=None,
+                 on_held_item_changed=None):
         self.cfg = cfg
         # 続行リスト一式。全窓で共有する1つを持つ（mainGUI が中の dict を差し替える）。
         # 渡されなければ、ほかの引数からこの窓だけのものを作る（監視だけで使うとき・テスト）。
@@ -78,6 +79,9 @@ class LogMonitor:
         # 生存して続行リスト（ツールの中のもの）から外したことをGUIへ伝える（GN。窓ごとのスレッドから呼ぶ。
         # GUI 側が画面のスレッドで全窓へ反映・保存・件数の更新をする）。渡さなければ何もしない
         self._on_list_changed = on_list_changed
+        # 持っているアイテム・インスタンスの種類が変わったことをGUIへ伝える（窓ごとのスレッドから呼ぶ。アイテムで切り替える
+        # 窓のドロップダウンの表示を直すため。GUI 側が画面のスレッドへ渡す）。渡さなければ何もしない
+        self._on_held_item_changed = on_held_item_changed
         # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
         self.early_read_capable = False
         self.st = WindowState()
@@ -655,6 +659,7 @@ class LogMonitor:
                 # 名前（Sabotage マーダーの判定）は入室より前の行で分かるので、最後に流す
                 self.st.held_item_id = self._replay_held_item(reversed(item_events))
                 self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
+                self._notify_held_item_changed()
                 self._restore_running_round(running_round, list(reversed(player_events)))
         except Exception as e:
             DebugLog.exception("LogMonitor._detect_instance_from_log")
@@ -1008,12 +1013,18 @@ class LogMonitor:
         self.st.held_item_id = item_id
         if item_id:
             self._log(f"所持アイテム: {self._held_item_text()}")
+        self._notify_held_item_changed()
+
+    def _notify_held_item_changed(self):
+        if self._on_held_item_changed is not None:
+            self._on_held_item_changed()
 
     def _lose_held_item(self, reason: str):
         held = self.st.held_item_id
         if not held:
             return
         self.st.held_item_id = 0
+        self._notify_held_item_changed()
         if reason != HELD_LOST_INSTANCE:
             # アイテム自動取得が取りに行く。インスタンス移動は取りに行かない
             self.st.last_lost_item_id = held
@@ -2063,6 +2074,7 @@ class LogMonitor:
         if self._on_round_settings_cleared:
             self._on_round_settings_cleared(self.window_idx)
         self._log(f"インスタンスタイプ: {self._instance_label(st.instance_type, event.suffix)}")
+        self._notify_held_item_changed()        # 干し芋・焼き芋かどうかで、窓の表示が変わる
 
     def _on_item_equip(self, event):
         """アイテム装備"""

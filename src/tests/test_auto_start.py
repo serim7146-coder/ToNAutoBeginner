@@ -23,6 +23,7 @@ def _app(entry=True, begin=True, running=False):
     app.after_calls = []
     app.after = lambda ms, fn, *a: app.after_calls.append((ms, fn))
     app._refresh_start_stop_button = lambda: app.calls.append(("refresh", app._start_stop_busy))
+    app._refresh_continue_choices = lambda *a, **k: None
     app._rearm_start_stop_button = lambda: None
     for name in ("_auto_start_before_entry",):
         setattr(app, name, getattr(mainGUI.App, name).__get__(app))
@@ -139,6 +140,7 @@ class TestStopStopsBoth(unittest.TestCase):
         app._release_suicide_keys = lambda hs: list(hs)
         app._show_own_windows_again = lambda: None
         app._refresh_start_stop_button = lambda: None
+        app._refresh_continue_choices = lambda *a, **k: None
         app.lbl_win_warn = MagicMock()
         with patch.object(Recorder, "stop_all"):
             mainGUI.App._stop(app)

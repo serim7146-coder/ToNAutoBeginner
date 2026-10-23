@@ -40,6 +40,7 @@ import OBSClient
 import Recorder
 import SecretStore
 import FogEarlyRead
+import GroupRound
 import BugReport
 import WindowVolume
 import WindowArrange
@@ -298,15 +299,22 @@ def build_launch_plan(tabs: list) -> list:
     return [(tab.idx + 1, tab.v_profile.get(), tab.idx) for tab in tabs]
 
 
+STYLE_CT_DIM = "CtDim.TCombobox"   # アイテムの決まりが代わりに使われている間のドロップダウン（灰色。触れない）
+COLOR_CT_DIM = "#7f849c"
+
+
 class WindowTab(ttk.Frame):
     # 全窓でそろえる折りたたみ（App が枠ごとの開閉を持って全タブへ配る）
     SECTIONS = ("assign", "rounds")
 
     def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
-                 section_collapsed=None, on_section_toggled=None, on_continue_choice=None):
+                 section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
+                 on_open_window_table=None, on_item_switch=None):
         super().__init__(parent)
         self.idx = idx
-        self._on_continue_choice = on_continue_choice
+        self._on_continue_choice = on_continue_choice           # (タブ, 種類, プリセット名|None): 窓の表に写す
+        self._on_open_window_table = on_open_window_table       # (タブ, 種類): その窓の表の画面を開く
+        self._on_item_switch = on_item_switch                   # (タブ, bool): アイテムで切り替える
         self._section_collapsed = dict(section_collapsed or {})
         self._on_section_toggled = on_section_toggled
         self.sections: dict = {}
@@ -443,15 +451,25 @@ class WindowTab(ttk.Frame):
         ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
 
-        # ── 続行表（GL）のプリセット: 窓ごとに、続行無効・デフォ続行それぞれ 1 つ（「なし」＝その表を使わない）。
-        # 選びは保存内容（ContinueTable）が持つので、窓数を変えて作り直しても残る
+        # ── 窓ごとの続行無効・デフォ続行の表（GR）: 「アイテムで切り替える」のチェックと、種類ごとのボタン（その窓の表を開く）・
+        # プリセットのドロップダウン（選ぶと中身を窓の表に写す。「なし」は空にする）。表は保存内容（ContinueTable）が持つので、
+        # 窓数を変えて作り直しても残る
         tf = ttk.Frame(p)
         tf.pack(fill="x", padx=10, pady=(4, 0))
+        style = ttk.Style(self)
+        style.configure(STYLE_CT_DIM, foreground=COLOR_CT_DIM)
+        style.map(STYLE_CT_DIM, foreground=[("disabled", COLOR_CT_DIM), ("readonly", COLOR_CT_DIM)])
+        self.v_ct_switch = tk.BooleanVar(value=False)
+        self.chk_ct_switch = ttk.Checkbutton(tf, text="アイテムで切り替える", variable=self.v_ct_switch,
+                                             command=self._on_continue_switch)
+        self.chk_ct_switch.pack(side="left")
         self.v_ct_choice = {}
         self.cb_ct_choice = {}
-        for n, (which, text) in enumerate(((ContinueTable.DISABLED, "続行無効:"),
-                                           (ContinueTable.DEFAULT, "デフォ続行:"))):
-            ttk.Label(tf, text=text).pack(side="left", padx=(12 if n else 0, 0))
+        self.btn_ct = {}
+        for which, text in ((ContinueTable.DISABLED, "続行無効"), (ContinueTable.DEFAULT, "デフォ続行")):
+            button = ttk.Button(tf, text=text, command=lambda w=which: self._open_window_table(w))
+            button.pack(side="left", padx=(16, 0))
+            self.btn_ct[which] = button
             self.v_ct_choice[which] = tk.StringVar()
             box = ttk.Combobox(tf, textvariable=self.v_ct_choice[which], state="readonly", width=14)
             box.pack(side="left", padx=(4, 0))
@@ -474,19 +492,37 @@ class WindowTab(ttk.Frame):
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0))
 
-    def refresh_continue_choices(self):
-        """続行表のプリセットの選択肢（各プリセットの名前＋「なし」）と、この窓の選びを今の保存内容に合わせる"""
-        store = ContinueTable.current()
+    def refresh_continue_choices(self, held: int | None = None, group: bool = False):
+        """窓の行（チェック・2 つのドロップダウン）を今の保存内容に合わせる。選択肢は「なし」とプリセットの名前。
+        表示は窓の表と同じ中身のプリセットの名前（空なら「なし」、どれとも違えば「-」）。
+        held は動作中の窓が今持っているアイテム（動いていなければ None）。group は干し芋・焼き芋の窓か。動作中で、
+        アイテムで切り替えるが ON、干し芋・焼き芋でなく、決まりが当てはまる種類は、決まりのプリセット名（「なし」）を
+        灰色で出して触れなくする（窓の表は変えない）"""
+        store, idx = ContinueTable.current(), self.idx + 1
+        self.v_ct_switch.set(ContinueTable.window_table(store, idx).item_switch)
         for which, box in self.cb_ct_choice.items():
-            box["values"] = [*ContinueTable.preset_names(store, which), ContinueTable.NONE_LABEL]
-            name = ContinueTable.choice_for(store, self.idx + 1, which)
-            self.v_ct_choice[which].set(ContinueTable.NONE_LABEL if name is None else name)
+            box["values"] = [ContinueTable.NONE_LABEL, *ContinueTable.preset_names(store, which)]
+            over = None if (held is None or group) else ContinueTable.override(store, idx, which, held)
+            if over is not None:
+                self.v_ct_choice[which].set(ContinueTable.NONE_LABEL if over[0] is None else over[0])
+                box.configure(state="disabled", style=STYLE_CT_DIM)
+            else:
+                self.v_ct_choice[which].set(ContinueTable.display_name(store, idx, which))
+                box.configure(state="readonly", style="TCombobox")
 
     def _on_continue_pick(self, which: str):
-        """ドロップダウンで選んだ: 保存して判定へ（「なし」は None）"""
+        """ドロップダウンで選んだ: 中身を窓の表に写して、保存して判定へ（「なし」は表を空にする）"""
         label = self.v_ct_choice[which].get()
         if self._on_continue_choice is not None:
             self._on_continue_choice(self, which, None if label == ContinueTable.NONE_LABEL else label)
+
+    def _on_continue_switch(self):
+        if self._on_item_switch is not None:
+            self._on_item_switch(self, bool(self.v_ct_switch.get()))
+
+    def _open_window_table(self, which: str):
+        if self._on_open_window_table is not None:
+            self._on_open_window_table(self, which)
 
     def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0)):
         """ラウンド一覧のチェックボックスを1つ並べる。
@@ -958,6 +994,7 @@ class App(tk.Tk):
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
+        self._window_table_windows: dict = {}      # (窓の番号, 種類) → 開いている窓の表の画面（GR）
         self._running = False
         self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
@@ -1695,11 +1732,11 @@ class App(tk.Tk):
               background=[("selected", config.GUI_ACC)], foreground=[("selected", config.GUI_BG)])
         s.configure("TSeparator",        background=config.GUI_SUB)
 
-        # ① 続行表（GH）: 続行リストの上に重ねる 2 つの表
-        # 続行リストはツールの中に持つ（GN）。.tnl の読み込み・書き出しは続行表の窓から行う
-        fct = ttk.LabelFrame(self, text="① 続行表", padding=8)
+        # ① 続行リスト（GN）: ツールの中の続行リスト。.tnl の読み込み・書き出しは続行リストの画面から行う。
+        # 続行無効・デフォ続行の表は窓ごと（GR）で、各窓の行から開く
+        fct = ttk.LabelFrame(self, text="① 続行リスト", padding=8)
         fct.pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Button(fct, text="続行表", command=self._open_continue_table).pack(side="left")
+        ttk.Button(fct, text="続行リスト", command=self._open_continue_table).pack(side="left")
         self.lbl_tnl = ttk.Label(fct, text="未読み込み", foreground=config.GUI_RED)
         self.lbl_tnl.pack(side="left", padx=(10, 0))
 
@@ -2106,6 +2143,8 @@ class App(tk.Tk):
             tab = WindowTab(self.nb, i, on_log_selected=self._on_tab_log_selected,
                             on_settings_changed=self._apply_tab_settings_live,
                             on_continue_choice=self._on_continue_choice,
+                            on_open_window_table=self._open_window_table,
+                            on_item_switch=self._on_item_switch,
                             section_collapsed=self._tab_sections,
                             on_section_toggled=self._on_tab_section_toggled)
             self.nb.add(tab, text=f"窓{i + 1}")
@@ -3297,7 +3336,8 @@ class App(tk.Tk):
                 window_idx=tab.idx + 1,
                 lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings,
-                on_list_changed=self._on_own_list_changed)
+                on_list_changed=self._on_own_list_changed,
+                on_held_item_changed=self._on_held_item_changed)
             self.monitors.append(mon)
             mon.start()
 
@@ -3310,14 +3350,16 @@ class App(tk.Tk):
 
         self._start_window_volume()
         self._running = True
+        self._refresh_continue_choices()            # 動作中は、アイテムの決まりが当てはまる窓の表示を変える
         self._refresh_start_stop_button()
         self.lbl_win_warn.config(
             text="⚠ 動作中です。窓数はマクロ停止後に変更できます", foreground=config.GUI_RED)
         self._log(f"[起動] {len(self.monitors)}窓の監視を開始")
         self._debug_start()
 
-    # ── 続行表（GH）────────────────────────
+    # ── 続行リスト・窓ごとの続行無効／デフォ続行の表（GR）────────────────────────
     def _open_continue_table(self):
+        """「続行リスト」ボタン: 続行リストだけの画面（開いていれば前へ）"""
         window = getattr(self, "_continue_table_window", None)
         try:
             if window is not None and window.winfo_exists():
@@ -3326,20 +3368,62 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         self._continue_table_window = ContinueTableWindow(
-            self, on_change=self._refresh_continue_choices, on_list_change=self._apply_own_list,
+            self, on_list_change=self._apply_own_list,
             on_import_tnl=self._import_tnl, on_export_tnl=self._export_tnl)
 
+    def _open_window_table(self, tab, which: str):
+        """窓の行の「続行無効」「デフォ続行」ボタン: その窓のその表の画面（同じものが開いていれば前へ）"""
+        windows = self._window_table_windows
+        key = (tab.idx + 1, which)
+        window = windows.get(key)
+        try:
+            if window is not None and window.winfo_exists():
+                window.lift()
+                return
+        except tk.TclError:
+            pass
+        holder = []
+        windows[key] = ContinueTableWindow(
+            self, on_change=lambda: self._refresh_continue_choices(except_window=holder[0] if holder else None),
+            window_idx=tab.idx + 1, kind=which)
+        holder.append(windows[key])
+
     def _on_continue_choice(self, tab, which: str, name):
-        """窓の「続行無効」「デフォ続行」のプリセット（name。None は「なし」）を変えた: 保存してすぐ判定に効かせる"""
-        store = ContinueTable.with_choice(ContinueTable.current(), tab.idx + 1, which, name)
+        """窓の「続行無効」「デフォ続行」のドロップダウンで選んだ（name。None は「なし」）: 窓の表に写して、保存してすぐ判定に効かせる"""
+        store = ContinueTable.with_applied_preset(ContinueTable.current(), tab.idx + 1, which, name)
         ContinueTable.set_current(store)
         ContinueTable.save(store)
         self._refresh_continue_choices()
 
-    def _refresh_continue_choices(self):
-        """各窓の選択肢（プリセットが増減・改名・削除されたあと）を今の保存内容に合わせる"""
+    def _on_item_switch(self, tab, on: bool):
+        """窓の「アイテムで切り替える」を変えた: 保存して、すぐ判定と表示に効かせる"""
+        store = ContinueTable.with_item_switch(ContinueTable.current(), tab.idx + 1, on)
+        ContinueTable.set_current(store)
+        ContinueTable.save(store)
+        self._refresh_continue_choices()
+
+    def _on_held_item_changed(self):
+        """窓の LogMonitor で持っているアイテム・インスタンスの種類が変わった（窓ごとのスレッドから呼ばれる）: 画面のスレッドへ渡す"""
+        self._after_from_worker(self._refresh_continue_choices)
+
+    def _refresh_continue_choices(self, except_window=None):
+        """各窓の行（表示・灰色）と、開いている窓の表の画面を、今の保存内容と動作中の状態に合わせる。
+        except_window は、いま変えたばかりでもう直してある画面"""
+        running = getattr(self, "_running", False)
         for tab in getattr(self, "tabs", []):
-            tab.refresh_continue_choices()
+            held, group = None, False
+            if running:
+                mon = next((m for m in self.monitors if m.window_idx == tab.idx + 1), None)
+                if mon is not None:
+                    held = mon.st.held_item_id
+                    group = mon.st.instance_type in GroupRound.GROUP_INSTANCES
+            tab.refresh_continue_choices(held, group)
+        for window in list(getattr(self, "_window_table_windows", {}).values()):
+            try:
+                if window is not except_window and window.winfo_exists():
+                    window.refresh_tables()
+            except tk.TclError:
+                pass
 
     # ── 不具合の報告 ────────────────────────
     def _open_report(self):
@@ -3432,6 +3516,7 @@ class App(tk.Tk):
         self.monitors.clear()
         self._show_own_windows_again()
         self._running = False
+        self._refresh_continue_choices()
         self._refresh_start_stop_button()
         self.lbl_win_warn.config(
             text="※ 窓数はマクロ起動前に設定してください", foreground=config.GUI_YLW)

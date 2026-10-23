@@ -965,3 +965,43 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
             monitor._on_killers([99], "Classic", revealed=False)
 
         mock_thread.assert_called_once()
+
+
+class TestHeldItemChangedNotice(unittest.TestCase):
+    """持っているアイテム・インスタンスの種類が変わったら、画面へ知らせる（窓の行の表示を直すため）"""
+
+    P = "2026.09.20 11:55:47 Debug      -  "
+
+    def setUp(self):
+        for p in (patch.object(config, "ITEMS", _item_table()),
+                  patch.object(ConnectDB, "register_round"),
+                  patch.object(LogMonitor.threading, "Thread")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.calls = []
+        self.monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1,
+                                             on_held_item_changed=lambda: self.calls.append(1))
+        self.monitor.st.instance_type = config.INSTANCE_PRIVATE
+
+    def _feed(self, *lines):
+        for line in lines:
+            self.monitor._process(self.P + line)
+
+    def test_equipping_and_losing_notify(self):
+        self._feed("Equipping 29.")
+        self.assertEqual(len(self.calls), 1)
+        self._feed("Equipping 29. Was using 29")
+        self.assertEqual(len(self.calls), 1, "同じアイテムのままなら知らせない")
+        self._feed("Equipping 36.")
+        self.assertEqual(len(self.calls), 2)
+        self._feed("Equipping 0.")
+        self.assertEqual(len(self.calls), 3)
+
+    def test_moving_to_another_instance_notifies(self):
+        self._feed("[Behaviour] Joining wrld_b:2~private(usr_me)~region(jp)")
+        self.assertGreaterEqual(len(self.calls), 1)
+
+    def test_without_a_callback_nothing_happens(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor._process(self.P + "Equipping 29.")
+        self.assertEqual(monitor.st.held_item_id, 29)
