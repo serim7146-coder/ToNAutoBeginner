@@ -269,7 +269,7 @@ LogMonitor._process(line)
 
 ## 10. 統計
 
-- 送る: ラウンドごとに1回、`rpc/register_round_v2`（開始の時刻・ラウンドの番号・マップ・テラー3体まで（**独自の番号**）・transformed_uid・インスタンスの番号・`p_players`）。送り先のテーブルは `ToNRounds_v2`。`p_players` はラウンド開始時の人数（自分を含む。分からなければ null）。前の `rpc/register_round`（ToN ListTool の番号）は使わない。SQL は `supabase/migrate_terror_ids_v2.sql`（番号の対応表 `terror_id_map` は生成した値。`register_round` の本体・`ToNRounds` の定義に依存する部分は [依存]／TODO のコメントで、現物を見て書き足す）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
+- 送る: ラウンドごとに1回、`rpc/register_round_v2`（開始の時刻・ラウンドの番号・マップ・テラー3体まで（**独自の番号**）・transformed_uid・インスタンスの番号・`p_players`）。送り先のテーブルは `ToNRounds_v2`。`p_players` はラウンド開始時の人数（自分を含む。分からなければ null）。ラウンドの途中で起動したときは、監視開始の遡り（`_detect_instance_from_log` → `_restore_running_round`）が、最後のラウンド開始の行の後に RoundOver が無ければその行の時刻と、その行より前の入退室だけを積んだ人数を `st.round_start_time`・`st.round_players` に入れる（この 2 つを読むのは DB へ送る 3 か所だけ）。前の `rpc/register_round`（ToN ListTool の番号）は使わない。SQL は `supabase/migrate_terror_ids_v2.sql`（番号の対応表 `terror_id_map` は生成した値。`register_round` の本体・`ToNRounds` の定義に依存する部分は [依存]／TODO のコメントで、現物を見て書き足す）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
 - transformed_uid: `rpc/get_transformed_uid` で VRChat uid から int2 の番号をもらう（無ければ DB が割り当てる）。`Users` の表は直接読まない（`supabase/get_transformed_uid.sql`）。
 - 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。取り込み元は `ToNRounds_v2`（独自の番号・人数あり）と、移行の間だけ無印の `ToNRounds`（`LegacyRoundsTable` が独自の番号に直し、人数は NULL）。元ごとに取り込んだ位置を別に覚える。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。8 Pages の行（3000 番台）は手元ではそのまま貯め、集計のときだけ通常の同じテラーに足す。
 
