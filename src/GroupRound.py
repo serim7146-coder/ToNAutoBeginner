@@ -11,8 +11,11 @@ import config
 import MatchTNL
 
 # 判定結果
-CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウンスもフリーズもしない
+CONTINUE = "continue"   # 全続行 = 自爆しないだけ。続行アナウンスもフリーズもしない（続行リストにそのテラーがあれば、LogMonitor が CONTINUE_LISTED に上げる）
 WANTED   = "wanted"     # 誰かがそのテラーを欲しがっている続行。アナウンスとフリーズを出す
+# 全続行のラウンドで、その窓の続行リストにもそのテラーがあった続行。decide() は返さず、LogMonitor が CONTINUE の後に
+# 続行リストを見て上げる（private の全続行と同じ見方）。扱いは WANTED と同じ（アナウンスとフリーズを出す）
+CONTINUE_LISTED = "continue_listed"
 SKIP     = "skip"       # 問答無用スキップ（グループ自動自爆）
 NORMAL   = "normal"     # 通常判定（RoundDecision.decide_killers）へ委譲
 

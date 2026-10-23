@@ -2,6 +2,7 @@
 （アナウンス・他窓フリーズ・音量「続行」・録画・窓位置リセット）。続行にならなければ今どおり全続行。
 本物の音・録画・窓・入力は使わない"""
 from tests.support import *  # noqa: F401,F403
+import ContinueTable
 import Recorder
 
 KEY = "Classic/クラシック"
@@ -135,6 +136,120 @@ class TestOtherKindsOfContinue(_Case):
         _s, play, _rec, _rem = self._killers(monitor, [LISTED])
         self.assertFalse(monitor.st.is_continue_round, "全続行は private だけ（public は操作しない）")
         play.assert_not_called()
+
+
+class TestGroupAllContinueFollowsTheList(_Case):
+    """干し芋・焼き芋の全続行（GroupRound が CONTINUE を返すもの）も、その窓の続行リストを先に見る。
+    続行になれば WANTED と同じ（アナウンス・前面化・他窓フリーズ・録画）で、ならなければ今どおり全続行"""
+    GROUPS = (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
+
+    def _group(self, itype, round_type, keep_on):
+        monitor = self._monitor(itype, keep_on=keep_on, round_type=round_type)
+        monitor.cfg.continue_rounds = set()         # 芋には全続行の設定は無い（残っていても効かない）
+        monitor.st.instance_type = itype
+        return monitor
+
+    def _said(self, monitor, text):
+        return [m for m in monitor.logs if text in m]
+
+    def test_a_listed_8_pages_terror_is_a_continue_round(self):
+        for itype in self.GROUPS:
+            SharedState.continue_round_reset()
+            monitor = self._group(itype, "8 Pages", {"8 Pages/8ページ": {3031}})
+            started, play, record, remember = self._killers(monitor, [3031])
+            st = monitor.st
+            self.assertTrue(st.is_continue_round, itype)
+            self.assertFalse(st.open_special_continue, itype)
+            self.assertTrue(st.continue_freeze_held, f"{itype}: 他窓フリーズ")
+            play.assert_called_once_with("continue.mp3", kind="continue")
+            record.assert_called_once_with(1)
+            remember.assert_called_once()
+            self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE, "音量「続行」")
+            self.assertNotIn("do_skip", started, itype)
+            self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行 → 続行リストで続行】"), monitor.logs)
+            self.assertFalse(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
+
+    def test_an_unlisted_8_pages_terror_stays_all_continue(self):
+        for itype in self.GROUPS:
+            SharedState.continue_round_reset()
+            monitor = self._group(itype, "8 Pages", {"8 Pages/8ページ": {3031}})
+            started, play, record, _remember = self._killers(monitor, [3032])
+            st = monitor.st
+            self.assertFalse(st.is_continue_round, itype)
+            self.assertFalse(st.continue_freeze_held, itype)
+            self.assertTrue(st.all_continue_round, itype)
+            play.assert_not_called()
+            record.assert_not_called()
+            self.assertNotIn("do_skip", started, itype)
+            self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
+
+    def test_hands_free_does_not_announce_or_record(self):
+        """放置モードの窓はアナウンスも録画もしない（WANTED と同じ。干し芋・焼き芋の窓では放置モードは効かないので、
+        効いているものとして確かめる）"""
+        monitor = self._group(config.INSTANCE_HOSHIIMO, "8 Pages", {"8 Pages/8ページ": {3031}})
+        with patch.object(monitor, "_hands_free", return_value=True):
+            _s, play, record, _remember = self._killers(monitor, [3031])
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertTrue(monitor.st.continue_freeze_held)
+        play.assert_not_called()
+        record.assert_not_called()
+
+    def test_run_has_no_terror_so_it_stays_all_continue(self):
+        for itype in self.GROUPS:
+            SharedState.continue_round_reset()
+            monitor = self._group(itype, "Run", {"Run/走れ！": {LISTED}})
+            _s, play, _rec, _rem = self._killers(monitor, [])
+            self.assertFalse(monitor.st.is_continue_round, itype)
+            self.assertTrue(monitor.st.all_continue_round, itype)
+            play.assert_not_called()
+
+    def test_bloodbath_ex_and_the_first_moon_follow_the_list_too(self):
+        for itype, round_type, key in ((config.INSTANCE_HOSHIIMO, "Bloodbath EX", "Bloodbath EX/ブラッドバスEX"),
+                                       (config.INSTANCE_YAKIIMO, "Bloodbath EX", "Bloodbath EX/ブラッドバスEX"),
+                                       (config.INSTANCE_HOSHIIMO, "Mystic Moon", MatchTNL.SPECIAL_MOON_KEY),
+                                       (config.INSTANCE_YAKIIMO, "Blood Moon", MatchTNL.SPECIAL_MOON_KEY)):
+            for listed, expected in ((True, True), (False, False)):
+                SharedState.continue_round_reset()
+                monitor = self._group(itype, round_type, {key: {LISTED}})
+                _s, play, _rec, _rem = self._killers(monitor, [LISTED if listed else UNLISTED])
+                self.assertEqual(monitor.st.is_continue_round, expected, (itype, round_type, listed))
+                self.assertEqual(play.called, expected, (itype, round_type, listed))
+                self.assertEqual(monitor.st.all_continue_round, not expected, (itype, round_type, listed))
+
+    def test_moon_log_zeros_are_not_looked_up(self):
+        """Moon の Killers の行は 0 0 0。private の全続行と同じく、リストの Moon のテラーには当たらない（全続行のまま）"""
+        for itype, round_type in ((config.INSTANCE_HOSHIIMO, "Mystic Moon"), (config.INSTANCE_YAKIIMO, "Blood Moon")):
+            monitor = self._group(itype, round_type, {MatchTNL.SPECIAL_MOON_KEY: {LISTED}})
+            _s, play, _rec, _rem = self._killers(monitor, TerrorIds.from_log([0, 0, 0], round_type, round_type))
+            self.assertFalse(monitor.st.is_continue_round, itype)
+            play.assert_not_called()
+
+    def test_hoshiimo_fog_follows_the_list_once_revealed(self):
+        monitor = self._group(config.INSTANCE_HOSHIIMO, "Fog", {"Fog/霧": {LISTED}})
+        _s, play, _rec, _rem = self._killers(monitor, [UNLISTED])
+        self.assertFalse(monitor.st.is_continue_round)
+        play.assert_not_called()
+        _s, play, record, _rem = self._killers(monitor, [LISTED], revealed=True)
+        self.assertTrue(monitor.st.is_continue_round, "公開されて、続行リストに当たれば続行ラウンドに上がる")
+        self.assertTrue(monitor.st.continue_freeze_held)
+        play.assert_called_once_with("continue.mp3", kind="continue")
+
+    def test_a_second_killers_line_announces_only_once(self):
+        for itype in self.GROUPS:
+            SharedState.continue_round_reset()
+            monitor = self._group(itype, "8 Pages", {"8 Pages/8ページ": {3031}})
+            _s, play1, record1, _rem = self._killers(monitor, [3031])
+            _s, play2, record2, _rem = self._killers(monitor, [3031])
+            self.assertEqual(play1.call_count + play2.call_count, 1, itype)
+            self.assertEqual(record1.call_count + record2.call_count, 1, itype)
+            self.assertEqual(SharedState.get_continue_round_count(), 1, itype)
+
+    def test_the_continue_table_is_not_laid_over_a_group_window(self):
+        """グループのインスタンスには続行表を重ねない（今のまま）。リストにあれば続行、重ねる表だけにあるものは続行にならない"""
+        monitor = self._group(config.INSTANCE_HOSHIIMO, "8 Pages", {"8 Pages/8ページ": {3031}})
+        with patch.object(ContinueTable, "apply", side_effect=AssertionError("重ねない")):
+            _s, play, _rec, _rem = self._killers(monitor, [3031])
+        self.assertTrue(monitor.st.is_continue_round)
 
 
 if __name__ == "__main__":

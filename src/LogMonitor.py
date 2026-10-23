@@ -1208,7 +1208,17 @@ class LogMonitor:
             self._start_daemon(self._action.do_skip)
 
     def _group_decision(self, killers_round_type: str, ids=None) -> str:
-        """このラウンドをグループのルールでどう扱うか"""
+        """このラウンドをグループのルールでどう扱うか。干し芋・焼き芋の全続行（CONTINUE）は、その窓の続行リストが
+        そのテラーを続行にするなら CONTINUE_LISTED に上げる（private の全続行が続行リストを先に見るのと同じ）"""
+        st = self.st
+        decision = self._group_rule_decision(killers_round_type, ids)
+        if (decision == GroupRound.CONTINUE and st.instance_type in GroupRound.GROUP_INSTANCES
+                and RoundDecision.list_continues(self._keep_on(), st.terror_ids if ids is None else ids,
+                                                 st.round_type)):
+            return GroupRound.CONTINUE_LISTED
+        return decision
+
+    def _group_rule_decision(self, killers_round_type: str, ids=None) -> str:
         st = self.st
         return GroupRound.decide(
             st.instance_type,
@@ -1231,15 +1241,16 @@ class LogMonitor:
         if decision == GroupRound.SKIP:
             self._start_group_skip()
             return True
-        if decision == GroupRound.WANTED:
-            # 誰かがそのテラーを欲しがっている。通常判定で続行になったときと
-            # 同じ扱いにする（アナウンスと他窓フリーズを出す）
+        if decision in (GroupRound.WANTED, GroupRound.CONTINUE_LISTED):
+            # 誰かがそのテラーを欲しがっている（全続行のラウンドでも続行リストにある）。
+            # 通常判定で続行になったときと同じ扱いにする（アナウンスと他窓フリーズを出す）
             st = self.st
             was_continue_round = st.is_continue_round
             st.is_continue_round = True
             st.open_special_continue = False     # グループの WANTED は普通の続行
             self._log(f"グループ判定: {st.round_type} "
-                      + ("【全続行 → 続行リストで続行】" if self._is_all_continue_round() else "【プレイ】"))
+                      + ("【全続行 → 続行リストで続行】"
+                         if decision == GroupRound.CONTINUE_LISTED or self._is_all_continue_round() else "【プレイ】"))
             if not was_continue_round:
                 if not self._hands_free():
                     PlaySound.play_sound(self.cfg.voice_continue, kind="continue")
@@ -2308,7 +2319,7 @@ class LogMonitor:
         kind = plan[0]
         if kind == "group":
             return {GroupRound.SKIP: "skip", GroupRound.CONTINUE: "quiet",
-                    GroupRound.WANTED: "continue"}[plan[1]]
+                    GroupRound.WANTED: "continue", GroupRound.CONTINUE_LISTED: "continue"}[plan[1]]
         if kind in ("hands_free", "round_skip"):
             return "skip"
         if kind in ("restricted", "continue_rounds"):
