@@ -12,7 +12,9 @@ import numpy as np
 import ContinueList
 import ContinueTable
 import GroupRound
-from ContinueTable import Table, Store
+from ContinueTable import Table
+
+Store = choice_store        # 窓ごとの「選んだプリセット」で書く（中身は窓の表に写される）
 
 KEY = "Classic/クラシック"
 ALT = "Alternate/オルタネイト"
@@ -157,7 +159,7 @@ class TestSaveLoad(unittest.TestCase):
         self.assertTrue(ContinueTable.save(store, self.path))
         self.assertEqual(ContinueTable.load(self.path), store)
 
-    def test_round_trip_keeps_none_choices_and_the_order_of_presets(self):
+    def test_round_trip_keeps_the_window_tables_and_the_order_of_presets(self):
         store = Store(disabled_presets={"後": {}, "先": _body({KEY: [1]})},
                       default_presets={BASE: {}},
                       windows={3: {DIS: None, DFL: BASE}})
@@ -166,15 +168,17 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(loaded, store)
         self.assertEqual(list(loaded.disabled_presets), ["後", "先"])
 
-    def test_the_file_has_the_documented_v4_shape(self):
+    def test_the_file_has_the_documented_v5_shape(self):
         store = Store(disabled_presets={BASE: _body({KEY: [9, 5]})}, default_presets={BASE: _body({ALT: [1030]})},
-                      windows={1: {DIS: BASE, DFL: None}})
+                      windows={1: {DIS: BASE, DFL: None}}, switch=[1])
         ContinueTable.save(store, self.path)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(raw, {"version": 4,
+        self.assertEqual(raw, {"version": 5,
                                "disabled_presets": {BASE: {KEY: [5, 9]}},
                                "default_presets": {BASE: {ALT: [1030]}},
-                               "windows": {"1": {"disabled": BASE, "default": None}},
+                               "windows": {"1": {"disabled": {KEY: [5, 9]}, "default": {},
+                                                 "disabled_from": BASE, "default_from": None,
+                                                 "item_switch": True}},
                                "item_rules": []})
 
     def test_a_missing_file_has_no_presets(self):
@@ -185,13 +189,14 @@ class TestSaveLoad(unittest.TestCase):
         self.assertEqual(store.windows, {})
         self.assertFalse(self.path.exists(), "読んだだけでは作らない")
 
-    def test_a_new_store_has_no_presets_and_every_window_is_none(self):
+    def test_a_new_store_has_no_presets_and_every_window_table_is_empty(self):
         store = Store()
         self.assertEqual((store.disabled_presets, store.default_presets, store.windows), ({}, {}, {}))
         for idx in (1, 4, 8):
             for which in (DIS, DFL):
-                self.assertIsNone(ContinueTable.choice_for(store, idx, which))
+                self.assertEqual(ContinueTable.display_name(store, idx, which), "なし")
             self.assertEqual(ContinueTable.table_for(store, idx), Table())
+            self.assertFalse(ContinueTable.window_table(store, idx).item_switch, "アイテムで切り替えるは最初 OFF")
 
     def test_a_broken_file_is_an_empty_store_and_one_line_in_the_debug_log(self):
         self.path.write_text("{ not json", encoding="utf-8")
@@ -215,7 +220,8 @@ class TestSaveLoad(unittest.TestCase):
         store = ContinueTable.load(self.path)
         self.assertEqual(store.disabled_presets, {"ok": {KEY: frozenset({1, 3})}, "worse": {}})
         self.assertEqual(store.default_presets, {}, "読めなければプリセット 0 個")
-        self.assertEqual(store.windows, {1: {DIS: "ok"}, 3: {DFL: None}})
+        self.assertEqual(store.windows, {1: ContinueTable.WindowTable(
+            disabled={KEY: frozenset({1, 3})}, disabled_from="ok")}, "選んだプリセットの中身が窓の表に写る")
 
     def test_v2_with_no_presets_stays_without_presets(self):
         self._write({"version": 2, "disabled_presets": {}, "default_presets": {}, "windows": {}})
@@ -264,8 +270,9 @@ class TestMigrationFromV1(unittest.TestCase):
         store = self._v1()
         self.assertEqual(store.disabled_presets, {"デフォルト": _body({KEY: [5, 9]})})
         self.assertEqual(store.default_presets, {"デフォルト": _body({ALT: [own(164)]})}, "番号は独自の番号に移る")
-        self.assertEqual(store.windows, {idx: {DIS: "デフォルト", DFL: "デフォルト"}
-                                         for idx in range(1, config.MAX_WINDOWS + 1)}, "今まで全窓が使っていた")
+        for idx in range(1, config.MAX_WINDOWS + 1):         # 今まで全窓が使っていた
+            self.assertEqual(ContinueTable.display_name(store, idx, DIS), "デフォルト", idx)
+            self.assertEqual(ContinueTable.display_name(store, idx, DFL), "デフォルト", idx)
         for idx in (1, 4, 8):
             table = ContinueTable.table_for(store, idx)
             self.assertEqual(table.disabled, _body({KEY: [5, 9]}), idx)
@@ -294,11 +301,11 @@ class TestMigrationFromV1(unittest.TestCase):
         self.assertEqual(store.disabled_presets, {"デフォルト": _body({KEY: [1, 3]})})
         self.assertEqual(store.default_presets, {}, "空の表はプリセットにしない")
 
-    def test_saving_after_loading_writes_v4_and_loads_back_the_same(self):
+    def test_saving_after_loading_writes_v5_and_loads_back_the_same(self):
         store = self._v1(use_disabled=False)
         ContinueTable.save(store, self.path)
         raw = json.loads(self.path.read_text(encoding="utf-8"))
-        self.assertEqual(raw["version"], 4)
+        self.assertEqual(raw["version"], 5)
         self.assertNotIn("use_disabled", raw)
         self.assertEqual(ContinueTable.load(self.path), store)
 
@@ -315,76 +322,148 @@ class TestTableFor(unittest.TestCase):
                       default_presets={BASE: _body({KEY: [3]})}, windows={1: {DIS: "A"}})
         self.assertEqual(ContinueTable.table_for(store, 1).disabled, _body({KEY: [1]}))
         self.assertEqual(ContinueTable.table_for(store, 1).default, {}, "種類ごとに、選んでいなければ「なし」")
-        self.assertIsNone(ContinueTable.choice_for(store, 1, DFL))
+        self.assertEqual(ContinueTable.display_name(store, 1, DFL), "なし")
         self.assertEqual(ContinueTable.table_for(store, 5), Table(), "窓ごとに「なし」")
 
-    def test_the_first_preset_has_no_special_meaning_for_an_unset_window(self):
+    def test_a_preset_alone_never_reaches_a_window(self):
         store = Store(disabled_presets={"B": _body({KEY: [1]}), "A": _body({KEY: [2]})})
         self.assertEqual(ContinueTable.table_for(store, 1).disabled, {})
-        self.assertEqual(ContinueTable.first_name(store, DIS), "B", "画面が編集の対象に選ぶだけ")
-        self.assertIsNone(ContinueTable.first_name(store, DFL))
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "なし")
 
     def test_none_means_no_table_for_that_window_and_kind(self):
         store = Store(disabled_presets={BASE: _body({KEY: [1]})}, default_presets={BASE: _body({KEY: [2]})},
                       windows={1: {DIS: None, DFL: BASE}, 2: {DIS: BASE, DFL: None}})
         self.assertEqual(ContinueTable.table_for(store, 1), Table(default=_body({KEY: [2]})))
         self.assertEqual(ContinueTable.table_for(store, 2), Table(disabled=_body({KEY: [1]})))
-        self.assertEqual(ContinueTable.choice_for(store, 1, DIS), None)
-        self.assertEqual(ContinueTable.choice_for(store, 3, DIS), None, "選んでいない窓も「なし」")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "なし")
+        self.assertEqual(ContinueTable.display_name(store, 3, DIS), "なし", "選んでいない窓も「なし」")
 
-    def test_a_choice_naming_a_missing_preset_is_none(self):
+    def test_a_choice_naming_a_missing_preset_gives_an_empty_table(self):
         store = Store(disabled_presets={BASE: _body({KEY: [1]})}, windows={1: {DIS: "消えた"}})
-        self.assertIsNone(ContinueTable.choice_for(store, 1, DIS))
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "なし")
         self.assertEqual(ContinueTable.table_for(store, 1), Table())
 
-    def test_with_choice_changes_one_window_and_kind_and_rejects_unknown_names(self):
+    def test_applying_a_preset_copies_it_into_one_window_and_kind_and_rejects_unknown_names(self):
         store = _two_presets()
-        changed = ContinueTable.with_choice(store, 1, DIS, "B")
-        self.assertEqual(ContinueTable.choice_for(changed, 1, DIS), "B")
-        self.assertEqual(ContinueTable.choice_for(changed, 1, DFL), "X")
-        self.assertEqual(ContinueTable.choice_for(store, 1, DIS), "A", "元の Store は変えない")
-        self.assertEqual(ContinueTable.choice_for(ContinueTable.with_choice(store, 7, DFL, None), 7, DFL), None)
+        changed = ContinueTable.with_applied_preset(store, 1, DIS, "B")
+        self.assertEqual(ContinueTable.body_of(changed, 1, DIS), _body({KEY: [8]}))
+        self.assertEqual(ContinueTable.window_table(changed, 1).disabled_from, "B", "写したプリセットを覚える")
+        self.assertEqual(ContinueTable.body_of(changed, 1, DFL), _body({KEY: [9]}), "もう片方の種類は変えない")
+        self.assertEqual(ContinueTable.body_of(changed, 2, DIS), _body({KEY: [8]}), "ほかの窓は変えない")
+        self.assertEqual(ContinueTable.body_of(store, 1, DIS), _body({KEY: [7]}), "元の Store は変えない")
+        cleared = ContinueTable.with_applied_preset(store, 1, DFL, None)
+        self.assertEqual((ContinueTable.body_of(cleared, 1, DFL), ContinueTable.window_table(cleared, 1).default_from),
+                         ({}, None), "「なし」は表を空にする")
         with self.assertRaises(ValueError):
-            ContinueTable.with_choice(store, 1, DIS, "X")      # X はデフォ続行の名前
+            ContinueTable.with_applied_preset(store, 1, DIS, "X")      # X はデフォ続行の名前
+
+    def test_after_applying_the_window_table_and_the_preset_are_separate(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 3, DIS, "A")
+        edited = ContinueTable.with_window_body(store, 3, DIS, {KEY: [7, 70]})
+        self.assertEqual(edited.disabled_presets["A"], _body({KEY: [7]}), "窓の表を直してもプリセットは変わらない")
+        changed_preset = ContinueTable.with_preset_body(store, DIS, "A", {KEY: [1]})
+        self.assertEqual(ContinueTable.body_of(changed_preset, 3, DIS), _body({KEY: [7]}), "プリセットが変わっても窓の表は変わらない")
+
+    def test_a_window_without_a_table_entry_is_empty_and_switch_off(self):
+        store = _two_presets()
+        self.assertEqual(ContinueTable.window_table(store, 9), ContinueTable.WindowTable())
+
+    def test_window_tables_are_edited_per_window_and_kind(self):
+        store = ContinueTable.with_window_table(Store(), 2, _table({KEY: [1]}, {ALT: [150]}))
+        self.assertEqual(ContinueTable.table_for(store, 2), _table({KEY: [1]}, {ALT: [150]}))
+        self.assertEqual(ContinueTable.table_for(store, 1), Table())
+        same = ContinueTable.with_window_table(store, 2, _table({KEY: [1]}, {ALT: [150]}))
+        self.assertEqual(same, store)
+        store = ContinueTable.with_window_body(store, 2, DIS, {KEY: [], ALT: [1]})
+        self.assertEqual(ContinueTable.body_of(store, 2, DIS), _body({ALT: [1]}), "空のキーは持たない")
+
+
+class TestDisplayName(unittest.TestCase):
+    """窓のドロップダウンに出す文字: 空は「なし」・最後に写したプリセット・中身が同じ先頭のプリセット・「-」"""
+
+    def test_an_empty_table_is_none_even_when_an_empty_preset_exists(self):
+        store = Store(disabled_presets={BASE: {}}, windows={1: {DIS: BASE}})
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "なし")
+
+    def test_the_last_applied_preset_wins_when_several_presets_have_the_same_content(self):
+        presets = {"先": _body({KEY: [1]}), "後": _body({KEY: [1]})}
+        store = ContinueTable.with_applied_preset(Store(disabled_presets=presets), 1, DIS, "後")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "後")
+        store = ContinueTable.with_applied_preset(store, 1, DIS, "先")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "先")
+
+    def test_without_a_last_applied_name_the_first_preset_with_the_same_content_is_shown(self):
+        presets = {"先": _body({KEY: [1]}), "後": _body({KEY: [1]})}
+        store = ContinueTable.with_window_body(Store(disabled_presets=presets), 1, DIS, {KEY: [1]})
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "先")
+
+    def test_a_changed_table_or_a_changed_preset_shows_a_dash(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 1, DIS, "A")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "A")
+        edited = ContinueTable.with_window_body(store, 1, DIS, {KEY: [7, 8]})
+        self.assertEqual(ContinueTable.display_name(edited, 1, DIS), "-", "表を直した")
+        saved = ContinueTable.with_preset_body(store, DIS, "A", {KEY: [99]})
+        self.assertEqual(ContinueTable.display_name(saved, 1, DIS), "-", "プリセットの側が変わった")
+
+    def test_editing_back_to_the_same_content_shows_the_name_again(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 1, DIS, "A")
+        edited = ContinueTable.with_window_body(store, 1, DIS, {KEY: [7, 8]})
+        back = ContinueTable.with_window_body(edited, 1, DIS, {KEY: [7]})
+        self.assertEqual(ContinueTable.display_name(back, 1, DIS), "A")
+
+    def test_another_preset_with_the_same_content_is_shown_when_the_last_one_changed(self):
+        presets = {"A": _body({KEY: [1]}), "B": _body({KEY: [1]})}
+        store = ContinueTable.with_applied_preset(Store(disabled_presets=presets), 1, DIS, "A")
+        store = ContinueTable.with_preset_body(store, DIS, "A", {KEY: [2]})
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "B")
+
+    def test_the_two_kinds_are_shown_separately(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 1, DFL, "Y")
+        self.assertEqual((ContinueTable.display_name(store, 1, DIS), ContinueTable.display_name(store, 1, DFL)),
+                         ("A", "Y"))
 
 
 class TestPresetOperations(unittest.TestCase):
-    def test_new_makes_an_empty_preset_at_the_end(self):
-        store = ContinueTable.with_new_preset(_two_presets(), DIS, " C ")
+    """プリセット（ひな形）の保存・名前変更・削除。窓の表は変えない"""
+
+    def test_saving_adds_a_copy_at_the_end_and_remembers_it_for_that_window(self):
+        store = ContinueTable.with_window_body(_two_presets(), 1, DIS, {KEY: [7, 70]})
+        store = ContinueTable.with_saved_preset(store, DIS, " C ", ContinueTable.body_of(store, 1, DIS), 1)
         self.assertEqual(ContinueTable.preset_names(store, DIS), ["A", "B", "C"], "前後の空白は除く")
-        self.assertEqual(store.disabled_presets["C"], {})
+        self.assertEqual(store.disabled_presets["C"], _body({KEY: [7, 70]}))
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "C")
         self.assertEqual(ContinueTable.preset_names(store, DFL), ["X", "Y"], "もう片方の種類は変えない")
+        self.assertEqual(ContinueTable.body_of(store, 2, DIS), _body({KEY: [8]}), "ほかの窓は変えない")
 
-    def test_a_name_must_be_new_not_empty_and_not_the_none_label(self):
+    def test_saving_over_an_existing_name_overwrites_and_other_windows_show_a_dash(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 2, DIS, "A")      # 窓 2 も A を写した
+        self.assertEqual(ContinueTable.display_name(store, 2, DIS), "A")
+        store = ContinueTable.with_window_body(store, 1, DIS, {KEY: [7, 70]})
+        store = ContinueTable.with_saved_preset(store, DIS, "A", ContinueTable.body_of(store, 1, DIS), 1)
+        self.assertEqual(ContinueTable.preset_names(store, DIS), ["A", "B"], "並びはそのまま")
+        self.assertEqual(store.disabled_presets["A"], _body({KEY: [7, 70]}))
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "A")
+        self.assertEqual(ContinueTable.display_name(store, 2, DIS), "-", "窓 2 の表は変わらず、プリセットだけ変わった")
+        self.assertEqual(ContinueTable.body_of(store, 2, DIS), _body({KEY: [7]}))
+
+    def test_a_name_must_be_new_not_empty_and_not_a_reserved_label(self):
         store = _two_presets()
-        for bad in ("A", "", "  ", ContinueTable.NONE_LABEL):
+        for bad in ("", "  ", ContinueTable.NONE_LABEL, ContinueTable.KEEP_LABEL, ContinueTable.DASH_LABEL):
             with self.assertRaises(ValueError, msg=repr(bad)):
-                ContinueTable.with_new_preset(store, DIS, bad)
-            with self.assertRaises(ValueError, msg=repr(bad)):
-                ContinueTable.with_copied_preset(store, DIS, "A", bad)
-        ContinueTable.with_new_preset(store, DIS, "X")          # 別の種類の名前は使える
+                ContinueTable.with_saved_preset(store, DIS, bad, {})
+        ContinueTable.with_saved_preset(store, DIS, "X", {})          # 別の種類の名前は使える
+        self.assertEqual(ContinueTable.name_error(store, DIS, "A"), "同じ名前のプリセットがあります。")
 
-    def test_copy_has_the_same_content_and_is_independent(self):
-        store = ContinueTable.with_copied_preset(_two_presets(), DIS, "A", "A2")
-        self.assertEqual(store.disabled_presets["A2"], _body({KEY: [7]}))
-        store = ContinueTable.with_preset_body(store, DIS, "A2", {KEY: [1]})
-        self.assertEqual(store.disabled_presets["A"], _body({KEY: [7]}))
-        with self.assertRaises(ValueError):
-            ContinueTable.with_copied_preset(store, DIS, "なにか", "Z")
-
-    def test_unique_name_numbers_a_taken_name(self):
-        store = _two_presets()
-        self.assertEqual(ContinueTable.unique_name(store, DIS, "A のコピー"), "A のコピー")
-        store = ContinueTable.with_new_preset(store, DIS, "A のコピー")
-        self.assertEqual(ContinueTable.unique_name(store, DIS, "A のコピー"), "A のコピー 2")
-
-    def test_rename_keeps_the_order_and_the_windows_follow(self):
-        store = ContinueTable.with_renamed_preset(_two_presets(), DIS, "A", "A改")
+    def test_rename_keeps_the_order_and_the_remembered_names_and_rules_follow(self):
+        store = ContinueTable.with_rule_added(_two_presets(), 5, "A", "Y")
+        store = ContinueTable.with_renamed_preset(store, DIS, "A", "A改")
         self.assertEqual(ContinueTable.preset_names(store, DIS), ["A改", "B"])
         self.assertEqual(store.disabled_presets["A改"], _body({KEY: [7]}))
-        self.assertEqual(ContinueTable.choice_for(store, 1, DIS), "A改")
-        self.assertEqual(ContinueTable.choice_for(store, 2, DIS), "B")
-        self.assertEqual(ContinueTable.choice_for(store, 1, DFL), "X", "もう片方の種類の同名は変えない")
+        self.assertEqual(ContinueTable.window_table(store, 1).disabled_from, "A改")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "A改")
+        self.assertEqual(ContinueTable.window_table(store, 1).default_from, "X", "もう片方の種類の同名は変えない")
+        self.assertEqual(store.item_rules, (ContinueTable.ItemRule(5, "A改", "Y"),))
+        self.assertEqual(ContinueTable.body_of(store, 1, DIS), _body({KEY: [7]}), "窓の表は変わらない")
 
     def test_rename_to_a_taken_name_is_refused_and_to_itself_is_allowed(self):
         store = _two_presets()
@@ -393,56 +472,43 @@ class TestPresetOperations(unittest.TestCase):
         self.assertEqual(ContinueTable.with_renamed_preset(store, DIS, "A", "A"), store)
 
     def test_rename_does_not_touch_the_other_kind_with_the_same_name(self):
-        store = Store(disabled_presets={"P": {}, "Q": {}}, default_presets={"P": {}},
-                      windows={1: {DIS: "P", DFL: "P"}})
+        store = ContinueTable.with_applied_preset(
+            ContinueTable.with_applied_preset(Store(disabled_presets={"P": {}, "Q": {}}, default_presets={"P": {}}),
+                                              1, DIS, "P"), 1, DFL, "P")
         store = ContinueTable.with_renamed_preset(store, DIS, "P", "R")
-        self.assertEqual(store.windows, {1: {DIS: "R", DFL: "P"}})
+        wt = ContinueTable.window_table(store, 1)
+        self.assertEqual((wt.disabled_from, wt.default_from), ("R", "P"))
 
-    def test_delete_sends_windows_that_used_it_to_none(self):
-        store = Store(disabled_presets={BASE: _body({KEY: [1]}), "A": {}, "B": {}},
-                      windows={1: {DIS: "A"}, 2: {DIS: "B"}, 3: {DIS: None}})
+    def test_delete_leaves_window_tables_and_forgets_the_remembered_name(self):
+        store = Store(disabled_presets={"A": _body({KEY: [1]}), "B": _body({KEY: [1]})},
+                      windows={1: {DIS: "A"}, 2: {DIS: "B"}})
+        store = ContinueTable.with_applied_preset(store, 3, DIS, "A")
+        store = ContinueTable.with_rule_added(store, 5, "A", KEEP)
         store = ContinueTable.with_deleted_preset(store, DIS, "A")
-        self.assertEqual(ContinueTable.preset_names(store, DIS), [BASE, "B"])
-        self.assertEqual(store.windows[1], {DIS: None})
-        self.assertEqual(store.windows[2], {DIS: "B"})
-        self.assertEqual(store.windows[3], {DIS: None}, "「なし」はそのまま")
+        self.assertEqual(ContinueTable.preset_names(store, DIS), ["B"])
+        self.assertEqual(ContinueTable.body_of(store, 1, DIS), _body({KEY: [1]}), "窓の表は変わらない")
+        self.assertIsNone(ContinueTable.window_table(store, 1).disabled_from)
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "B", "中身が同じ別のプリセットが表示に出る")
+        self.assertEqual(ContinueTable.window_table(store, 2).disabled_from, "B", "ほかのプリセットを写した窓はそのまま")
+        self.assertEqual(store.item_rules[0].disabled, KEEP, "消えたプリセットを指していた決まりは「窓のまま」")
 
-    def test_a_window_that_used_a_deleted_preset_has_none(self):
-        store = Store(disabled_presets={"A": {}, BASE: {}, "B": {}}, windows={1: {DIS: BASE}})
-        store = ContinueTable.with_deleted_preset(store, DIS, BASE)
-        self.assertIsNone(ContinueTable.choice_for(store, 1, DIS))
-        self.assertIsNone(ContinueTable.choice_for(store, 9, DIS), "選んでいなかった窓も「なし」")
+    def test_a_deleted_preset_leaves_a_dash_when_nothing_else_matches(self):
+        store = ContinueTable.with_applied_preset(_two_presets(), 1, DIS, "A")
+        store = ContinueTable.with_deleted_preset(store, DIS, "A")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "-")
 
     def test_the_last_preset_of_a_kind_can_be_deleted(self):
         store = Store(disabled_presets={"A": _body({KEY: [7]})}, default_presets={"X": {}, "Y": {}},
                       windows={1: {DIS: "A", DFL: "X"}})
         self.assertTrue(ContinueTable.can_delete(store, DIS))
-        self.assertTrue(ContinueTable.can_delete(store, DFL))
         store = ContinueTable.with_deleted_preset(store, DIS, "A")
         self.assertEqual(store.disabled_presets, {}, "プリセットが 0 個になる")
-        self.assertEqual(store.windows[1], {DIS: None, DFL: "X"}, "もう片方の種類は変えない")
-        self.assertEqual(ContinueTable.table_for(store, 1), Table())
+        self.assertEqual(ContinueTable.table_for(store, 1).disabled, _body({KEY: [7]}), "窓の表は残る")
         self.assertFalse(ContinueTable.can_delete(store, DIS), "0 個では消すものが無い")
         with self.assertRaises(ValueError):
             ContinueTable.with_deleted_preset(store, DIS, "A")
         with self.assertRaises(ValueError):
             ContinueTable.with_deleted_preset(store, DFL, "Z")
-
-    def test_a_kind_with_no_presets_can_start_again(self):
-        store = ContinueTable.with_new_preset(Store(), DIS, "最初")
-        self.assertEqual(ContinueTable.preset_names(store, DIS), ["最初"])
-        self.assertEqual(ContinueTable.preset_names(store, DFL), [])
-        self.assertIsNone(ContinueTable.choice_for(store, 1, DIS), "作っただけでは窓は選ばない")
-        self.assertEqual(ContinueTable.with_edited_table(Store(), {DIS: None, DFL: None}, Table(disabled=_body({KEY: [1]}))),
-                         Store(), "選んでいるプリセットが無い種類は書かない")
-
-    def test_with_edited_table_writes_only_the_kinds_that_changed(self):
-        store = _two_presets()
-        table = Table(disabled=_body({KEY: [7, 70]}), default=store.default_presets["X"])
-        edited = ContinueTable.with_edited_table(store, {DIS: "A", DFL: "X"}, table)
-        self.assertEqual(edited.disabled_presets["A"], _body({KEY: [7, 70]}))
-        self.assertIs(edited.default_presets, store.default_presets, "変わらない種類は同じもの")
-        self.assertEqual(store.disabled_presets["A"], _body({KEY: [7]}))
 
 
 class TestImports(unittest.TestCase):
@@ -858,11 +924,11 @@ class TestPerWindowPresets(_MonitorCase):
         self.assertTrue(self._judgement_line(two).endswith("【プレイ】（デフォ続行）"), two.logs)
 
     def test_none_for_a_window_turns_that_table_off_for_that_window_only(self):
-        store = ContinueTable.with_choice(_two_presets(), 1, DIS, None)
+        store = ContinueTable.with_applied_preset(_two_presets(), 1, DIS, None)
         ContinueTable.set_current(store)
         one = self._monitor({KEY: {7, 8}}, ids=[7], window_idx=1)
         self.assertEqual(self._result_of(one), "continue", "窓 1 の続行無効は「なし」")
-        ContinueTable.set_current(ContinueTable.with_choice(store, 2, DIS, "A"))
+        ContinueTable.set_current(ContinueTable.with_applied_preset(store, 2, DIS, "A"))
         two = self._monitor({KEY: {7, 8}}, ids=[7], window_idx=2)
         self.assertEqual(self._result_of(two), "skip", "窓 2 は A に変えた")
 
@@ -875,7 +941,7 @@ class TestPerWindowPresets(_MonitorCase):
     def test_a_change_of_the_choice_reaches_a_running_monitor(self):
         monitor = self._monitor({KEY: {7, 8}}, ids=[7], window_idx=2)
         self.assertEqual(self._result_of(monitor), "continue")
-        ContinueTable.set_current(ContinueTable.with_choice(ContinueTable.current(), 2, DIS, "A"))
+        ContinueTable.set_current(ContinueTable.with_applied_preset(ContinueTable.current(), 2, DIS, "A"))
         self.assertEqual(self._result_of(monitor), "skip")
 
     def test_group_instances_still_never_overlay_in_any_window(self):
@@ -936,12 +1002,12 @@ PLUSH = 70                      # item.json の Guidance Plush
 OTHER_ITEM = 5                  # item.json の Radar
 
 
-def _rule_store(*rules, windows=None) -> Store:
-    """窓 1・2 は何も選んでいない（＝「なし」）。プリセットは 続行無効 BASE・無7・無8、デフォ続行 BASE・足9・足10"""
+def _rule_store(*rules, windows=None, switch="all") -> Store:
+    """窓は何も選んでいない（＝表は空）。「アイテムで切り替える」は switch の窓だけ ON（初めは全窓）。プリセットは 続行無効 BASE・無7・無8、デフォ続行 BASE・足9・足10"""
     return Store(
         disabled_presets={BASE: {}, "無7": _body({KEY: [7]}), "無8": _body({KEY: [8]})},
         default_presets={BASE: {}, "足9": _body({KEY: [9]}), "足10": _body({KEY: [10]})},
-        windows=windows or {}, item_rules=tuple(rules))
+        windows=windows or {}, item_rules=tuple(rules), switch=switch)
 
 
 class TestItemRuleLookup(unittest.TestCase):
@@ -1052,9 +1118,9 @@ class TestItemRuleOperations(unittest.TestCase):
 
     def test_preset_operations_keep_the_rules(self):
         store = _rule_store(Rule(PLUSH, "無7", "足9"))
-        store = ContinueTable.with_new_preset(store, DIS, "新")
+        store = ContinueTable.with_saved_preset(store, DIS, "新", {})
         store = ContinueTable.with_preset_body(store, DIS, "新", {KEY: [1]})
-        store = ContinueTable.with_choice(store, 1, DIS, "新")
+        store = ContinueTable.with_applied_preset(store, 1, DIS, "新")
         self.assertEqual(store.item_rules, (Rule(PLUSH, "無7", "足9"),))
 
 
@@ -1135,7 +1201,7 @@ class TestItemRulesFollowPresets(unittest.TestCase):
 
     def test_the_keep_label_cannot_be_a_preset_name(self):
         with self.assertRaises(ValueError):
-            ContinueTable.with_new_preset(_rule_store(), DIS, ContinueTable.KEEP_LABEL)
+            ContinueTable.with_saved_preset(_rule_store(), DIS, ContinueTable.KEEP_LABEL, {})
 
 
 class TestItemRuleJudgement(_MonitorCase):
@@ -1234,7 +1300,7 @@ class TestItemRuleSelfInserts(unittest.TestCase):
         ContinueTable.set_current(Store(
             disabled_presets={"有": _body({self.UNBOUND: [self.SLOT]}), "無": {}},
             windows={1: {DIS: "無"}, 2: {DIS: "有"}},
-            item_rules=(Rule(PLUSH, "有"), Rule(0, "無"))))
+            item_rules=(Rule(PLUSH, "有"), Rule(0, "無")), switch=[1, 2]))
 
     def _monitor(self, window_idx, held, instance_type=config.INSTANCE_PRIVATE):
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=window_idx)
@@ -1253,13 +1319,15 @@ class TestItemRuleSelfInserts(unittest.TestCase):
             self.assertFalse(self._monitor(1, PLUSH, itype)._self_inserts_table_disabled(), itype)
 
 
-class TestMigrationToV4(unittest.TestCase):
-    """v3 までの特別なプリセット「既定」の片づけ（初めて読むとき 1 回だけ。v4 にする）"""
+class TestMigrationToV5(unittest.TestCase):
+    """前の形（v1〜v4: 窓ごとにプリセットの名前を選ぶ）→ 窓ごとの表（v5）。初めて読むとき 1 回だけ書き換える。
+    v3 までの特別なプリセット「既定」の片づけも同じ読み込みで行う"""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "continue_table.json"
+        self.bak = Path(self.tmp.name) / "continue_table.json.v4.bak"
         patcher = patch.object(DebugLog, "write")
         self.log = patcher.start()
         self.addCleanup(patcher.stop)
@@ -1274,29 +1342,54 @@ class TestMigrationToV4(unittest.TestCase):
     def _lines(self):
         return [c.args[0] for c in self.log.call_args_list]
 
-    def test_the_users_file_loses_only_the_two_empty_base_presets(self):
+    def test_the_users_file_copies_the_preset_into_windows_1_and_2(self):
         emeco = {KEY: [3, 5, 7, 9, 11, 13, 15]}
+        original = {
+            "version": 4, "disabled_presets": {},
+            "default_presets": {"エメコ": emeco},
+            "windows": {"1": {"default": "エメコ"}, "2": {"default": "エメコ"}},
+            "item_rules": [{"item": 29, "default": "エメコ"}]}
+        store = self._load(original)
+        self.assertEqual(store.disabled_presets, {})
+        self.assertEqual(store.default_presets, {"エメコ": _body(emeco)}, "プリセットはそのまま")
+        self.assertEqual(store.item_rules, (Rule(29, KEEP, "エメコ"),), "アイテムの決まりもそのまま")
+        for idx in (1, 2):
+            self.assertEqual(ContinueTable.body_of(store, idx, DFL), _body(emeco), idx)
+            self.assertEqual(ContinueTable.display_name(store, idx, DFL), "エメコ", idx)
+            self.assertEqual(ContinueTable.display_name(store, idx, DIS), "なし", idx)
+            self.assertFalse(ContinueTable.window_table(store, idx).item_switch, "アイテムで切り替えるは OFF")
+        self.assertEqual(ContinueTable.table_for(store, 3), Table())
+        raw = self._raw()
+        self.assertEqual(raw["version"], 5)
+        self.assertEqual(raw["windows"]["1"]["default"], {KEY: sorted(emeco[KEY])})
+        self.assertEqual(raw["windows"]["1"]["default_from"], "エメコ")
+        self.assertEqual(raw["item_rules"], original["item_rules"])
+        self.assertEqual(json.loads(self.bak.read_text(encoding="utf-8")), original, "直す前のファイルを残す")
+
+    def test_the_user_file_before_the_base_preset_was_removed_gives_the_same_result(self):
+        """GQ の前の形（v3。空の「既定」が 2 つある）からでも同じ所へ着く"""
+        emeco = {KEY: [3, 5]}
         store = self._load({
             "version": 3, "disabled_presets": {"既定": {}},
             "default_presets": {"既定": {}, "エメコ": emeco},
             "windows": {"1": {"default": "エメコ"}, "2": {"default": "エメコ"}},
             "item_rules": [{"item": 29, "default": "エメコ"}]})
-        self.assertEqual(store.disabled_presets, {})
-        self.assertEqual(store.default_presets, {"エメコ": _body(emeco)})
-        self.assertEqual(store.windows, {1: {DFL: "エメコ"}, 2: {DFL: "エメコ"}})
-        self.assertEqual(store.item_rules, (Rule(29, KEEP, "エメコ"),))
-        for idx in (1, 2, 3):
-            self.assertIsNone(ContinueTable.choice_for(store, idx, DIS), "続行無効は「なし」")
-        self.assertEqual(ContinueTable.choice_for(store, 1, DFL), "エメコ")
-        self.assertIsNone(ContinueTable.choice_for(store, 3, DFL), "選んでいなかった窓は「なし」（空の既定と同じ結果）")
-        raw = self._raw()
-        self.assertEqual(raw["version"], 4)
-        self.assertEqual((raw["disabled_presets"], list(raw["default_presets"])), ({}, ["エメコ"]))
-        self.assertEqual(raw["windows"], {"1": {"default": "エメコ"}, "2": {"default": "エメコ"}})
-        self.assertEqual(raw["item_rules"], [{"item": 29, "default": "エメコ"}])
-        self.assertEqual(os.listdir(self.tmp.name), [self.path.name], ".bak などは作らない")
+        self.assertEqual((store.disabled_presets, list(store.default_presets)), ({}, ["エメコ"]))
+        self.assertEqual(ContinueTable.display_name(store, 1, DFL), "エメコ")
+        self.assertEqual(ContinueTable.display_name(store, 3, DFL), "なし", "選んでいなかった窓は空（空の既定と同じ結果）")
+        self.assertEqual(self._raw()["version"], 5)
 
-    def test_a_base_preset_with_content_becomes_the_default_named_preset_and_everything_follows(self):
+    def test_unchosen_and_none_windows_get_an_empty_table_and_the_switch_is_off_everywhere(self):
+        store = self._load({
+            "version": 4, "disabled_presets": {"A": {KEY: [1]}}, "default_presets": {"X": {KEY: [2]}},
+            "windows": {"1": {"disabled": "A", "default": None}, "2": {"disabled": "消えた"}, "3": {"default": "X"}}})
+        self.assertEqual(ContinueTable.body_of(store, 1, DIS), _body({KEY: [1]}))
+        self.assertEqual(ContinueTable.body_of(store, 1, DFL), {})
+        self.assertEqual(ContinueTable.table_for(store, 2), Table(), "消えた名前は空")
+        self.assertEqual(ContinueTable.body_of(store, 3, DFL), _body({KEY: [2]}))
+        self.assertTrue(all(not wt.item_switch for wt in store.windows.values()))
+
+    def test_a_base_preset_with_content_becomes_the_default_named_preset_and_is_copied(self):
         store = self._load({
             "version": 3, "disabled_presets": {"既定": {KEY: [7]}, "A": {}},
             "default_presets": {"既定": {KEY: [9]}},
@@ -1305,34 +1398,34 @@ class TestMigrationToV4(unittest.TestCase):
         self.assertEqual(list(store.disabled_presets), ["デフォルト", "A"], "並びはそのまま")
         self.assertEqual(store.disabled_presets["デフォルト"], _body({KEY: [7]}))
         self.assertEqual(store.default_presets, {"デフォルト": _body({KEY: [9]})})
-        self.assertEqual(store.windows[1][DIS], "デフォルト", "窓の選びが追う")
-        self.assertEqual(store.windows[2], {DIS: "A", DFL: None}, "選んでいた窓はそのまま")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "デフォルト", "窓の選びが追う")
+        self.assertEqual(ContinueTable.body_of(store, 2, DIS), {}, "「A」（空）を選んでいた窓")
+        self.assertEqual(ContinueTable.body_of(store, 2, DFL), {}, "「なし」を選んでいた窓")
         self.assertEqual(store.item_rules, (Rule(5, "デフォルト", "デフォルト"), Rule(6, None, KEEP)), "決まりが追う")
 
     def test_windows_that_chose_nothing_keep_using_a_base_preset_that_has_content(self):
-        """選んでいなかった窓は今まで「既定」を使っていた。中身が残る間は、その窓の選びとして書いて使い続ける"""
+        """選んでいなかった窓は今まで「既定」を使っていた。中身が残る間は、その窓の表に写して使い続ける"""
         store = self._load({"version": 3, "disabled_presets": {"既定": {KEY: [7]}}, "default_presets": {"既定": {}},
                             "windows": {"2": {"disabled": None}}})
         for idx in range(1, config.MAX_WINDOWS + 1):
-            expected = None if idx == 2 else "デフォルト"
-            self.assertEqual(ContinueTable.choice_for(store, idx, DIS), expected, idx)
-            self.assertIsNone(ContinueTable.choice_for(store, idx, DFL), idx)
+            expected = "なし" if idx == 2 else "デフォルト"
+            self.assertEqual(ContinueTable.display_name(store, idx, DIS), expected, idx)
+            self.assertEqual(ContinueTable.display_name(store, idx, DFL), "なし", idx)
 
     def test_an_existing_default_named_preset_keeps_the_base_preset_as_it_is(self):
         store = self._load({"version": 3, "disabled_presets": {"既定": {KEY: [7]}, "デフォルト": {KEY: [8]}},
                             "default_presets": {"既定": {KEY: [9]}},
                             "windows": {"1": {"disabled": "既定"}, "2": {"disabled": "デフォルト"}}})
         self.assertEqual(list(store.disabled_presets), ["既定", "デフォルト"], "名前を変えない")
-        self.assertEqual(store.disabled_presets["既定"], _body({KEY: [7]}))
-        self.assertEqual(store.windows[1][DIS], "既定")
-        self.assertEqual(store.windows[2][DIS], "デフォルト")
-        self.assertEqual(ContinueTable.choice_for(store, 3, DIS), "既定", "選んでいなかった窓は今まで通り「既定」の中身")
+        self.assertEqual(ContinueTable.display_name(store, 1, DIS), "既定")
+        self.assertEqual(ContinueTable.display_name(store, 2, DIS), "デフォルト")
+        self.assertEqual(ContinueTable.display_name(store, 3, DIS), "既定", "選んでいなかった窓は今まで通り「既定」の中身")
         self.assertEqual(list(store.default_presets), ["デフォルト"], "もう片方の種類は別に片づく")
         self.assertTrue(any("デフォルト" in line and "既定" in line for line in self._lines()), self._lines())
 
     def test_the_second_load_does_nothing(self):
-        self._load({"version": 3, "disabled_presets": {"既定": {}}, "default_presets": {"既定": {KEY: [9]}},
-                    "windows": {}})
+        self._load({"version": 4, "disabled_presets": {}, "default_presets": {"X": {KEY: [9]}},
+                    "windows": {"1": {"default": "X"}}})
         first_bytes = self.path.read_bytes()
         self.log.reset_mock()
         with patch.object(ContinueTable, "save") as save, \
@@ -1341,39 +1434,50 @@ class TestMigrationToV4(unittest.TestCase):
         save.assert_not_called()
         persist.assert_not_called()
         self.assertEqual(self.path.read_bytes(), first_bytes)
-        self.assertEqual(again.default_presets, {"デフォルト": _body({KEY: [9]})})
+        self.assertEqual(ContinueTable.display_name(again, 1, DFL), "X")
         self.assertEqual(self._lines(), [], "debug.log にも何も書かない")
 
-    def test_a_v4_file_with_a_user_made_base_named_preset_is_left_alone(self):
+    def test_a_v4_file_with_a_user_made_base_named_preset_is_not_cleaned_up_again(self):
         store = self._load({"version": 4, "disabled_presets": {"既定": {}}, "default_presets": {}, "windows": {}})
         self.assertEqual(store.disabled_presets, {"既定": {}}, "v4 のあとに作った名前は触らない")
+
+    def test_an_existing_backup_is_not_overwritten(self):
+        self.bak.write_bytes(b"older")
+        self._load({"version": 4, "disabled_presets": {}, "default_presets": {"X": {KEY: [9]}},
+                    "windows": {"1": {"default": "X"}}})
+        self.assertEqual(self.bak.read_bytes(), b"older")
+        self.assertEqual(self._raw()["version"], 5, "書き換えは出来る")
+
+    def test_a_failed_backup_does_not_rewrite(self):
+        original = {"version": 4, "disabled_presets": {}, "default_presets": {"X": {KEY: [9]}},
+                    "windows": {"1": {"default": "X"}}}
+        self.path.write_text(json.dumps(original), encoding="utf-8")
+        before = self.path.read_bytes()
+        with patch.object(ContinueTable.shutil, "copy2", side_effect=OSError("disk")):
+            store = ContinueTable.load(self.path)
+        self.assertEqual(self.path.read_bytes(), before, "残せなかったので書き換えない")
+        self.assertEqual(ContinueTable.display_name(store, 1, DFL), "X", "メモリの上では使える")
+        self.assertFalse(self.bak.exists())
 
     def test_v2_and_v1_reach_the_same_place(self):
         v2 = self._load({"version": 2, "disabled_presets": {"既定": {KEY: [5]}}, "default_presets": {"既定": {}},
                          "windows": {}})
         self.assertEqual(v2.disabled_presets, {"デフォルト": _body({KEY: [5]})})
         self.assertEqual(v2.default_presets, {})
-        self.assertEqual(self._raw()["version"], 4)
+        self.assertEqual(ContinueTable.display_name(v2, 1, DIS), "デフォルト", "今まで全窓が使っていた")
+        self.assertEqual(self._raw()["version"], 5)
         self.assertTrue((Path(self.tmp.name) / "continue_table.json.listtool.bak").exists(), "番号を直したので .bak を残す")
         self.path.unlink()
         v1 = self._load({"version": 1, "use_disabled": True, "use_default": True,
                          "disabled": {KEY: [5]}, "default": {}})
         self.assertEqual(v1.disabled_presets, {"デフォルト": _body({KEY: [5]})})
         self.assertEqual(v1.default_presets, {}, "空の表はプリセットにしない")
-        self.assertEqual(self._raw()["version"], 4)
+        self.assertEqual(self._raw()["version"], 5)
 
     def test_a_v1_file_with_empty_tables_gets_no_presets(self):
         store = self._load({"version": 1, "use_disabled": True, "use_default": True, "disabled": {}, "default": {}})
         self.assertEqual((store.disabled_presets, store.default_presets), ({}, {}))
-        self.assertEqual(self._raw()["version"], 4)
-
-    def test_a_v3_file_without_a_base_preset_only_gets_the_new_version(self):
-        store = self._load({"version": 3, "disabled_presets": {"A": {KEY: [1]}}, "default_presets": {},
-                            "windows": {"1": {"disabled": "A"}}})
-        self.assertEqual(store.disabled_presets, {"A": _body({KEY: [1]})})
-        self.assertEqual(store.windows, {1: {DIS: "A"}})
-        self.assertEqual(self._raw()["version"], 4)
-        self.assertEqual(os.listdir(self.tmp.name), [self.path.name])
+        self.assertEqual(self._raw()["version"], 5)
 
     def test_a_save_that_fails_still_gives_the_migrated_store(self):
         self.path.write_text(json.dumps({"version": 3, "disabled_presets": {"既定": {}}, "default_presets": {},
@@ -1381,3 +1485,92 @@ class TestMigrationToV4(unittest.TestCase):
         with patch.object(ContinueTable.os, "replace", side_effect=OSError("disk")):
             store = ContinueTable.load(self.path)
         self.assertEqual(store.disabled_presets, {})
+
+
+class TestItemSwitch(unittest.TestCase):
+    """窓ごとの「アイテムで切り替える」（最初は OFF）。ON の窓だけ、決まりが窓の表の代わりになる"""
+
+    def _store(self, switch):
+        return _rule_store(Rule(PLUSH, "無7", None), Rule(0, KEEP, "足10"),
+                           windows={1: {DIS: "無8", DFL: "足9"}, 2: {DIS: "無8", DFL: "足9"}}, switch=switch)
+
+    def test_it_is_off_at_first_and_the_rules_do_nothing(self):
+        store = self._store(switch=())
+        self.assertFalse(ContinueTable.window_table(store, 1).item_switch)
+        for held in (PLUSH, 0, 999, None):
+            self.assertEqual(ContinueTable.table_for(store, 1, held), ContinueTable.table_for(store, 1), held)
+            self.assertIsNone(ContinueTable.override(store, 1, DIS, held), held)
+        self.assertFalse(ContinueTable.rule_changes_table(store, 1, PLUSH))
+
+    def test_it_is_per_window(self):
+        store = self._store(switch=[1])
+        one, two = ContinueTable.table_for(store, 1, PLUSH), ContinueTable.table_for(store, 2, PLUSH)
+        self.assertEqual((one.disabled, one.default), (_body({KEY: [7]}), {}), "窓 1: 決まりの 無7 と なし")
+        self.assertEqual((two.disabled, two.default), (_body({KEY: [8]}), _body({KEY: [9]})), "窓 2: 窓の表のまま")
+
+    def test_the_rule_replaces_the_window_table_per_kind_and_never_writes_it(self):
+        store = self._store(switch=[1])
+        before = ContinueTable.window_table(store, 1)
+        held = ContinueTable.table_for(store, 1, 0)
+        self.assertEqual((held.disabled, held.default), (_body({KEY: [8]}), _body({KEY: [10]})), "窓のままの種類は窓の表")
+        self.assertEqual(ContinueTable.window_table(store, 1), before)
+        self.assertEqual(ContinueTable.override(store, 1, DIS, 0), None)
+        self.assertEqual(ContinueTable.override(store, 1, DFL, 0), ("足10",))
+        self.assertEqual(ContinueTable.override(store, 1, DFL, PLUSH), (None,), "「なし」")
+        self.assertEqual(ContinueTable.override(store, 1, DIS, PLUSH), ("無7",))
+
+    def test_a_rule_naming_a_missing_preset_leaves_the_window_table(self):
+        store = _rule_store(Rule(PLUSH, "消えた", "消えた"), windows={1: {DIS: "無8"}}, switch=[1])
+        self.assertIsNone(ContinueTable.override(store, 1, DIS, PLUSH))
+        self.assertEqual(ContinueTable.table_for(store, 1, PLUSH), ContinueTable.table_for(store, 1))
+
+    def test_not_holding_anything_is_item_zero(self):
+        store = self._store(switch=[1])
+        self.assertEqual(ContinueTable.table_for(store, 1, 0).default, _body({KEY: [10]}))
+        self.assertEqual(ContinueTable.table_for(store, 1, None).default, _body({KEY: [9]}), "None は見ない")
+
+    def test_the_switch_setter_changes_one_window_and_keeps_the_table(self):
+        store = ContinueTable.with_item_switch(self._store(switch=()), 2, True)
+        self.assertTrue(ContinueTable.window_table(store, 2).item_switch)
+        self.assertFalse(ContinueTable.window_table(store, 1).item_switch)
+        self.assertEqual(ContinueTable.body_of(store, 2, DIS), _body({KEY: [8]}))
+        self.assertFalse(ContinueTable.window_table(ContinueTable.with_item_switch(store, 2, False), 2).item_switch)
+
+    def test_it_is_saved_and_loaded_per_window(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "continue_table.json"
+        store = self._store(switch=[2])
+        ContinueTable.save(store, path)
+        loaded = ContinueTable.load(path)
+        self.assertEqual(loaded, store)
+        self.assertEqual([ContinueTable.window_table(loaded, i).item_switch for i in (1, 2)], [False, True])
+
+    def test_group_instances_do_not_overlay_even_with_the_switch_on(self):
+        ContinueTable.set_current(self._store(switch="all"))
+        self.addCleanup(ContinueTable.set_current, Store())
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = LogMonitor.LogMonitor(WindowConfig(), {KEY: {7}}, lambda _m: None, window_idx=1)
+            monitor.st.instance_type = itype
+            monitor.st.held_item_id = PLUSH
+            self.assertEqual(monitor._keep_on(), {KEY: {7}}, itype)
+            self.assertFalse(monitor._self_inserts_table_disabled(), itype)
+
+    def test_self_inserts_follows_the_rule_applied_disabled_table_of_that_window(self):
+        slot = TerrorIds.SELF_INSERTS_BLOODTHIRSTY
+        unbound = "Unbound/アンバウンド"
+        store = Store(disabled_presets={"有": _body({unbound: [slot]}), "無": {}},
+                      windows={1: {DIS: "無"}, 2: {DIS: "有"}},
+                      item_rules=(Rule(PLUSH, "有"),), switch=[1])           # 窓 2 はスイッチ OFF
+        ContinueTable.set_current(store)
+        self.addCleanup(ContinueTable.set_current, Store())
+
+        def disabled(idx, held):
+            monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=idx)
+            monitor.st.instance_type = config.INSTANCE_PRIVATE
+            monitor.st.held_item_id = held
+            return monitor._self_inserts_table_disabled()
+        self.assertTrue(disabled(1, PLUSH), "窓 1: スイッチ ON で決まりが当てはまる → 決まりの 有")
+        self.assertFalse(disabled(1, 0), "窓 1: 当てはまらない → 窓の 無")
+        self.assertTrue(disabled(2, 0), "窓 2: スイッチ OFF → 窓の表（有）")
+        self.assertTrue(disabled(2, PLUSH))

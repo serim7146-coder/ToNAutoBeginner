@@ -184,14 +184,14 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     def setUp(self):
         SharedState.set_instance_type(config.INSTANCE_PUBLIC)
         SharedState.continue_round_reset()
-        self.addCleanup(ContinueTable.set_current, ContinueTable.Store())
+        self.addCleanup(ContinueTable.set_current, choice_store())
         self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
         self.addCleanup(SharedState.continue_round_reset)
 
     def _table(self, disabled=None, default=None, use_disabled=True):
         """窓 1 が「基本」の 2 つのプリセットを使う保存内容にする（use_disabled=False は窓 1 の続行無効を「なし」に）"""
         windows = {1: {ContinueTable.DISABLED: "基本" if use_disabled else None, ContinueTable.DEFAULT: "基本"}}
-        ContinueTable.set_current(ContinueTable.Store(
+        ContinueTable.set_current(choice_store(
             disabled_presets={"基本": disabled or {}},
             default_presets={"基本": default or {}},
             windows=windows))
@@ -234,7 +234,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
         self.assertFalse(ContinueTable.disables(table, "Classic/クラシック", self.SLOT),
                          "デフォ続行は続行無効ではない")
         self.assertFalse(ContinueTable.disables(table, "Fog/霧", self.SLOT))
-        store = ContinueTable.Store(
+        store = choice_store(
             disabled_presets={"基本": table.disabled},
             windows={1: {ContinueTable.DISABLED: "基本"}, 2: {ContinueTable.DISABLED: None}})
         self.assertTrue(ContinueTable.disables(ContinueTable.table_for(store, 1), self.UNBOUND_KEY, self.SLOT))

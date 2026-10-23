@@ -124,6 +124,7 @@ class TestStopOrder(unittest.TestCase):
         app._release_suicide_keys = lambda hs: list(hs)
         app._show_own_windows_again = lambda: None
         app._refresh_start_stop_button = lambda: None
+        app._refresh_continue_choices = lambda *a, **k: None
         app.lbl_win_warn = MagicMock()
         return app
 

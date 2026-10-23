@@ -418,9 +418,9 @@ class TestLogMonitorRemoval(unittest.TestCase):
 
     def test_the_overlay_tables_are_not_touched(self):
         store = ContinueTable.with_preset_body(
-            ContinueTable.with_new_preset(self.table_before, ContinueTable.DEFAULT, "基本"),
+            ContinueTable.with_saved_preset(self.table_before, ContinueTable.DEFAULT, "基本", {}),
             ContinueTable.DEFAULT, "基本", {CLASSIC: [7]})
-        store = ContinueTable.with_choice(store, 2, ContinueTable.DEFAULT, "基本")
+        store = ContinueTable.with_applied_preset(store, 2, ContinueTable.DEFAULT, "基本")
         ContinueTable.set_current(store)
         self.addCleanup(ContinueTable.set_current, self.table_before)
         ContinueList.set_current({CLASSIC: frozenset({7})})
@@ -456,7 +456,7 @@ class _ListWindowCase(unittest.TestCase):
     def setUp(self):
         _reset_list(self)
         ContinueTable.table_path().unlink(missing_ok=True)
-        ContinueTable.set_current(ContinueTable.Store(disabled_presets={"基本": {}}, default_presets={"基本": {}}))
+        ContinueTable.set_current(ContinueTable.Store())
         self.addCleanup(ContinueTable.table_path().unlink, missing_ok=True)
         self.addCleanup(ContinueTable.set_current, ContinueTable.Store())
         patcher = patch.object(ContinueTableGUI, "SAVE_DELAY_MS", 30)
@@ -481,25 +481,26 @@ class _ListWindowCase(unittest.TestCase):
 
 
 class TestListInTheTableWindow(_ListWindowCase):
-    def test_the_list_is_a_third_kind_with_a_blue_frame(self):
+    """続行リストの画面（window_idx なし）: 続行リストだけを編集する"""
+
+    def test_the_list_window_edits_only_the_list_with_a_blue_frame(self):
         self.assertEqual(ContinueTableGUI.WHICH_TEXT[LIST], "続行リスト")
         self.assertEqual(ContinueTableGUI.COLOR_LIST, "#4FA3FF")
-        radios = [w.cget("text") for w in _widgets_of(self.win, ttk.Radiobutton)]
-        self.assertEqual(radios, ["続行リスト", "続行無効", "デフォ続行"], "続行リストが先頭")
-        self.assertEqual(self.win.v_which.get(), LIST, "最初に選ばれているのは続行リスト")
+        self.assertEqual(self.win.title(), "続行リスト")
+        self.assertEqual(_widgets_of(self.win, ttk.Radiobutton), [], "続行無効・デフォ続行の切り替えは無い")
+        self.assertEqual(self.win.v_which.get(), LIST)
         self.assertEqual(self.win._which(), LIST)
         self.win.toggle(5)
         self.assertEqual(self._style(5), ("#4FA3FF", 2.0))
         self.assertEqual(self._style(6)[1], 1.0, "入っていないものは細い灰色の枠")
 
-    def test_the_bottom_buttons_are_in_order_with_the_list_pair_first(self):
+    def test_the_bottom_buttons_are_the_list_pair_only(self):
         win = ContinueTableGUI.ContinueTableWindow(
             self.root, on_import_tnl=lambda **k: None, on_export_tnl=lambda **k: None)
         self.addCleanup(win.destroy)
-        bottom = next(b for b in _widgets_of(win, ttk.Button) if b.cget("text") == ".tnnl を続行無効へ読み込む").master
+        bottom = next(b for b in _widgets_of(win, ttk.Button) if b.cget("text") == ".tnl を続行リストへ読み込む").master
         self.assertEqual([b.cget("text") for b in bottom.pack_slaves()],
-                         [".tnl を続行リストへ読み込む", "続行リストを .tnl に書き出す",
-                          ".tnnl を続行無効へ読み込む", ".tnl をデフォ続行へ読み込む"])
+                         [".tnl を続行リストへ読み込む", "続行リストを .tnl に書き出す"])
 
     def test_the_list_buttons_call_the_callbacks_with_the_window_as_parent(self):
         calls = []
@@ -515,22 +516,14 @@ class TestListInTheTableWindow(_ListWindowCase):
         texts = [b.cget("text") for b in _widgets_of(self.win, ttk.Button)]
         self.assertNotIn(".tnl を続行リストへ読み込む", texts)
         self.assertNotIn("続行リストを .tnl に書き出す", texts)
-        self.assertIn(".tnnl を続行無効へ読み込む", texts, "ほかのボタンは残る")
-        self.assertIn(".tnl をデフォ続行へ読み込む", texts)
+        self.assertEqual(sorted(texts), sorted(["全選択", "全解除"]), "表のためのボタンも無い")
 
-    def test_the_preset_controls_are_hidden_for_the_list_and_back_for_the_others(self):
-        widgets = [w for w, _pack in self.win._preset_widgets]
-        self.assertEqual(len(widgets), 6, "ラベル・ドロップダウン・4 つのボタン")
-        self.assertEqual([w.winfo_manager() for w in widgets], [""] * 6, "隠れている")
-        self.win.v_which.set(ContinueTable.DEFAULT)
-        self.assertEqual([w.winfo_manager() for w in widgets], ["pack"] * 6)
-        order = [w for w in self.win.cb_preset.master.pack_slaves() if w in widgets]
-        self.assertEqual(order, widgets, "元の並びで戻る")
-        self.win.v_which.set(LIST)
-        self.assertEqual([w.winfo_manager() for w in widgets], [""] * 6)
-        self.win.v_which.set(ContinueTable.DISABLED)
-        self.assertEqual([w.winfo_manager() for w in widgets], ["pack"] * 6)
-        self.assertEqual(self.win.v_preset.get(), "基本")
+    def test_there_is_no_preset_row_and_no_item_rule_section(self):
+        texts = [b.cget("text") for b in _widgets_of(self.win, ttk.Button)]
+        for text in ("プリセットとして保存…", "名前変更", "削除", "Add", ".tnnl を続行無効へ読み込む", ".tnl をデフォ続行へ読み込む"):
+            self.assertNotIn(text, texts)
+        self.assertFalse(hasattr(self.win, "cb_preset"))
+        self.assertEqual([f for f in _widgets_of(self.win, ttk.LabelFrame) if f.cget("text").startswith("アイテム")], [])
 
     def test_clicking_toggles_the_own_list_and_applies_at_once(self):
         self.win.toggle(5)
@@ -540,36 +533,40 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.assertEqual(ContinueList.current(), {})
         self.assertEqual(len(self.list_changed), 2)
 
-    def test_clicking_does_not_touch_the_overlay_tables_or_their_file(self):
+    def test_clicking_does_not_touch_the_window_tables_or_their_file(self):
         before = ContinueTable.current()
         self.win.toggle(5)
         self.win._flush_save()
         self.assertIs(ContinueTable.current(), before)
-        self.assertFalse(ContinueTable.table_path().exists(), "続行表のファイルは書かない")
-        self.assertEqual(self.changed, [], "プリセットの件数の更新は要らない")
+        self.assertFalse(ContinueTable.table_path().exists(), "窓の表のファイルは書かない")
+        self.assertEqual(self.changed, [], "窓の表の画面へ知らせることは無い")
 
-    def test_the_overlay_tables_do_not_touch_the_list(self):
-        self.win.v_which.set(ContinueTable.DISABLED)
-        self.win.toggle(5)
-        self.assertEqual(ContinueList.current(), {})
-        self.assertEqual(self.list_changed, [])
-
-    def test_the_other_two_tables_still_show_their_thin_frames(self):
-        store = ContinueTable.with_preset_body(ContinueTable.current(), ContinueTable.DISABLED, "基本", {CLASSIC: [1, 3]})
-        store = ContinueTable.with_preset_body(store, ContinueTable.DEFAULT, "基本", {CLASSIC: [2, 3]})
+    def test_the_window_tables_are_not_shown_in_the_list_window(self):
+        store = ContinueTable.with_window_table(
+            ContinueTable.Store(), 1, ContinueTable.Table(disabled={CLASSIC: frozenset({1, 3})},
+                                                          default={CLASSIC: frozenset({2, 3})}))
         ContinueTable.set_current(store)
         self.win._restyle_all()
-        self.assertEqual(self._style(1), (ContinueTableGUI.COLOR_DISABLED, 1.0))
-        self.assertEqual(self._style(2), (ContinueTableGUI.COLOR_DEFAULT, 1.0))
-        self.assertEqual(self._style(3), (ContinueTableGUI.COLOR_DEFAULT, 1.0), "両方なら重ねで勝つデフォ続行の色")
+        self.assertEqual(self._style(1), (ContinueTableGUI.COLOR_IDLE, 1.0), "窓の表は続行リストの画面には出さない")
+        self.assertEqual(self._style(2), (ContinueTableGUI.COLOR_IDLE, 1.0))
         self.win.toggle(1)
-        self.assertEqual(self._style(1), ("#4FA3FF", 2.0), "続行リストに入れたらそちらが強い")
+        self.assertEqual(self._style(1), ("#4FA3FF", 2.0))
 
-    def test_the_list_is_not_shown_while_editing_the_overlay_tables(self):
-        ContinueList.set_current({CLASSIC: frozenset({5})})
-        self.win.v_which.set(ContinueTable.DISABLED)
-        self.win._restyle_all()
-        self.assertEqual(self._style(5), (ContinueTableGUI.COLOR_IDLE, 1.0), "今までどおりの見た目")
+    def test_a_window_table_window_keeps_the_list_apart(self):
+        win = ContinueTableGUI.ContinueTableWindow(self.root, on_change=lambda: self.changed.append(1),
+                                                   on_list_change=lambda: self.list_changed.append(1),
+                                                   window_idx=1, kind=ContinueTable.DISABLED)
+        self.addCleanup(win.destroy)
+        win.toggle(5)
+        self.assertEqual(ContinueList.current(), {}, "窓の表を押しても続行リストは変わらない")
+        self.assertEqual(self.list_changed, [])
+        self.assertEqual(ContinueTable.body_of(ContinueTable.current(), 1, ContinueTable.DISABLED),
+                         {CLASSIC: frozenset({5})})
+        ContinueList.set_current({CLASSIC: frozenset({6})})
+        win._restyle_all()
+        cell = win._cells[6]
+        self.assertEqual(win.canvas.itemcget(cell.frame, "outline"), ContinueTableGUI.COLOR_IDLE,
+                         "窓の表の画面には続行リストは出さない")
 
     def test_select_all_and_clear_all_work_on_the_visible_cells(self):
         self.win.select_all()
@@ -635,10 +632,14 @@ class TestListInTheTableWindow(_ListWindowCase):
         self.win.refresh_list()
         self.assertEqual(self._style(5)[1], 1.0)
 
-    def test_the_item_rules_and_imports_are_still_there(self):
-        texts = [b.cget("text") for b in _widgets_of(self.win, ttk.Button)]
-        for text in (".tnl をデフォ続行へ読み込む", ".tnnl を続行無効へ読み込む", "Add", "全選択", "全解除"):
+    def test_the_item_rules_and_the_table_imports_are_in_the_window_table_window(self):
+        win = ContinueTableGUI.ContinueTableWindow(self.root, window_idx=2, kind=ContinueTable.DEFAULT)
+        self.addCleanup(win.destroy)
+        texts = [b.cget("text") for b in _widgets_of(win, ttk.Button)]
+        for text in (".tnl をデフォ続行へ読み込む", "Add", "全選択", "全解除", "プリセットとして保存…", "名前変更", "削除"):
             self.assertIn(text, texts)
+        self.assertNotIn(".tnnl を続行無効へ読み込む", texts, "その種類の読み込みのボタンだけ")
+        self.assertEqual(win.title(), "窓2 のデフォ続行")
 
 
 def _widgets_of(widget, cls):
@@ -744,19 +745,19 @@ class TestStartup(_AppCase):
         self.assertNotIn("再読み込み", texts)
         self.assertNotIn("参照…", texts)
         frames = [w.cget("text") for w in _widgets_of(app, ttk.LabelFrame)]
-        self.assertNotIn("① 続行リスト", frames)
         self.assertNotIn("① 続行リスト(.tnl)", frames)
         self.assertEqual(frames.count("続行表"), 0, "古い「続行表」の枠は残っていない")
+        self.assertNotIn("① 続行表", frames)
 
     def test_the_continue_table_frame_is_the_first_section_and_holds_the_list_status(self):
         app = self._app({})
         first = next(w for w in app.pack_slaves() if isinstance(w, ttk.LabelFrame))
-        self.assertEqual(first.cget("text"), "① 続行表", "最初の枠")
-        self.assertIs(app.lbl_tnl.master, first, "リストの状態の文字は続行表の枠の中")
+        self.assertEqual(first.cget("text"), "① 続行リスト", "最初の枠")
+        self.assertIs(app.lbl_tnl.master, first, "リストの状態の文字は続行リストの枠の中")
         row = first.pack_slaves()
         self.assertIsInstance(row[0], ttk.Button)
-        self.assertEqual(row[0].cget("text"), "続行表")
-        self.assertEqual(row[1:], [app.lbl_tnl], "続行表のボタン → リストの状態の文字（プリセットの件数は出さない）")
+        self.assertEqual(row[0].cget("text"), "続行リスト")
+        self.assertEqual(row[1:], [app.lbl_tnl], "続行リストのボタン → リストの状態の文字（プリセットの件数は出さない）")
         self.assertFalse(hasattr(app, "lbl_ct_count"))
 
 

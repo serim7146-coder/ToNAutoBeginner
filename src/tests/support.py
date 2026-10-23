@@ -990,5 +990,19 @@ class RunNow:
         self.target()
 
 
+def choice_store(disabled_presets=None, default_presets=None, windows=None, item_rules=(), switch=()):
+    """続行表の保存内容を、窓ごとの「選んだプリセット」で書いて作る（GR のテスト用）。windows は {窓の番号: {"disabled": 名前|None,
+    "default": 名前|None}}。選んだプリセットの中身が、その窓の表に写される（選んでいない・None は空）。
+    switch は「アイテムで切り替える」を ON にする窓の番号（"all" なら 1〜MAX_WINDOWS）"""
+    import ContinueTable
+    store = ContinueTable.from_v4(ContinueTable._V4(
+        dict(disabled_presets or {}), dict(default_presets or {}), dict(windows or {}), tuple(item_rules)))
+    if switch == "all":
+        switch = range(1, config.MAX_WINDOWS + 1)
+    for idx in switch:
+        store = ContinueTable.with_item_switch(store, idx, True)
+    return store
+
+
 # `from tests.support import *` で、_ で始まる道具・setUpModule・tearDownModule も渡す
 __all__ = [name for name in dir() if not name.startswith("__")]
