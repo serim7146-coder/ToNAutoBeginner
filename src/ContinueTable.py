@@ -8,18 +8,21 @@
 Cold Night のラウンドは Special/Moon の 1 つ）、番号はツールの独自の番号（TerrorIds）。重ねるのは続行リストの dict だけで、
 3クラ済み・完全放置モードの自爆・全続行・全自爆などは今のまま（LogMonitor._keep_on）。
 
-表（GL）は続行無効・デフォ続行それぞれ、名前を付けたプリセットをいくつでも持つ（Store）。
-どのプリセットを使うかは窓ごと（メイン画面の窓の設定）。「なし」を選んだ窓はその表を重ねない。
-選んでいない窓は「既定」（無ければ先頭）。窓の判定は table_for(store, 窓の番号) の Table で見る。
+表（GL）は続行無効・デフォ続行それぞれ、名前を付けたプリセットをいくつでも持つ（Store）。最初は 0 個で、
+特別なプリセットは無い（最後の 1 つも消せる）。どのプリセットを使うかは窓ごと（メイン画面の窓の設定）。
+「なし」を選んだ窓・選んでいない窓・選んだプリセットが消えた窓はその表を重ねない。窓の判定は
+table_for(store, 窓の番号) の Table で見る。
 
 アイテムで切り替え（GM）: 全窓共通の決まりの並び（Store.item_rules）。窓が今持っているアイテム
 （0 は持っていない）で上から最初に当てはまる決まりが、その窓の選んだプリセットを種類ごとに
 上書きする（窓のまま／なし／プリセット名）。当てはまらなければ窓の選択だけ。
 
-保存先は %APPDATA%\\ToNAutoBeginner\\continue_table.json（v3）。v1（表が 1 組だけ）は
-読むときに「既定」というプリセットへ移す。無い・壊れているときは空の「既定」だけ。
+保存先は %APPDATA%\\ToNAutoBeginner\\continue_table.json（v4）。無い・壊れているときはプリセット 0 個。
 前の版（v1・v2。番号は ToN ListTool の形）のファイルは、新しい版で初めて読むとき 1 回だけ独自の番号に直して書き換える
 （直す前のファイルは continue_table.json.listtool.bak に残す。窓ごとの選びとアイテムの決まりは触らない）。
+v1（表が 1 組だけ）は中身があれば「デフォルト」というプリセットへ移す。v3 までの「既定」という特別なプリセットは、
+読むとき 1 回だけ片づけて v4 にする（空なら消す。中身があれば「デフォルト」に名前を変える。窓の選びと
+アイテムの決まりの中の名前も追う。その種類にもう「デフォルト」があれば「既定」はそのまま）。
 """
 import json
 import os
@@ -32,7 +35,7 @@ import DebugLog
 import MatchTNL
 import RoundDecision
 
-VERSION = 3
+VERSION = 4
 FILE_NAME = "continue_table.json"
 
 # 表の種類（Table の属性名と同じ）
@@ -40,7 +43,8 @@ DISABLED = "disabled"
 DEFAULT = "default"
 
 # プリセットの名前
-DEFAULT_PRESET = "既定"       # 移行で付く名前。窓が選んでいないときもこれを使う
+LEGACY_PRESET = "既定"         # v3 までにあった特別なプリセット（v4 へ移すときだけ見る）
+RENAMED_PRESET = "デフォルト"   # 中身のあった「既定」の移し先の名前（v1 の表 1 組もこれ）
 NONE_LABEL = "なし"            # 窓の選択肢での「その表を重ねない」。プリセットの名前にはできない
 
 # アイテムの決まり
@@ -80,17 +84,13 @@ class ItemRule:
     default: object = KEEP
 
 
-def _empty_presets() -> dict:
-    return {DEFAULT_PRESET: {}}
-
-
 @dataclass(frozen=True)
 class Store:
     """保存するもの全部。中の dict は書き換えない（変えるときは新しい Store を作る）"""
-    disabled_presets: dict = field(default_factory=_empty_presets)   # {名前: {キー: frozenset(番号)}}
-    default_presets: dict = field(default_factory=_empty_presets)
+    disabled_presets: dict = field(default_factory=dict)   # {名前: {キー: frozenset(番号)}}。最初は 0 個
+    default_presets: dict = field(default_factory=dict)
     # {窓の番号(1 始まり): {DISABLED: 名前|None, DEFAULT: 名前|None}}。None は「なし」。
-    # 載っていない窓・種類は選んでいない（→ fallback_name）
+    # 載っていない窓・種類は選んでいない（→ 「なし」）
     windows: dict = field(default_factory=dict)
     # 上から順に見て、最初に当てはまるものを使う（全窓共通）
     item_rules: tuple = ()
@@ -129,24 +129,16 @@ def preset_names(store: Store, which: str) -> list:
     return list(presets_of(store, which))
 
 
-def fallback_name(store: Store, which: str) -> str | None:
-    """選んでいない窓・消えたプリセットを選んでいた窓の行き先: 「既定」、無ければ先頭、プリセットが 0 なら None"""
-    names = presets_of(store, which)
-    if DEFAULT_PRESET in names:
-        return DEFAULT_PRESET
-    return next(iter(names), None)
+def first_name(store: Store, which: str) -> str | None:
+    """プリセットの先頭の名前（画面が編集の対象を選ぶのに使う）。プリセットが 0 なら None"""
+    return next(iter(presets_of(store, which)), None)
 
 
 def choice_for(store: Store, window_idx: int, which: str) -> str | None:
-    """窓の which のプリセットの名前。None は「なし」（その表を重ねない）"""
-    saved = store.windows.get(window_idx, {})
-    if which in saved:
-        name = saved[which]
-        if name is None:
-            return None
-        if name in presets_of(store, which):
-            return name
-    return fallback_name(store, which)
+    """窓の which のプリセットの名前。None は「なし」（その表を重ねない）。選んでいない窓・消えたプリセットを
+    選んでいた窓も「なし」"""
+    name = store.windows.get(window_idx, {}).get(which)
+    return name if name in presets_of(store, which) else None
 
 
 def rule_for(store: Store, held_item: int | None) -> ItemRule | None:
@@ -260,21 +252,18 @@ def with_renamed_preset(store: Store, which: str, old: str, new: str) -> Store:
 
 
 def can_delete(store: Store, which: str) -> bool:
-    """最後の 1 つは消せない"""
-    return len(presets_of(store, which)) > 1
+    """1 つでもあれば消せる（最後の 1 つも）"""
+    return len(presets_of(store, which)) >= 1
 
 
 def with_deleted_preset(store: Store, which: str, name: str) -> Store:
-    """name を消した新しい Store。name を選んでいた窓は「既定」へ（既定が無ければ先頭）"""
+    """name を消した新しい Store。name を選んでいた窓は「なし」へ"""
     presets = presets_of(store, which)
     if name not in presets:
         raise ValueError(f"プリセット「{name}」がありません")
-    if not can_delete(store, which):
-        raise ValueError("最後の 1 つは削除できません。")
     remaining = {n: body for n, body in presets.items() if n != name}
     after = _with_presets(store, which, remaining)
-    goto = fallback_name(after, which)
-    windows = {idx: {k: (goto if (k == which and v == name) else v) for k, v in kinds.items()}
+    windows = {idx: {k: (None if (k == which and v == name) else v) for k, v in kinds.items()}
                for idx, kinds in store.windows.items()}
     rules = _rules_map(store.item_rules, which, lambda pick: KEEP if pick == name else pick)
     return replace(after, windows=windows, item_rules=rules)
@@ -355,10 +344,10 @@ def with_preset_body(store: Store, which: str, name: str, body: dict) -> Store:
 
 def with_edited_table(store: Store, names: dict, table: Table) -> Store:
     """names（{DISABLED: 名前, DEFAULT: 名前}）のプリセットの中身を table の中身にした新しい Store。
-    変わらない種類は触らない"""
+    変わらない種類は触らない（名前が None＝プリセットが 0 個の種類も触らない）"""
     for which in (DISABLED, DEFAULT):
         body = getattr(table, which)
-        if presets_of(store, which).get(names[which]) != body:
+        if names[which] is not None and presets_of(store, which).get(names[which]) != body:
             store = with_preset_body(store, which, names[which], body)
     return store
 
@@ -384,13 +373,13 @@ def _table_of(raw) -> dict:
 
 
 def _presets_from(raw) -> dict:
-    """{名前: {キー: [番号]}} → {名前: {キー: frozenset}}。使えない名前は捨てる。1 つも無ければ空の「既定」"""
+    """{名前: {キー: [番号]}} → {名前: {キー: frozenset}}。使えない名前は捨てる。1 つも無ければ空"""
     presets = {}
     if isinstance(raw, dict):
         for name, body in raw.items():
             if isinstance(name, str) and name.strip() and name != NONE_LABEL:
                 presets[name] = _table_of(body)
-    return presets or _empty_presets()
+    return presets
 
 
 def _windows_from(raw) -> dict:
@@ -446,15 +435,50 @@ def _rules_from(raw, disabled_names: dict, default_names: dict) -> tuple:
 
 
 def _from_v1(raw: dict) -> Store:
-    """v1（表が 1 組）→ それぞれ「既定」のプリセット。use_* が false だった種類は全窓「なし」"""
+    """v1（表が 1 組）→ それぞれ「既定」のプリセット（v3 までの形。読むときに drop_legacy_preset が空なら消し、
+    中身があれば「デフォルト」にする）。use_* が false だった種類は全窓「なし」"""
     windows = {}
     for which, flag in ((DISABLED, "use_disabled"), (DEFAULT, "use_default")):
         if raw.get(flag) is False:
             for idx in range(1, config.MAX_WINDOWS + 1):
                 windows.setdefault(idx, {})[which] = None
-    return Store(disabled_presets={DEFAULT_PRESET: _table_of(raw.get("disabled"))},
-                 default_presets={DEFAULT_PRESET: _table_of(raw.get("default"))},
+    return Store(disabled_presets={LEGACY_PRESET: _table_of(raw.get("disabled"))},
+                 default_presets={LEGACY_PRESET: _table_of(raw.get("default"))},
                  windows=windows)
+
+
+def drop_legacy_preset(store: Store) -> tuple:
+    """v3 までの特別なプリセット「既定」の片づけ → (新しい Store, debug.log に書く行 [str, ...])。
+    種類ごとに: 空なら消す（それを選んでいた窓・決まりは「なし」。空の表を重ねるのと「なし」は同じ結果）。
+    中身があれば「デフォルト」に名前を変える（窓の選びと決まりの中の名前も追う）。その種類にもう「デフォルト」が
+    あれば「既定」はそのまま残す。中身が残るときは、選んでいなかった窓（今まで「既定」を使っていた窓）が
+    使い続けるように、その窓の選びとして書く（窓 1〜MAX_WINDOWS。「なし」を選んでいた窓はそのまま）。
+    「既定」が無ければ何もしない"""
+    notes = []
+    for which in (DISABLED, DEFAULT):
+        presets = presets_of(store, which)
+        if LEGACY_PRESET not in presets:
+            continue
+        if not presets[LEGACY_PRESET]:
+            remaining = {n: body for n, body in presets.items() if n != LEGACY_PRESET}
+            windows = {idx: {k: (None if (k == which and v == LEGACY_PRESET) else v) for k, v in kinds.items()}
+                       for idx, kinds in store.windows.items()}
+            rules = _rules_map(store.item_rules, which, lambda pick: None if pick == LEGACY_PRESET else pick)
+            store = replace(_with_presets(store, which, remaining, windows), item_rules=rules)
+            notes.append(f"{which}: 空の「{LEGACY_PRESET}」を消しました")
+        else:
+            if RENAMED_PRESET in presets:
+                kept = LEGACY_PRESET
+                notes.append(f"{which}: 「{RENAMED_PRESET}」があるので、「{LEGACY_PRESET}」の名前はそのままです")
+            else:
+                store = with_renamed_preset(store, which, LEGACY_PRESET, RENAMED_PRESET)
+                kept = RENAMED_PRESET
+                notes.append(f"{which}: 「{LEGACY_PRESET}」を「{RENAMED_PRESET}」に変えました")
+            windows = {idx: dict(kinds) for idx, kinds in store.windows.items()}
+            for idx in range(1, config.MAX_WINDOWS + 1):
+                windows.setdefault(idx, {}).setdefault(which, kept)       # 選んでいなかった窓だけ
+            store = replace(store, windows=windows)
+    return store, notes
 
 
 def migrate_legacy(store: Store) -> tuple:
@@ -473,8 +497,9 @@ def migrate_legacy(store: Store) -> tuple:
 
 
 def load(path=None) -> Store:
-    """無い・壊れている → 空の「既定」だけの Store（壊れていたら debug.log に 1 行）。v1 は v2 の形へ移し、
-    前の版（v1・v2）は独自の番号に直して返す（初めて読むとき 1 回だけ書き換える。.bak は残す）"""
+    """無い・壊れている → プリセット 0 個の Store（壊れていたら debug.log に 1 行）。v1 は今の形へ移し、
+    前の版（v1・v2）は独自の番号に直し、v3 までの「既定」は片づけて返す（初めて読むとき 1 回だけ v4 に書き換える。
+    番号を直したときだけ .bak を残す）"""
     path = Path(path) if path is not None else table_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -497,13 +522,21 @@ def load(path=None) -> Store:
     version = raw.get("version")
     if isinstance(version, int) and not isinstance(version, bool) and version >= VERSION:
         return store
-    if not any(body for presets in (store.disabled_presets, store.default_presets) for body in presets.values()):
-        return store                # 直す番号が無い（プリセットが空）。書き換えない
-    store, dropped = migrate_legacy(store)
-    saved = ContinueList.persist_migration(path, _to_json(store), "続行表")
-    total = sum(len(ids) for presets in (store.disabled_presets, store.default_presets)
-                for body in presets.values() for ids in body.values())
-    ContinueList.note_migration("続行表", path.name, saved, dropped, f"{sum(counts(store))}プリセット / {total}件")
+    own_numbers = isinstance(version, int) and not isinstance(version, bool) and version >= 3     # v3 は独自の番号
+    has_ids = any(body for presets in (store.disabled_presets, store.default_presets) for body in presets.values())
+    dropped = []
+    if has_ids and not own_numbers:
+        store, dropped = migrate_legacy(store)
+    store, notes = drop_legacy_preset(store)
+    for note in notes:
+        DebugLog.write(f"[続行表] {note}")
+    if has_ids and not own_numbers:
+        saved = ContinueList.persist_migration(path, _to_json(store), "続行表")
+        total = sum(len(ids) for presets in (store.disabled_presets, store.default_presets)
+                    for body in presets.values() for ids in body.values())
+        ContinueList.note_migration("続行表", path.name, saved, dropped, f"{sum(counts(store))}プリセット / {total}件")
+    else:
+        save(store, path)           # v4 にする（番号を直したのではないので .bak は残さない）
     return store
 
 
