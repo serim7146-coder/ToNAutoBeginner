@@ -588,6 +588,10 @@ class LogMonitor:
             # 最後の Joining より後（今のインスタンス）の生存と特殊ラウンド（3クラ）
             lived = 0
             round_types = []
+            # 今進んでいるラウンド（最後のラウンド開始の行のあとに RoundOver が無い）の開始の時刻と、
+            # その行より新しい入退室の数（人数を開始の時点に戻すため。DB に送る人数と時刻だけに使う）
+            round_checked = False
+            running_round = None
             # 定期の Verified の位相用（新しい順に溜まる。入室をまたいでよい）
             verified_events = []
             newest = None
@@ -620,6 +624,12 @@ class LogMonitor:
                     item_events.append(event)
                 if not found_instance and event.kind == LogParser.EVENT_ROUND_START:
                     round_types.append(event.round_type)    # 1ラウンド1回
+                if not found_instance and not round_checked and event.kind in (
+                        LogParser.EVENT_ROUND_START, LogParser.EVENT_ROUND_OVER):
+                    # 新しい順の最初の 1 つ。開始なら進行中、終わりならラウンドの間
+                    round_checked = True
+                    if event.kind == LogParser.EVENT_ROUND_START:
+                        running_round = (at, len(player_events))
 
                 if event.kind == LogParser.EVENT_USER_AUTH and (
                         not found_user or event.user_id != self.st.local_user_id):
@@ -645,6 +655,7 @@ class LogMonitor:
                 # 名前（Sabotage マーダーの判定）は入室より前の行で分かるので、最後に流す
                 self.st.held_item_id = self._replay_held_item(reversed(item_events))
                 self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
+                self._restore_running_round(running_round, list(reversed(player_events)))
         except Exception as e:
             DebugLog.exception("LogMonitor._detect_instance_from_log")
             self._log(f"検出エラー: {e}")
@@ -709,6 +720,24 @@ class LogMonitor:
         else:
             stamp = datetime.fromtimestamp(tracker.last_periodic).strftime("%H:%M:%S")
             self._debug(f"定期 Verified の位相を復元: 最後 {stamp}")
+
+    def _restore_running_round(self, running_round, player_events: list):
+        """監視開始の遡り: 途中から始めたときの今のラウンドの開始の時刻と、開始の行の時点の人数を
+        st.round_start_time・st.round_players に入れる（DB に送るときだけに使う。ほかは見ない）。
+        running_round は (開始の行の時刻, その行より新しい入退室の数)。進んでいるラウンドが無ければ None で何もしない。
+        player_events は古い順の入退室。人数は開始の行より前の入退室だけを積んだもの（自分を含む）"""
+        if running_round is None:
+            return
+        st = self.st
+        at, newer = running_round
+        players = set()
+        for event in player_events[:len(player_events) - newer]:
+            if event.kind == LogParser.EVENT_PLAYER_JOINED:
+                players.add(event.user_id)
+            elif event.kind == LogParser.EVENT_PLAYER_LEFT:
+                players.discard(event.user_id)
+        st.round_start_time = at
+        st.round_players = max(1, len(players | ({st.local_user_id} if st.local_user_id else set())))
 
     def _restore_three_wins(self, lived: int, round_types: list):
         """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、
