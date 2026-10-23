@@ -352,6 +352,7 @@ class _WindowCase(unittest.TestCase):
         self.changed = []
         self.win = ContinueTableGUI.ContinueTableWindow(self.root, on_change=lambda: self.changed.append(1))
         self.win.update()
+        self.win.v_which.set(ContinueTable.DISABLED)        # 窓は続行リストで開く。ここの試験は表（続行無効）の編集
 
     def _style(self, tid):
         cell = self.win._cells[tid]
@@ -1139,13 +1140,10 @@ class TestMainWindow(unittest.TestCase):
         tab.v_ct_choice[which].set(label)
         tab._on_continue_pick(which)
 
-    def test_the_count_label_counts_presets(self):
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 1 個")
-
     def test_the_global_checkboxes_are_gone(self):
         self.assertFalse(hasattr(self.app, "v_ct_disabled"))
         self.assertFalse(hasattr(self.app, "v_ct_default"))
-        frame = next(f for f in _widgets(self.app, ttk.LabelFrame) if f.cget("text") == "続行表")
+        frame = next(f for f in _widgets(self.app, ttk.LabelFrame) if f.cget("text") == "① 続行表")
         self.assertEqual([b.cget("text") for b in _widgets(frame, ttk.Checkbutton)], [])
 
     def test_every_window_row_has_the_two_dropdowns_listing_presets_and_none(self):
@@ -1179,14 +1177,14 @@ class TestMainWindow(unittest.TestCase):
     def test_choosing_a_preset_per_window(self):
         store = ContinueTable.with_new_preset(ContinueTable.current(), ContinueTable.DEFAULT, "デフォB")
         ContinueTable.set_current(store)
-        self.app._refresh_continue_table_count()
+        self.app._refresh_continue_choices()
         second = self.app.tabs[1]
         self.assertEqual(list(second.cb_ct_choice[ContinueTable.DEFAULT]["values"]), ["既定", "デフォB", "なし"])
         self._pick(second, ContinueTable.DEFAULT, "デフォB")
         self.assertEqual(ContinueTable.choice_for(ContinueTable.current(), 2, ContinueTable.DEFAULT), "デフォB")
         self.assertEqual(ContinueTable.choice_for(ContinueTable.current(), 1, ContinueTable.DEFAULT), "既定")
         self.assertEqual(ContinueTable.choice_for(ContinueTable.load(), 2, ContinueTable.DEFAULT), "デフォB")
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 2 個")
+        self.assertFalse(hasattr(self.app, "lbl_ct_count"), "プリセットの個数の表示は出さない")
 
     def test_the_choice_survives_a_change_of_the_window_count(self):
         self._pick(self.app.tabs[1], ContinueTable.DISABLED, "なし")
@@ -1197,6 +1195,7 @@ class TestMainWindow(unittest.TestCase):
     def test_the_editor_window_changes_refresh_the_dropdowns_of_every_window(self):
         self.app._open_continue_table()
         editor = self.app._continue_table_window
+        editor.v_which.set(ContinueTable.DISABLED)          # 開いたときは続行リスト（プリセットが無い）
         editor._ask_name = lambda title, initial="": "B"
         editor._error = lambda text: None
         editor.new_preset()
@@ -1208,15 +1207,15 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(self.app.tabs[0].v_ct_choice[ContinueTable.DISABLED].get(), "既定",
                          "消したプリセットを使っていた窓は既定へ")
         self.assertEqual(list(self.app.tabs[0].cb_ct_choice[ContinueTable.DISABLED]["values"]), ["既定", "なし"])
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 1 個・デフォ 1 個")
         editor.destroy()
 
-    def test_the_button_opens_one_window_and_a_change_updates_the_count(self):
+    def test_the_button_opens_one_window_and_a_change_updates_the_dropdowns(self):
         self.app._open_continue_table()
         first = self.app._continue_table_window
         self.assertIsInstance(first, ContinueTableGUI.ContinueTableWindow)
         self.app._open_continue_table()
         self.assertIs(self.app._continue_table_window, first, "2 回目は同じ窓")
+        first.v_which.set(ContinueTable.DISABLED)           # 開いたときは続行リスト（プリセットが無い）
         first._ask_name = lambda title, initial="": "B"
         first.new_preset()
         first.v_which.set(ContinueTable.DEFAULT)
@@ -1224,7 +1223,9 @@ class TestMainWindow(unittest.TestCase):
         first.new_preset()
         first._ask_name = lambda title, initial="": "D"
         first.new_preset()
-        self.assertEqual(self.app.lbl_ct_count.cget("text"), "プリセット 無効 2 個・デフォ 3 個")
+        for tab in self.app.tabs:
+            self.assertEqual(list(tab.cb_ct_choice[ContinueTable.DISABLED]["values"]), ["既定", "B", "なし"])
+            self.assertEqual(list(tab.cb_ct_choice[ContinueTable.DEFAULT]["values"]), ["既定", "C", "D", "なし"])
         first.destroy()
         self.app._open_continue_table()
         self.assertIsNot(self.app._continue_table_window, first, "閉じたら作り直す")
@@ -1239,7 +1240,6 @@ class TestMainWindow(unittest.TestCase):
         self.assertEqual(app.tabs[0].v_ct_choice[ContinueTable.DISABLED].get(), "既定")
         self.assertEqual(app.tabs[1].v_ct_choice[ContinueTable.DISABLED].get(), "A")
         self.assertEqual(app.tabs[1].v_ct_choice[ContinueTable.DEFAULT].get(), "なし")
-        self.assertEqual(app.lbl_ct_count.cget("text"), "プリセット 無効 2 個・デフォ 1 個")
 
     def test_a_v1_file_with_a_check_off_shows_none_in_every_window(self):
         ContinueTable.table_path().write_text(json.dumps(

@@ -1695,22 +1695,13 @@ class App(tk.Tk):
               background=[("selected", config.GUI_ACC)], foreground=[("selected", config.GUI_BG)])
         s.configure("TSeparator",        background=config.GUI_SUB)
 
-        # ① TNL
-        # 続行リストはツールの中に持つ（GN）。.tnl は読み込み・書き出しの入り口
-        f1 = ttk.LabelFrame(self, text="① 続行リスト", padding=8)
-        f1.pack(fill="x", padx=12, pady=(12, 4))
-        ttk.Button(f1, text=".tnl から読み込む", command=self._import_tnl).pack(side="left")
-        ttk.Button(f1, text=".tnl に書き出す", command=self._export_tnl).pack(side="left", padx=(4, 0))
-        self.lbl_tnl = ttk.Label(f1, text="未読み込み", foreground=config.GUI_RED)
-        self.lbl_tnl.pack(side="left", padx=(10, 0))
-
-        # 続行表（GH）: 続行リストの上に重ねる 2 つの表
-        fct = ttk.LabelFrame(self, text="続行表", padding=8)
-        fct.pack(fill="x", padx=12, pady=4)
+        # ① 続行表（GH）: 続行リストの上に重ねる 2 つの表
+        # 続行リストはツールの中に持つ（GN）。.tnl の読み込み・書き出しは続行表の窓から行う
+        fct = ttk.LabelFrame(self, text="① 続行表", padding=8)
+        fct.pack(fill="x", padx=12, pady=(12, 4))
         ttk.Button(fct, text="続行表", command=self._open_continue_table).pack(side="left")
-        self.lbl_ct_count = ttk.Label(fct, text="")
-        self.lbl_ct_count.pack(side="left", padx=(12, 0))
-        self._refresh_continue_table_count()
+        self.lbl_tnl = ttk.Label(fct, text="未読み込み", foreground=config.GUI_RED)
+        self.lbl_tnl.pack(side="left", padx=(10, 0))
 
         # ③ 窓数・ログ
         f2 = CollapsibleFrame(self, text="② 窓数・ログ設定")
@@ -2593,22 +2584,23 @@ class App(tk.Tk):
         self._schedule_settings_save()
 
     # ── ツールの続行リスト（GN）────────────────────
-    def _import_tnl(self):
-        """「.tnl から読み込む」: 選んだ .tnl でツールの続行リストを置き換える（確認あり）。.tnl は書き換えない"""
+    def _import_tnl(self, parent=None):
+        """「.tnl を続行リストへ読み込む」: 選んだ .tnl でツールの続行リストを置き換える（確認あり）。.tnl は書き換えない。
+        parent: ダイアログを重ねる窓（続行表の窓から呼ぶとき。None なら今まで通り）"""
         p = filedialog.askopenfilename(
-            title="tnlファイルを選択",
+            parent=parent, title="tnlファイルを選択",
             filetypes=[("TNL files", "*.tnl"), ("All", "*.*")]
         )
         if not p:
             return
         if not messagebox.askyesno("続行リスト", "ツールの続行リストを、選んだ .tnl の中身で置き換えます。"
-                                   "ツールの中で直した分は失われます。よいですか？"):
+                                   "ツールの中で直した分は失われます。よいですか？", parent=parent):
             return
         try:
             data, meta = ContinueList.from_tnl(p)
         except Exception as e:
             DebugLog.exception("mainGUI._import_tnl")
-            messagebox.showerror("TNL読み込みエラー", str(e))
+            messagebox.showerror("TNL読み込みエラー", str(e), parent=parent)
             return
         self.v_tnl.set(p)
         save_settings({**load_settings(), "tnl_path": p})       # 次に選ぶときの目印・初回の作成元
@@ -2617,10 +2609,11 @@ class App(tk.Tk):
         self._apply_own_list(log=True)
         self._refresh_continue_table_list()
 
-    def _export_tnl(self):
-        """「.tnl に書き出す」: ツールの続行リストを .tnl に書き出す（保存先を聞く。ListTool のフォルダは既定にしない）"""
+    def _export_tnl(self, parent=None):
+        """「続行リストを .tnl に書き出す」: ツールの続行リストを .tnl に書き出す（保存先を聞く。ListTool のフォルダは既定にしない）。
+        parent: ダイアログを重ねる窓（None なら今まで通り）"""
         p = filedialog.asksaveasfilename(
-            title="tnlファイルの保存先", defaultextension=".tnl",
+            parent=parent, title="tnlファイルの保存先", defaultextension=".tnl",
             initialfile="続行リスト.tnl",
             filetypes=[("TNL files", "*.tnl"), ("All", "*.*")]
         )
@@ -2629,7 +2622,7 @@ class App(tk.Tk):
         if ContinueList.write_tnl(ContinueList.current(), ContinueList.current_meta(), p):
             self._log(f"[続行リスト] .tnl に書き出しました: {Path(p).name}")
         else:
-            messagebox.showerror("エラー", "書き出せませんでした。保存先を確かめてください。")
+            messagebox.showerror("エラー", "書き出せませんでした。保存先を確かめてください。", parent=parent)
 
     def _load_own_list(self):
         """起動時: ツールの続行リストを読む。ファイルが無い（初めて）ときだけ、設定の .tnl から作って保存する
@@ -2666,8 +2659,7 @@ class App(tk.Tk):
             return
         self._apply_keep_on(ContinueList.current())
         rounds, total = ContinueList.counts(self.keepOn_set)
-        name = ContinueList.current_meta().get("list_name") or "続行リスト"
-        msg = f"[{name}] {rounds}ラウンド / {total}件 続行対象"
+        msg = f"{rounds}ラウンド / {total}件 続行対象"
         self.lbl_tnl.config(text=msg, foreground=config.GUI_GRN)
         if log:
             self._log(f"[続行リスト] {msg}")
@@ -3334,19 +3326,18 @@ class App(tk.Tk):
         except tk.TclError:
             pass
         self._continue_table_window = ContinueTableWindow(
-            self, on_change=self._refresh_continue_table_count, on_list_change=self._apply_own_list)
+            self, on_change=self._refresh_continue_choices, on_list_change=self._apply_own_list,
+            on_import_tnl=self._import_tnl, on_export_tnl=self._export_tnl)
 
     def _on_continue_choice(self, tab, which: str, name):
         """窓の「続行無効」「デフォ続行」のプリセット（name。None は「なし」）を変えた: 保存してすぐ判定に効かせる"""
         store = ContinueTable.with_choice(ContinueTable.current(), tab.idx + 1, which, name)
         ContinueTable.set_current(store)
         ContinueTable.save(store)
-        self._refresh_continue_table_count()
+        self._refresh_continue_choices()
 
-    def _refresh_continue_table_count(self):
-        """件数の表示と、各窓の選択肢（プリセットが増減・改名・削除されたあと）を今の保存内容に合わせる"""
-        disabled, default = ContinueTable.counts(ContinueTable.current())
-        self.lbl_ct_count.configure(text=f"プリセット 無効 {disabled} 個・デフォ {default} 個")
+    def _refresh_continue_choices(self):
+        """各窓の選択肢（プリセットが増減・改名・削除されたあと）を今の保存内容に合わせる"""
         for tab in getattr(self, "tabs", []):
             tab.refresh_continue_choices()
 
