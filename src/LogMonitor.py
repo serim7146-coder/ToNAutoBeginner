@@ -1306,7 +1306,8 @@ class LogMonitor:
             # 前のラウンドのフリーズが残っていたら落とす——通常は ROUND_START が
             # 落としているが、張りっぱなしは全窓が止まるので念のため
             self._clear_stale_continue_round()
-            self._log(f"グループ判定: {self.st.round_type} 【全続行】")
+            if self.st.all_continue_early_seq != self.st.round_seq:     # テラー不明の時点で出した行を二度出さない
+                self._log(f"グループ判定: {self.st.round_type} 【全続行】")
             self.st.all_continue_round = True     # 音量「全続行」（FG: 干し芋の Mystic Moon など）
             return True
         return False
@@ -2019,6 +2020,28 @@ class LogMonitor:
             else:
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
                 self._start_daemon(self._action.do_skip)
+        else:
+            self._apply_all_continue_while_unknown()
+
+    def _apply_all_continue_while_unknown(self):
+        """テラー不明のうちに、全続行と決まっているラウンドは音量を「全続行」にする（干し芋の Fog・8 Pages など。
+        テラーが分かるまで待つと、その間ずっと「その他」の音量になる）。決まりはテラーが分かったときの判定と
+        同じで、続行リストにあるテラーなら、そのときに普通の続行ラウンドに上がる。放置モードは呼ばない（即自爆のまま）"""
+        st = self.st
+        if st.instance_type in GroupRound.GROUP_INSTANCES:
+            if not GroupRound.is_all_continue_regardless_of_terror(
+                    st.instance_type, st.round_type, moon_repeat=st.moon_repeat,
+                    skip_moons={name for name in self.cfg.skip_rounds if name in GroupRound.MOONS}):
+                return
+            text = f"グループ判定: {st.round_type} 【全続行】"
+        elif self._is_all_continue_round():
+            text = f"ラウンド指定で続行: {st.round_type}"
+        else:
+            return
+        self._clear_stale_continue_round()
+        self._log(text)
+        st.all_continue_round = True
+        st.all_continue_early_seq = st.round_seq
 
     def _on_killers_revealed(self, event):
         """霧のテラーが公開された"""
@@ -2451,7 +2474,8 @@ class LogMonitor:
                 self._start_daemon(self._action.do_skip)
             return
         if kind == "continue_rounds":
-            self._log(f"ラウンド指定で続行: {st.round_type}")
+            if st.all_continue_early_seq != st.round_seq:       # テラー不明の時点で出した行を二度出さない
+                self._log(f"ラウンド指定で続行: {st.round_type}")
             self._clear_stale_continue_round()
             st.all_continue_round = True        # 音量の「全続行」（EZ）
             return
