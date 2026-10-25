@@ -122,6 +122,8 @@ def decide(
         return NORMAL if is_fog_alternate(killers_round_type) else SKIP
 
     if round_type == "Sabotage":
+        if instance_type == config.INSTANCE_YAKIIMO:
+            return SKIP          # 焼き芋の Sabotage は全自爆（依頼者 2026-10-25）。選出者・続行希望は見ない
         return _decide_sabotage(instance_type, terror_ids, sus_players,
                                 host_wishes, follow_host)
 
