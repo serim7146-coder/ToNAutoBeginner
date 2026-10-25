@@ -565,6 +565,7 @@ INSTANCE_YAKIIMO       = "焼き芋"
 INSTANCE_OTHER_GROUP   = "その他のグループ"
 INSTANCE_EMERALD_CITY  = "Emerald City"
 INSTANCE_SEER          = "Seer's Apostle"
+INSTANCE_ACHIEVEMENT   = "実績・アイテム集会"
 
 # ── インスタンスid ──
 HOSHIIMO_GROUP_ID = "grp_0821983a-f7ab-4252-9895-0fe2712026a9"
@@ -573,10 +574,16 @@ YAKIIMO_GROUP_ID  = "grp_005eab93-0bee-4493-9973-252f9ed51461"
 # （GroupRound.GROUP_INSTANCES に入れると自爆が走る）
 EMERALD_CITY_GROUP_ID = "grp_8f8ace13-018b-47e6-a0f3-885831fd9bc8"
 SEER_GROUP_ID = "grp_71fee430-5156-41e0-9623-e36860058af8"
+# 実績・アイテム集会（GT）。Group+・グループオンリーだけ INSTANCE_ACHIEVEMENT（判定・音声・統計＋自動自爆だけ）
+ACHIEVEMENT_GROUP_ID = "grp_4066ddbc-28e6-4e02-9148-2d5d912f9a4a"
 # private とすべて同じに扱うインスタンス（FD: Seer's Apostle の「グループ（メンバーのみ）」。依頼者 2026-10-15）。
 # 操作（can_operate）・ラウンドの判断・霧の看破。Seer's Apostle でもグループ+・公開・分からないは
 # INSTANCE_OTHER_GROUP（マクロ・看破とも全面禁止）。自爆のグループ判定（GroupRound.GROUP_INSTANCES）には入れない
 PRIVATE_LIKE_INSTANCES = frozenset({INSTANCE_PRIVATE, INSTANCE_SEER})
+# 判定（続行リスト・続行表・ラウンド指定・Glorbo・Sabotage・自動自爆）を private と同じに通すインスタンス（GT）。
+# PRIVATE_LIKE_INSTANCES に実績・アイテム集会を足したもの。実操作（Begin・入室・アイテム取得・Run リスポーン・
+# アイテムを落とす・チェイス・放置モード・AFK 回避の移動・窓を戻す）と霧の看破は PRIVATE_LIKE_INSTANCES のまま
+JUDGE_LIKE_INSTANCES = PRIVATE_LIKE_INSTANCES | frozenset({INSTANCE_ACHIEVEMENT})
 
 
 # ── Variant判定待ち ──

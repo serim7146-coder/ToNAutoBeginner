@@ -259,6 +259,11 @@ class LogMonitor:
             if LogParser.instance_access(suffix) == LogParser.ACCESS_GROUP_MEMBERS:
                 return config.INSTANCE_SEER
             return config.INSTANCE_OTHER_GROUP
+        if f"group({config.ACHIEVEMENT_GROUP_ID})" in suffix:
+            # 実績・アイテム集会（GT）: Group+・グループオンリーだけ、判定・音声・統計＋自動自爆。公開・分からないは全面禁止
+            if LogParser.instance_access(suffix) in (LogParser.ACCESS_GROUP_PLUS, LogParser.ACCESS_GROUP_MEMBERS):
+                return config.INSTANCE_ACHIEVEMENT
+            return config.INSTANCE_OTHER_GROUP
         if "~group(" in suffix:
             return config.INSTANCE_OTHER_GROUP
         if any(marker in suffix for marker in ("~private", "~friends", "~hidden", "~canRequestInvite")):
@@ -270,6 +275,8 @@ class LogMonitor:
         """画面・debug.log のインスタンスの種類。Seer's Apostle は扱いも添える（FD）"""
         if instance_type == config.INSTANCE_SEER:
             return f"{instance_type}（グループオンリー → private と同じに扱う）"
+        if instance_type == config.INSTANCE_ACHIEVEMENT:
+            return f"{instance_type}（Group+／グループオンリー → 自動自爆だけ）"
         if f"group({config.SEER_GROUP_ID})" in (suffix or ""):
             return (f"{instance_type}（Seer's Apostle・グループオンリーでない → マクロ・霧の看破はしない）")
         return instance_type
@@ -1337,7 +1344,7 @@ class LogMonitor:
         自爆しないので要らない。操作しないインスタンス（public など）は
         判定そのものをしないので、ここでも求めない。
         """
-        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
+        if self.st.instance_type not in (*config.JUDGE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         return self.cfg.do_skip and self._others_present()
@@ -1353,7 +1360,7 @@ class LogMonitor:
         いるので止めない（全部自爆する）。誰もリストを持っていないときは、
         続行が無いのか分からないので止める。
         """
-        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
+        if self.st.instance_type not in (*config.JUDGE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip:
@@ -1384,7 +1391,7 @@ class LogMonitor:
         なる。人数を復元できなかった窓がそれで判定すると、全ラウンド自爆する。
         tnl のときは従来どおり（空の tnl で判定するのは利用者の選択）。
         """
-        if self.st.instance_type not in (*config.PRIVATE_LIKE_INSTANCES,
+        if self.st.instance_type not in (*config.JUDGE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip or SharedState.get_list_source() != "host":
@@ -2339,11 +2346,12 @@ class LogMonitor:
         """
         st = self.st
         itype = st.instance_type
-        is_private = itype in config.PRIVATE_LIKE_INSTANCES
+        # 判定を private と同じに通す種類（実績・アイテム集会を含む。実操作の可否は見ない）
+        is_judge = itype in config.JUDGE_LIKE_INSTANCES
         is_group = itype in GroupRound.GROUP_INSTANCES
         # Glorbo（Punished の Arkus の置き換え）は、続行リストに Glorbo の続行があれば
         # 放置モードの即自爆・ラウンド指定の自爆より優先して続行する（依頼者の決定）
-        if (is_private and config.GLORBO_ID in ids
+        if (is_judge and config.GLORBO_ID in ids
                 and self._list_plan(ids, bloodthirsty)[1]):
             return ("glorbo",)
         if is_group:
@@ -2351,7 +2359,7 @@ class LogMonitor:
             if decision != GroupRound.NORMAL:
                 return ("group", decision)
         # 通常操作はフレ/フレ+/招待/招待+のみ。干し芋では判定と音声だけ通す。
-        if not (is_private or is_group):
+        if not (is_judge or is_group):
             return ("restricted",)
         # 放置モードの自動操作はprivateのみ（_hands_free が種別を見ている）。
         if self._hands_free():
@@ -2364,11 +2372,11 @@ class LogMonitor:
         # privateのラウンド指定。全続行が先（自爆するラウンドの指定より前）。続行リストで続行になれば、
         # 普通の続行ラウンドとすべて同じ（FE: アナウンス・他窓フリーズ・音量「続行」・録画など）。ならなければ全続行
         if self._is_all_continue_round():
-            listed = self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
+            listed = self._plan_by_lists(round_type, ids, bloodthirsty, is_judge)
             return listed if self._outcome(listed) in ("continue", "open_special") else ("continue_rounds",)
         # privateのラウンド指定自爆。続行リストより優先する。ただし、その窓のデフォ続行にそのテラーがあれば
         # 指定自爆をやめる（GS）。続行リストの判定へ流すと、重ねた表（デフォ続行）で続行になる
-        if (is_private and self.cfg.skip_rounds
+        if (is_judge and self.cfg.skip_rounds
                 and self._should_skip_by_round(ids, bloodthirsty)):
             if not self._default_continue_hits(ids):
                 return ("round_skip",)
@@ -2376,7 +2384,7 @@ class LogMonitor:
                 # 主催の希望（_decide_sabotage）もリストの「Sabotage」の枠も、デフォ続行の Sabotage star の枠を見ない。
                 # 表で続行と決めたので、そのまま続行にする
                 return ("list", True, False)
-        return self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
+        return self._plan_by_lists(round_type, ids, bloodthirsty, is_judge)
 
     def _default_continue_hits(self, ids) -> bool:
         """その窓のデフォ続行（アイテムで切り替え込み）に、このラウンドのキーで ids のどれかがあるか（GS）。
@@ -2389,23 +2397,23 @@ class LogMonitor:
 
     def _round_skip_overridden(self, ids, bloodthirsty) -> bool:
         """ラウンド指定自爆に当たっていたが、その窓のデフォ続行で上書きして続行の判定に流したラウンドか（GS）"""
-        return bool(ids and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES and self.cfg.skip_rounds
+        return bool(ids and self.st.instance_type in config.JUDGE_LIKE_INSTANCES and self.cfg.skip_rounds
                     and self._should_skip_by_round(ids, bloodthirsty) and self._default_continue_hits(ids))
 
-    def _plan_by_lists(self, round_type: str, ids, bloodthirsty, is_private: bool) -> tuple:
+    def _plan_by_lists(self, round_type: str, ids, bloodthirsty, is_judge: bool) -> tuple:
         """ラウンド指定（全続行・自爆）の後の判断: プラベ系の Sabotage は焼き芋と同じ判定、ほかは続行リスト"""
         # プラベ系の Sabotage は焼き芋と同じ判定にする（依頼者の決定）。ここへ
         # 置くのは、「自爆する」の指定と放置モードの即自爆を先に効かせるため
-        if is_private and self.st.round_type == "Sabotage":
+        if is_judge and self.st.round_type == "Sabotage":
             decision = self._group_decision(round_type, ids)
             if decision != GroupRound.NORMAL:
                 return ("group", decision)
         return self._list_plan(ids, bloodthirsty)
 
     def _is_all_continue_round(self) -> bool:
-        """private（と同じ扱い）の窓で、このラウンドが全続行（ラウンド指定 cfg.continue_rounds）か"""
+        """private（と同じ扱い。実績・アイテム集会を含む）の窓で、このラウンドが全続行（ラウンド指定 cfg.continue_rounds）か"""
         st = self.st
-        return (st.instance_type in config.PRIVATE_LIKE_INSTANCES
+        return (st.instance_type in config.JUDGE_LIKE_INSTANCES
                 and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds)
 
     def _list_plan(self, ids, bloodthirsty) -> tuple:
@@ -2626,7 +2634,7 @@ class LogMonitor:
             if not self._hands_free():          # 放置中は録らない
                 Recorder.on_continue_start(self.window_idx)
             self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
-        if not st.glorbo_afk:
+        if not st.glorbo_afk and st.instance_type != config.INSTANCE_ACHIEVEMENT:   # 実績・アイテム集会は移動しない（GT）
             st.glorbo_afk = True
             self._log("AFK解除ループ開始（Glorbo）")
             self._start_daemon(self._action.do_open_special_round_loop, True)
@@ -2634,7 +2642,8 @@ class LogMonitor:
     # ── 通常判定（続行リスト照合） ──────────────
     def _decide_with_keep_on_set(self, round_type: str, plan: tuple | None = None):
         st = self.st
-        is_private = st.instance_type in config.PRIVATE_LIKE_INSTANCES
+        is_private = st.instance_type in config.PRIVATE_LIKE_INSTANCES      # 実操作（3クラの AFK 解除）を許す種類
+        is_judge = st.instance_type in config.JUDGE_LIKE_INSTANCES          # 判定と自爆だけ通す種類
         is_group = st.instance_type in GroupRound.GROUP_INSTANCES
 
         all_ids = st.terror_ids
@@ -2683,7 +2692,7 @@ class LogMonitor:
                 self._log("DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")
         else:
             # 続行にならなければ自爆する。グループもここに含める
-            if self.cfg.do_skip and (is_private or is_group):
+            if self.cfg.do_skip and (is_judge or is_group):
                 self._start_daemon(self._action.do_skip)
 
     def _overlay_label(self, ids) -> str:
