@@ -191,6 +191,10 @@ class WindowState:
     moon_repeat: bool = False   # このmoonが2回目以降か（ROUND_STARTで確定）
     # Enrage のログから前倒しで判明させたテラーID。ラウンドごとに落とす
     enrage_identified: int | None = None
+    # 霧のテラーを前倒し（Enrage・スタン・Joy・Foxy・看破・DTM 推定）で判明させ、まだ Killers の行が来ていないラウンドの round_seq
+    # （-1 = 無し）。焼き芋の霧の自爆はこの間は公開の行まで待つ。待っているラウンドの round_seq が fog_skip_deferred_seq
+    fog_early_seq: int = -1
+    fog_skip_deferred_seq: int = -1
     # 主催リスト喪失を知らせたか。ラウンドごとに鳴らさないための抑制
     list_lost_notified: bool = False
     list_lost_reason: str = ""      # "host"（主催リスト無し）/ "wishes"（希望無し）
