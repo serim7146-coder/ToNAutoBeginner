@@ -3,7 +3,7 @@ from tests.support import *  # noqa: F401,F403
 
 
 NOT_PRIVATE = (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP, config.INSTANCE_EMERALD_CITY,
-               config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO)
+               config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO, config.INSTANCE_ACHIEVEMENT)
 LINE = "2026.10.01 12:00:00 Debug      -  "
 
 

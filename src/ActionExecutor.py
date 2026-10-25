@@ -2760,6 +2760,8 @@ class ActionExecutor:
         hwnd = self._cfg.hwnd
         if not SharedState.get_continue_restore_window() or not hwnd:
             return
+        if self._st.instance_type == config.INSTANCE_ACHIEVEMENT:
+            return              # 実績・アイテム集会は窓を動かさない（GT。覚えなければ終わりでも戻さない）
         head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの始まり:"
         state = WindowOperator.window_state(hwnd)
         if state in (None, "minimized", "fullscreen"):
