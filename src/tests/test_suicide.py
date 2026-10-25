@@ -1306,7 +1306,12 @@ class TestSkipRoundsByType(unittest.TestCase):
 
             started = self._killers(monitor, [1, 2])
 
-            self.assertEqual(started, [], itype)   # 全続行のまま
+            if itype == config.INSTANCE_YAKIIMO:
+                # 焼き芋の 8 Pages は GroupRound が NORMAL を返し、続行リストで決める（リストに無いので自爆）。
+                # 自爆するラウンドの指定（skip_rounds）ではなくリストで自爆する
+                self.assertEqual(started, ["do_skip"], itype)
+            else:
+                self.assertEqual(started, [], itype)   # 全続行のまま
 
     def test_public_is_untouched(self):
         for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP):

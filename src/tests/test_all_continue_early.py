@@ -120,6 +120,42 @@ class TestGroupWhileUnknown(_Case):
         self.assertEqual(started, [])
         self.assertFalse(any("【全続行】" in m for m in monitor.logs))
 
+    def test_yakiimo_eight_pages_is_not_set_while_unknown(self):
+        """焼き芋の 8 Pages は続行リスト次第（自爆になりうる）。テラーが出るまで全続行にしない・行も出さない・自爆もしない"""
+        monitor = self._monitor(YAKI, "8 Pages", keep_on={PAGES_KEY: {3031}})
+        started = self._unknown(monitor, "8 Pages")
+        self.assertFalse(monitor.st.all_continue_round)
+        self.assertEqual(WindowVolume.category_of(monitor.st), WindowVolume.OTHER)
+        self.assertEqual(started, [], "テラーが出てから決める（ここでは自爆しない）")
+        self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
+
+    def test_yakiimo_eight_pages_listed_terror_becomes_a_continue_round(self):
+        monitor = self._monitor(YAKI, "8 Pages", keep_on={PAGES_KEY: {3031}})
+        self._unknown(monitor, "8 Pages")
+        started, play, record = self._killers(monitor, [3031])
+        st = monitor.st
+        self.assertTrue(st.is_continue_round)
+        self.assertTrue(st.continue_freeze_held)
+        self.assertFalse(st.all_continue_round)
+        play.assert_called_once_with("continue.mp3", kind="continue")
+        record.assert_called_once_with(1)
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
+        self.assertNotIn("do_skip", started)
+        self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
+
+    def test_yakiimo_eight_pages_unlisted_terror_self_destructs(self):
+        monitor = self._monitor(YAKI, "8 Pages", keep_on={PAGES_KEY: {3031}})
+        self._unknown(monitor, "8 Pages")
+        started, play, record = self._killers(monitor, [3032])
+        st = monitor.st
+        self.assertFalse(st.is_continue_round)
+        self.assertFalse(st.continue_freeze_held)
+        self.assertFalse(st.all_continue_round)
+        self.assertIn("do_skip", started)
+        play.assert_not_called()
+        record.assert_not_called()
+        self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
+
     def test_a_skip_moon_is_not_set_while_unknown(self):
         monitor = self._monitor(HOSHI, "Twilight", skip_rounds={"Twilight"})
         self._unknown(monitor, "Twilight")
@@ -155,9 +191,15 @@ class TestPureFunction(unittest.TestCase):
         self.assertFalse(self.f(YAKI, "Fog"))
         for itype in (HOSHI, YAKI):
             for name in GroupRound.ALWAYS_CONTINUE_ROUNDS:
-                self.assertTrue(self.f(itype, name), (itype, name))
+                # 焼き芋の 8 Pages だけは続行リストで決める（自爆になりうる）ので、テラー不明の時点で全続行にしない
+                self.assertEqual(self.f(itype, name), not (itype == YAKI and name == "8 Pages"), (itype, name))
             for name in ("Classic", "Bloodbath", "Sabotage", "Alternate"):
                 self.assertFalse(self.f(itype, name), (itype, name))
+
+    def test_yakiimo_eight_pages_is_no_hoshiimo_is_yes(self):
+        self.assertFalse(self.f(YAKI, "8 Pages"))
+        self.assertFalse(self.f(YAKI, "8 Pages", moon_repeat=True, skip_moons={"8 Pages"}))
+        self.assertTrue(self.f(HOSHI, "8 Pages"))
 
     def test_not_a_group_instance_is_no(self):
         for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_PUBLIC):

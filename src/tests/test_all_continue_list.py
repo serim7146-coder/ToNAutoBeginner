@@ -166,22 +166,48 @@ class TestGroupAllContinueFollowsTheList(_Case):
             remember.assert_called_once()
             self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE, "音量「続行」")
             self.assertNotIn("do_skip", started, itype)
-            self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行 → 続行リストで続行】"), monitor.logs)
-            self.assertFalse(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
+            if itype == config.INSTANCE_YAKIIMO:
+                # 焼き芋の 8 Pages は通常判定（全続行ではない）。続行の行は通常判定の「判定: … 【プレイ】」
+                self.assertTrue(self._said(monitor, "【プレイ】"), monitor.logs)
+                self.assertFalse(self._said(monitor, "【全続行"), monitor.logs)
+                self.assertFalse(st.all_continue_round, itype)
+            else:
+                self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行 → 続行リストで続行】"), monitor.logs)
+                self.assertFalse(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
 
-    def test_an_unlisted_8_pages_terror_stays_all_continue(self):
-        for itype in self.GROUPS:
-            SharedState.continue_round_reset()
-            monitor = self._group(itype, "8 Pages", {"8 Pages/8ページ": {3031}})
-            started, play, record, _remember = self._killers(monitor, [3032])
-            st = monitor.st
-            self.assertFalse(st.is_continue_round, itype)
-            self.assertFalse(st.continue_freeze_held, itype)
-            self.assertTrue(st.all_continue_round, itype)
-            play.assert_not_called()
-            record.assert_not_called()
-            self.assertNotIn("do_skip", started, itype)
-            self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
+    def test_an_unlisted_8_pages_terror_stays_all_continue_in_hoshiimo(self):
+        monitor = self._group(config.INSTANCE_HOSHIIMO, "8 Pages", {"8 Pages/8ページ": {3031}})
+        started, play, record, _remember = self._killers(monitor, [3032])
+        st = monitor.st
+        self.assertFalse(st.is_continue_round)
+        self.assertFalse(st.continue_freeze_held)
+        self.assertTrue(st.all_continue_round)
+        play.assert_not_called()
+        record.assert_not_called()
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(self._said(monitor, "グループ判定: 8 Pages 【全続行】"), monitor.logs)
+
+    def test_an_unlisted_8_pages_terror_self_destructs_in_yakiimo(self):
+        """焼き芋の 8 Pages は続行リストに無いテラーなら自爆（全続行のままにはしない）"""
+        monitor = self._group(config.INSTANCE_YAKIIMO, "8 Pages", {"8 Pages/8ページ": {3031}})
+        started, play, record, _remember = self._killers(monitor, [3032])
+        st = monitor.st
+        self.assertFalse(st.is_continue_round)
+        self.assertFalse(st.continue_freeze_held)
+        self.assertFalse(st.all_continue_round)
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.OTHER)
+        play.assert_not_called()
+        record.assert_not_called()
+        self.assertIn("do_skip", started)
+        self.assertFalse(self._said(monitor, "【全続行"), monitor.logs)
+
+    def test_yakiimo_eight_pages_skip_is_gated_by_do_skip(self):
+        monitor = self._group(config.INSTANCE_YAKIIMO, "8 Pages", {"8 Pages/8ページ": {3031}})
+        monitor.cfg.do_skip = False
+        started, play, _record, _remember = self._killers(monitor, [3032])
+        self.assertNotIn("do_skip", started, "自動自爆 OFF なら自爆しない")
+        self.assertFalse(monitor.st.is_continue_round)
+        play.assert_not_called()
 
     def test_hands_free_does_not_announce_or_record(self):
         """放置モードの窓はアナウンスも録画もしない（WANTED と同じ。干し芋・焼き芋の窓では放置モードは効かないので、

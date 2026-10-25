@@ -25,6 +25,10 @@ ALWAYS_SKIP_ROUNDS = frozenset({"Bloodbath", "Classic.exe", "Randomizer"})
 # 全続行（自爆しないだけ）。Bloodbath EX は芋では自爆しない（依頼者 2026-10-04）
 ALWAYS_CONTINUE_ROUNDS = frozenset({"8 Pages", "Run", "Bloodbath EX"})
 
+# 焼き芋だけ、全続行にせず続行リストで決めるラウンド（依頼者 2026-10-25）。
+# リストにそのテラーがあれば続行ラウンド、無ければ自爆。干し芋の 8 Pages は全続行のまま
+YAKIIMO_LIST_ROUNDS = frozenset({"8 Pages"})
+
 # 焼き芋では1回目でもスキップするmoon
 YAKIIMO_SKIP_FIRST_MOONS = frozenset({"Mystic Moon", "Solstice"})
 
@@ -98,6 +102,9 @@ def decide(
         return SKIP
 
     if round_type in ALWAYS_CONTINUE_ROUNDS:
+        if (instance_type == config.INSTANCE_YAKIIMO
+                and round_type in YAKIIMO_LIST_ROUNDS):
+            return NORMAL        # 続行リストにあれば続行、無ければ自爆（テラーが出てから）
         return CONTINUE
 
     if round_type in MOONS:
@@ -141,13 +148,15 @@ def is_all_continue_regardless_of_terror(
 
     霧や 8 Pages はテラーが出るまで時間がかかる（8 Pages は最初のページまで）。そのあいだ音量を
     「全続行」にするために、テラー不明の時点で使う。決まりは `decide` と同じ:
-    ALWAYS_CONTINUE_ROUNDS・1回目の moon（自爆指定・2回目・焼き芋の Mystic Moon/Solstice は除く）・
-    干し芋の Fog。焼き芋の Fog は Killers 行の種別で決まる（SKIP になりうる）ので含めない。
+    ALWAYS_CONTINUE_ROUNDS（焼き芋の 8 Pages は除く）・1回目の moon（自爆指定・2回目・焼き芋の
+    Mystic Moon/Solstice は除く）・干し芋の Fog。焼き芋の Fog は Killers 行の種別で決まる（SKIP になりうる）、
+    焼き芋の 8 Pages は続行リスト次第（自爆になりうる）ので含めない。
     """
     if instance_type not in GROUP_INSTANCES:
         return False
     if round_type in ALWAYS_CONTINUE_ROUNDS:
-        return True
+        return not (instance_type == config.INSTANCE_YAKIIMO
+                    and round_type in YAKIIMO_LIST_ROUNDS)
     if round_type in MOONS:
         if round_type in skip_moons or moon_repeat:
             return False
