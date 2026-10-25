@@ -728,14 +728,33 @@ class TestGroupRoundSabotage(unittest.TestCase):
                          sus=["ソノア7", "ユウナ2858"], wishes=wishes),
             GroupRound.SKIP)
 
-    def test_a_non_murderer_wanting_the_star_slot_is_wanted(self):
-        """誰かが欲しがっている続行。全続行とは別枠（アナウンスが要る）"""
+    def test_a_non_murderer_wanting_the_star_slot_is_wanted_in_hoshiimo(self):
+        """誰かが欲しがっている続行。全続行とは別枠（アナウンスが要る）。焼き芋は全自爆なので干し芋で見る"""
         wishes = {"ソノア7": {self.MURDER: {99}},
                   "みているひと": {self.STAR: {5}}}
 
         self.assertEqual(
-            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes),
+            self._decide(config.INSTANCE_HOSHIIMO, sus=["ソノア7"], wishes=wishes),
             GroupRound.WANTED)
+
+    def test_yakiimo_always_skips_sabotage(self):
+        """焼き芋の Sabotage は全自爆（GS）。マーダー以外が star を希望していても、希望が無くても自爆する"""
+        star_wanted = {"ソノア7": {self.MURDER: {99}},
+                       "みているひと": {self.STAR: {5}}}
+        for wishes, follow in ((star_wanted, True), ({}, True), ({}, False), (star_wanted, False)):
+            self.assertEqual(
+                self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes=wishes, follow_host=follow),
+                GroupRound.SKIP, (wishes, follow))
+
+    def test_private_like_sabotage_still_follows_the_wishes(self):
+        """プラベ系の Sabotage（_decide_sabotage）は今のまま"""
+        star_wanted = {"ソノア7": {self.MURDER: {99}},
+                       "みているひと": {self.STAR: {5}}}
+        for itype in config.PRIVATE_LIKE_INSTANCES:
+            self.assertEqual(self._decide(itype, sus=["ソノア7"], wishes=star_wanted), GroupRound.WANTED, itype)
+            self.assertEqual(self._decide(itype, sus=["ソノア7"], wishes={"ソノア7": {self.MURDER: {5}}}),
+                             GroupRound.SKIP, itype)
+            self.assertEqual(self._decide(itype, sus=["ソノア7"], wishes={}), GroupRound.NORMAL, itype)
 
     def test_the_murderers_own_star_wish_does_not_count(self):
         wishes = {"ソノア7": {self.STAR: {5}}}
@@ -761,16 +780,16 @@ class TestGroupRoundSabotage(unittest.TestCase):
             GroupRound.SKIP)
 
     def test_following_off_falls_back_to_the_normal_judgement(self):
-        """追従OFFでは誰の希望か分からない。従来どおり keepOn_set で判定する"""
-        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+        """追従OFFでは誰の希望か分からない。従来どおり keepOn_set で判定する（焼き芋は全自爆なので除く）"""
+        for itype in (config.INSTANCE_HOSHIIMO, *config.PRIVATE_LIKE_INSTANCES):
             self.assertEqual(
                 self._decide(itype, sus=["ソノア7"], wishes={}, follow_host=False),
                 GroupRound.NORMAL, itype)
 
     def test_following_on_but_empty_list_also_falls_back(self):
-        """0人のときは前のリストを保持しているので、希望が空なら判断できない"""
+        """0人のときは前のリストを保持しているので、希望が空なら判断できない（焼き芋は全自爆なので干し芋で見る）"""
         self.assertEqual(
-            self._decide(config.INSTANCE_YAKIIMO, sus=["ソノア7"], wishes={}),
+            self._decide(config.INSTANCE_HOSHIIMO, sus=["ソノア7"], wishes={}),
             GroupRound.NORMAL)
 
 
@@ -1862,15 +1881,20 @@ class TestSabotageStarAnnounces(unittest.TestCase):
         self.played.assert_not_called()
         self.assertTrue(monitor.st.is_continue_round, "続行状態自体は立てる")
 
-    def test_both_group_types_behave_the_same(self):
-        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
-            SharedState.continue_round_reset()
-            monitor = self._monitor(itype)
+    def test_hoshiimo_announces_but_yakiimo_always_skips(self):
+        """干し芋は star 希望で続行する。焼き芋の Sabotage は全自爆（GS）で、アナウンスもフリーズも出さない"""
+        monitor = self._monitor(config.INSTANCE_HOSHIIMO)
+        self._apply(monitor)
+        self.assertTrue(monitor.st.is_continue_round)
+        self.played.assert_called_once_with("continue.mp3", kind="continue")
 
+        SharedState.continue_round_reset()
+        monitor = self._monitor(config.INSTANCE_YAKIIMO)
+        with patch.object(monitor, "_start_group_skip") as skip:
             self._apply(monitor)
-
-            self.assertTrue(monitor.st.is_continue_round, itype)
-            self.played.assert_called_once_with("continue.mp3", kind="continue")
+        skip.assert_called_once()
+        self.assertFalse(monitor.st.is_continue_round)
+        self.played.assert_not_called()
 
     # ── CONTINUE は従来どおり無音 ───────────────
     def test_plain_continue_stays_silent(self):
