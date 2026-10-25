@@ -1275,10 +1275,27 @@ class LogMonitor:
             follow_host=bool(self._group_wishes()),
         )
 
+    def _defer_yakiimo_fog_skip(self) -> bool:
+        """焼き芋の霧の自爆は、`Killers have been revealed` の行まで待つ（待つなら True）。
+        Enrage・看破・DTM 推定などの前倒しで分かっただけなら、まだ自爆しない（外れると、霧の間に自爆して
+        公開の行を見ないまま終わるため）。公開の行で `_on_killers` が通り直すと、そこで自爆する。
+        前倒しでないとき（Killers の行から決まった・fog_early_seq が立っていない）は待たない。新しい予約は作らない"""
+        st = self.st
+        if (st.instance_type != config.INSTANCE_YAKIIMO
+                or st.round_type not in GroupRound.FOG_ROUND_TYPES
+                or st.fog_early_seq != st.round_seq):
+            return False
+        if st.fog_skip_deferred_seq != st.round_seq:
+            st.fog_skip_deferred_seq = st.round_seq
+            self._log("霧: 公開の行で自爆します")
+        return True
+
     def _apply_group_decision(self, killers_round_type: str) -> bool:
         """スキップ/全続行なら処理してTrueを返す。通常判定に回すならFalse。"""
         decision = self._group_decision(killers_round_type)
         if decision == GroupRound.SKIP:
+            if self._defer_yakiimo_fog_skip():
+                return True
             self._start_group_skip()
             return True
         if decision in (GroupRound.WANTED, GroupRound.CONTINUE_LISTED):
@@ -1544,6 +1561,7 @@ class LogMonitor:
             # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
             # st.round_type は書き換えない（「Fog」の自爆指定が効かなくなる）。
             # オルタ枠であることは引数で伝える（焼き芋の判定が見る）
+            st.fog_early_seq = st.round_seq     # 前倒し。焼き芋の霧の自爆は公開の行まで待つ
             self._on_killers([config.FOXY_ID],
                              GroupRound.FOG_ALTERNATE_ROUND_TYPE,
                              revealed=True)
@@ -1816,6 +1834,7 @@ class LogMonitor:
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
             st.round_type = event.round_type
         st.utils_anchor_seq = st.round_seq          # Utils の判断を待ち始めてよい（EB）
+        st.fog_early_seq = -1                       # Killers の行が来た。前倒しの待ちは終わり
         st.utils_anchor_time = st.log_now or time.time()
         self._on_killers(self._own_killer_ids(event.terror_ids or [], st.round_type), st.round_type, revealed=False)
 
@@ -2049,6 +2068,7 @@ class LogMonitor:
         st.fog_reading = False
         st.fog_no_object_deadline = 0.0
         st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判断する（EB）
+        st.fog_early_seq = -1                       # 公開の行が来た。前倒しの待ちは終わり
         st.utils_anchor_time = st.log_now or time.time()
         own = self._own_killer_ids(event.terror_ids or [], event.round_type)
         self._on_killers(own, event.round_type, revealed=True)
@@ -2249,6 +2269,7 @@ class LogMonitor:
         self._log(f"🔎 テラー判明({how}): {name} → {format_terror_ids([tid])}")
         # 判定を通してからフラグを立てる。先に立てると、この呼び出し自身が
         # 「前倒し済み」と見なされて素通りしてしまう
+        st.fog_early_seq = st.round_seq         # 公開の行ではなく前倒し。焼き芋の霧の自爆は公開の行まで待つ
         self._on_killers([tid], round_type, revealed=True)
         st.enrage_identified = tid
 
@@ -2283,7 +2304,9 @@ class LogMonitor:
                 self._log(
                     f"⚠ Enrageの判明({format_terror_ids([st.enrage_identified])})と "
                     f"revealed({format_terror_ids(ids)})が食い違いました")
-            return
+            if st.fog_skip_deferred_seq != st.round_seq:
+                return
+            # 焼き芋の霧の自爆を公開の行まで待っていた（_defer_yakiimo_fog_skip）。ここで判定を通し直して自爆する
 
         # 他の人がいるのに主催リストが取れない窓、この窓にいる誰の希望も
         # 無い窓はここで止める。

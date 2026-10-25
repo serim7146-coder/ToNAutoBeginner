@@ -1486,14 +1486,19 @@ class TestEnrageFogAlternate(unittest.TestCase):
 
         forced.assert_not_called()
 
-    def test_a_classic_terror_still_forces_a_skip(self):
-        """焼き芋の従来どおりの動き。巻き込んで弱めていないこと"""
+    def test_a_classic_terror_still_skips_but_at_the_revealed_line(self):
+        """焼き芋のクラシックの霧は自爆する。ただし Enrage の時点ではなく公開の行で（GS）"""
         monitor = self._monitor()
 
         with patch.object(monitor, "_start_group_skip") as forced:
             self._enrage(monitor, "Hell Bell")
+            forced.assert_not_called()
+            with patch.object(LogMonitor.threading, "Thread"):
+                monitor._process("2026.09.21 17:32:05 Debug      -  Killers have been revealed - "
+                                 "65 0 0 // Round type is Fog")
 
         forced.assert_called_once()
+        self.assertEqual(sum("公開の行で自爆します" in m for m in monitor.logs), 1, monitor.logs)
 
     def test_an_alternate_terror_in_the_list_continues(self):
         monitor = self._monitor(keep_on={"Fog/霧": {self.WALPURGISNACHT}})
