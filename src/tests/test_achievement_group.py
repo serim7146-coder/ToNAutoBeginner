@@ -256,18 +256,18 @@ class TestNoOperation(unittest.TestCase):
         hold.assert_not_called()
         borrow.assert_not_called()
 
-    def test_the_window_position_is_not_remembered(self):
-        """続行ラウンドの始まりで窓の位置を覚えない（覚えなければ、終わりでも戻さない）。干し芋は今まで通り覚える"""
+    def test_the_window_position_is_remembered_like_any_instance(self):
+        """窓の位置を戻すのはどのインスタンスでも行う（依頼者 2026-10-25）。続行ラウンドの始まりで窓の位置を覚える"""
         SharedState.set_continue_restore_window(True)
         self.addCleanup(SharedState.set_continue_restore_window, False)
         rect = (10, 20, 500, 400)
-        for itype, remembered in ((ACH, False), (config.INSTANCE_HOSHIIMO, True)):
+        for itype in (ACH, config.INSTANCE_HOSHIIMO):
             st, ex = self._executor()
             st.instance_type = itype
             with patch.object(WindowOperator, "window_state", return_value="normal"), \
                  patch.object(WindowOperator, "window_rect", return_value=rect):
                 ex.remember_continue_window()
-            self.assertEqual(ex._continue_rect, rect if remembered else None, itype)
+            self.assertEqual(ex._continue_rect, rect, itype)
 
 
 class TestFogEarlyReadIsNotAllowed(test_fog.TestFogEarlyReadAnswerCheck):
