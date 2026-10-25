@@ -83,8 +83,21 @@ class TestGroupRoundTable(unittest.TestCase):
         self.assertEqual(self._both("Double Trouble"), {GroupRound.NORMAL})
 
     def test_eight_pages_run_and_bloodbath_ex_always_continue(self):
+        """干し芋は 3 つとも全続行。焼き芋の 8 Pages だけは続行リストで決める（下の test_yakiimo_eight_pages_*）"""
         for round_type in ("8 Pages", "Run", "Bloodbath EX"):
-            self.assertEqual(self._both(round_type), {GroupRound.CONTINUE}, round_type)
+            self.assertEqual(self._decide(self.HOSHIIMO, round_type), GroupRound.CONTINUE, round_type)
+        for round_type in ("Run", "Bloodbath EX"):
+            self.assertEqual(self._decide(self.YAKIIMO, round_type), GroupRound.CONTINUE, round_type)
+
+    def test_yakiimo_eight_pages_is_judged_by_the_list(self):
+        """焼き芋の 8 Pages は全続行ではなく通常判定（続行リストにあれば続行・無ければ自爆）。ID は問わない"""
+        for ids in ([], [3031], [3032, 3033]):
+            self.assertEqual(self._decide(self.YAKIIMO, "8 Pages", ids), GroupRound.NORMAL, ids)
+
+    def test_eight_pages_decision_does_not_depend_on_other_arguments(self):
+        for kwargs in ({"moon_repeat": True}, {"skip_moons": {"8 Pages"}}, {"killers_round_type": "8 Pages (Alternate)"}):
+            self.assertEqual(self._decide(self.YAKIIMO, "8 Pages", [3031], **kwargs), GroupRound.NORMAL, kwargs)
+            self.assertEqual(self._decide(self.HOSHIIMO, "8 Pages", [3031], **kwargs), GroupRound.CONTINUE, kwargs)
 
     def test_hoshiimo_fog_always_continues(self):
         self.assertEqual(self._decide(self.HOSHIIMO, "Fog", [7]),
@@ -1281,7 +1294,7 @@ class TestEightPagesPages(unittest.TestCase):
             monitor, "Killers have been set - 70 1 0 // Round type is 8 Pages")
 
         self.assertIn("8 Pages", GroupRound.ALWAYS_CONTINUE_ROUNDS)
-        self.assertNotIn("do_skip", started, "未登録でもグループの全続行は効く")
+        self.assertNotIn("do_skip", started, "未登録でも干し芋の全続行は効く")
 
 
 
