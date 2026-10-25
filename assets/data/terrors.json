@@ -55,7 +55,7 @@
     {"id": 52, "name": "Specimen 10", "terrors": ["Specimen 10"], "objects": ["Specimen 10"]},
     {"id": 53, "name": "The Lifebringer", "terrors": ["The Lifebringer"], "objects": ["Life Bringer"]},
     {"id": 54, "name": "Pale Association", "terrors": ["Pale Associate"], "objects": ["Pale Fixers"]},
-    {"id": 55, "name": "Toy Enforcer", "terrors": ["Toy Enforcer"], "objects": ["Toy Helicopter"]},
+    {"id": 55, "name": "Toy Enforcer", "terrors": ["Toy Enforcer", "Baby Helicopter"], "objects": ["Toy Helicopter"]},
     {"id": 56, "name": "TBH", "terrors": ["TBH"], "objects": ["TBH"]},
     {"id": 57, "name": "DoomBox", "terrors": ["DoomBox"], "objects": ["Doombox"]},
     {"id": 58, "name": "Christian Brutal Sniper", "terrors": ["Christian Brutal Sniper"], "objects": ["ChristianBrutralSniper"]},
