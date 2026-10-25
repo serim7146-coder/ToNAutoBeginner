@@ -2366,11 +2366,31 @@ class LogMonitor:
         if self._is_all_continue_round():
             listed = self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
             return listed if self._outcome(listed) in ("continue", "open_special") else ("continue_rounds",)
-        # privateのラウンド指定自爆。続行リストより優先する
+        # privateのラウンド指定自爆。続行リストより優先する。ただし、その窓のデフォ続行にそのテラーがあれば
+        # 指定自爆をやめる（GS）。続行リストの判定へ流すと、重ねた表（デフォ続行）で続行になる
         if (is_private and self.cfg.skip_rounds
                 and self._should_skip_by_round(ids, bloodthirsty)):
-            return ("round_skip",)
+            if not self._default_continue_hits(ids):
+                return ("round_skip",)
+            if st.round_type == "Sabotage":
+                # 主催の希望（_decide_sabotage）もリストの「Sabotage」の枠も、デフォ続行の Sabotage star の枠を見ない。
+                # 表で続行と決めたので、そのまま続行にする
+                return ("list", True, False)
         return self._plan_by_lists(round_type, ids, bloodthirsty, is_private)
+
+    def _default_continue_hits(self, ids) -> bool:
+        """その窓のデフォ続行（アイテムで切り替え込み）に、このラウンドのキーで ids のどれかがあるか（GS）。
+        ラウンド指定自爆を続行の判定へ上書きするかを決める。Sabotage のキーは Sabotage star だけ（murder は見ない）。
+        テラーが分からない間（ids が空）は False"""
+        st = self.st
+        key = (GroupRound.SABOTAGE_STAR_KEY if st.round_type == "Sabotage"
+               else MatchTNL.LOG_TO_TNL.get(st.round_type, st.round_type))
+        return bool(set(ids) & set(self._continue_table().default.get(key, ())))
+
+    def _round_skip_overridden(self, ids, bloodthirsty) -> bool:
+        """ラウンド指定自爆に当たっていたが、その窓のデフォ続行で上書きして続行の判定に流したラウンドか（GS）"""
+        return bool(ids and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES and self.cfg.skip_rounds
+                    and self._should_skip_by_round(ids, bloodthirsty) and self._default_continue_hits(ids))
 
     def _plan_by_lists(self, round_type: str, ids, bloodthirsty, is_private: bool) -> tuple:
         """ラウンド指定（全続行・自爆）の後の判断: プラベ系の Sabotage は焼き芋と同じ判定、ほかは続行リスト"""
@@ -2674,6 +2694,8 @@ class LogMonitor:
             return ""
         label = ContinueTable.overlay_label(self._keep_on_base(), self._keep_on(),
                                             st.round_type, ids)
+        if st.is_continue_round and self._round_skip_overridden(ids, st.bloodthirsty_creature_variant):
+            label = ContinueTable.LABEL_DEFAULT       # 指定自爆をデフォ続行で上書きして続行した（GS）
         wanted = {ContinueTable.LABEL_DEFAULT: True, ContinueTable.LABEL_DISABLED: False}
         if label and wanted[label] != st.is_continue_round:
             label = ""          # 3クラ解放などリスト以外の決まりで、結果が逆になった
