@@ -35,9 +35,14 @@ _SOUND_VOLUME_LOCK = threading.Lock()
 _ALIAS_LOCK = threading.Lock()
 _alias_seq = 0
 
-# 拡張子 → MCIのデバイス種別。未知の拡張子は type 句を省いて自動判別に任せる
+# 拡張子 → MCIのデバイス種別。未知の拡張子は type 句を省いて自動判別に任せる。
+# .wav も mpegvideo（DirectShow）で開く: PCM の .wav も鳴らせて、waveaudio と違い setaudio の音量が効く。
+# 開けなければ _MCI_FALLBACK_TYPES の種別で開き直す（音量は効かないが鳴る）
 _MCI_TYPES = {
     ".mp3": "mpegvideo",
+    ".wav": "mpegvideo",
+}
+_MCI_FALLBACK_TYPES = {
     ".wav": "waveaudio",
 }
 
@@ -199,9 +204,11 @@ def _mci_volume_value(kind=None) -> int:
     return int(round(max(0.0, min(1.0, volume)) * 1000))
 
 
-def _open_command(path: Path, alias: str, path_text: str = "") -> str:
-    """open コマンド。パスは空白区切り対策で必ずダブルクォートで囲む"""
-    device_type = _MCI_TYPES.get(path.suffix.lower())
+def _open_command(path: Path, alias: str, path_text: str = "", device_type: str | None = None) -> str:
+    """open コマンド。パスは空白区切り対策で必ずダブルクォートで囲む。
+    device_type を渡さなければ拡張子から決める"""
+    if device_type is None:
+        device_type = _MCI_TYPES.get(path.suffix.lower())
     type_part = f" type {device_type}" if device_type else ""
     return f'open "{path_text or path.absolute()}"{type_part} alias {alias}'
 
@@ -222,19 +229,38 @@ def _short_path(path: Path) -> str:
 
 
 def _open_device(path: Path, alias: str) -> bool:
-    """音声デバイスを開く。長いパスで失敗したら短縮パスで開き直す。"""
-    command = _open_command(path, alias)
-    code = _mci(command)
-    if not code:
-        return True
-    short = _short_path(path)
-    if short and short != str(path.absolute()):
-        retry = _open_command(path, alias, path_text=short)
-        if not _mci(retry):
-            return True
-        command = retry
-    _say(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
-    return False
+    """音声デバイスを開く。種別ごとに「元のパス → 長いパスで失敗したら短縮パス」の順で試し、
+    その種別で開けなければ次の種別（.wav は mpegvideo → waveaudio）へ進む。"""
+    suffix = path.suffix.lower()
+    device_types = [_MCI_TYPES.get(suffix)]
+    fallback = _MCI_FALLBACK_TYPES.get(suffix)
+    if fallback:
+        device_types.append(fallback)
+    long_text = str(path.absolute())
+    short = None
+    code = 0
+    command = ""
+    for device_type in device_types:
+        command = _open_command(path, alias, device_type=device_type)
+        code = _mci(command)
+        if not code:
+            break
+        if short is None:
+            short = _short_path(path)
+        if short and short != long_text:
+            retry = _open_command(path, alias, path_text=short, device_type=device_type)
+            if not _mci(retry):
+                code = 0
+                command = retry
+                break
+            command = retry
+    if code:
+        _say(f"音声再生エラー: {_mci_error_text(code)}（{command}）")
+        return False
+    if fallback and device_type == fallback:
+        DebugLog.write(f"[音声] {path.name} は {_MCI_TYPES.get(suffix)} で開けず {fallback} で再生"
+                       f"（音量は効きません）")
+    return True
 
 
 def _say(message: str):

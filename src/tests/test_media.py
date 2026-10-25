@@ -984,12 +984,100 @@ class TestPlaySound(unittest.TestCase):
         self.assertEqual(commands[2], f"play {alias}", "wait は付けない（ほかのスレッドから止められない。EM）")
         self.assertEqual(commands[3], f"close {alias}")
 
-    def test_wav_uses_waveaudio_and_unknown_extension_omits_type(self):
+    def test_wav_opens_with_mpegvideo_and_unknown_extension_omits_type(self):
         commands, _out = self._play("voice/se.wav")
-        self.assertIn("type waveaudio", commands[0])
+        self.assertIn("type mpegvideo", commands[0])
+        self.assertNotIn("waveaudio", commands[0])
 
         commands, _out = self._play("voice/se.ogg")
         self.assertNotIn(" type ", commands[0])
+
+    def test_wav_sets_volume_with_the_computed_value(self):
+        """mpegvideo で開けば .wav にも setaudio の音量が効く（ツール音量 × 声の音量）"""
+        PlaySound.set_sound_volume(0.5)
+        try:
+            commands, out = self._play("voice/se.wav")
+        finally:
+            PlaySound.set_sound_volume(1.0)
+
+        alias = commands[0].split("alias ")[1]
+        self.assertEqual(len(commands), 4, commands)
+        self.assertEqual(commands[1], f"setaudio {alias} volume to 500")
+        self.assertEqual(out, [], "mpegvideo で開けたなら警告は出さない")
+
+    def test_wav_falls_back_to_waveaudio_when_mpegvideo_fails(self):
+        """mpegvideo で開けない .wav は waveaudio で開き直す。鳴らす・音量警告は拡張子ごとに1回"""
+        def play_with_fallback(keep_warned):
+            commands: list[str] = []
+
+            def fake_mci(command: str) -> int:
+                commands.append(command)
+                if command.startswith("open") and "type mpegvideo" in command:
+                    return 266
+                return 259 if command.startswith("setaudio") else 0
+
+            if not keep_warned:
+                PlaySound._warned.clear()
+            with patch.object(PlaySound, "_mci", side_effect=fake_mci), \
+                 patch.object(PlaySound, "_mci_mode", return_value="stopped"), \
+                 patch.object(PlaySound, "_mci_error_text", return_value="MCIのエラー"), \
+                 patch.object(PlaySound, "_short_path", return_value=""), \
+                 patch.object(PlaySound.threading, "Thread", self._SyncThread), \
+                 patch.object(PlaySound.DebugLog, "write") as mock_log, \
+                 patch("pathlib.Path.exists", return_value=True), \
+                 patch("builtins.print") as mock_print:
+                PlaySound.play_sound("voice/se.wav")
+            return commands, [str(c.args[0]) for c in mock_print.call_args_list], mock_log
+
+        first, out1, log1 = play_with_fallback(False)
+        self.assertIn("type mpegvideo", first[0])
+        self.assertIn("type waveaudio", first[1])
+        self.assertTrue(first[2].startswith("setaudio "), first)
+        self.assertTrue(first[3].startswith("play "), first)
+        self.assertTrue(first[4].startswith("close "), first)
+        self.assertEqual(len(out1), 1, "音量の警告は1回")
+        self.assertTrue(any("waveaudio" in str(c.args[0]) for c in log1.call_args_list),
+                        "waveaudio へ落ちたことを debug.log に1行")
+
+        second, out2, _log2 = play_with_fallback(True)
+        self.assertIn("type waveaudio", second[1])
+        self.assertEqual(out2, [], "2回目以降は黙ること")
+
+    def test_wav_tries_long_then_short_path_for_each_type(self):
+        """種別ごとに 長いパス → 短縮パス の順（mpegvideo の2つ → waveaudio の2つ）"""
+        commands: list[str] = []
+        short = r"C:\DIR~1\SE~1.WAV"
+
+        def fake_mci(command: str) -> int:
+            commands.append(command)
+            ok = command.startswith("open") and "type waveaudio" in command and short in command
+            return 0 if ok or not command.startswith("open") else 304
+
+        PlaySound._warned.clear()
+        with patch.object(PlaySound, "_mci", side_effect=fake_mci), \
+             patch.object(PlaySound, "_mci_mode", return_value="stopped"), \
+             patch.object(PlaySound, "_short_path", return_value=short), \
+             patch.object(PlaySound.threading, "Thread", self._SyncThread), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.print"):
+            PlaySound.play_sound("voice/se.wav")
+
+        opens = [c for c in commands if c.startswith("open")]
+        self.assertEqual(len(opens), 4, opens)
+        self.assertIn("type mpegvideo", opens[0])
+        self.assertNotIn(short, opens[0])
+        self.assertIn("type mpegvideo", opens[1])
+        self.assertIn(short, opens[1])
+        self.assertIn("type waveaudio", opens[2])
+        self.assertNotIn(short, opens[2])
+        self.assertIn("type waveaudio", opens[3])
+        self.assertIn(short, opens[3])
+
+    def test_wav_open_failure_on_both_types_skips_playback(self):
+        commands, out = self._play("voice/se.wav", fail_on="open")
+
+        self.assertEqual(len(commands), 2, "mpegvideo → waveaudio の2回だけ送って諦める")
+        self.assertTrue(any("MCIのエラー" in line for line in out))
 
     def test_each_playback_uses_a_unique_alias(self):
         """エイリアスを固定すると2回目の再生が1回目を止めてしまう"""
