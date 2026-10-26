@@ -411,7 +411,7 @@ class LogMonitor:
         self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
         SharedState.round_freeze_start(st)
         self._log(f"⏸ {name} 突入 → 全窓フリーズ"
-                  f"（死亡{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
+                  f"（死亡・生存{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
         # 音声は選べるラウンドのもの。Punished / 8 Pages の音声は速度検知用
         voice = self._round_entry_voice(name)
         if voice:
@@ -455,12 +455,15 @@ class LogMonitor:
         if self._auto_begin_active():
             self._start_daemon(self._action.do_begin_again, st.round_seq)
 
-    def _release_round_freeze_after_delay(self, round_seq: int, reborn_seq=None):
-        """死亡から一定時間後にラウンド突入フリーズを解除する。
+    def _release_round_freeze_after_delay(self, round_seq: int, reborn_seq=None, label: str = "死亡"):
+        """死亡・生存から一定時間後にラウンド突入フリーズを解除する。
 
         猶予は霧ラウンドと同じ。待機中に次のラウンドが始まっていたら何もしない
         （ROUND_START 側で解除済み）。待機中に猫で復活していたら（reborn_seq が変わったら）
-        その死亡は取り消されているので何もしない。
+        その死亡は取り消されているので何もしない（死亡からの予約だけが reborn_seq を渡す）。
+        label は何から数えたか（"死亡" か "生存"）。生存で解除しないと、窓が生き残る
+        ラウンド（8 Pages など）では次のラウンドまでフリーズが残り、RoundOver の
+        アイテムロストの前面化＋音声が出なかった。
         """
         time.sleep(config.FOG_FREEZE_RELEASE_DELAY_SEC)
         st = self.st
@@ -471,7 +474,7 @@ class LogMonitor:
             return
         if st.round_freeze_held:
             SharedState.round_freeze_end(st)
-            self._log(f"ラウンド突入フリーズ解除（死亡から"
+            self._log(f"ラウンド突入フリーズ解除（{label}から"
                       f"{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒）")
 
     def _release_speed_freeze_after_delay(self, round_seq: int):
@@ -2164,6 +2167,11 @@ class LogMonitor:
         """生存"""
         st = self.st
         st.lived_this_round = True
+        # ラウンド突入フリーズは生存からも少し置いて解除する（死亡と同じ猶予）。
+        # 解除しないと次のラウンドまで残り、アイテムロストの前面化＋音声が出ない
+        if st.round_freeze_held:
+            self._start_daemon(self._release_round_freeze_after_delay,
+                               st.round_seq, None, "生存")
         # どのラウンドでも生き残ったら1勝（3で打ち止め）
         if st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
             st.open_special_round_wins += 1

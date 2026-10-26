@@ -3057,6 +3057,140 @@ class TestRoundFreeze(unittest.TestCase):
         mock_sleep.assert_called_once_with(config.FOG_FREEZE_RELEASE_DELAY_SEC)
         self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
 
+    # ── 生存からの解除（死亡と同じ猶予。窓が生き残るラウンドで次のラウンドまで残らないように） ──
+    LIVED = "2026.10.27 12:00:00 Debug      -  Lived in round."
+
+    def _lived(self, monitor):
+        """`Lived in round.` を読む。予約された解除は同期で回せるよう記録だけする"""
+        started = []
+        monitor._start_daemon = lambda target, *args: started.append((target.__name__, args))
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        with patch.object(ConnectDB, "register_round"), patch.object(PlaySound, "play_sound"):
+            monitor._process(self.LIVED)
+        return started
+
+    def _run_release(self, monitor, *args):
+        with patch.object(LogMonitor.time, "sleep") as mock_sleep:
+            monitor._release_round_freeze_after_delay(*args)
+        return mock_sleep
+
+    def test_lived_releases_the_entry_freeze_after_the_delay(self):
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        seq = monitor.st.round_seq
+
+        started = self._lived(monitor)
+
+        self.assertEqual(started, [("_release_round_freeze_after_delay", (seq, None, "生存"))])
+        self.assertTrue(monitor.st.round_freeze_held, "猶予のあいだは張ったまま")
+        mock_sleep = self._run_release(monitor, *started[0][1])
+        mock_sleep.assert_called_once_with(config.FOG_FREEZE_RELEASE_DELAY_SEC)
+        self.assertFalse(monitor.st.round_freeze_held)
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+        self.assertTrue(any(m.endswith(f"ラウンド突入フリーズ解除（生存から{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒）")
+                            for m in monitor.logs), monitor.logs)
+
+    def test_lived_does_nothing_when_this_window_holds_no_entry_freeze(self):
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Classic")       # 選んでいないラウンド: 張らない
+        monitor._running = True
+
+        started = self._lived(monitor)
+
+        self.assertEqual([name for name, _a in started], [])
+
+    def test_next_round_before_the_delay_leaves_the_release_alone(self):
+        """待っているあいだに次のラウンドが始まったら、この予約は何もしない（突入側が解除済み）"""
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        started = self._lived(monitor)
+
+        self._start_round(monitor, "Classic")           # ROUND_START が先に解除する
+        self.assertFalse(monitor.st.round_freeze_held)
+        monitor.logs.clear()
+        self._run_release(monitor, *started[0][1])
+
+        self.assertFalse(any("生存から" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+    def test_stale_lived_release_does_not_drop_the_next_rounds_freeze(self):
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        started = self._lived(monitor)
+
+        self._start_round(monitor, "Alternate")         # 次のラウンドでも張り直した
+        self.assertTrue(monitor.st.round_freeze_held)
+        self._run_release(monitor, *started[0][1])
+
+        self.assertTrue(monitor.st.round_freeze_held, "古い予約で次のラウンドの突入フリーズを解かない")
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
+
+    def test_death_path_is_unchanged(self):
+        """死亡: 予約は（番号・復活番号）のまま、ログは「死亡から」"""
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        started = []
+        monitor._start_daemon = lambda target, *args: started.append((target.__name__, args))
+        with patch.object(ConnectDB, "register_round"), patch.object(PlaySound, "play_sound"):
+            monitor._process("You died.")
+        st = monitor.st
+        self.assertEqual(started, [("_release_round_freeze_after_delay", (st.round_seq, st.reborn_seq))])
+
+        self._run_release(monitor, *started[0][1])
+
+        self.assertFalse(st.round_freeze_held)
+        self.assertTrue(any(m.endswith(f"ラウンド突入フリーズ解除（死亡から{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒）")
+                            for m in monitor.logs), monitor.logs)
+
+    def test_death_release_is_still_cancelled_by_a_reborn(self):
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        seq, reborn = monitor.st.round_seq, monitor.st.reborn_seq
+        monitor.st.reborn_seq += 1                      # 待っているあいだに猫で復活
+
+        self._run_release(monitor, seq, reborn)
+
+        self.assertTrue(monitor.st.round_freeze_held)
+        self.assertFalse(any("ラウンド突入フリーズ解除" in m for m in monitor.logs))
+
+    def test_lived_release_ignores_a_reborn_check(self):
+        """生存からの予約は復活番号を渡さない（復活したあとに生き残っても解除する）"""
+        monitor = self._monitor(["Alternate"])
+        self._start_round(monitor, "Alternate")
+        monitor._running = True
+        started = self._lived(monitor)
+        monitor.st.reborn_seq += 1
+
+        self._run_release(monitor, *started[0][1])
+
+        self.assertFalse(monitor.st.round_freeze_held)
+
+    def test_lived_release_leaves_other_windows_freezes_alone(self):
+        a = self._monitor(["Alternate"])
+        b = self._monitor(["Alternate"])
+        self._start_round(a, "Alternate")
+        self._start_round(b, "Alternate")
+        a._running = True
+        self.assertEqual(SharedState.get_round_freeze_count(), 2)
+        started = self._lived(a)
+
+        self._run_release(a, *started[0][1])
+
+        self.assertFalse(a.st.round_freeze_held)
+        self.assertTrue(b.st.round_freeze_held, "ほかの窓の突入フリーズは張ったまま")
+        self.assertEqual(SharedState.get_round_freeze_count(), 1)
+        self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set(), "b がまだ張っている")
+
     def test_two_windows_hold_it_independently(self):
         a, b = WindowState(), WindowState()
         SharedState.round_freeze_start(a)
@@ -3086,6 +3220,89 @@ class TestRoundFreeze(unittest.TestCase):
         self.assertTrue(SharedState.ROUND_FREEZE_EVENT.is_set())
 
 
+
+
+class TestEightPagesSurviveItemLost(unittest.TestCase):
+    """8 Pages の突入フリーズで窓が生き残ったとき、生存から猶予で解除され、
+    RoundOver のアイテムロスト（前面化＋音声）が解除を待って出る"""
+
+    ITEMS = {29: ItemCatalog.Item("Taser", "Survival", True)}
+
+    def setUp(self):
+        p = patch.object(config, "ITEMS", self.ITEMS)
+        p.start()
+        self.addCleanup(p.stop)
+        SharedState.set_item_fetch(False)
+        SharedState.set_item_begin_mode(False)
+        SharedState.set_hands_free(False)
+        SharedState.set_freeze_rounds(("8 Pages",))
+        for reset in (SharedState.round_freeze_reset, SharedState.speed_freeze_reset,
+                      SharedState.equip_freeze_reset, SharedState.continue_round_reset):
+            reset()
+            self.addCleanup(reset)
+        self.addCleanup(SharedState.set_freeze_rounds, ())
+        self.sounds = []
+        self.focus = []
+        for p in (patch.object(PlaySound, "play_sound", side_effect=lambda p, kind=None, **_kw: self.sounds.append(p)),
+                  patch.object(WindowOperator, "borrow_front",
+                               side_effect=lambda h: self.focus.append(h) or (True, None)),
+                  patch.object(WindowOperator, "focus_window", side_effect=lambda h: self.focus.append(h) or True),
+                  patch.object(ConnectDB, "register_round"),
+                  patch.object(ActionExecutor.threading, "Thread")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10, auto_begin=False, voice_item_lost="lost.mp3"),
+                                        {}, lambda _m: None, window_idx=1)
+        st = monitor.st
+        st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor.started = []
+        monitor._start_daemon = lambda target, *args: monitor.started.append((target, args))
+        return monitor
+
+    def test_after_the_release_the_item_loss_front_and_voice_come_once(self):
+        monitor = self._monitor()
+        st, ex = monitor.st, monitor._action
+        # 8 Pages に入って突入フリーズを張り、アイテムを持っていた
+        monitor._process("This round is taking place at Facility (12) and the round type is 8 Pages")
+        self.assertTrue(st.round_freeze_held)
+        st.held_item_id = 29
+        st.item_id = 29
+        self.sounds.clear()
+        self.focus.clear()
+        # 生き残る → リスポーンでロスト → RoundOver
+        monitor._process("Lived in round.")
+        release = [(t, a) for t, a in monitor.started if t.__name__ == "_release_round_freeze_after_delay"]
+        self.assertEqual(len(release), 1)
+        monitor._mark_item_lost("リスポーン: アイテムロスト")
+        monitor._lose_held_item("リスポーン")
+        monitor._process("RoundOver")
+        self.assertTrue(st.waiting_for_equip)
+        self.assertEqual(self.sounds, [], "突入フリーズが解けるまで音声は出ない")
+        self.assertEqual(self.focus, [])
+
+        ticks = {"n": 0}
+
+        def sleep(_sec):
+            ticks["n"] += 1
+            if ticks["n"] == 2:                          # 生存から猶予が過ぎて解除される
+                with patch.object(LogMonitor.time, "sleep"):
+                    release[0][0](*release[0][1])
+            if ticks["n"] > 20:
+                raise AssertionError("見張りが終わらない（突入フリーズが残っている）")
+
+        with patch.object(ex, "announce_item_lost_once", wraps=ex.announce_item_lost_once) as announce, \
+             patch.object(ActionExecutor.time, "sleep", side_effect=sleep):
+            ex._watch_item_loss(st.round_seq)
+
+        self.assertFalse(st.round_freeze_held)
+        self.assertEqual(announce.call_count, 1)
+        self.assertEqual(self.sounds, ["lost.mp3"], "音声は1回")
+        self.assertEqual(self.focus, [0x10], "前面化は1回")
 
 
 class TestEquipFreezeCounter(unittest.TestCase):
