@@ -1083,6 +1083,7 @@ class TestHostListGrace(unittest.TestCase):
         app.host_wishes = {}
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
+        app._user_save_cache = None
         app._host_save_warned = False
         app._host_loss_since = None
         app._process_cache = FakeProcessCache()
@@ -1613,6 +1614,7 @@ class TestHostListSource(unittest.TestCase):
         app.host_wishes = {}
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
+        app._user_save_cache = None
         app._host_save_warned = False
         app._host_loss_since = None
         app._process_cache = FakeProcessCache()
@@ -2204,6 +2206,7 @@ class TestListSourceShared(unittest.TestCase):
         app.host_wishes = {}
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
+        app._user_save_cache = None
         app._host_save_warned = False
         app.logs = []
         app._log = app.logs.append

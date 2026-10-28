@@ -64,17 +64,41 @@ def _file_stamp(path):
     return (stat.st_mtime, stat.st_size)
 
 
-def _user_save_digest(path):
+def _user_save_digest(path, raw=None):
     """user_save.json の、読んでいる中身（last_active・accounts）のダイジェスト。ToN ListTool は数秒おきに
-    updated_at だけ書き直すので、時刻では毎回「変わった」になる（FT）。読めない・壊れている → _file_stamp(path)"""
+    updated_at だけ書き直すので、時刻では毎回「変わった」になる（FT）。読めない・壊れている → _file_stamp(path)
+
+    raw（読んだバイト列）が渡されたら、それを解析する（ファイルは開かない）。無ければ開いて読む。
+    どちらも f.read() で一気に読んで閉じてから解析する——ToN ListTool は一時ファイルから os.replace で
+    保存するので、こちらが開いている間に重なると「続行リストを保存できませんでした」になる（GU）"""
     try:
-        with open(path, "rb") as f:
-            raw = json.load(f)
+        if raw is None:
+            with open(path, "rb") as f:
+                raw = f.read()
+        raw = json.loads(raw)
         picked = json.dumps({"last_active": raw.get("last_active"), "accounts": raw.get("accounts")},
                             sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         return ("digest", hashlib.sha1(picked.encode("utf-8")).hexdigest())
     except Exception:
         return _file_stamp(path)
+
+
+def _read_user_save(path, cache):
+    """user_save.json を読む。戻り値は (stamp, ダイジェスト, 読んだバイト列)。前回の cache と
+    (mtime, size) が同じなら開かずに cache を返す。開くときは f.read() で一気に読んですぐ閉じる
+    （開いている時間と回数を減らす。ListTool の保存と重なりにくくする: GU）。
+    読めなかったときのバイト列は None（ダイジェストは _file_stamp(path)）"""
+    stamp = _file_stamp(path)
+    # 無いファイルの stamp は None。無いものは開いても失敗するだけなので、覚えには使わない
+    if cache is not None and stamp is not None and cache[0] == stamp:
+        return cache
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        raw = None
+    digest = _user_save_digest(path, raw) if raw is not None else _file_stamp(path)
+    return (stamp, digest, raw)
 
 
 def _first_existing(path: str, legacy: str) -> str:
@@ -989,6 +1013,7 @@ class App(tk.Tk):
         # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
         self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
+        self._user_save_cache: tuple | None = None   # _read_user_save の前回の結果（裏スレッドだけが触る）
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
         self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
@@ -2858,14 +2883,18 @@ class App(tk.Tk):
 
         # 自分のリストだけ更新されたときも読み直す。SQLite は本体を触らずに
         # -wal だけ伸びることがあるので、そちらも見る
+        # user_save.json は (mtime, size) が前回と同じなら開かない。開くのは周期あたり最多1回で、
+        # 読んだバイト列は load にも渡す（2回開かない: GU）
+        self._user_save_cache = _read_user_save(user_save, self._user_save_cache)
+        _, user_save_digest, user_save_raw = self._user_save_cache
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
-                 _user_save_digest(user_save),
+                 user_save_digest,
                  _file_stamp(path + "-wal"))
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return "same", None
 
         try:
-            keep_on, meta, wishes = load(path, user_save)
+            keep_on, meta, wishes = load(path, user_save, user_save_raw=user_save_raw)
         except Exception as e:
             DebugLog.exception("mainGUI._read_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
