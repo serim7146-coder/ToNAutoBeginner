@@ -56,13 +56,13 @@ class TestReadHostSourcePlaces(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def _fake_load(self, db, user):
+    def _fake_load(self, db, user, user_save_raw=None):
         self.calls.append((db, user))
         return self.LOADED
 
     def _read(self):
         app = types.SimpleNamespace(_process_cache=types.SimpleNamespace(watch=lambda name: True),
-                                    _host_save_stamp=None)
+                                    _host_save_stamp=None, _user_save_cache=None)
         with patch.object(config, "HOST_STATE_PATH", str(self.new_db)), \
              patch.object(config, "HOST_STATE_LEGACY_PATH", str(self.old_db)), \
              patch.object(config, "USER_SAVE_PATH", str(self.new_user)), \

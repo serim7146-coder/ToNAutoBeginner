@@ -66,7 +66,7 @@ class TestUserSaveDigest(unittest.TestCase):
         user = Path(self._dir.name) / "user_save.json"
         user.write_text(json.dumps(self._raw(updated_at="t1")), encoding="utf-8")
         cache = types.SimpleNamespace(watch=lambda name: True)
-        app = types.SimpleNamespace(_process_cache=cache, _host_save_stamp=None)
+        app = types.SimpleNamespace(_process_cache=cache, _host_save_stamp=None, _user_save_cache=None)
         fake_stat = types.SimpleNamespace(st_mtime=100.0, st_size=10)
         loaded = ({"Classic/クラシック": {1}}, {"listed": 1, "participants": 1}, {})
         with patch.object(config, "USER_SAVE_PATH", str(user)), \
@@ -88,6 +88,118 @@ class TestUserSaveDigest(unittest.TestCase):
             user.write_text(json.dumps(self._raw(accounts={"alice_test": {"3": 1}})), encoding="utf-8")
             self.assertEqual(mainGUI.App._read_host_source(app)[0], "loaded", "中身が変われば読み直す")
             self.assertEqual(load.call_count, 2)
+
+
+# ── GU: user_save.json は開く回数と時間を減らす ───────────
+class TestUserSaveOpenOnce(unittest.TestCase):
+    """ToN ListTool は user_save.json を「一時ファイルへ書く → os.replace」で保存する。こちらが同じ瞬間に
+    開いていると置き換えが失敗する。開く前に stat・一気に読んですぐ閉じる・1 周期に最多 1 回開く。
+    一時フォルダの偽のファイルだけを使う（ToN ListTool のフォルダは読まない・書かない）"""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.user = Path(self._dir.name) / "user_save.json"
+        self.db = Path(self._dir.name) / "host_state.sqlite3"
+
+    def _raw(self, accounts=None):
+        return {"updated_at": "t1", "last_active": "alice_test",
+                "accounts": {"alice_test": {"data": {}}} if accounts is None else accounts}
+
+    def _write(self, raw):
+        self.user.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    def _count_opens(self, target):
+        """target を開いた回数を数える（builtins.open を包む。中身は本物のまま）"""
+        real_open = open
+        calls = []
+
+        def counting(file, *args, **kwargs):
+            if str(file) == str(target):
+                calls.append(file)
+            return real_open(file, *args, **kwargs)
+        return calls, patch("builtins.open", counting)
+
+    def test_the_same_stamp_does_not_open_the_file(self):
+        self._write(self._raw())
+        first = mainGUI._read_user_save(str(self.user), None)
+        calls, patcher = self._count_opens(self.user)
+        with patcher:
+            second = mainGUI._read_user_save(str(self.user), first)
+        self.assertEqual(calls, [], "stamp が同じなら開かない")
+        self.assertIs(second, first)
+        self.assertEqual(second[1][0], "digest")
+
+    def test_a_changed_stamp_opens_once_for_the_whole_cycle(self):
+        """ダイジェストと自分のリストで 2 回開かない（読んだバイト列を load へ渡す）"""
+        self._write(self._raw())
+        cache = mainGUI._read_user_save(str(self.user), None)
+        self._write(self._raw(accounts={"alice_test": {"data": {}}, "bob_test": {"data": {}}}))   # サイズも変わる
+        app = types.SimpleNamespace(_process_cache=types.SimpleNamespace(watch=lambda name: True),
+                                    _host_save_stamp=None, _user_save_cache=cache)
+        fake_stat = types.SimpleNamespace(st_mtime=100.0, st_size=10)
+        calls, patcher = self._count_opens(self.user)
+        seen = {}
+
+        def fake_load(path, user_save, user_save_raw=None):
+            # 本物の _load_host_own_list を通す（raw が来ていれば開かない）
+            keep_on, wishes = {}, {}
+            seen["host_self"] = MatchTNL._load_host_own_list(user_save, keep_on, wishes, raw=user_save_raw)
+            seen["wishes"] = wishes
+            return keep_on, {"listed": 1, "participants": 1}, wishes
+
+        with patch.object(config, "USER_SAVE_PATH", str(self.user)), \
+             patch.object(config, "HOST_STATE_PATH", str(self.db)), \
+             patch.object(mainGUI.os.path, "exists", return_value=True), \
+             patch.object(mainGUI.os, "stat", return_value=fake_stat), \
+             patch.object(SharedState, "get_list_source", return_value="host"), \
+             patch.object(MatchTNL, "load_host_state", side_effect=fake_load), \
+             patcher:
+            kind, _value = mainGUI.App._read_host_source(app)
+        self.assertEqual(kind, "loaded")
+        self.assertEqual(len(calls), 1, "1 周期に開くのは 1 回だけ")
+        self.assertEqual(seen["host_self"], "alice_test")
+        self.assertIn("bob_test", seen["wishes"])
+
+    def test_a_broken_json_falls_back_to_the_file_stamp_through_the_reader(self):
+        self.user.write_text('{"last_active": "alice_t', encoding="utf-8")
+        stamp, digest, raw = mainGUI._read_user_save(str(self.user), None)
+        self.assertEqual(digest, mainGUI._file_stamp(str(self.user)))
+        self.assertEqual(stamp, digest)
+        self.assertIsNotNone(raw, "読めてはいる（解析だけ失敗）")
+
+    def test_a_missing_file_is_none(self):
+        self.assertEqual(mainGUI._read_user_save(str(self.user), None), (None, None, None))
+
+    def test_a_given_raw_is_parsed_without_opening(self):
+        self._write(self._raw())
+        raw = self.user.read_bytes()
+        calls, patcher = self._count_opens(self.user)
+        with patcher:
+            digest = mainGUI._user_save_digest(str(self.user), raw)
+        self.assertEqual(calls, [])
+        self.assertEqual(digest, mainGUI._user_save_digest(str(self.user)))
+
+    def test_own_list_with_raw_does_not_open_and_matches_reading_from_the_path(self):
+        data = {"alice_test": {"data": {"Classic/クラシック": {"1": True}}}, "bob_test": {"data": {}}}
+        self._write(self._raw(accounts=data))
+        keep_path, wishes_path = {}, {}
+        host_path = MatchTNL._load_host_own_list(str(self.user), keep_path, wishes_path)
+        raw = self.user.read_bytes()
+        keep_raw, wishes_raw = {}, {}
+        calls, patcher = self._count_opens(self.user)
+        with patcher:
+            host_raw = MatchTNL._load_host_own_list(str(self.user), keep_raw, wishes_raw, raw=raw)
+        self.assertEqual(calls, [], "raw があれば開かない")
+        self.assertEqual(host_raw, host_path)
+        self.assertEqual(keep_raw, keep_path)
+        self.assertEqual(wishes_raw, wishes_path)
+        self.assertEqual(host_raw, "alice_test")
+
+    def test_own_list_still_gives_up_quietly_on_bad_input(self):
+        self.assertIsNone(MatchTNL._load_host_own_list(str(self.user), {}, {}))                       # 無い
+        self.assertIsNone(MatchTNL._load_host_own_list(str(self.user), {}, {}, raw=b'{"accounts'))   # 壊れている
+        self.assertIsNone(MatchTNL._load_host_own_list(str(self.user), {}, {}, raw=b"[1]"))          # オブジェクトでない
 
 
 # ── ① _wish_ids の覚え書き ─────────────────────────

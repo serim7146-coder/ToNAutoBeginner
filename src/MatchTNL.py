@@ -271,7 +271,8 @@ def _wish_ids(bits) -> frozenset:
 
 
 def load_host_state(path: str,
-                    user_save_path: str | None = None
+                    user_save_path: str | None = None,
+                    user_save_raw: bytes | None = None
                     ) -> tuple[dict[str, set[int]], dict, dict]:
     """ToN ListTool の主催リスト（SQLite 版）を keepOn_set の形で読む。
 
@@ -358,7 +359,7 @@ def load_host_state(path: str,
 
     host_self = None
     if user_save_path:
-        host_self = _load_host_own_list(user_save_path, keepOn_set, wishes)
+        host_self = _load_host_own_list(user_save_path, keepOn_set, wishes, raw=user_save_raw)
     if host_self:
         participant_names.add(host_self)
         # 主催者はどのタブの窓にいても自分のリストで判定する。タブごとの
@@ -406,7 +407,8 @@ def tab_for_window(tabs_data: dict, present_names) -> int | None:
     return None if tied else best
 
 
-def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None:
+def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict,
+                        raw: bytes | None = None) -> str | None:
     """このPCのアカウントの続行リストを足す。last_active の名前を返す。
 
     ToN ListTool の GUI に「主催者のリストを表示に含める」があるが、保存
@@ -419,10 +421,16 @@ def _load_host_own_list(path: str, keepOn_set: dict, wishes: dict) -> str | None
 
     ここは「足せたら足す」だけ。ファイルが無い・壊れている、のいずれでも
     例外を投げずに諦める。
+
+    raw（呼び出し側が読んだバイト列）が渡されたら、それを解析してファイルは開かない。
+    無ければ開いて f.read() で一気に読み、閉じてから解析する（ToN ListTool の保存と重ならないよう、
+    掴む時間と回数を減らす: GU）。
     """
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        if raw is None:
+            with open(path, "rb") as f:
+                raw = f.read()
+        raw = json.loads(raw)
         accounts = raw.get("accounts") or {}
         active = raw.get("last_active")
         if not isinstance(accounts, dict):
