@@ -168,6 +168,7 @@ import ScreenCapture
 import ToNEntry
 import SaveLoad
 import mainGUI
+import MouseButtons
 import UIFont
 import AutoUpdate
 import Migration
@@ -179,6 +180,16 @@ from State import WindowConfig, WindowState
 # 呼んだその場で work → done を回す。本物の入口は残す（スレッドで回ることを確かめるテストが使う）
 REAL_STATS_OFF_GUI = StatisticsGUI.StatisticsWindow._off_gui
 StatisticsGUI.StatisticsWindow._off_gui = lambda self, work, done: done(work())
+
+
+# ── テストで本物のマウスフック（SetWindowsHookEx）を張らない（GW）──────────────
+# アプリを立てるテストが MouseButtons.start() を呼ぶ。本物は専用スレッドで低レベルのフックを張るので、何もしない物にする
+# （start は張れたことにして True）。ボタンの押した・離したは MouseButtons._on_hook_event(wParam, mouseData) で起こす。
+# 本物の入口は残しておく（スレッドの動きを確かめるテストが、_user32 を偽物にして呼ぶ）
+REAL_MOUSE_START = MouseButtons.start
+REAL_MOUSE_STOP = MouseButtons.stop
+MouseButtons.start = lambda: True
+MouseButtons.stop = lambda: None
 
 
 # ── テストから本物の OSC を送らない・本物の受け口を開かない ─────────
@@ -314,6 +325,7 @@ _real_paths = {}
 
 def setUpModule():
     global _sandbox
+    MouseButtons.reset_for_tests()          # 前のモジュールの App が残した購読・押下の記録を持ち込まない（GW）
     _sandbox = tempfile.TemporaryDirectory()
     root = Path(_sandbox.name) / "ToNAutoBeginner"
     _real_paths.update(settings=config.SETTINGS_PATH,
@@ -360,6 +372,7 @@ def _refuse_network(*_args, **_kwargs):
 
 
 def tearDownModule():
+    MouseButtons.reset_for_tests()
     urllib.request.urlopen = _real_paths["urlopen"]
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
