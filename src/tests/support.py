@@ -958,6 +958,16 @@ def _with_chase_keys(app):
     app._chase_key_var = lambda d: mainGUI.App._chase_key_var(app, d)
     app._chase_target_conflict = lambda d, k: mainGUI.App._chase_target_conflict(app, d, k)
     app._refresh_chase_key_labels = lambda: None
+    # 移動のキー（GV。既定は全部未設定）。重なりの判定・保存の読み書きは本物
+    app.v_move_forward_key = _CancelKeyVar(config.MOVE_FORWARD_KEY)
+    app.v_move_left_key = _CancelKeyVar(config.MOVE_LEFT_KEY)
+    app.v_move_right_key = _CancelKeyVar(config.MOVE_RIGHT_KEY)
+    app.v_jump_key = _CancelKeyVar(config.JUMP_KEY)
+    app._move_key_var = lambda t: mainGUI.App._move_key_var(app, t)
+    app._move_name = mainGUI.App._move_name
+    app._move_key_conflict = lambda k: mainGUI.App._move_key_conflict(app, k)
+    app._move_target_conflict = lambda t, k: mainGUI.App._move_target_conflict(app, t, k)
+    app._refresh_move_key_labels = lambda: None
     return app
 
 

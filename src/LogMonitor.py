@@ -180,6 +180,7 @@ class LogMonitor:
         # 押しっぱなしのまま残さない（使っていた2つを離す）
         if self._action.chase_stop():
             self._log("チェイス停止（監視の停止）")
+        self._action.move_keys_release_all()     # 移動のキーも離す（画面のログは出さない。debug.log だけ）
         self._running = False
         self._stop_event.set()
         self._action.stop_velocity_receiver()
@@ -202,6 +203,18 @@ class LogMonitor:
             self._log(f"チェイス停止（{key_label}）")
         else:
             self._log(f"チェイスの向きを{name}に切り替え")
+
+    def on_move_key(self, direction: str, down: bool):
+        """移動のキー（前進・左・右）を押した・離した。インスタンスの種類もラウンドも問わない。
+        画面のログには出さない（送れないときの ⚠ と、debug.log への記録は ActionExecutor）"""
+        if down:
+            self._action.move_key_down(direction)
+        else:
+            self._action.move_key_up(direction)
+
+    def on_jump_key(self):
+        """ジャンプのキーを 1 回押した"""
+        self._action.jump()
 
     def cancel_suicide(self):
         """自爆キャンセルのキー。ActionExecutor.cancel_suicide() の結果を返す"""

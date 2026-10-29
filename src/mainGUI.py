@@ -1040,6 +1040,13 @@ class App(tk.Tk):
         # チェイスのキー（DV2: 変えられる・解除できる。既定は F1・F2）
         self.v_chase_cw_key = tk.StringVar(value=config.CHASE_CW_KEY)
         self.v_chase_ccw_key = tk.StringVar(value=config.CHASE_CCW_KEY)
+        # 移動のキー（GV: 前進・左・右・ジャンプ。既定は全部未設定）
+        self.v_move_forward_key = tk.StringVar(value=config.MOVE_FORWARD_KEY)
+        self.v_move_left_key = tk.StringVar(value=config.MOVE_LEFT_KEY)
+        self.v_move_right_key = tk.StringVar(value=config.MOVE_RIGHT_KEY)
+        self.v_jump_key = tk.StringVar(value=config.JUMP_KEY)
+        self._move_hooks = []
+        self._move_keys_down = set()
         self._suicide_cancel_hook = None
         self._suicide_cancel_down = False
         self._capturing_key = False
@@ -1086,6 +1093,7 @@ class App(tk.Tk):
 
     def _start_emergency_stop_polling(self):
         self._hook_chase_keys()
+        self._hook_move_keys()
         self._hook_suicide_cancel_key()
         self._hook_stop_start_keys()
 
@@ -1262,6 +1270,77 @@ class App(tk.Tk):
         except (tk.TclError, RuntimeError):
             pass                    # 閉じた後に通知が来た
 
+    # ── 移動のキー（GV: 押している間、監視中の全窓が動く。ジャンプは 1 回押しで 1 回）──
+    # チェイスと同じく押した・離した通知で拾う（suppress しない）。マクロが動いている間だけ効き、
+    # インスタンスの種類もラウンド中かどうかも問わない
+    def _hook_move_keys(self):
+        """起動時と、キーを変えた・解除したとき。設定されているキーだけ拾う"""
+        self._unhook_move_keys()            # 二重に拾わない
+        self._move_keys_down = set()
+        self._move_hooks = []
+        if keyboard is None:
+            return
+        for target, _field, _label in App.MOVE_KEY_FIELDS:
+            key = self._move_key_var(target).get()
+            if not key:
+                continue            # 未設定・解除したキーは拾わない
+            # 1キーに1つのフック（_hook_chase_keys と同じ。押す・離すは event_type で分ける）
+            def on_key(event, t=target, k=key):
+                if getattr(event, "event_type", None) == "down":
+                    self._move_key_down(t, k)
+                else:
+                    self._move_key_up(t, k)
+            try:
+                self._move_hooks.append(keyboard.hook_key(key, on_key, suppress=False))
+            except Exception as e:
+                DebugLog.exception("mainGUI._hook_move_keys")
+                self._log(f"[移動] ⚠ {HotKey.display(key)} を登録できません（{e}）")
+
+    def _unhook_move_keys(self):
+        """アプリ終了時と、拾い直すとき"""
+        for hook in getattr(self, "_move_hooks", []):    # 登録できたものだけ
+            try:
+                keyboard.unhook(hook)
+            except KeyError:
+                pass                    # もう外れている。例外として書かない
+            except Exception:
+                DebugLog.exception("mainGUI._unhook_move_keys")
+        self._move_hooks = []
+
+    def _move_key_down(self, target: str, key: str):
+        """keyboard のスレッドから呼ばれる。押しっぱなしの繰り返しは離すまで1回。
+        GUI の処理は Tk のスレッドで行う"""
+        if key in self._move_keys_down:
+            return
+        self._move_keys_down.add(key)
+        if self._capturing_key:
+            return                  # キーの設定中は反応しない
+        try:
+            UiInbox.call_soon(self, self._on_move_key, target, True)
+        except (tk.TclError, RuntimeError):
+            pass                    # 閉じた後に通知が来た
+
+    def _move_key_up(self, target: str, key: str):
+        """keyboard のスレッドから呼ばれる。離す通知は設定中でも通す（押したまま残さない）"""
+        self._move_keys_down.discard(key)
+        try:
+            UiInbox.call_soon(self, self._on_move_key, target, False)
+        except (tk.TclError, RuntimeError):
+            pass                    # 閉じた後に通知が来た
+
+    def _on_move_key(self, target: str, down: bool):
+        """監視している全窓へ送る。マクロが動いていなければ何もしない。
+        止めた後に来た離す通知は、LogMonitor.stop() が離し終えているので何もしない"""
+        if not self._running or not self.monitors:
+            return
+        if target == "jump":
+            if down:                # 押しっぱなしでは繰り返さない（1回押しで1回）
+                for monitor in self.monitors:
+                    monitor.on_jump_key()
+            return
+        for monitor in self.monitors:
+            monitor.on_move_key(target, down)
+
     # ── 自爆キャンセルのキー（押した瞬間の通知で拾う）──────────
     # ツール自身が背面で送る自爆の ^ は PostMessage なので、低レベルのフックには来ない
     def _hook_suicide_cancel_key(self):
@@ -1422,6 +1501,40 @@ class App(tk.Tk):
     def _chase_key_var(self, direction: str):
         return self.v_chase_cw_key if direction == "cw" else self.v_chase_ccw_key
 
+    # 移動のキー: (向き, 保存のキー名, 短い名前)。向きは ActionExecutor.MOVE_INPUTS と同じ（jump だけ別）
+    MOVE_KEY_FIELDS = (("forward", "move_forward_key", "前進"),
+                       ("left", "move_left_key", "左"),
+                       ("right", "move_right_key", "右"),
+                       ("jump", "jump_key", "ジャンプ"))
+
+    def _move_key_var(self, target: str):
+        for t, field, _label in App.MOVE_KEY_FIELDS:
+            if t == target:
+                return getattr(self, "v_" + field)
+        raise KeyError(target)
+
+    @staticmethod
+    def _move_short(target: str) -> str:
+        """「前進」「左」「右」「ジャンプ」"""
+        return next(label for t, _field, label in App.MOVE_KEY_FIELDS if t == target)
+
+    @staticmethod
+    def _move_name(target: str) -> str:
+        """「移動（前進）」「ジャンプ」"""
+        label = App._move_short(target)
+        return label if target == "jump" else f"移動（{label}）"
+
+    def _move_key_text(self, target: str) -> str:
+        name = self._move_name(target)
+        key = self._move_key_var(target).get()
+        return f"{name}: 未設定" if not key else f"{name}: {HotKey.display(key)}"
+
+    def _move_keys_summary(self) -> str:
+        """「移動: 前進 F3・左 F4・右 F5・ジャンプ F6」。設定済みだけ並べる。全部無ければ「移動: 未設定」"""
+        parts = [f"{label} {HotKey.display(self._move_key_var(t).get())}"
+                 for t, _field, label in App.MOVE_KEY_FIELDS if self._move_key_var(t).get()]
+        return "移動: " + "・".join(parts) if parts else "移動: 未設定"
+
     def _suicide_cancel_key_text(self) -> str:
         key = self.v_suicide_cancel_key.get()
         return "自爆キャンセル: 未設定" if not key else f"自爆キャンセル: {HotKey.display(key)}"
@@ -1445,7 +1558,8 @@ class App(tk.Tk):
             self.lbl_keys.config(text="   ".join((self._start_key_text(),
                                                    self._emergency_key_text(),
                                                    self._suicide_cancel_key_text(),
-                                                   self._chase_keys_summary())))
+                                                   self._chase_keys_summary(),
+                                                   self._move_keys_summary())))
         except (tk.TclError, AttributeError):
             pass
 
@@ -1458,6 +1572,36 @@ class App(tk.Tk):
     def _refresh_chase_key_labels(self):
         self._set_key_label("lbl_chase_cw_key", self._chase_key_text("cw"))
         self._set_key_label("lbl_chase_ccw_key", self._chase_key_text("ccw"))
+
+    def _refresh_move_key_labels(self):
+        for target, _field, _label in App.MOVE_KEY_FIELDS:
+            self._set_key_label(f"lbl_move_{target}_key" if target != "jump" else "lbl_jump_key",
+                                self._move_key_text(target))
+
+    def _move_key_conflict(self, key) -> str | None:
+        """緊急停止・マクロ開始・自爆キャンセル・チェイスのキーにしようとしたキーが、移動のキーと重なるか。
+        重なる移動のキーの名前（「移動（前進）」など）。移動のキーは、チェイスを使うかどうかに関係なく見る"""
+        for target, _field, _label in App.MOVE_KEY_FIELDS:
+            other = self._move_key_var(target).get()
+            if other and key == other:
+                return self._move_name(target)
+        return None
+
+    def _move_target_conflict(self, target: str, key) -> str | None:
+        """移動のキーにしようとしたキーと重なるほかのキーの名前"""
+        chase = SharedState.get_chase_enabled()     # チェイスを使わないなら F1・F2 は空いている（DT）
+        for name, other in (("緊急停止", self.v_emergency_key.get()),
+                            ("マクロ開始", self.v_start_key.get()),
+                            ("自爆キャンセル", self.v_suicide_cancel_key.get()),
+                            ("チェイス", self.v_chase_cw_key.get() if chase else ""),
+                            ("チェイス", self.v_chase_ccw_key.get() if chase else "")):
+            if other and key == other:
+                return name
+        for t, _field, _label in App.MOVE_KEY_FIELDS:
+            other = self._move_key_var(t).get()
+            if t != target and other and key == other:
+                return self._move_name(t)
+        return None
 
     def _chase_key_conflict(self, key) -> str | None:
         """緊急停止・マクロ開始のキーがチェイスのキーと重なるか（DV2）。チェイスを使わないなら
@@ -1479,7 +1623,7 @@ class App(tk.Tk):
                             ("チェイスのもう一方", self._chase_key_var(other_dir).get())):
             if other and key == other:
                 return name
-        return None
+        return self._move_key_conflict(key)
 
     def _suicide_cancel_key_conflict(self, key) -> str | None:
         """自爆キャンセルのキーと重なるほかのキーの名前。重ならなければ None"""
@@ -1490,7 +1634,7 @@ class App(tk.Tk):
                             ("チェイス", self.v_chase_ccw_key.get() if SharedState.get_chase_enabled() else "")):
             if other and key == other:
                 return name
-        return None
+        return self._move_key_conflict(key)
 
     def _refresh_start_key_label(self):
         self._set_key_label("lbl_start_key", self._start_key_text())
@@ -1534,6 +1678,11 @@ class App(tk.Tk):
         row(2, "cancel", "lbl_suicide_cancel_key")
         row(3, "cw", "lbl_chase_cw_key")
         row(4, "ccw", "lbl_chase_ccw_key")
+        # 移動のキー（GV）。チェイスの下に前進・左・右・ジャンプの順
+        row(5, "forward", "lbl_move_forward_key")
+        row(6, "left", "lbl_move_left_key")
+        row(7, "right", "lbl_move_right_key")
+        row(8, "jump", "lbl_jump_key")
         # 使う・使わないのチェック（キーの表示はキーの行に任せる。DV2）
         ttk.Checkbutton(body, text="チェイスを使う",
                         variable=self.v_chase_enabled,
@@ -1543,6 +1692,7 @@ class App(tk.Tk):
         self._refresh_emergency_key_label()
         self._refresh_suicide_cancel_key_label()
         self._refresh_chase_key_labels()
+        self._refresh_move_key_labels()
 
     # キーバインドの画面のボタン（変更・解除）の名前
     KEY_BUTTONS = {
@@ -1551,6 +1701,10 @@ class App(tk.Tk):
         "cancel": {"capture": "btn_capture_cancel_key", "clear": "btn_clear_cancel_key"},
         "cw": {"capture": "btn_capture_cw_key", "clear": "btn_clear_cw_key"},
         "ccw": {"capture": "btn_capture_ccw_key", "clear": "btn_clear_ccw_key"},
+        "forward": {"capture": "btn_capture_forward_key", "clear": "btn_clear_forward_key"},
+        "left": {"capture": "btn_capture_left_key", "clear": "btn_clear_left_key"},
+        "right": {"capture": "btn_capture_right_key", "clear": "btn_clear_right_key"},
+        "jump": {"capture": "btn_capture_jump_key", "clear": "btn_clear_jump_key"},
     }
 
     def _clear_key(self, target: str):
@@ -1582,6 +1736,16 @@ class App(tk.Tk):
             self._refresh_suicide_cancel_key_label()
             self._hook_suicide_cancel_key()
             self._log("[自爆キャンセル] 解除しました")
+            return
+        if target in ("forward", "left", "right", "jump"):
+            var = self._move_key_var(target)
+            if not var.get():
+                self._log("[移動] すでに未設定です")
+                return
+            var.set("")
+            self._refresh_move_key_labels()
+            self._hook_move_keys()
+            self._log(f"[移動] {self._move_short(target)}のキーを解除しました")
             return
         var = self._chase_key_var(target)
         if not var.get():
@@ -1647,6 +1811,9 @@ class App(tk.Tk):
         if target in ("cw", "ccw"):
             self._finish_capture_chase_key(key, target)
             return
+        if target in ("forward", "left", "right", "jump"):
+            self._finish_capture_move_key(key, target)
+            return
         if key is None:
             self._log("[緊急停止] ⚠ キーを取れませんでした。設定は変えていません")
             return
@@ -1667,6 +1834,10 @@ class App(tk.Tk):
             return
         if self._chase_key_conflict(key):
             self._log("[緊急停止] ⚠ チェイスのキーと同じキーは使えません。設定は変えていません")
+            return
+        move = self._move_key_conflict(key)
+        if move:
+            self._log(f"[緊急停止] ⚠ {move}のキーと同じキーは使えません。設定は変えていません")
             return
         self.v_emergency_key.set(key)
         self._refresh_emergency_key_label()
@@ -1695,6 +1866,10 @@ class App(tk.Tk):
             return
         if self._chase_key_conflict(key):
             self._log("[マクロ開始] ⚠ チェイスのキーと同じキーは使えません。設定は変えていません")
+            return
+        move = self._move_key_conflict(key)
+        if move:
+            self._log(f"[マクロ開始] ⚠ {move}のキーと同じキーは使えません。設定は変えていません")
             return
         self.v_start_key.set(key)
         self._start_key_pressed = False
@@ -1737,6 +1912,24 @@ class App(tk.Tk):
         self._refresh_chase_key_labels()
         self._hook_chase_keys()
         self._log(f"[チェイス] {name}を {HotKey.display(key)} に変更しました")
+
+    def _finish_capture_move_key(self, key, target: str):
+        """移動のキーを設定する（GV）。取れない・不正・ほかのキーと同じなら今のまま。変えたらフックし直す"""
+        name = self._move_short(target)
+        if key is None:
+            self._log(f"[移動] ⚠ {name}のキーを取れませんでした。設定は変えていません")
+            return
+        if not HotKey.is_valid(key):
+            self._log(f"[移動] ⚠ {key!r} は使えないキーです。設定は変えていません")
+            return
+        other = self._move_target_conflict(target, key)
+        if other:
+            self._log(f"[移動] ⚠ {other}のキーと同じキーは使えません。設定は変えていません")
+            return
+        self._move_key_var(target).set(key)
+        self._refresh_move_key_labels()
+        self._hook_move_keys()
+        self._log(f"[移動] {name}を {HotKey.display(key)} に変更しました")
 
     def _build_ui(self):
         s = ttk.Style(self)
@@ -2944,7 +3137,11 @@ class App(tk.Tk):
                         "start_key": ("マクロ開始", "v_start_key"),
                         "suicide_cancel_key": ("自爆キャンセル", "v_suicide_cancel_key"),
                         "chase_cw_key": ("チェイス（時計回り）", "v_chase_cw_key"),
-                        "chase_ccw_key": ("チェイス（反時計回り）", "v_chase_ccw_key")}
+                        "chase_ccw_key": ("チェイス（反時計回り）", "v_chase_ccw_key"),
+                        "move_forward_key": ("移動（前進）", "v_move_forward_key"),
+                        "move_left_key": ("移動（左）", "v_move_left_key"),
+                        "move_right_key": ("移動（右）", "v_move_right_key"),
+                        "jump_key": ("ジャンプ", "v_jump_key")}
 
     def _report_stale_keys(self, fields):
         """読み込みで「半角/全角」を外したキーを画面のログに 1 つ 1 回出し、外した結果を保存する（EL）"""
@@ -3016,6 +3213,20 @@ class App(tk.Tk):
             taken.add(chase_key)
             self._chase_key_var(direction).set(chase_key)
         self._refresh_chase_key_labels()
+        # 移動のキー（GV）。チェイスと同じ決まり（無ければ未設定、不正なら既定＝未設定、ほかのキーと重なれば未設定）。
+        # 自爆キャンセルはこの後で読み、移動のキーと重なれば向こうを既定へ倒す
+        move_defaults = {"forward": config.MOVE_FORWARD_KEY, "left": config.MOVE_LEFT_KEY,
+                         "right": config.MOVE_RIGHT_KEY, "jump": config.JUMP_KEY}
+        for target, name, _label in App.MOVE_KEY_FIELDS:
+            default = move_defaults[target]
+            move_key = saved_key(name, default)
+            if move_key != "" and not HotKey.is_valid(move_key):
+                move_key = default
+            if move_key in taken:
+                move_key = ""
+            taken.add(move_key)
+            self._move_key_var(target).set(move_key)
+        self._refresh_move_key_labels()
         # 自爆キャンセルのキー。不正・ほかのキーと同じなら既定（^）へ。既定も重なれば未設定
         cancel_key = saved_key("suicide_cancel_key", config.SUICIDE_CANCEL_KEY)
         if cancel_key == "":
@@ -4295,6 +4506,7 @@ class App(tk.Tk):
             "follow_utils":            SharedState.get_follow_utils(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
+            **{field: self._move_key_var(target).get() for target, field, _label in App.MOVE_KEY_FIELDS},
             "voice_volumes":           PlaySound.voice_volumes_setting(),
             "voice_enabled":           PlaySound.voice_enabled_setting(),
             **self._launch_options_setting(),
@@ -4406,6 +4618,7 @@ class App(tk.Tk):
         self._stop()
         OSCQuery.shutdown()                         # 残っていれば広告を取り下げる
         self._unhook_chase_keys()
+        self._unhook_move_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
         self._show_own_windows_again()

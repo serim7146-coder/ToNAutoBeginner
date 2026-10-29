@@ -114,6 +114,10 @@ class ActionExecutor:
         self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
         self._chase_stop = None           # 送り直しのスレッドを止める合図
         self._chase_thread = None
+        # 移動のキー（前進・左・右。押している間だけ動く）。向き → (止める印, スレッド)
+        self._move_lock = threading.Lock()
+        self._move_holds: dict = {}
+        self._move_warned: set = set()    # ⚠ を出した向き（離したら消す。次に押したときはまた 1 回）
         self._speed_recv_warned = False   # 速度未受信の警告を出したか
         # カーソル方式を見送った理由は、同じラウンドで同じものを出さない
         self._cursor_reason_round = -1
@@ -239,6 +243,106 @@ class ActionExecutor:
                 if self._chase_stop is stop:
                     self._chase_dir = self._chase_stop = self._chase_thread = None
             self._log("⚠ チェイス: キーを送れません（最小化中など）→ 止めました")
+
+    # ── 移動のキー（押している間、動く）──────────────────
+    # 向き → (OSC のアドレス, OSC が使えない窓のキー)。チェイスと同じ送り方
+    MOVE_INPUTS = {
+        "forward": ("/input/MoveForward", "w"),
+        "left": ("/input/MoveLeft", "a"),
+        "right": ("/input/MoveRight", "d"),
+    }
+
+    # 注意: この3つ（move_key_down / move_key_up / jump）は can_operate() を見ない。
+    # 自動の操作と違い、人がキーを押している間だけ動く操作なので、public・グループなど
+    # どのインスタンスでも動かす（依頼者の決定）。この機能だけの例外
+    def move_key_down(self, direction: str) -> bool:
+        """前進・左・右のキーを押した。押している間、送り続ける。
+        すでに押していれば True（押しっぱなしの繰り返し。何もしない）、新しく始めたら False。
+
+        どのスレッドから呼んでもよい（鍵）。前面を奪わないので _GLOBAL_ACTION_LOCK は取らない
+        """
+        with self._move_lock:
+            if direction in self._move_holds:
+                return True
+            self._trace(f"[操作] 移動キー 押す {direction}")
+            stop = threading.Event()
+            thread = TaskStats.thread("_run_move_hold", self._run_move_hold, direction, stop, daemon=True)
+            self._move_holds[direction] = (stop, thread)
+            thread.start()
+            return False
+
+    def move_key_up(self, direction: str):
+        """前進・左・右のキーを離した。送るのをやめて 0 を送る（押していなければ何もしない）"""
+        with self._move_lock:
+            self._move_warned.discard(direction)        # 次に押したときはまた 1 回
+            held = self._move_holds.pop(direction, None)
+            if held is None:
+                return
+            self._trace(f"[操作] 移動キー 離す {direction}")
+            self._release_move_locked(held)
+
+    def move_keys_release_all(self) -> bool:
+        """押している移動のキーを全部離す（マクロの停止・アプリの終了）。離したものがあれば True"""
+        with self._move_lock:
+            holds = list(self._move_holds.items())
+            self._move_holds.clear()
+            self._move_warned.clear()
+            for direction, held in holds:
+                self._trace(f"[操作] 移動キー 離す {direction}（まとめて）")
+                held[0].set()
+            for _direction, held in holds:
+                self._release_move_locked(held)
+            return bool(holds)
+
+    @staticmethod
+    def _release_move_locked(held):
+        """止める印を立て、離し終えるのを待つ（離し終えてから次の押しへ）"""
+        stop, thread = held
+        stop.set()
+        if thread is not threading.current_thread():
+            thread.join(config.CHASE_RESEND_SEC * 10)
+
+    def _run_move_hold(self, direction: str, stop):
+        address, key = self.MOVE_INPUTS[direction]
+        osc = self._osc
+        if osc is not None:
+            try:
+                while True:
+                    osc.send(address, 1)
+                    if stop.wait(config.CHASE_RESEND_SEC):
+                        break
+            finally:
+                osc.send(address, 0)        # stop_all() は使わない（ほかの押しを消さない）
+            return
+        if WindowOperator.hold_keys_background(self._cfg.hwnd, [key], stop, config.CHASE_RESEND_SEC):
+            return
+        if stop.is_set():
+            return                          # 離し終えている。鍵は待たない
+        with self._move_lock:
+            held = self._move_holds.get(direction)
+            if held is None or held[0] is not stop:
+                return
+            del self._move_holds[direction]
+            first = direction not in self._move_warned
+            self._move_warned.add(direction)
+        if first:
+            self._log("⚠ 移動キーを送れません（最小化中など）")
+
+    def jump(self) -> bool:
+        """ジャンプのキーを 1 回押した。JUMP_PRESS_SEC だけ押して離す（別スレッド。キーの通知も Tk も塞がない）。
+        送れなければ ⚠ を 1 回（押すたびに 1 回）。始めたら True"""
+        self._trace("[操作] ジャンプ")
+        TaskStats.thread("_run_jump", self._run_jump, daemon=True).start()
+        return True
+
+    def _run_jump(self):
+        if self._osc is not None:
+            ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC, stop=self._stopped)
+        else:
+            ok = WindowOperator.hold_key_background(self._cfg.hwnd, "space", config.JUMP_PRESS_SEC,
+                                                    stop=self._stopped)
+        if ok is False:
+            self._log("⚠ ジャンプを送れません（最小化中など）")
 
     def _stopped(self) -> bool:
         """マクロが止められたか。押している最中の移動・長押しはこれでその場で離す"""

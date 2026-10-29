@@ -230,7 +230,7 @@ class TestKeybindDialog(_AppCase):
         self.app.v_emergency_key.set("ctrl+p")
         self.app._refresh_emergency_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定   停止: Ctrl+P   自爆キャンセル: ^   チェイス: F1/F2")
+                         "マクロ開始: 未設定   停止: Ctrl+P   自爆キャンセル: ^   チェイス: F1/F2   移動: 未設定")
 
     def test_the_button_opens_the_dialog_once(self):
         button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
@@ -279,7 +279,7 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
         self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定   停止: F8   自爆キャンセル: F7   チェイス: F1/F2")
+                         "マクロ開始: 未設定   停止: F8   自爆キャンセル: F7   チェイス: F1/F2   移動: 未設定")
 
     def test_the_overlap_check_is_the_same(self):
         self._dialog()
@@ -504,7 +504,7 @@ class TestDv2Keys(_AppCase):
                          ("f6", "f5"))
         self.assertEqual(self.hook_chase.call_count, 2, "変えるたびにフックし直す")
         self.assertEqual(self.app.lbl_chase_cw_key.cget("text"), "チェイス（時計回り）: F6")
-        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F6/F5"),
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F6/F5   移動: 未設定"),
                         self.app.lbl_keys.cget("text"))
         self.assertEqual(self._hooked_chase_keys(), ["f6", "f5"])
 
@@ -542,7 +542,7 @@ class TestDv2Keys(_AppCase):
                                             self.app.v_suicide_cancel_key, self.app.v_chase_cw_key,
                                             self.app.v_chase_ccw_key)], [""] * 5)
         self.assertEqual(self.app.lbl_keys.cget("text"),
-                         "マクロ開始: 未設定   停止: 未設定   自爆キャンセル: 未設定   チェイス: 未設定")
+                         "マクロ開始: 未設定   停止: 未設定   自爆キャンセル: 未設定   チェイス: 未設定   移動: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"), "停止: 未設定")
         self.hook_cancel.assert_called_once_with()
         self.assertEqual(self.hook_chase.call_count, 2, "チェイスは解除のたびにフックし直す")
@@ -639,7 +639,7 @@ class TestDv2Keys(_AppCase):
 # ── DV3（言葉を短く・キーの並びと名前）──────────────────────
 class TestDv3(_AppCase):
     def test_the_dialog_rows_have_no_notes(self):
-        """キーバインドの画面: マクロ開始 → 停止 → 自爆キャンセル → チェイス2つ。右の説明文は無い"""
+        """キーバインドの画面: マクロ開始 → 停止 → 自爆キャンセル → チェイス2つ → 移動4つ（GV）。右の説明文は無い"""
         self._dialog()
         grid = self.app.lbl_start_key.master
         labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
@@ -648,7 +648,11 @@ class TestDv3(_AppCase):
                                   ((1, 0), f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}"),
                                   ((2, 0), "自爆キャンセル: ^"),
                                   ((3, 0), "チェイス（時計回り）: F1"),
-                                  ((4, 0), "チェイス（反時計回り）: F2")])
+                                  ((4, 0), "チェイス（反時計回り）: F2"),
+                                  ((5, 0), "移動（前進）: 未設定"),         # GV
+                                  ((6, 0), "移動（左）: 未設定"),
+                                  ((7, 0), "移動（右）: 未設定"),
+                                  ((8, 0), "ジャンプ: 未設定")])
         texts = [w.cget("text") for w in _all_widgets(self.app._keybind_dialog)
                  if isinstance(w, ttk.Label)]
         self.assertFalse(any("緊急" in t for t in texts), texts)
@@ -658,10 +662,10 @@ class TestDv3(_AppCase):
         self.app._refresh_start_key_label()
         self.assertEqual(self.app.lbl_keys.cget("text"),
                          f"マクロ開始: F9   停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}"
-                         "   自爆キャンセル: ^   チェイス: F1/F2")
+                         "   自爆キャンセル: ^   チェイス: F1/F2   移動: 未設定")
         self.app.v_chase_ccw_key.set("")
         self.app._refresh_chase_key_labels()
-        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F1/未設定"),
+        self.assertTrue(self.app.lbl_keys.cget("text").endswith("   チェイス: F1/未設定   移動: 未設定"),
                         self.app.lbl_keys.cget("text"))
 
     def test_no_emergency_word_on_the_screens(self):
