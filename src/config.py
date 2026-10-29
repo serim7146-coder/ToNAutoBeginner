@@ -800,6 +800,13 @@ CHASE_CCW_KEY    = "f2"
 # 移動の stop_all() や UDP の取りこぼしで離されても、すぐ戻るように
 CHASE_RESEND_SEC = 0.2
 
+# ── 移動のキー（押している間、監視中の全窓を動かす。ジャンプは 1 回押しで 1 回）──
+MOVE_FORWARD_KEY = ""     # デフォルト未設定（使う人が決める）
+MOVE_LEFT_KEY    = ""
+MOVE_RIGHT_KEY   = ""
+JUMP_KEY         = ""
+JUMP_PRESS_SEC   = 0.1    # ジャンプを押している時間
+
 # ── 音量 ──
 DEFAULT_SOUND_VOLUME = 1.0
 # VRChat の窓ごとの音量（WindowVolume）。窓の状態で Windows の音量ミキサーの音量を

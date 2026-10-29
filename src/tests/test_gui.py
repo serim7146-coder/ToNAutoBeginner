@@ -1597,6 +1597,7 @@ class TestSuicideKeysReleasedByTheApp(unittest.TestCase):
         with self._released(app):
             app._stop_window_volume = lambda: None
             app._unhook_chase_keys = lambda: None
+            app._unhook_move_keys = lambda: None
             app._unhook_stop_start_keys = lambda: None
             mainGUI.App._on_close(app)
 
@@ -3117,6 +3118,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_move_keys = lambda: None
         app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
@@ -3131,6 +3133,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_move_keys = lambda: None
         app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
@@ -3145,6 +3148,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_move_keys = lambda: None
         app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
@@ -3158,6 +3162,7 @@ class TestSettingsArePersisted(unittest.TestCase):
 
         app._stop_window_volume = lambda: None
         app._unhook_chase_keys = lambda: None
+        app._unhook_move_keys = lambda: None
         app._unhook_stop_start_keys = lambda: None
         mainGUI.App._on_close(app)
 
@@ -3201,6 +3206,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
+            "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した
             "window_layout",                                     # DX で足した
             "ton_entry_plush",                                   # DZ で足した
             "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）
