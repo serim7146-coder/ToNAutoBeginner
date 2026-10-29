@@ -33,6 +33,7 @@ import VRChatLauncher
 import WindowOperator
 import ToolLauncher
 import HotKey
+import MouseButtons
 import ToNEntry
 import OSCClient
 import OSCQuery
@@ -1092,6 +1093,8 @@ class App(tk.Tk):
 
 
     def _start_emergency_stop_polling(self):
+        if not MouseButtons.start():
+            self._log("[キー] ⚠ マウスのサイドボタンは使えません（フックを張れませんでした）")
         self._hook_chase_keys()
         self._hook_move_keys()
         self._hook_suicide_cancel_key()
@@ -1104,6 +1107,7 @@ class App(tk.Tk):
     def _hook_stop_start_keys(self):
         """アプリ起動時に1回。keyboard が無ければ何もしない"""
         self._stop_start_hook = None
+        self._stop_start_mouse_hook = None
         if keyboard is None:
             return
         try:
@@ -1111,8 +1115,16 @@ class App(tk.Tk):
         except Exception as e:
             DebugLog.exception("mainGUI._hook_stop_start_keys")
             self._log(f"[緊急停止] ⚠ キーの通知を受けられません（{e}）")
+        try:
+            # マウスのサイドボタン（GW）。押した・離したを同じ関数で受ける
+            self._stop_start_mouse_hook = MouseButtons.hook(self._on_stop_start_key_event)
+        except Exception:
+            DebugLog.exception("mainGUI._hook_stop_start_keys.mouse")
 
     def _unhook_stop_start_keys(self):
+        mouse_hook, self._stop_start_mouse_hook = getattr(self, "_stop_start_mouse_hook", None), None
+        if mouse_hook is not None:
+            MouseButtons.unhook(mouse_hook)
         hook, self._stop_start_hook = getattr(self, "_stop_start_hook", None), None
         if hook is None:
             return
@@ -1151,6 +1163,11 @@ class App(tk.Tk):
         届く。遅れている間に離されると、表ではもう離れている。押した通知そのものが
         そのキーなら（組み合わせのほかのキーは表で見て）押されたものとして数える
         """
+        if MouseButtons.is_mouse(key):
+            # マウスのサイドボタン（GW）。組み合わせは無い。押した通知そのものがそのボタンなら押されたものとして数える
+            return bool(MouseButtons.is_pressed(key)
+                        or (event is not None and getattr(event, "event_type", None) == "down"
+                            and getattr(event, "name", None) == key))
         if keyboard.is_pressed(key):
             return True
         if event is None or getattr(event, "event_type", None) != "down":
@@ -1252,7 +1269,7 @@ class App(tk.Tk):
                 else:
                     self._chase_keys_down.discard(k)
             try:
-                self._chase_hooks.append(keyboard.hook_key(key, on_key, suppress=False))
+                self._chase_hooks.append(HotKey.hook_key(key, on_key, suppress=False, kb=keyboard))
             except Exception as e:
                 DebugLog.exception("mainGUI._hook_chase_keys")
                 self._log(f"[チェイス] ⚠ {HotKey.display(key)} を登録できません（{e}）")
@@ -1291,7 +1308,7 @@ class App(tk.Tk):
                 else:
                     self._move_key_up(t, k)
             try:
-                self._move_hooks.append(keyboard.hook_key(key, on_key, suppress=False))
+                self._move_hooks.append(HotKey.hook_key(key, on_key, suppress=False, kb=keyboard))
             except Exception as e:
                 DebugLog.exception("mainGUI._hook_move_keys")
                 self._log(f"[移動] ⚠ {HotKey.display(key)} を登録できません（{e}）")
@@ -1300,7 +1317,7 @@ class App(tk.Tk):
         """アプリ終了時と、拾い直すとき"""
         for hook in getattr(self, "_move_hooks", []):    # 登録できたものだけ
             try:
-                keyboard.unhook(hook)
+                HotKey.unhook(hook, kb=keyboard)
             except KeyError:
                 pass                    # もう外れている。例外として書かない
             except Exception:
@@ -1356,7 +1373,7 @@ class App(tk.Tk):
             else:
                 self._suicide_cancel_down = False
         try:
-            self._suicide_cancel_hook = keyboard.hook_key(key, on_key, suppress=False)
+            self._suicide_cancel_hook = HotKey.hook_key(key, on_key, suppress=False, kb=keyboard)
         except Exception as e:
             DebugLog.exception("mainGUI._hook_suicide_cancel_key")
             self._log(f"[自爆キャンセル] ⚠ {HotKey.display(key)} を登録できません（{e}）")
@@ -1367,7 +1384,7 @@ class App(tk.Tk):
         if hook is None:
             return
         try:
-            keyboard.unhook(hook)
+            HotKey.unhook(hook, kb=keyboard)
         except KeyError:
             pass                    # もう外れている
         except Exception:
@@ -1403,7 +1420,7 @@ class App(tk.Tk):
         """アプリ終了時と、チェイスを使う設定を OFF にしたときに外す"""
         for hook in getattr(self, "_chase_hooks", []):   # 登録できたものだけ
             try:
-                keyboard.unhook(hook)
+                HotKey.unhook(hook, kb=keyboard)
             except KeyError:
                 pass                    # もう外れている。例外として書かない
             except Exception:
@@ -4621,6 +4638,7 @@ class App(tk.Tk):
         self._unhook_move_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
+        MouseButtons.stop()                         # マウスのサイドボタンのフック（GW）。キーのフックを外した後に
         self._show_own_windows_again()
         inbox = getattr(self, "_inbox", None)
         if inbox is not None:
