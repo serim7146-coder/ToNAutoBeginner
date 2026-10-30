@@ -19,6 +19,8 @@ EVENT_JOINING = "joining"
 EVENT_ITEM_EQUIP = "item_equip"
 EVENT_LIVED = "lived"
 EVENT_USER_AUTH = "user_auth"
+EVENT_USER_ID = "user_id"                # 自分の usr_ID だけ（clientConfig の行）
+EVENT_LOCAL_PLAYER = "local_player"      # 自分の名前だけ（is local の行）
 EVENT_SUS_PLAYER = "sus_player"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
@@ -83,6 +85,18 @@ RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
 # かけずに飛ばす。正規表現を直したら一緒に直すこと（グループを開く ( を除いた正規表現に
 # 含まれていることをテストが見張っている）
 USER_AUTH_MARK = "User Authenticated: "
+# 2026-10-29 の VRChat の更新で User Authenticated の行が出なくなった。代わりに:
+#   [API] Requesting Get users/usr_…/clientConfig {{}} retryCount: N
+#     ログイン直後に出る。ログイン中のアカウントの ID だけ（他人の ID では出ない）。
+#     `[API] [N] Sending Get request to https://…/users/usr_…/clientConfig` も
+#     /clientConfig を含むが、Requesting が無いので当たらない
+#   [Behaviour] Initialized PlayerAPI "名前" is local
+#     ワールドに入ったときに自分の分だけ出る（他人は is remote）。名前は引用符で
+#     囲まれ、名前の中に " や括弧が入りうるので、行末の " is local で区切る
+RE_USER_ID = re.compile(r"Requesting Get users/(usr_[0-9a-f-]+)/clientConfig")
+USER_ID_MARK = "/clientConfig"
+RE_LOCAL_PLAYER = re.compile(r'^\[Behaviour\] Initialized PlayerAPI "(.+)" is local$')
+LOCAL_PLAYER_MARK = '" is local'
 # 入退室。`[PlayerLog] OnPlayerJoined: 名前 (VR=False)` という別形式も出るが
 # usr_ID が無いので [Behaviour] の方だけを使う（両方拾うと二重に数える）。
 # 名前に括弧が入りうるので、末尾の (usr_...) で区切る。
@@ -349,5 +363,13 @@ def parse(line: str) -> LogEvent | None:
     m = RE_USER_AUTH.search(line)
     if m:
         return LogEvent(EVENT_USER_AUTH, user_id=m.group(2), player_name=m.group(1).strip())
+
+    m = RE_USER_ID.search(line)
+    if m:
+        return LogEvent(EVENT_USER_ID, user_id=m.group(1))
+
+    m = RE_LOCAL_PLAYER.match(line)
+    if m:
+        return LogEvent(EVENT_LOCAL_PLAYER, player_name=m.group(1).strip())
 
     return None

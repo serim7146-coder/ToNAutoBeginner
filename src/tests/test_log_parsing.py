@@ -359,6 +359,8 @@ class TestStartScanPrefilter(unittest.TestCase):
 
         for mark, rx in ((LogParser.JOINING_MARK, LogParser.RE_JOINING),
                          (LogParser.USER_AUTH_MARK, LogParser.RE_USER_AUTH),
+                         (LogParser.USER_ID_MARK, LogParser.RE_USER_ID),
+                         (LogParser.LOCAL_PLAYER_MARK, LogParser.RE_LOCAL_PLAYER),
                          (LogParser.PLAYER_JOINED_MARK, LogParser.RE_PLAYER_JOINED),
                          (LogParser.PLAYER_LEFT_MARK, LogParser.RE_PLAYER_LEFT)):
             self.assertIn(mark, literal(rx.pattern), rx.pattern)
