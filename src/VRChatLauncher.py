@@ -120,7 +120,8 @@ def joined_ton(log_path) -> bool:
 def latest_user_id(log_dir) -> Optional[str]:
     """直近のログから自分のユーザーIDを取り出す（インスタンス生成に使う）。
     ログは数百 MB になるので丸読みせず、末尾から遡って最初のログインの行で止める
-    （Tk のスレッドから呼ばれる）"""
+    （Tk のスレッドから呼ばれる）。ログインの行は、古い形式の User Authenticated と、
+    2026-10-29 以降の clientConfig の行（LogParser.RE_USER_ID）の両方を見る"""
     try:
         import LogMonitor
         import LogParser
@@ -129,9 +130,10 @@ def latest_user_id(log_dir) -> Optional[str]:
         for path in logs:               # 新しい順
             for line in LogMonitor.LogMonitor._iter_log_lines_reversed(
                     Path(path), config.LOG_START_SCAN_CHUNK_BYTES):
-                if LogParser.USER_AUTH_MARK not in line:
+                if (LogParser.USER_AUTH_MARK not in line
+                        and LogParser.USER_ID_MARK not in line):
                     continue            # 前絞り（正規表現は重い）
-                m = RE_USER_AUTH.search(line)
+                m = RE_USER_AUTH.search(line) or LogParser.RE_USER_ID.search(line)
                 if m:
                     return m.group(1)
     except Exception:
