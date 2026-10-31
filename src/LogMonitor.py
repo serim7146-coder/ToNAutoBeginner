@@ -245,11 +245,8 @@ class LogMonitor:
             parts.append(f"公開範囲={LogParser.instance_access(event.suffix)}")
         if event.kind == LogParser.EVENT_REPLACEMENT:
             parts.append(f"合図={event.flag}")
-        if event.kind in (LogParser.EVENT_ENRAGE, LogParser.EVENT_STUNNED,
-                          LogParser.EVENT_LOCAL_PLAYER):
+        if event.kind in (LogParser.EVENT_ENRAGE, LogParser.EVENT_STUNNED):
             parts.append(f"名前={event.player_name}")       # 通常のログに出る行（公開の情報）
-        if event.kind == LogParser.EVENT_USER_ID:
-            parts.append(f"ID={event.user_id}")
         self._debug(f"[事象] {event.kind}" + (" " + " ".join(parts) if parts else ""))
 
     def _debug_verified(self, result: str):
@@ -581,8 +578,7 @@ class LogMonitor:
 
     # 監視開始の遡りで探す行（ログイン・入室・入ってきた人・出ていった人・
     # ラウンド開始・生存・所持アイテムを取り戻すための行）
-    _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.USER_ID_MARK,
-                         LogParser.LOCAL_PLAYER_MARK, LogParser.JOINING_MARK,
+    _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
                          LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK,
                          LogParser.ROUND_START_MARK, LogParser.LIVED_MARK,
                          LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK,
@@ -609,11 +605,7 @@ class LogMonitor:
             # ログインの行はログの先頭にある。末尾から遡って探すと全部読むことになる（26 MB・27 万行で
             # 0.8 秒。6 窓同時だと起動時にその分の CPU）。先頭を読めば 1 ms。遡りの途中でもっと後の
             # ログインの行（入り直し）が見つかれば、そちらで上書きする
-            # ID（clientConfig か User Authenticated の行）と名前（is local か User Authenticated の行）は
-            # 別の行から取るので、別々に追う
-            found_user_id  = self._user_from_log_head()
-            id_scanned     = False      # 遡りで最初に見えた ID の行を処理した（それより古い行では入れ直さない）
-            found_name     = False      # 遡りで最初に見えた名前を入れた（古い行では上書きしない）
+            found_user     = self._user_from_log_head()
             found_instance = False
             past_learn     = False      # 定期の Verified の位相に使う範囲（VERIFIED_LEARN_BACK_SEC）より前まで遡った
             # 最後の Joining より後の、所持アイテムに関わる行（新しい順に溜まる）
@@ -666,20 +658,11 @@ class LogMonitor:
                     if event.kind == LogParser.EVENT_ROUND_START:
                         running_round = (at, len(player_events))
 
-                if event.kind in (LogParser.EVENT_USER_AUTH, LogParser.EVENT_USER_ID) and not id_scanned:
+                if event.kind == LogParser.EVENT_USER_AUTH and (
+                        not found_user or event.user_id != self.st.local_user_id):
                     # 遡りで最初に見えたログインが最新（先頭から読んだものと違えば入り直している）
-                    id_scanned = True
-                    if not found_user_id or event.user_id != self.st.local_user_id:
-                        self._apply_user_id(event.user_id)
-                        found_user_id = True
-                        if event.kind == LogParser.EVENT_USER_AUTH and not found_name:
-                            self._apply_local_name(event.player_name)
-                    if event.kind == LogParser.EVENT_USER_AUTH:
-                        found_name = True       # ログインの行の名前（同じログインなら先頭から読んだ名前）
-                if (event.kind == LogParser.EVENT_LOCAL_PLAYER and not found_name
-                        and event.player_name):
-                    self._apply_local_name(event.player_name)
-                    found_name = True
+                    self._apply_user_auth(event)
+                    found_user = True
 
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
                     found_instance = True
@@ -692,7 +675,7 @@ class LogMonitor:
                     self._restore_players(reversed(player_events))
                     self._restore_three_wins(lived, list(reversed(round_types)))
 
-                if found_user_id and found_instance and past_learn:
+                if found_user and found_instance and past_learn:
                     break           # 要るものはそろった（これより前は位相にも使わない）
             self._learn_verified_phase(list(reversed(verified_events)))
             if found_instance:
@@ -711,8 +694,7 @@ class LogMonitor:
             self._log("インスタンス内の人数を復元できません → 他の人がいる扱い")
 
     def _user_from_log_head(self) -> bool:
-        """ログの先頭（LOG_START_SCAN_CHUNK_BYTES）からログインの行を読む。
-        clientConfig の行（ID だけ）か User Authenticated の行（名前も）を見つけて反映したら True"""
+        """ログの先頭（LOG_START_SCAN_CHUNK_BYTES）からログインの行を読む。見つけて反映したら True"""
         try:
             with open(self.cfg.log_path, "rb") as f:
                 head = f.read(config.LOG_START_SCAN_CHUNK_BYTES)
@@ -720,35 +702,21 @@ class LogMonitor:
             return False
         for raw in head.split(b"\n"):
             line = raw.decode("utf-8", errors="replace")
-            if LogParser.USER_AUTH_MARK not in line and LogParser.USER_ID_MARK not in line:
+            if LogParser.USER_AUTH_MARK not in line:
                 continue
             event = LogParser.parse(line)
             if event and event.kind == LogParser.EVENT_USER_AUTH:
                 self._apply_user_auth(event)
                 return True
-            if event and event.kind == LogParser.EVENT_USER_ID:
-                self._apply_user_id(event.user_id)
-                return True
         return False
 
     def _apply_user_auth(self, event):
-        """古い形式のログインの行（自分の名前と usr_ID）を反映する"""
-        self._apply_user_id(event.user_id)
-        self._apply_local_name(event.player_name)
-
-    def _apply_user_id(self, user_id: str):
-        """自分の usr_ID を反映し、統計用の番号を取りに行く。同じ ID なら何もしない
-        （遡りと通常の監視で同じ行が 2 回来ても、2 回取りに行かない）"""
-        if user_id == self.st.local_user_id:
-            return
-        self._log(f"UserID検出: {user_id}")
-        self.st.local_user_id = user_id
+        """ログインの行（自分の名前と usr_ID）を反映し、統計用の番号を取りに行く"""
+        self._log(f"UserID検出: {event.user_id}")
+        self.st.local_player_name = event.player_name
+        self.st.local_user_id = event.user_id
         # 統計用の通信（最大10秒）は待たない
-        self._start_daemon(self._fetch_transformed_uid, user_id)
-
-    def _apply_local_name(self, name: str):
-        """自分の名前を反映する（公開ログには出さない）"""
-        self.st.local_player_name = name
+        self._start_daemon(self._fetch_transformed_uid, event.user_id)
 
     def _learn_verified_phase(self, events):
         """起動時: 過去の Verified・開始・RoundOver・Verified Round End を古い順に
@@ -857,9 +825,6 @@ class LogMonitor:
             st.players.add(event.user_id)
             if event.player_name:
                 st.player_names[event.user_id] = event.player_name
-                # is local の行が取れなかったときの保険（自分の名前が空のときだけ）
-                if event.user_id == st.local_user_id and not st.local_player_name:
-                    self._apply_local_name(event.player_name)
         elif event.kind == LogParser.EVENT_PLAYER_LEFT:
             st.players.discard(event.user_id)
             st.player_names.pop(event.user_id, None)
@@ -1563,8 +1528,6 @@ class LogMonitor:
         LogParser.EVENT_JOY: "_on_joy",
         LogParser.EVENT_MASTER_SWITCHED: "_on_master_switched",
         LogParser.EVENT_USER_AUTH: "_on_user_auth",
-        LogParser.EVENT_USER_ID: "_on_user_id",
-        LogParser.EVENT_LOCAL_PLAYER: "_on_local_player",
         LogParser.EVENT_PLAYER_JOINED: "_apply_player_event",
         LogParser.EVENT_PLAYER_LEFT: "_apply_player_event",
         LogParser.EVENT_SUS_PLAYER: "_on_sus_player",
@@ -1658,16 +1621,6 @@ class LogMonitor:
         st = self.st
         st.local_player_name = event.player_name
         st.local_user_id = event.user_id
-
-    def _on_user_id(self, event):
-        """clientConfig の行（自分の usr_ID だけ）"""
-        self._apply_user_id(event.user_id)
-
-    def _on_local_player(self, event):
-        """is local の行（自分の名前だけ）。変わったときだけ debug.log へ（公開ログには出さない）"""
-        if event.player_name and event.player_name != self.st.local_player_name:
-            self._apply_local_name(event.player_name)
-            self._debug("自分の名前を検出")
 
     def _on_sus_player(self, event):
         """Sabotage の選出者"""
