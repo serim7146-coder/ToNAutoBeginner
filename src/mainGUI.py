@@ -2043,24 +2043,30 @@ class App(tk.Tk):
         ttk.Radiobutton(lf22, text="フレンド+", variable=self.v_ton_access,
                         value=config.TON_INSTANCE_ACCESS_FRIENDS_PLUS).pack(side="left", padx=(6, 0))
 
-        # 2 行目: 自動Join → 選択画面の自動突破 → 自動でBegin → Guidance Plush（1 行に横並び）
+        # 2 行目: 自動Join → 選択画面の自動突破 → 自動でBegin → Guidance Plush（1 行に横並び）。
+        # 左から順に続く操作なので連鎖にする（GZ）。左が OFF の間、右のチェックは灰色で、操作もしない
+        # （値は消さない。効いているかは _launch_chain()）
         lf2 = ttk.Frame(f2_launch)
         lf2.pack(fill="x", pady=(4, 0))
         self.v_join_world = tk.BooleanVar(value=False)
-        ttk.Checkbutton(lf2, text="ToNへ自動Join",
-                        variable=self.v_join_world).pack(side="left")
+        ttk.Checkbutton(lf2, text="ToNへ自動Join", variable=self.v_join_world,
+                        command=self._refresh_launch_chain).pack(side="left")
         self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
-        ttk.Checkbutton(lf2, text="入室後の選択画面を自動突破",
-                        variable=self.v_ton_entry).pack(side="left", padx=(12, 0))
+        self.chk_ton_entry = ttk.Checkbutton(lf2, text="入室後の選択画面を自動突破",
+                                             variable=self.v_ton_entry,
+                                             command=self._refresh_launch_chain)
+        self.chk_ton_entry.pack(side="left", padx=(12, 0))
         self.v_ton_begin = tk.BooleanVar(value=config.TON_ENTRY_BEGIN)
-        ttk.Checkbutton(lf2, text="自動でBeginを押す", variable=self.v_ton_begin,
-                        command=self._refresh_plush_check).pack(side="left", padx=(12, 0))
-        # Begin が受理された後に Guidance Plush を取りに行く（DZ）。自動でBeginを押すが ON のときだけ
+        self.chk_ton_begin = ttk.Checkbutton(lf2, text="自動でBeginを押す", variable=self.v_ton_begin,
+                                             command=self._refresh_launch_chain)
+        self.chk_ton_begin.pack(side="left", padx=(12, 0))
+        # Begin が受理された後に Guidance Plush を取りに行く（DZ）
         self.v_ton_entry_plush = tk.BooleanVar(value=True)
         self.chk_ton_entry_plush = ttk.Checkbutton(lf2, text="Guidance Plushを自動取得",
-                                                   variable=self.v_ton_entry_plush)
+                                                   variable=self.v_ton_entry_plush,
+                                                   command=self._refresh_launch_chain)
         self.chk_ton_entry_plush.pack(side="left", padx=(12, 0))
-        self._refresh_plush_check()
+        self._refresh_launch_chain()
 
         # 起動オプション（config.LAUNCH_OPTION の後ろに足す。空白で区切る。既定は空）
         lf26 = ttk.Frame(f2_launch)
@@ -3178,7 +3184,6 @@ class App(tk.Tk):
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         if hasattr(self, "v_ton_entry_plush"):
             self.v_ton_entry_plush.set(data.get("ton_entry_plush") is not False)    # 無い・壊れた値は ON（false を保存したときだけ OFF）
-            App._refresh_plush_check(self)
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
@@ -3307,6 +3312,7 @@ class App(tk.Tk):
         self._apply_saved_window_settings()
         self.v_tnl.set(data.get("tnl_path", ""))
         self._load_own_list()
+        App._refresh_launch_chain(self)     # 起動の 2 行目の灰色（読み込んだ値で）
 
     def _apply_saved_window_settings(self):
         """保存済みの窓ごと設定（profile ID）を反映する。
@@ -4229,10 +4235,21 @@ class App(tk.Tk):
         self._auto_start_before_entry()
         self._run_ton_entry()
 
+    def _launch_chain(self) -> tuple:
+        """起動の 2 行目の 4 つ（自動Join・自動突破・自動でBegin・Guidance Plush）の「効いている」値（GZ）。
+        自分が ON かつ左が全部効いているものだけ True。(join, entry, begin, plush)"""
+        def checked(name):
+            var = getattr(self, name, None)
+            return bool(var and var.get())
+        join = checked("v_join_world")
+        entry = join and checked("v_ton_entry")
+        begin = entry and checked("v_ton_begin")
+        plush = begin and checked("v_ton_entry_plush")
+        return join, entry, begin, plush
+
     def _all_auto_checks_on(self) -> bool:
-        """起動の詳細設定の 2 行目の 4 つが全部 ON か"""
-        return all(bool(getattr(self, name, None) and getattr(self, name).get())
-                   for name in ("v_join_world", "v_ton_entry", "v_ton_begin", "v_ton_entry_plush"))
+        """起動の詳細設定の 2 行目の 4 つが全部 ON か（連鎖で効いているか）"""
+        return all(App._launch_chain(self))
 
     def _apply_full_auto_settings(self):
         """全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF。ボタンを押したときと同じ道
@@ -4247,10 +4264,11 @@ class App(tk.Tk):
         self._log("[起動] 全自動の設定: 完全放置モード ON・アイテム自動取得 ON・速度検知 OFF")
 
     def _auto_start_before_entry(self):
-        """「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方 ON で、マクロが止まっていれば、
-        入室操作の前にマクロを始める（ED。Guidance Plush の移動にマクロの受信が要るため）。
-        開始ボタンと同じく、押した直後は押せない表示にする。始められなくても入室操作は今どおり"""
-        if not (self.v_ton_entry.get() and self.v_ton_begin.get()) or self._running:
+        """「入室後の選択画面を自動突破」と「続けてBeginまで押す」が両方効いていて（左の自動Join が OFF
+        なら効かない。GZ）、マクロが止まっていれば、入室操作の前にマクロを始める（ED。Guidance Plush の移動に
+        マクロの受信が要るため）。開始ボタンと同じく、押した直後は押せない表示にする。始められなくても入室操作は今どおり"""
+        _join, entry, begin, _plush = App._launch_chain(self)
+        if not (entry and begin) or self._running:
             return
         if getattr(self, "_start_stop_busy", False):
             self._log("[起動] マクロの開始・停止の途中のため、自動では開始しません")
@@ -4306,8 +4324,12 @@ class App(tk.Tk):
 
     def _run_ton_entry(self):
         """入室後の選択画面を自動突破する（窓ごとに順番に実行）"""
-        if not self.v_ton_entry.get():
-            self._log("[入室操作] 設定がOFFのためスキップします")
+        join, entry, begin, plush = App._launch_chain(self)
+        if not entry:
+            if not join:
+                self._log("[入室操作] 自動Join が OFF のためスキップします")
+            else:
+                self._log("[入室操作] 設定がOFFのためスキップします")
             return
         launched = getattr(self, "_launched_tab_indices", None)
         targets = [(tab.idx + 1, tab._get_selected_hwnd(), tab.v_log.get().strip())
@@ -4317,8 +4339,7 @@ class App(tk.Tk):
         if not targets:
             self._log("[入室操作] 対象の窓がありません")
             return
-        press_begin = self.v_ton_begin.get()
-        plush = press_begin and bool(getattr(self, "v_ton_entry_plush", None) and self.v_ton_entry_plush.get())
+        press_begin = begin
         # セーブコードは最初に 1 回だけ読み、全窓に同じものを貼る（DY。中身はどこにも書かない）
         save_code = SaveLoad.read_clipboard() if press_begin else ""
         self._entry_stop.clear()
@@ -4364,10 +4385,14 @@ class App(tk.Tk):
 
         TaskStats.thread("mainGUI._run_ton_entry", worker, daemon=True).start()
 
-    def _refresh_plush_check(self):
-        """□Guidance Plush は「続けてBeginまで押す」が ON のときだけ押せる（DZ）"""
+    def _refresh_launch_chain(self):
+        """起動の 2 行目は左から順に続く連鎖（GZ）。左が OFF の間、右のチェックは灰色（値は消さない）。
+        自動Join OFF → 残り 3 つ、自動突破 OFF → Begin と Plush、Begin OFF → Plush"""
         try:
-            self.chk_ton_entry_plush.config(state="normal" if self.v_ton_begin.get() else "disabled")
+            join, entry, begin, _plush = App._launch_chain(self)
+            for chk, on in ((self.chk_ton_entry, join), (self.chk_ton_begin, entry),
+                            (self.chk_ton_entry_plush, begin)):
+                chk.config(state="normal" if on else "disabled")
         except (tk.TclError, AttributeError):
             pass
 

@@ -375,6 +375,7 @@ class _Entry:
 class TestTheEntryFlow(unittest.TestCase):
     def _app(self, begin=True, n=2):
         app = type("FakeApp", (), {})()
+        app.v_join_world = MagicMock(get=lambda: True)      # 連鎖（GZ）の先頭
         app.v_ton_entry = MagicMock(get=lambda: True)
         app.v_ton_begin = MagicMock(get=lambda: begin)
         app.v_emergency_key = MagicMock(get=lambda: "p")
