@@ -83,6 +83,12 @@ RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
 # かけずに飛ばす。正規表現を直したら一緒に直すこと（グループを開く ( を除いた正規表現に
 # 含まれていることをテストが見張っている）
 USER_AUTH_MARK = "User Authenticated: "
+# 2026-10-29 の VRChat の更新で User Authenticated の行が出なくなった。代わりにログイン直後に 1 回出る
+#   [Authentication - <記号>] Preforming post login checks for 名前 (usr_…)
+# を同じ意味（EVENT_USER_AUTH）で読む。綴りは VRChat 側の誤り。直されたときのため Performing も受ける。
+# 名前に括弧が入りうるので、行末の (usr_...) で区切る
+RE_POST_LOGIN = re.compile(r"\] (?:Pre|Per)forming post login checks for (.+?) \((usr_[0-9a-f-]+)\)$")
+POST_LOGIN_MARK = "post login checks for "
 # 入退室。`[PlayerLog] OnPlayerJoined: 名前 (VR=False)` という別形式も出るが
 # usr_ID が無いので [Behaviour] の方だけを使う（両方拾うと二重に数える）。
 # 名前に括弧が入りうるので、末尾の (usr_...) で区切る。
@@ -347,6 +353,10 @@ def parse(line: str) -> LogEvent | None:
                         player_name=m.group(1).strip())
 
     m = RE_USER_AUTH.search(line)
+    if m:
+        return LogEvent(EVENT_USER_AUTH, user_id=m.group(2), player_name=m.group(1).strip())
+
+    m = RE_POST_LOGIN.search(line)
     if m:
         return LogEvent(EVENT_USER_AUTH, user_id=m.group(2), player_name=m.group(1).strip())
 

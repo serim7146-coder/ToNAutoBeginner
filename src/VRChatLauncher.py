@@ -129,11 +129,16 @@ def latest_user_id(log_dir) -> Optional[str]:
         for path in logs:               # 新しい順
             for line in LogMonitor.LogMonitor._iter_log_lines_reversed(
                     Path(path), config.LOG_START_SCAN_CHUNK_BYTES):
-                if LogParser.USER_AUTH_MARK not in line:
+                if (LogParser.USER_AUTH_MARK not in line
+                        and LogParser.POST_LOGIN_MARK not in line):
                     continue            # 前絞り（正規表現は重い）
                 m = RE_USER_AUTH.search(line)
                 if m:
                     return m.group(1)
+                # post login checks の行は ID が 2 番目のグループ（名前が 1 番目）
+                m = LogParser.RE_POST_LOGIN.search(LogParser.strip_prefix(line))
+                if m:
+                    return m.group(2)
     except Exception:
         DebugLog.exception("VRChatLauncher.latest_user_id")
         pass
