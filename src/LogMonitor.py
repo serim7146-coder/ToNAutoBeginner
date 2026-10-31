@@ -344,8 +344,10 @@ class LogMonitor:
             else:
                 self._log(f"⚠ 前面化に失敗（{label}は継続）")
 
-    def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None):
+    def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None, label: str = "死亡"):
         """死亡から一定時間後に続行ラウンドのフリーズを解除する。
+
+        label は何から数えたか（"死亡" か "リスポーン"。ログの文言だけに使う）。
 
         猶予を置くのは、解除前に手動操作を挟む余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
@@ -368,7 +370,7 @@ class LogMonitor:
             st.is_continue_round = False
             st.open_special_continue = False
             SharedState.continue_round_end(st)
-            self._log(f"続行ラウンド終了 → 他窓フリーズ解除（死亡から{delay}秒）")
+            self._log(f"続行ラウンド終了 → 他窓フリーズ解除（{label}から{delay}秒）")
 
     def _start_speed_probe(self):
         """次のラウンドの種別を速度で見始める（Verified Round End から）。
@@ -1880,21 +1882,31 @@ class LogMonitor:
                 config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
             self._log("✅ 自爆成功")
             st._skip_time = 0.0
-        st.died_this_round = True
-        st.item_equipped_after_death = False
-        st.is_open_special_round_round = False
-        # 続行ラウンドのフリーズは死亡から少し置いて解除する。
-        # 猶予中に手動で視点調整などを挟めるようにするため。
-        if st.is_continue_round:
-            self._start_daemon(self._release_continue_freeze_after_delay,
-                               st.round_seq, st.reborn_seq)
-        if st.round_freeze_held:
-            self._start_daemon(self._release_round_freeze_after_delay,
-                               st.round_seq, st.reborn_seq)
+        self._mark_out_of_round("死亡")
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")
             self._lose_held_item(HELD_LOST_RUN_DEATH)
         self._drop_when_round_ends("死んだ")
+
+    def _mark_out_of_round(self, label: str):
+        """このラウンドではもう生きて動いていない、の後始末（HA。死亡とラウンド中のリスポーンで共有する）。
+        AFK 回避・DTM/Waldo と Glorbo の AFK 解除ループ・このラウンドの自爆が見る印を立て、
+        続行フリーズとラウンド突入フリーズの解除を予約する。label は何から数えたか（"死亡" か "リスポーン"）"""
+        st = self.st
+        st.died_this_round = True
+        st.item_equipped_after_death = False
+        st.is_open_special_round_round = False
+        st.glorbo_afk = False
+        # 続行ラウンドのフリーズは死亡から少し置いて解除する。
+        # 猶予中に手動で視点調整などを挟めるようにするため。
+        # 死亡の予約の引数は今までどおり（番号・復活番号）。ラベルは死亡でないときだけ足す
+        said = () if label == "死亡" else (label,)
+        if st.is_continue_round:
+            self._start_daemon(self._release_continue_freeze_after_delay,
+                               st.round_seq, st.reborn_seq, *said)
+        if st.round_freeze_held:
+            self._start_daemon(self._release_round_freeze_after_delay,
+                               st.round_seq, st.reborn_seq, *said)
 
     def _on_reborn(self, event):
         """猫（Maxwell）で復活した。直前の死亡を取り消し、猫を消費したのでアイテムロストにする。
@@ -1913,12 +1925,15 @@ class LogMonitor:
         self._lose_held_item(HELD_LOST_REBORN)
 
     def _on_respawn(self, event):
-        """リスポーン（ラウンド中ならアイテムロスト）"""
+        """リスポーン（ラウンド中ならアイテムロスト＋死亡とほぼ同じ扱い。HA）。
+        自爆成功の判定・Run のロストの二重書き・ラウンド終わりのアイテムを落とす処理は、死亡だけがする"""
         st = self.st
         st.respawn_seen_seq += 1        # Run のリスポーン（ActionExecutor.do_run_respawn）が待つ
         if st.in_round:
             self._mark_item_lost("リスポーン: アイテムロスト")
             self._lose_held_item(HELD_LOST_RESPAWN)
+            self._debug("リスポーン → 死亡と同じ扱い")
+            self._mark_out_of_round("リスポーン")
 
     def _on_page_collected(self, event):
         """8 Pages のページ取得"""
