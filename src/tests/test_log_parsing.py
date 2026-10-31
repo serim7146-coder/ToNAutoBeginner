@@ -359,6 +359,7 @@ class TestStartScanPrefilter(unittest.TestCase):
 
         for mark, rx in ((LogParser.JOINING_MARK, LogParser.RE_JOINING),
                          (LogParser.USER_AUTH_MARK, LogParser.RE_USER_AUTH),
+                         (LogParser.POST_LOGIN_MARK, LogParser.RE_POST_LOGIN),
                          (LogParser.PLAYER_JOINED_MARK, LogParser.RE_PLAYER_JOINED),
                          (LogParser.PLAYER_LEFT_MARK, LogParser.RE_PLAYER_LEFT)):
             self.assertIn(mark, literal(rx.pattern), rx.pattern)
@@ -376,6 +377,15 @@ class TestStartScanPrefilter(unittest.TestCase):
                 seen.add(event.kind)
                 self.assertIn(kinds[event.kind], line)
         self.assertEqual(seen, set(kinds), "4種類とも試せていること")
+
+    def test_the_post_login_line_carries_its_mark(self):
+        """ログインの行（post login checks）も、印を含む行だけを parse() にかける"""
+        for word in ("Preforming", "Performing"):
+            line = (f"[Authentication - xyz] {word} post login checks for "
+                    "serim01 (usr_0e01408a)")
+            event = LogParser.parse(self.PREFIX + line)
+            self.assertEqual(event.kind, LogParser.EVENT_USER_AUTH, line)
+            self.assertIn(LogParser.POST_LOGIN_MARK, line)
 
     # ── 2. 結果は前絞りの前後で同じ ──────────────
     def test_the_start_scan_gives_the_same_result(self):

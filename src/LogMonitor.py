@@ -578,7 +578,8 @@ class LogMonitor:
 
     # 監視開始の遡りで探す行（ログイン・入室・入ってきた人・出ていった人・
     # ラウンド開始・生存・所持アイテムを取り戻すための行）
-    _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.JOINING_MARK,
+    _START_SCAN_MARKS = (LogParser.USER_AUTH_MARK, LogParser.POST_LOGIN_MARK,
+                         LogParser.JOINING_MARK,
                          LogParser.PLAYER_JOINED_MARK, LogParser.PLAYER_LEFT_MARK,
                          LogParser.ROUND_START_MARK, LogParser.LIVED_MARK,
                          LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK,
@@ -702,7 +703,8 @@ class LogMonitor:
             return False
         for raw in head.split(b"\n"):
             line = raw.decode("utf-8", errors="replace")
-            if LogParser.USER_AUTH_MARK not in line:
+            if (LogParser.USER_AUTH_MARK not in line
+                    and LogParser.POST_LOGIN_MARK not in line):
                 continue
             event = LogParser.parse(line)
             if event and event.kind == LogParser.EVENT_USER_AUTH:
