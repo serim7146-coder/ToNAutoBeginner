@@ -11,8 +11,9 @@ class _Var:
         return self.value
 
 
-def _app(entry=True, begin=True, running=False):
+def _app(entry=True, begin=True, running=False, join=True):
     app = type("FakeApp", (), {})()
+    app.v_join_world = _Var(join)       # 連鎖（GZ）: 自動Join が OFF なら右も効かない
     app.v_ton_entry = _Var(entry)
     app.v_ton_begin = _Var(begin)
     app._running = running
@@ -207,8 +208,7 @@ class TestFullAutoSettings(unittest.TestCase):
         SharedState.set_speed_detect(True)
 
     def _full_app(self, join=True, entry=True, begin=True, plush=True):
-        app = _app(entry=entry, begin=begin)
-        app.v_join_world = _Var(join)
+        app = _app(entry=entry, begin=begin, join=join)
         app.v_ton_entry_plush = _Var(plush)
         app.saves = []
         app._schedule_settings_save = lambda: app.saves.append(1)
@@ -257,8 +257,9 @@ class TestFullAutoSettings(unittest.TestCase):
             self.assertEqual(app.saves, [], kwargs)
             self.assertFalse([m for m in app.logs if "全自動の設定" in m], kwargs)
             started = [c for c in app.calls if isinstance(c, tuple) and c[0] == "start"]
-            if "entry" in kwargs or "begin" in kwargs:
-                self.assertEqual(started, [], kwargs)       # 今までどおり: 自動突破かBeginが OFF なら開始しない
+            if "join" in kwargs or "entry" in kwargs or "begin" in kwargs:
+                # 自動突破かBeginが OFF なら開始しない。自動Join が OFF でも効かない（連鎖。GZ）
+                self.assertEqual(started, [], kwargs)
             else:
                 self.assertEqual(started, [("start", False, False, True)], kwargs)
 

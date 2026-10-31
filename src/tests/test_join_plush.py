@@ -361,6 +361,7 @@ class _Thread:
 class TestTheEntryFlow(unittest.TestCase):
     def _app(self, begin=True, plush=True, n=2):
         app = type("FakeApp", (), {})()
+        app.v_join_world = MagicMock(get=lambda: True)      # 連鎖（GZ）の先頭
         app.v_ton_entry = MagicMock(get=lambda: True)
         app.v_ton_begin = MagicMock(get=lambda: begin)
         app.v_ton_entry_plush = MagicMock(get=lambda: plush)
@@ -461,11 +462,13 @@ class TestTheCheck(unittest.TestCase):
         row = chk.master.pack_slaves()
         texts = [w.cget("text") for w in row]
         self.assertEqual(texts[texts.index("自動でBeginを押す") + 1], "Guidance Plushを自動取得")
+        self.app.v_join_world.set(True)
+        self.app.v_ton_entry.set(True)
         self.app.v_ton_begin.set(False)
-        self.app._refresh_plush_check()
+        self.app._refresh_launch_chain()
         self.assertEqual(str(chk.cget("state")), "disabled")
         self.app.v_ton_begin.set(True)
-        self.app._refresh_plush_check()
+        self.app._refresh_launch_chain()
         self.assertEqual(str(chk.cget("state")), "normal")
 
     def test_saved_on_by_default(self):
