@@ -3,7 +3,7 @@
 送り先は .env の DISCORD_REPORT_WEBHOOK_URL（ConnectDB と同じ候補から読む）。
 URL はどこにも出さない（画面・ログ・debug.log・失敗の文言）。
 送るもの: 本文（版・窓・時刻・要件）と zip 1つ（report.txt・画面のログ・debug.log の末尾・
-選んだ窓の VRChat のログの末尾・設定）。Windows のユーザー名は %USERPROFILE% に伏せる。
+選んだ窓の VRChat のログの末尾・設定（settings.json・続行表・続行リスト））。Windows のユーザー名は %USERPROFILE% に伏せる。
 画面（mainGUI）からは build_report() で中身を作り、send() で送る。どちらも別スレッドで呼ぶ。
 """
 import io
@@ -24,6 +24,8 @@ import BeginMiss
 import FetchMiss
 import RunFace
 import config
+import ContinueList
+import ContinueTable
 import ConnectDB            # .env を読み込む（同じ候補）。値は debug.log に書かないよう覚えている
 import DebugLog
 
@@ -80,6 +82,14 @@ def tail_bytes(path, limit: int) -> bytes | None:
                 return f.read()
             f.seek(size - limit)
             return _cut_to_line(f.read())
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def read_file(path) -> bytes | None:
+    """ファイルを全部。無い・読めなければ None（続行表・続行リストのような小さいファイル用）"""
+    try:
+        return Path(path).read_bytes()
     except (OSError, TypeError, ValueError):
         return None
 
@@ -176,6 +186,10 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
         debug_log_tail(debug_log_path, config.REPORT_DEBUG_LOG_MAX_BYTES), "ファイルが無い")
     add(SETTINGS, "設定", "settings.json",
         json.dumps(settings_for_report(settings), ensure_ascii=False, indent=2, sort_keys=True), "")
+    # 続行表・続行リストの保存ファイル（独自の番号とプリセットの名前だけ）も「設定」のチェックで入れる
+    add(SETTINGS, "続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）", "continue_table.json",
+        read_file(ContinueTable.table_path()), "ファイルが無い")
+    add(SETTINGS, "ツールの続行リスト", "continue_list.json", read_file(ContinueList.list_path()), "ファイルが無い")
 
     # 撮影（Begin は窓を選べばその窓の2枚、Run の向きはその窓の分。窓なしなら全部の窓の分）。そのまま入れる
     images: dict[str, bytes] = {}

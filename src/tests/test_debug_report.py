@@ -425,6 +425,9 @@ class TestBugReportContent(unittest.TestCase):
         p = patch.object(BugReport.os.path, "expanduser", return_value=self.HOME)
         p.start()
         self.addCleanup(p.stop)
+        p = patch.object(config, "SETTINGS_PATH", self.dir / "app" / "settings.json")   # 続行表・続行リストの置き場所
+        p.start()
+        self.addCleanup(p.stop)
         self.debug = self.dir / "debug.log"
         self.debug.write_text("debug line\n", encoding="utf-8")
         self.vrchat = self.dir / "output_log.txt"
@@ -469,7 +472,57 @@ class TestBugReportContent(unittest.TestCase):
                    BugReport.VRCHAT_LOG: False, BugReport.SETTINGS: False, BugReport.BEGIN_MISS: False}
         _n, _d, files = self._zip(include=include)
         self.assertEqual(set(files), {"report.txt", "debug_log.txt"})
-        self.assertEqual(files["report.txt"].count("（未選択）"), 4)
+        self.assertEqual(files["report.txt"].count("（未選択）"), 6, "設定のチェックは続行表・続行リストの分も数える")
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: 入れていません（未選択）",
+                      files["report.txt"])
+        self.assertIn("- ツールの続行リスト: 入れていません（未選択）", files["report.txt"])
+
+    def _write_tables(self):
+        folder = config.SETTINGS_PATH.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "continue_table.json").write_text(
+            json.dumps({"disabled_presets": ["a"], "path": "C:/Users/Alice/t.tnl"}), encoding="utf-8")
+        (folder / "continue_list.json").write_text('{"list_name": "デフォ"}', encoding="utf-8")
+
+    def test_the_continue_files_go_in_with_settings(self):
+        self._write_tables()
+        _n, _d, files = self._zip()
+        self.assertEqual(set(files), {"report.txt", "gui_log.txt", "debug_log.txt", "vrchat_log_window2.txt",
+                                      "settings.json", "continue_table.json", "continue_list.json"})
+        self.assertEqual(json.loads(files["continue_list.json"]), {"list_name": "デフォ"})
+        table = json.loads(files["continue_table.json"])
+        self.assertEqual(table["disabled_presets"], ["a"])
+        self.assertIn("%USERPROFILE%", table["path"], "settings.json と同じくユーザー名を伏せる")
+        self.assertNotIn("alice", files["continue_table.json"].lower())
+        report = files["report.txt"]
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: continue_table.json", report)
+        self.assertIn("- ツールの続行リスト: continue_list.json", report)
+        self.assertIn("- 設定: settings.json", report)
+
+    def test_missing_continue_files_are_noted(self):
+        _n, _d, files = self._zip()
+        self.assertNotIn("continue_table.json", files)
+        self.assertNotIn("continue_list.json", files)
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: 入れていません（ファイルが無い）",
+                      files["report.txt"])
+        self.assertIn("- ツールの続行リスト: 入れていません（ファイルが無い）", files["report.txt"])
+        self.assertIn("settings.json", files)
+
+    def test_one_missing_continue_file_does_not_hide_the_other(self):
+        self._write_tables()
+        (config.SETTINGS_PATH.parent / "continue_list.json").unlink()
+        _n, _d, files = self._zip()
+        self.assertIn("continue_table.json", files)
+        self.assertNotIn("continue_list.json", files)
+        self.assertIn("- ツールの続行リスト: 入れていません（ファイルが無い）", files["report.txt"])
+
+    def test_unchecked_settings_leaves_the_continue_files_out(self):
+        self._write_tables()
+        include = {k: k != BugReport.SETTINGS for k, _l in BugReport.ATTACHMENTS}
+        _n, _d, files = self._zip(include=include)
+        for name in ("settings.json", "continue_table.json", "continue_list.json"):
+            self.assertNotIn(name, files)
+        self.assertEqual(files["report.txt"].count("（未選択）"), 3)
 
     def test_vrchat_log_reasons(self):
         for window, path, reason in ((0, None, "窓を選んでいない"), (3, "", "窓に未割り当て"),
