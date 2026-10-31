@@ -118,6 +118,29 @@ def exclusive_check(checked, other):
         other.set(False)
 
 
+def ctrl_held() -> bool:
+    """いま Ctrl が押されているか（GetKeyState(VK_CONTROL) の上位ビット）。Windows 以外・失敗は False。テストは差し替える"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetKeyState(0x11) & 0x8000)
+    except Exception:
+        return False
+
+
+# Ctrl を押しながら変えて全窓へ写すときの、ログに出す設定の名前（チェックのキーは live_settings と同じ）
+BROADCAST_CHECK_LABELS = {
+    "auto_begin": "自動Begin",
+    "do_skip": "自動自爆",
+    "cancel_afk": "DTM/Waldo続行 (3クラまで)",
+    "cancel_afk_after_unlock": "3クラ後もDTM/Waldo続行",
+    "announce_intermission": "Intermissionアナウンス",
+}
+BROADCAST_ROUND_LABELS = {"skip": "全自爆", "continue": "全続行"}
+BROADCAST_CHOICE_LABELS = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
+
+
 def skip_round_vars(make_var) -> dict:
     """ラウンド指定自爆のチェックボックス用の変数を作る。
 
@@ -334,9 +357,10 @@ class WindowTab(ttk.Frame):
 
     def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
                  section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
-                 on_open_window_table=None, on_item_switch=None):
+                 on_open_window_table=None, on_item_switch=None, on_broadcast=None):
         super().__init__(parent)
         self.idx = idx
+        self._on_broadcast = on_broadcast                       # (タブ, 種類, キー, 値): Ctrl を押して変えた設定を全窓へ写す
         self._on_continue_choice = on_continue_choice           # (タブ, 種類, プリセット名|None): 窓の表に写す
         self._on_open_window_table = on_open_window_table       # (タブ, 種類): その窓の表の画面を開く
         self._on_item_switch = on_item_switch                   # (タブ, bool): アイテムで切り替える
@@ -377,6 +401,35 @@ class WindowTab(ttk.Frame):
                     self.v_cancel_afk_after_unlock, self.v_announce_intermission, *self.v_skip_rounds.values(),
                     *self.v_continue_rounds.values()):
             var.trace_add("write", lambda *_a: self._on_settings_changed(self))
+
+    def _broadcast_if_ctrl(self, kind: str, key, value) -> bool:
+        """Ctrl を押して変えたなら、全窓へ写すよう App に頼む（変えた瞬間に見る）。頼んだら True"""
+        if self._on_broadcast is None or not ctrl_held():
+            return False
+        self._on_broadcast(self, kind, key, value)
+        return True
+
+    def _changed(self, key: str, var):
+        """窓ごとのチェックを手で変えた: Ctrl を押していれば全窓へ写す"""
+        self._broadcast_if_ctrl("check", key, bool(var.get()))
+
+    def _checks(self) -> dict:
+        return {"auto_begin": self.v_auto_begin, "do_skip": self.v_do_skip,
+                "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
+                "announce_intermission": self.v_announce_intermission}
+
+    def set_check(self, key: str, value: bool):
+        """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）"""
+        self._checks()[key].set(bool(value))
+
+    def set_round(self, which: str, name: str, value: bool):
+        """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。手で入れたときと同じく、入れたら反対側を外す"""
+        own, other = ((self.v_skip_rounds, self.v_continue_rounds) if which == "skip"
+                      else (self.v_continue_rounds, self.v_skip_rounds))
+        if name not in own:
+            return
+        own[name].set(bool(value))
+        exclusive_check(own[name], other[name])
 
     def live_settings(self) -> dict:
         """動作中の監視（WindowConfig）へ渡す、窓ごとの設定"""
@@ -470,11 +523,16 @@ class WindowTab(ttk.Frame):
         self.v_cancel_afk  = tk.BooleanVar(value=True)
         self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
-        ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin).pack(side="left")
-        ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock).pack(side="left", padx=(4, 0))
-        ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin,
+                        command=lambda k="auto_begin", v=self.v_auto_begin: self._changed(k, v)).pack(side="left")
+        ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip,
+                        command=lambda k="do_skip", v=self.v_do_skip: self._changed(k, v)).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk,
+                        command=lambda k="cancel_afk", v=self.v_cancel_afk: self._changed(k, v)).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock,
+                        command=lambda k="cancel_afk_after_unlock", v=self.v_cancel_afk_after_unlock: self._changed(k, v)).pack(side="left", padx=(4, 0))
+        ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission,
+                        command=lambda k="announce_intermission", v=self.v_announce_intermission: self._changed(k, v)).pack(side="left", padx=(12, 0))
 
         # ── 窓ごとの続行無効・デフォ続行の表（GR）: 「アイテムで切り替える」のチェックと、種類ごとのボタン（その窓の表を開く）・
         # プリセットのドロップダウン（選ぶと中身を窓の表に写す。「なし」は空にする）。表は保存内容（ContinueTable）が持つので、
@@ -510,12 +568,12 @@ class WindowTab(ttk.Frame):
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
 
         self._round_grid(rounds.content, "■ 全自爆", self.v_skip_rounds,
-                         self.v_continue_rounds)
+                         self.v_continue_rounds, which="skip")
         # Variant（置き換え後のテラー）はいつもリストで判定する。
         # 以前ここにあった切り替えは廃止した
         self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
-                         pady=(8, 0))
+                         pady=(8, 0), which="continue")
 
     def refresh_continue_choices(self, held: int | None = None, group: bool = False):
         """窓の行（チェック・2 つのドロップダウン）を今の保存内容に合わせる。選択肢は「なし」とプリセットの名前。
@@ -538,10 +596,15 @@ class WindowTab(ttk.Frame):
     def _on_continue_pick(self, which: str):
         """ドロップダウンで選んだ: 中身を窓の表に写して、保存して判定へ（「なし」は表を空にする）"""
         label = self.v_ct_choice[which].get()
+        name = None if label == ContinueTable.NONE_LABEL else label
+        if label != ContinueTable.DASH_LABEL and self._broadcast_if_ctrl("choice", which, name):
+            return              # Ctrl: 全窓（この窓も）へ写す。App が各窓の表に写して保存する
         if self._on_continue_choice is not None:
-            self._on_continue_choice(self, which, None if label == ContinueTable.NONE_LABEL else label)
+            self._on_continue_choice(self, which, name)
 
     def _on_continue_switch(self):
+        if self._broadcast_if_ctrl("item_switch", None, bool(self.v_ct_switch.get())):
+            return              # Ctrl: 全窓（この窓も）へ写す
         if self._on_item_switch is not None:
             self._on_item_switch(self, bool(self.v_ct_switch.get()))
 
@@ -549,11 +612,18 @@ class WindowTab(ttk.Frame):
         if self._on_open_window_table is not None:
             self._on_open_window_table(self, which)
 
-    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0)):
+    def _round_changed(self, which, name: str, var, other):
+        """ラウンドごとのチェックを手で変えた: 排他を行い、Ctrl を押していれば全窓へ写す"""
+        exclusive_check(var, other)
+        if which is not None:
+            self._broadcast_if_ctrl("round", (which, name), bool(var.get()))
+
+    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0), which: str | None = None):
         """ラウンド一覧のチェックボックスを1つ並べる。
 
         同じラウンドを両方に入れられると意味が矛盾するので、片方を入れたら
         もう片方を外す。並び順は config.SKIP_ROUND_SELECTABLE のまま。
+        which（"skip" か "continue"）があれば、Ctrl を押して変えたとき全窓へ写す。
         """
         ttk.Label(parent, text=title, foreground=config.GUI_ACC).pack(
             anchor="w", padx=10, pady=pady)
@@ -562,7 +632,7 @@ class WindowTab(ttk.Frame):
         for i, (name, var) in enumerate(own.items()):
             ttk.Checkbutton(
                 grid, text=name, variable=var,
-                command=lambda v=var, o=other[name]: exclusive_check(v, o)
+                command=lambda v=var, o=other[name], n=name: self._round_changed(which, n, v, o)
             ).grid(row=i // config.SKIP_ROUND_COLUMNS,
                    column=i % config.SKIP_ROUND_COLUMNS,
                    sticky="w", padx=(0, 12), pady=1)
@@ -2386,6 +2456,7 @@ class App(tk.Tk):
                             on_continue_choice=self._on_continue_choice,
                             on_open_window_table=self._open_window_table,
                             on_item_switch=self._on_item_switch,
+                            on_broadcast=self._broadcast_tab_setting,
                             section_collapsed=self._tab_sections,
                             on_section_toggled=self._on_tab_section_toggled)
             self.nb.add(tab, text=f"窓{i + 1}")
@@ -3336,6 +3407,32 @@ class App(tk.Tk):
             if monitor.window_idx == tab.idx + 1:
                 for key, value in settings.items():
                     setattr(monitor.cfg, key, value)
+
+    def _broadcast_tab_setting(self, tab, kind: str, key, value):
+        """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
+        kind は "check"（key=設定のキー）・"round"（key=(skip か continue, ラウンド名)）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
+        tabs = list(getattr(self, "tabs", []))
+        if kind == "check":
+            for t in tabs:
+                t.set_check(key, value)
+            what = f"「{BROADCAST_CHECK_LABELS.get(key, key)}」を {'ON' if value else 'OFF'} にして"
+        elif kind == "round":
+            which, name = key
+            for t in tabs:
+                t.set_round(which, name, value)
+            what = f"「{BROADCAST_ROUND_LABELS.get(which, which)} {name}」を {'ON' if value else 'OFF'} にして"
+        elif kind == "item_switch":
+            for t in tabs:
+                self._on_item_switch(t, bool(value))
+            what = f"「アイテムで切り替える」を {'ON' if value else 'OFF'} にして"
+        elif kind == "choice":
+            for t in tabs:
+                self._on_continue_choice(t, key, value)
+            shown = ContinueTable.NONE_LABEL if value is None else value
+            what = f"「{BROADCAST_CHOICE_LABELS.get(key, key)}」を「{shown}」に"
+        else:
+            return
+        self._log(f"[設定] Ctrl: {what}全窓へ写しました")
 
     def _clear_tab_round_settings(self, window_idx: int):
         """監視スレッドから呼ばれる。Tk変数はメインスレッドでしか触れない"""
