@@ -1,12 +1,12 @@
 -- テラーの番号をツール独自の番号にする（DB v2）— 移行の SQL
 -- ツールの新しい版は register_round_v2 で ToNRounds_v2 へ、独自の番号（0〜 Classic・1000〜 Alternate・2000〜 Unbound・
 -- 3000〜 8 Pages・4000〜 固定の表）と人数（players）つきで送る。古い版の人は 3 日ほど無印の register_round・
--- ToNRounds へ送り続けるので、無印は消さずに残す。
+-- ToNRounds へ送り続けるので、無印は消さずに残した。
+-- 無印を v2 へ写して閉じる B は supabase/migrate_legacy_rounds_b.sql（2026-11-01 流し済み）に移した。
 --
 -- 【書いてあるもの】
 --   A-1 対応表 terror_id_map（今の番号 → 独自の番号。assets/data/terror_ids.json から生成した行）
---   B-4 3 日ほど後に、無印の全行を v2 へ写す
---   B-5 無印の関数と表をしまう
+--   （B は supabase/migrate_legacy_rounds_b.sql）
 -- 【まだ書けないもの（［依存］の印）】
 --   A-2 ToNRounds_v2 の作り・A-3 register_round_v2 の中身は、今の ToNRounds の DDL・一意の制約・RLS・grant と、
 --   今の register_round の中身（まとめ方・権限）に合わせる必要がある。リポジトリには無いので、ここには書いていない。
@@ -17,8 +17,8 @@
 --
 -- 流す順:
 --   A（リリース前）: 1 → 2 → 3。新しい版はこの時点から v2 へ送る
---   B（リリースの 3 日ほど後。古い版の人の無印への書き込みが止まってから）: 4 → 5。
---     無印が消えた後も新しい版は壊れない（無印の取り込みが失敗しても v2 の分で動く）
+--   B（リリースの 3 日ほど後。古い版の人の無印への書き込みが止まってから）: supabase/migrate_legacy_rounds_b.sql。
+--     2026-11-01 に流し済み（無印の全行を v2 へ写し、関数 register_round を消し、表は ToNRounds_legacy_bak に名前を変えて残した）
 --
 -- 番号の範囲（独自の番号）: 0〜999 Classic（ログの番号）・1000〜 Alternate（1000＋ログの番号）・
 --   2000〜 Unbound（2000＋ログの番号）・3000〜 8 Pages（3000＋8 Pages のログの番号）・4000〜 固定の表。
@@ -392,29 +392,5 @@ on conflict (legacy, eight_pages) do nothing;
 
 -- ═══ B. リリースの 3 日ほど後 ═════════════════════════════════
 
--- B-4. 無印の全行を v2 へ写す（人数は NULL）。番号は対応表で直す。
---   8 Pages のラウンド（round = 105）は 8 Pages の行（eight_pages = true）を先に引き、無ければ通常の行へ。
---   重なり（ツールの新しい版が先に v2 へ送った同じラウンド）は on conflict do nothing。
---   ［依存: ToNRounds_v2 の一意の制約。別の表に入った同じラウンドを instance でまとめられるかは分からないので、
---    移行の間（3 日ほど）に両方の表へ送られた同じラウンドは、2 行になる可能性がある］
---   TODO: 一意の制約が分かったら on conflict の対象を書く（下は目印の形）。
--- insert into public."ToNRounds_v2"
---   ("time", round, map_id, terror1, terror2, terror3, transformed_uid, other_uids, players)
--- select r."time", r.round, r.map_id,
---        case when r.round = 105 then coalesce(e1.own, n1.own) else n1.own end,
---        case when r.round = 105 then coalesce(e2.own, n2.own) else n2.own end,
---        case when r.round = 105 then coalesce(e3.own, n3.own) else n3.own end,
---        r.transformed_uid, r.other_uids, null
---   from public."ToNRounds" r
---   left join public.terror_id_map n1 on n1.legacy = r.terror1 and not n1.eight_pages
---   left join public.terror_id_map e1 on e1.legacy = r.terror1 and e1.eight_pages
---   left join public.terror_id_map n2 on n2.legacy = r.terror2 and not n2.eight_pages
---   left join public.terror_id_map e2 on e2.legacy = r.terror2 and e2.eight_pages
---   left join public.terror_id_map n3 on n3.legacy = r.terror3 and not n3.eight_pages
---   left join public.terror_id_map e3 on e3.legacy = r.terror3 and e3.eight_pages
--- on conflict do nothing;      -- ［依存］一意の制約の列を書く
-
--- B-5. 無印をしまう。まず関数を消し、表は名前を変えて残し、確かめてから消す。
--- drop function public.register_round(bigint, integer, smallint, smallint, smallint, smallint, smallint, smallint);
--- alter table public."ToNRounds" rename to "ToNRounds_legacy_bak";
--- -- 確かめてから: drop table public."ToNRounds_legacy_bak";
+-- B は supabase/migrate_legacy_rounds_b.sql（2026-11-01 流し済み）。
+--   無印の全行を v2 へ写し、無印の関数を消し、表は ToNRounds_legacy_bak に名前を変えて残した。

@@ -139,8 +139,8 @@ def send_Users(VRChat_uid: str, name: str | None = None) -> int | None:
 
 
 # ラウンドの送り先（DB v2）。テラーの番号はツールの独自の番号、人数つき。
-# 無印の関数 register_round・表 ToNRounds は古い版の人が使い続けるので、新しい版からは送らない
-# （無印の取り込みは LegacyRoundsTable に一時的に置いてある。supabase/migrate_terror_ids_v2.sql）
+# 無印（register_round・ToNRounds）は 2026-11-01 に v2 へ写して閉じた（supabase/migrate_legacy_rounds_b.sql）。
+# 新しい版は v2 だけを使う
 REGISTER_ROUND_RPC = "rpc/register_round_v2"
 ROUNDS_TABLE = "ToNRounds_v2"
 
@@ -217,7 +217,7 @@ def register_round(round_name: str, terror_ids: list[int], map_id: int,
 
 
 def fetch_rounds(since: int | None, my_uids, page_size: int = 1000, table: str = ROUNDS_TABLE):
-    """table（既定は "ToNRounds_v2"。無印は LegacyRoundsTable）の行を time の昇順で取る（統計画面の差分取り）。1 ページずつ返す
+    """table（既定は "ToNRounds_v2"）の行を time の昇順で取る（統計画面の差分取り）。1 ページずつ返す
     イテレータ（全ページを一度に持たない。初回の全件取りで DB の行数ぶんのメモリを使わないため）。
 
     since があれば time >= since。my_uids があれば「1人目が自分でない行」か「1人目が
