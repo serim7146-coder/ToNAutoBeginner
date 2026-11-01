@@ -103,19 +103,25 @@ def _url(path: str) -> str:
 TRANSFORMED_UID_RPC = "rpc/get_transformed_uid"
 
 
-def send_Users(VRChat_uid: str) -> int | None:
+def send_Users(VRChat_uid: str, name: str | None = None) -> int | None:
     """VRChat の uid → transformed_uid（int2。DB を軽くするための番号）。無ければ DB 側で割り当てる。
 
     DB の関数 get_transformed_uid を呼ぶ。Users の表は直接読まない——読めると、鍵（exe から
     取り出せる）を持つ誰でも全員の uid と番号の対応を引けてしまう。関数が DB に無い（404）・
     割り当てられないときは None。ほかの失敗は例外（呼び出し側が握る）
+
+    name（自分の表示名）が空でなければ p_name として添える。DB 側が Users.name に入れる。
+    None・空なら添えない（古い DB の関数でもそのまま動く）
     """
     if not _configured():
         _say_user("Supabase設定がないためユーザー登録をスキップします。")
         return None
+    body = {"p_vrchat_uid": VRChat_uid}
+    if isinstance(name, str) and name:
+        body["p_name"] = name
     req = urllib.request.Request(
         _url(TRANSFORMED_UID_RPC),
-        data=json.dumps({"p_vrchat_uid": VRChat_uid}).encode(),
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json", **_headers(accept=True)},
         method="POST")
     try:

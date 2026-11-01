@@ -1769,6 +1769,23 @@ class TestGetTransformedUid(unittest.TestCase):
         self.assertEqual(req.get_method(), "POST")
         self.assertEqual(json.loads(req.data), {"p_vrchat_uid": "usr_new"})
 
+    def test_send_Users_adds_the_name_when_given(self):
+        """表示名は p_name として添える（DB 側が Users.name に入れる）"""
+        self._configured()
+        with patch('urllib.request.urlopen', return_value=self._res(123)) as mock_urlopen:
+            self.assertEqual(ConnectDB.send_Users("usr_new", "名前"), 123)
+        req = mock_urlopen.call_args.args[0]
+        self.assertEqual(json.loads(req.data), {"p_vrchat_uid": "usr_new", "p_name": "名前"})
+
+    def test_send_Users_without_a_name_sends_only_the_uid(self):
+        """名前が無い・空なら p_name を付けない（古い DB の関数でも壊れない）"""
+        self._configured()
+        for args in (("usr_new",), ("usr_new", None), ("usr_new", "")):
+            with patch('urllib.request.urlopen', return_value=self._res(5)) as mock_urlopen:
+                ConnectDB.send_Users(*args)
+            req = mock_urlopen.call_args.args[0]
+            self.assertEqual(json.loads(req.data), {"p_vrchat_uid": "usr_new"}, args)
+
     def test_send_Users_none_from_the_db_is_none(self):
         """割り当てられない（ほぼ埋まっている）"""
         self._configured()

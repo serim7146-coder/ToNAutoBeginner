@@ -441,7 +441,7 @@ class TestStartScanPrefilter(unittest.TestCase):
         monitor = self._monitor(path)
         done = threading.Event()
 
-        def slow(_uid):
+        def slow(_uid, _name=None):
             time.sleep(2.0)
             done.set()
             return 42
@@ -465,7 +465,7 @@ class TestStartScanPrefilter(unittest.TestCase):
     def test_a_failed_request_leaves_the_id_empty(self):
         monitor = self._monitor(self._log_file(self.LINES))
 
-        def offline(_uid):
+        def offline(_uid, _name=None):
             raise OSError("offline")    # 毎回作る（使い回すと例外がログを掴んだままになる）
 
         with patch.object(ConnectDB, "send_Users", side_effect=offline), \
