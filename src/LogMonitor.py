@@ -720,7 +720,7 @@ class LogMonitor:
         self.st.local_player_name = event.player_name
         self.st.local_user_id = event.user_id
         # 統計用の通信（最大10秒）は待たない
-        self._start_daemon(self._fetch_transformed_uid, event.user_id)
+        self._start_daemon(self._fetch_transformed_uid, event.user_id, event.player_name)
 
     def _learn_verified_phase(self, events):
         """起動時: 過去の Verified・開始・RoundOver・Verified Round End を古い順に
@@ -800,14 +800,14 @@ class LogMonitor:
         if self.cfg.cancel_afk:
             self._log(f"3クラ: {said}")
 
-    def _fetch_transformed_uid(self, user_id):
+    def _fetch_transformed_uid(self, user_id, name=None):
         """統計用のIDを取りに行く（裏のスレッドで）。
 
         届く前にラウンドが終われば、その統計は transformed_uid = None で送られる
         （通信に失敗したときと同じ）
         """
         try:
-            self.st.transformed_uid = ConnectDB.send_Users(user_id)
+            self.st.transformed_uid = ConnectDB.send_Users(user_id, name)
         except Exception as e:
             DebugLog.exception("LogMonitor._fetch_transformed_uid")
             self._log(f"transformed_uid の取得に失敗: {e}")

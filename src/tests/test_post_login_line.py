@@ -96,6 +96,7 @@ class TestPostLoginInTheMonitor(unittest.TestCase):
             self.assertEqual((monitor.st.local_user_id, monitor.st.local_player_name),
                              (ME, "serim01"), crlf)
             self.assertEqual(fetch.call_count, 1, crlf)
+            fetch.assert_called_once_with(ME, "serim01")
             self.assertEqual(sum("UserID検出" in m for m in monitor.logs), 1, crlf)
 
     def test_the_backward_scan_finds_it_without_the_head_read(self):
@@ -105,6 +106,7 @@ class TestPostLoginInTheMonitor(unittest.TestCase):
             self.assertEqual((monitor.st.local_user_id, monitor.st.local_player_name),
                              (ME, "serim01"), crlf)
             self.assertEqual(fetch.call_count, 1, crlf)
+            fetch.assert_called_once_with(ME, "serim01")
 
     def test_the_mark_is_in_the_scan_marks_and_the_line(self):
         self.assertIn(LogParser.POST_LOGIN_MARK, LogMonitor.LogMonitor._START_SCAN_MARKS)
@@ -115,6 +117,25 @@ class TestPostLoginInTheMonitor(unittest.TestCase):
         monitor._process(PREFIX + post_login())
         self.assertEqual((monitor.st.local_user_id, monitor.st.local_player_name),
                          (ME, "serim01"))
+
+    def test_the_name_is_not_written_to_any_log(self):
+        """画面のログにも debug.log にも表示名を書かない（成功・失敗の両方）"""
+        name = "テスト名"
+        failure = urllib.error.HTTPError("u", 401, "denied", {}, None)
+        for outcome in (MagicMock(return_value=7), MagicMock(side_effect=failure)):
+            monitor = self._monitor(self._log_file([post_login(name=name)]))
+            written = []
+            with patch.object(ConnectDB, "send_Users", outcome), \
+                 patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)), \
+                 patch.object(DebugLog, "write", side_effect=written.append), \
+                 patch("builtins.print") as printed:
+                monitor._detect_instance_from_log()
+            outcome.assert_called_once_with(ME, name)
+            self.assertTrue(any("UserID検出" in m for m in monitor.logs))
+            texts = (monitor.logs + [str(w) for w in written]
+                     + [str(c) for c in printed.call_args_list])
+            for text in texts:
+                self.assertNotIn(name, text)
 
 
 class TestLatestUserIdPostLogin(unittest.TestCase):
