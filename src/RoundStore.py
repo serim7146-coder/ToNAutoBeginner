@@ -12,8 +12,8 @@ DB から取ったラウンドと、自分が送ったラウンドを貯める�
   だけでは足りない。取り直した行は上書き（other_uids の更新を取り込む）
 - 表 meta: my_uids（このPCから送ったことのある transformed_uid。複数ありうる）・
   initial_done（初回の全件取得が済んだか）・synced_to（DB から取った行の最大の time）・synced_uids。
-  この 3 つは取り先（v2・legacy＝無印）ごとに別々に持つ（initial_done:v2 など）。一方の取り先が失敗しても
-  もう一方は進む
+  この 3 つは取り先ごとに別々に持つ（initial_done:v2 など）。取り先は今は v2 だけ（取り先ごとに別々に進める作りは残す）。
+  一方の取り先が失敗してももう一方は進む
 - 列 players: ラウンド開始の瞬間のインスタンスの人数（自分を含む）。分からない行・今までの行は NULL
 
 どのスレッドから呼んでもよい（鍵）。失敗しても例外を外へ出さない（統計が取れない
@@ -34,7 +34,7 @@ ORIGIN_OWN = "own"
 BAK_SUFFIX = ".listtool.bak"        # 番号を移す前の店（rounds.sqlite.listtool.bak）
 TERROR_IDS_OWN = "own"              # meta の terror_ids。独自の番号に移し終えた印
 V2_SOURCE = "v2"                    # 取り先の名前（DB v2）
-LEGACY_SOURCE = "legacy"            # 無印 ToNRounds（LegacyRoundsTable）
+LEGACY_SOURCE = "legacy"            # 古い手元の記録を移す先の名前（無印 ToNRounds の取り込みは閉じた）
 
 _CREATE_ROUNDS_NEW = """create table rounds_new (
     time integer not null,
@@ -97,12 +97,10 @@ class Source:
 
 
 def sources() -> tuple:
-    """DB から取る表の一覧（v2 と、一時的に無印）。取り先ごとに別々に進める。
-    無印を消すときは LegacyRoundsTable の行を消す。ConnectDB が RoundStore を読むので、ここで読む"""
+    """DB から取る表の一覧。取り先は今は v2 だけ（取り先ごとに別々に進める作りは残す）。
+    ConnectDB が RoundStore を読むので、ここで読む"""
     import ConnectDB
-    import LegacyRoundsTable
-    return (Source(V2_SOURCE, ConnectDB.fetch_rounds),
-            Source(LegacyRoundsTable.NAME, LegacyRoundsTable.fetch, LegacyRoundsTable.convert))
+    return (Source(V2_SOURCE, ConnectDB.fetch_rounds),)
 
 
 @dataclass(frozen=True)
@@ -307,8 +305,8 @@ class RoundStore:
     OWN_MATCH_SEC = 15
 
     def sync_all(self, source_list=None) -> bool:
-        """DB の取り先（v2・無印）をそれぞれ別々に取り込む。戻り値は v2 の成否。
-        無印の失敗（消えて 404 になった・通信）は v2 に響かせない（無印の失敗は debug.log に 1 回だけ書く）"""
+        """DB の取り先をそれぞれ別々に取り込む（今は v2 だけ）。戻り値は v2 の成否。
+        v2 以外の取り先の失敗は v2 に響かせない（その失敗は debug.log に 1 回だけ書く）"""
         ok = False
         for source in (source_list if source_list is not None else sources()):
             done = self.sync(source.fetch, source.name, source.convert)
@@ -323,7 +321,7 @@ class RoundStore:
 
     def sync(self, fetch, source: str = V2_SOURCE, convert=None) -> bool:
         """DB から差分を取って手元に入れる。fetch(since, my_uids) は ConnectDB.fetch_rounds。
-        source は取り先の名前（記録の meta の鍵に添える）。convert があれば行ごとに通す（無印を v2 の形に直す）。
+        source は取り先の名前（記録の meta の鍵に添える）。convert があれば行ごとに通す（その取り先の行を v2 の形に直す）。
 
         初回（または my_uids に新しい uid が増えた）は全件（自分の行も含む）。以降は
         time >= synced_to − 15分 の、1人目が自分でない行か other_uids のある行だけ。

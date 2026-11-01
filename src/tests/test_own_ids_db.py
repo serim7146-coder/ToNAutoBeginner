@@ -1,8 +1,6 @@
-"""統計・DB を独自のテラー番号にする: 手元の rounds.sqlite の移行・DB v2 への送信・無印との一時的な取り込み・
+"""統計・DB を独自のテラー番号にする: 手元の rounds.sqlite の移行・DB v2 への送信・取り先ごとの取り込み・
 8 Pages の数え方。通信は差し替え。本物の DB・本物の rounds.sqlite には触らない"""
 from tests.support import *  # noqa: F401,F403
-
-import LegacyRoundsTable
 
 OLD_SCHEMA = """
 create table rounds (time integer not null, round integer not null, map_id integer,
@@ -295,27 +293,10 @@ class TestFetchTable(unittest.TestCase):
 
         self.assertIn("/rest/v1/ToNRounds_v2?select", pages(None))
         self.assertIn("/rest/v1/ToNRounds?select", pages("ToNRounds"))
-        self.assertIn("/rest/v1/ToNRounds?select", pages(LegacyRoundsTable.TABLE))
-
-
-class TestLegacyRows(unittest.TestCase):
-    def test_convert_changes_the_numbers_and_empties_the_count(self):
-        row = {"time": 5, "round": 105, "map_id": 12, "terror1": 0, "terror2": None, "terror3": None,
-               "transformed_uid": 9, "other_uids": [4], "players": 99}
-        converted = LegacyRoundsTable.convert(row)
-        self.assertEqual((converted["terror1"], converted["terror2"], converted["terror3"]), (3014, None, None))
-        self.assertIsNone(converted["players"])
-        self.assertEqual((converted["time"], converted["transformed_uid"], converted["other_uids"]), (5, 9, [4]))
-        self.assertEqual(row["terror1"], 0, "元の行は変えない")
-        other = LegacyRoundsTable.convert({"round": 6, "terror1": 192, "terror2": 316, "terror3": 175})
-        self.assertEqual((other["terror1"], other["terror2"], other["terror3"]), (4002, 4011, None))
-
-    def test_the_table_name(self):
-        self.assertEqual((LegacyRoundsTable.NAME, LegacyRoundsTable.TABLE), ("legacy", "ToNRounds"))
 
 
 class TestTwoSources(_TempCase):
-    """v2 と無印を別々に進める。無印が消えて 404 になっても v2 は進む"""
+    """取り先を別々に進める。v2 以外の取り先が 404 になっても v2 は進む（v2 以外は偽の Source "other"）"""
 
     @staticmethod
     def _row(t, uid, t1=5, rnd=1, others=None, players=None):
@@ -325,9 +306,18 @@ class TestTwoSources(_TempCase):
             row["players"] = players
         return row
 
-    def _sources(self, v2, legacy):
+    @staticmethod
+    def _convert(row):
+        """偽の convert: 番号 135 を 1001 にし、人数を NULL にする"""
+        out = dict(row)
+        if out["terror1"] == 135:
+            out["terror1"] = 1001
+        out["players"] = None
+        return out
+
+    def _sources(self, v2, other):
         return (RoundStore.Source("v2", v2),
-                RoundStore.Source(LegacyRoundsTable.NAME, legacy, LegacyRoundsTable.convert))
+                RoundStore.Source("other", other, self._convert))
 
     def test_each_source_has_its_own_records(self):
         store = RoundStore.RoundStore(self.path)
@@ -337,21 +327,21 @@ class TestTwoSources(_TempCase):
             calls.append(("v2", since, set(mine)))
             return [self._row(100, 1, 1001, players=4)]
 
-        def legacy(since, mine):
-            calls.append(("legacy", since, set(mine)))
+        def other(since, mine):
+            calls.append(("other", since, set(mine)))
             return [self._row(200, 2, 135, rnd=51)]
 
-        self.assertTrue(store.sync_all(self._sources(v2, legacy)))
+        self.assertTrue(store.sync_all(self._sources(v2, other)))
         meta = meta_of(self.path)
-        self.assertEqual((meta["synced_to:v2"], meta["synced_to:legacy"]), ("100", "200"))
-        self.assertEqual((meta["initial_done:v2"], meta["initial_done:legacy"]), ("1", "1"))
-        self.assertEqual(calls, [("v2", None, set()), ("legacy", None, set())])
+        self.assertEqual((meta["synced_to:v2"], meta["synced_to:other"]), ("100", "200"))
+        self.assertEqual((meta["initial_done:v2"], meta["initial_done:other"]), ("1", "1"))
+        self.assertEqual(calls, [("v2", None, set()), ("other", None, set())])
         self.assertEqual([(r[0], r[3], r[9]) for r in dump(self.path)], [(100, 1001, 4), (200, 1001, None)],
-                         "無印の 135（Alternate）は 1001・人数は NULL")
-        store.sync_all(self._sources(v2, legacy))
-        self.assertEqual([c[:2] for c in calls[2:]], [("v2", 100 - 900), ("legacy", 200 - 900)], "次は差分")
+                         "other の convert は 135 を 1001 にし、人数は NULL")
+        store.sync_all(self._sources(v2, other))
+        self.assertEqual([c[:2] for c in calls[2:]], [("v2", 100 - 900), ("other", 200 - 900)], "次は差分")
 
-    def test_a_legacy_failure_does_not_stop_v2(self):
+    def test_a_failure_of_another_source_does_not_stop_v2(self):
         store = RoundStore.RoundStore(self.path)
 
         def gone(since, mine):
@@ -363,12 +353,12 @@ class TestTwoSources(_TempCase):
         self.assertEqual(store.count(), 2, "v2 の分は入る")
         meta = meta_of(self.path)
         self.assertEqual(meta["synced_to:v2"], "300")
-        self.assertNotIn("synced_to:legacy", meta, "無印の記録は変えない")
-        self.assertNotIn("initial_done:legacy", meta)
-        self.assertEqual(len([c for c in write.call_args_list if "legacy" in c.args[0]]), 1,
-                         "無印の失敗は 1 回だけ書く")
+        self.assertNotIn("synced_to:other", meta, "other の記録は変えない")
+        self.assertNotIn("initial_done:other", meta)
+        self.assertEqual(len([c for c in write.call_args_list if "other" in c.args[0]]), 1,
+                         "other の失敗は 1 回だけ書く")
 
-    def test_a_legacy_failure_in_the_middle_of_the_pages_adds_nothing_from_legacy(self):
+    def test_a_failure_in_the_middle_of_the_pages_adds_nothing_from_that_source(self):
         store = RoundStore.RoundStore(self.path)
 
         def broken(since, mine):
@@ -376,8 +366,8 @@ class TestTwoSources(_TempCase):
             raise OSError("cut")
 
         self.assertTrue(store.sync_all(self._sources(lambda s, m: [self._row(100, 1, 6)], broken)))
-        self.assertEqual([r[0] for r in dump(self.path)], [100], "その回に入れた無印の行は戻る")
-        self.assertNotIn("synced_to:legacy", meta_of(self.path))
+        self.assertEqual([r[0] for r in dump(self.path)], [100], "その回に入れた other の行は戻る")
+        self.assertNotIn("synced_to:other", meta_of(self.path))
 
     def test_the_return_value_is_the_v2_result(self):
         store = RoundStore.RoundStore(self.path)
@@ -389,33 +379,31 @@ class TestTwoSources(_TempCase):
         self.assertTrue(store.sync_all(self._sources(lambda s, m: [], offline)))
 
     def test_the_same_round_from_both_is_one_row(self):
-        """依頼者が無印の行を v2 へ写したあとの重なり（同じ鍵）は 1 行に上書きされる"""
+        """v2 と別の取り先の重なり（同じ鍵）は 1 行に上書きされる"""
         store = RoundStore.RoundStore(self.path)
         self.assertTrue(store.sync_all(self._sources(
             lambda s, m: [self._row(100, 1, 1001, rnd=51, players=3)],
             lambda s, m: [self._row(100, 1, 135, rnd=51)])))
         self.assertEqual(store.count(), 1)
 
-    def test_a_legacy_row_with_me_as_second_player_replaces_my_own_row(self):
+    def test_a_row_of_another_source_with_me_as_second_player_replaces_my_own_row(self):
         store = RoundStore.RoundStore(self.path)
         store.add_own(100, 51, 12, 1001, None, None, -13, players=2)
-        legacy_row = self._row(98, 7, 135, rnd=51, others=[-13])
-        self.assertTrue(store.sync_all(self._sources(lambda s, m: [], lambda s, m: [legacy_row])))
+        other_row = self._row(98, 7, 135, rnd=51, others=[-13])
+        self.assertTrue(store.sync_all(self._sources(lambda s, m: [], lambda s, m: [other_row])))
         self.assertEqual([(r[0], r[6]) for r in store.rows()], [(98, 7)], "変換後の番号で自分の行と合わさる")
 
-    def test_the_default_sources_are_v2_then_legacy(self):
-        names = [s.name for s in RoundStore.sources()]
-        self.assertEqual(names, ["v2", "legacy"])
-        self.assertIs(RoundStore.sources()[0].fetch, ConnectDB.fetch_rounds)
-        self.assertIs(RoundStore.sources()[1].fetch, LegacyRoundsTable.fetch)
-        self.assertIs(RoundStore.sources()[1].convert, LegacyRoundsTable.convert)
+    def test_the_default_sources_are_v2_only(self):
+        sources = RoundStore.sources()
+        self.assertEqual([x.name for x in sources], ["v2"])
+        self.assertIs(sources[0].fetch, ConnectDB.fetch_rounds)
+        self.assertIsNone(sources[0].convert)
 
-    def test_the_legacy_fetch_reads_the_old_table(self):
-        with patch.object(ConnectDB, "fetch_rounds", return_value=iter([])) as fetch:
-            LegacyRoundsTable.fetch(5, {1})
-        fetch.assert_called_once_with(5, {1}, table="ToNRounds")
+    def test_the_legacy_table_module_is_gone(self):
+        with self.assertRaises(ImportError):
+            import LegacyRoundsTable  # noqa: F401
 
-    def test_the_window_syncs_both(self):
+    def test_the_window_syncs_all_sources(self):
         """統計画面の取り込みは sync_all"""
         window = type("W", (), {})()
         window.store = MagicMock()

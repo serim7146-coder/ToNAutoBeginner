@@ -72,7 +72,6 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `FogEarlyRead.py` | 霧の看破（`[NetworkProcessing]` のオブジェクト名から公開前にテラーを特定）の許可と、名前ごとの答え合わせの記録。 |
 | `UtilsWatch.py` | ToN Utils のログ（`ton-utils.log`）の press・hold・許可の変化を読み、Utils の source を窓に対応づける（`save-history.sqlite` の `logs` の source・started だけを読み取り専用で読む）。全窓で1つ（`shared()`）。 |
 | `ReadJson.py` / `ItemCatalog.py` | terrors.json・item.json の読み込みと引き方。terrors.json の番号は独自の番号（8 Pages の行の `id` はページ番号そのもので `list_id` は無い。ツールの中の番号は 3000＋`id`）。 |
-| `LegacyRoundsTable.py` | 無印の `ToNRounds`（ToN ListTool の番号。前の版が送っていた分）を読んで独自の番号に直す、**移行の間だけの**モジュール（`NAME="legacy"`・`fetch`・`convert`。人数は NULL）。統計の取り込みが ToNRounds_v2 と両方を読む。いらなくなったら、このファイルと `RoundStore.sources()` の 1 行を消すだけ。 |
 
 ### 操作
 | モジュール | 責務 |
@@ -100,8 +99,8 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `PlaySound.py` | MCI（winmm）で音声を鳴らす。 |
 | `WindowVolume.py` | Windows のアプリごとの音量で、窓の状態ごとに VRChat の音量を変える。見張りのスレッドが Core Audio を使い、止めると元の音量に戻す。 |
 | `Recorder.py` / `OBSClient.py` | 続行ラウンドを OBS（obs-websocket v5）で録る。通信は専用のスレッド。 |
-| `ConnectDB.py` | Supabase との通信。ラウンドの送信（`rpc/register_round_v2`。独自の番号と `p_players`）、transformed_uid の取得（`rpc/get_transformed_uid`）、統計画面の差分取得（`fetch_rounds(..., table=)`。`ToNRounds_v2` と、移行の間は無印の `ToNRounds`）。`.env` が無ければ何もしない。 |
-| `RoundStore.py` / `Statistics.py` / `StatisticsGUI.py` | 統計画面。DB の差分を手元の SQLite に取り込み、手元で集計する。二項分布の検定。`RoundStore` は取り込み元（`Source`: v2 と legacy）ごとに取り込んだ位置を別に覚え（meta の `initial_done:v2`・`synced_to:legacy` など。404 でも巻き戻さない）、`sync_all()` で全部を取り込む。`rounds` の列 `players` はラウンド開始時の人数（自分を含む・不明は NULL）。前の版の rounds.sqlite は初回に独自の番号へ直し（1 つのトランザクション）、直す前を `rounds.sqlite.listtool.bak` に残す。8 Pages の行は 3000 番台のまま貯め、集計のときだけ通常の同じテラーに足す（`TerrorIds.statistics_id`）。 |
+| `ConnectDB.py` | Supabase との通信。ラウンドの送信（`rpc/register_round_v2`。独自の番号と `p_players`）、transformed_uid の取得（`rpc/get_transformed_uid`）、統計画面の差分取得（`fetch_rounds(..., table=)`。既定は `ToNRounds_v2`）。`.env` が無ければ何もしない。 |
+| `RoundStore.py` / `Statistics.py` / `StatisticsGUI.py` | 統計画面。DB の差分を手元の SQLite に取り込み、手元で集計する。二項分布の検定。`RoundStore` は取り込み元（`Source`。今は v2 だけ）ごとに取り込んだ位置を別に覚え（meta の `initial_done:v2`・`synced_to:v2` など。404 でも巻き戻さない）、`sync_all()` で全部を取り込む。`rounds` の列 `players` はラウンド開始時の人数（自分を含む・不明は NULL）。前の版の rounds.sqlite は初回に独自の番号へ直し（1 つのトランザクション）、直す前を `rounds.sqlite.listtool.bak` に残す。8 Pages の行は 3000 番台のまま貯め、集計のときだけ通常の同じテラーに足す（`TerrorIds.statistics_id`）。 |
 | `DebugLog.py` / `BugReport.py` | debug.log（秘密・ユーザー名を伏せる）と、不具合の報告（Discord の Webhook。窓を複数・全部選べる）。 |
 | `UnitTest.py` | テストを回す入口（`tests/test_*.py`）。 |
 
@@ -273,9 +272,9 @@ LogMonitor._process(line)
 
 ## 10. 統計
 
-- 送る: ラウンドごとに1回、`rpc/register_round_v2`（開始の時刻・ラウンドの番号・マップ・テラー3体まで（**独自の番号**）・transformed_uid・インスタンスの番号・`p_players`）。送り先のテーブルは `ToNRounds_v2`。`p_players` はラウンド開始時の人数（自分を含む。分からなければ null）。ラウンドの途中で起動したときは、監視開始の遡り（`_detect_instance_from_log` → `_restore_running_round`）が、最後のラウンド開始の行の後に RoundOver が無ければその行の時刻と、その行より前の入退室だけを積んだ人数を `st.round_start_time`・`st.round_players` に入れる（この 2 つを読むのは DB へ送る 3 か所だけ）。前の `rpc/register_round`（ToN ListTool の番号）は使わない。SQL は `supabase/migrate_terror_ids_v2.sql`（番号の対応表 `terror_id_map` は生成した値。`register_round` の本体・`ToNRounds` の定義に依存する部分は [依存]／TODO のコメントで、現物を見て書き足す）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
+- 送る: ラウンドごとに1回、`rpc/register_round_v2`（開始の時刻・ラウンドの番号・マップ・テラー3体まで（**独自の番号**）・transformed_uid・インスタンスの番号・`p_players`）。送り先のテーブルは `ToNRounds_v2`。`p_players` はラウンド開始時の人数（自分を含む。分からなければ null）。ラウンドの途中で起動したときは、監視開始の遡り（`_detect_instance_from_log` → `_restore_running_round`）が、最後のラウンド開始の行の後に RoundOver が無ければその行の時刻と、その行より前の入退室だけを積んだ人数を `st.round_start_time`・`st.round_players` に入れる（この 2 つを読むのは DB へ送る 3 か所だけ）。前の `rpc/register_round`（ToN ListTool の番号）は使わない。SQL は `supabase/migrate_terror_ids_v2.sql`（A。番号の対応表 `terror_id_map` は生成した値。`register_round` の本体・`ToNRounds` の定義に依存する部分は [依存]／TODO のコメントで、現物を見て書き足す）と `supabase/migrate_legacy_rounds_b.sql`（B。無印を v2 へ写して閉じた。2026-11-01 流し済み）。インスタンスの番号はインスタンスIDの SHA-256 の先頭8バイトで、DB 側で同じインスタンスの同じラウンドを1行にまとめる（ソロなら送らない）。
 - transformed_uid: `rpc/get_transformed_uid` で VRChat uid から int2 の番号をもらう（無ければ DB が割り当てる）。`Users` の表は直接読まない（`supabase/get_transformed_uid.sql`）。表示名 `p_name` も添え、DB 側が `Users.name` に入れる（最新だけ。ツールはログに出さない）。
-- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。取り込み元は `ToNRounds_v2`（独自の番号・人数あり）と、移行の間だけ無印の `ToNRounds`（`LegacyRoundsTable` が独自の番号に直し、人数は NULL）。元ごとに取り込んだ位置を別に覚える。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。8 Pages の行（3000 番台）は手元ではそのまま貯め、集計のときだけ通常の同じテラーに足す。
+- 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。取り込み元は `ToNRounds_v2`（独自の番号・人数あり）。元ごとに取り込んだ位置を別に覚える。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。8 Pages の行（3000 番台）は手元ではそのまま貯め、集計のときだけ通常の同じテラーに足す。
 
 ## 11. 置き場所
 
