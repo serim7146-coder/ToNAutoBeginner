@@ -582,8 +582,11 @@ ACHIEVEMENT_GROUP_ID = "grp_4066ddbc-28e6-4e02-9148-2d5d912f9a4a"
 PRIVATE_LIKE_INSTANCES = frozenset({INSTANCE_PRIVATE, INSTANCE_SEER})
 # 判定（続行リスト・続行表・ラウンド指定・Glorbo・Sabotage・自動自爆）を private と同じに通すインスタンス（GT）。
 # PRIVATE_LIKE_INSTANCES に実績・アイテム集会を足したもの。実操作（Begin・入室・アイテム取得・Run リスポーン・
-# アイテムを落とす・チェイス・放置モード・AFK 回避の移動・窓を戻す）と霧の看破は PRIVATE_LIKE_INSTANCES のまま
+# チェイス・放置モード・AFK 回避の移動・窓を戻す）と霧の看破は PRIVATE_LIKE_INSTANCES のまま
 JUDGE_LIKE_INSTANCES = PRIVATE_LIKE_INSTANCES | frozenset({INSTANCE_ACHIEVEMENT})
+# 「アイテムを落とす」（死亡・生存で 1 回）を送るインスタンス（HF。依頼者 2026-11-02）: private 相当＋干し芋・焼き芋。
+# 他の実操作は PRIVATE_LIKE_INSTANCES のまま
+DROP_ITEM_INSTANCES = PRIVATE_LIKE_INSTANCES | frozenset({INSTANCE_HOSHIIMO, INSTANCE_YAKIIMO})
 
 
 # ── Variant判定待ち ──

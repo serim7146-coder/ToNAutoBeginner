@@ -119,7 +119,7 @@ class TestDropOnDeathOrLife(_Case):
         self.assertEqual(ex._osc.sent, [], "落とさない")
 
     def test_off_not_private_or_no_osc_does_not_drop(self):
-        for kwargs, setting, reason in (({"itype": config.INSTANCE_PUBLIC}, True, "private でない"),
+        for kwargs, setting, reason in (({"itype": config.INSTANCE_PUBLIC}, True, "private でも干し芋・焼き芋でもない"),
                                         ({"osc": False}, True, "OSC が使えない窓"),
                                         ({}, False, None)):
             SharedState.set_continue_drop_item(setting)
@@ -130,6 +130,50 @@ class TestDropOnDeathOrLife(_Case):
             self.assertFalse(any("アイテムを落としました" in m for m in monitor.logs), kwargs)
             if reason:
                 self.assertTrue(any(reason in m for m in self.written), self.written)
+
+    def test_hoshiimo_and_yakiimo_drop_once_a_round(self):
+        """干し芋・焼き芋でも落とす（HF。依頼者 2026-11-02）: 死んだ → 1 回、生き残った → 1 回、同じラウンドで 2 回目は無し"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            for line, why in ((DIED, "死んだ"), (LIVED, "生き残った")):
+                monitor = self._monitor(itype=itype)
+                monitor._process(line)
+                self.assertEqual(self.osc.sent, [("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC)], (itype, why))
+                self.assertIn(f"{why}ので、アイテムを落としました", monitor.logs)
+                monitor._process(DIED)
+                monitor._process(LIVED)
+                monitor._process(ROUND_OVER)
+                self.assertEqual(len(self._drops()), 1, (itype, why))
+
+    def test_hoshiimo_and_yakiimo_next_round_drops_again(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype=itype)
+            monitor._process(DIED)
+            monitor.st.round_seq += 1
+            monitor._process(LIVED)
+            self.assertEqual(len(self._drops()), 2, itype)
+
+    def test_hoshiimo_without_osc_does_not_drop(self):
+        monitor = self._monitor(itype=config.INSTANCE_HOSHIIMO, osc=False)
+        monitor._process(DIED)
+        self.assertEqual(self.osc.sent, [])
+        self.assertTrue(any("OSC が使えない窓" in m for m in self.written), self.written)
+
+    def test_other_instances_do_not_drop(self):
+        """公開・実績・アイテム集会・その他のグループ（など）は落とさない。理由は debug.log に出る"""
+        for itype in (config.INSTANCE_PUBLIC, config.INSTANCE_ACHIEVEMENT, config.INSTANCE_OTHER_GROUP):
+            for line in (DIED, LIVED):
+                self.written.clear()
+                monitor = self._monitor(itype=itype)
+                monitor._process(line)
+                self.assertEqual(self.osc.sent, [], itype)
+                self.assertFalse(any("アイテムを落としました" in m for m in monitor.logs), itype)
+                self.assertTrue(any("private でも干し芋・焼き芋でもない" in m for m in self.written), (itype, self.written))
+
+    def test_the_drop_instances_are_private_like_plus_hoshiimo_and_yakiimo(self):
+        self.assertEqual(config.DROP_ITEM_INSTANCES,
+                         config.PRIVATE_LIKE_INSTANCES | {config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO})
+        self.assertNotIn(config.INSTANCE_ACHIEVEMENT, config.DROP_ITEM_INSTANCES)
+        self.assertNotIn(config.INSTANCE_HOSHIIMO, config.PRIVATE_LIKE_INSTANCES, "can_operate は変えない")
 
     def test_a_late_drop_after_the_next_round_started_is_skipped(self):
         st = WindowState(instance_type=config.INSTANCE_PRIVATE, window_idx=3, round_seq=5)

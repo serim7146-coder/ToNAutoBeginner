@@ -2890,7 +2890,7 @@ class ActionExecutor:
 
     def drop_at_round_end(self, round_seq: int, why: str):
         """死んだ・生き残った行が来たラウンドで 1 回（EU。LogMonitor._drop_when_round_ends が 1 回にする）:
-        /input/DropRight を押して離す。設定 OFF・OSC が使えない・private でない・次のラウンドになった・
+        /input/DropRight を押して離す。設定 OFF・OSC が使えない・private・干し芋・焼き芋のどれでもない・次のラウンドになった・
         止めた → 落とさない"""
         st = self._st
         head = f"[操作] [窓{st.window_idx}] {why}:"
@@ -2902,9 +2902,10 @@ class ActionExecutor:
         self._press_drop(head, f"{why}ので、アイテムを落としました")
 
     def _press_drop(self, head: str, message: str):
-        """/input/DropRight を押して離す。OSC の窓・private のときだけ。持っているかは見ない"""
-        if self._osc is None or not self.can_operate():
-            DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でない'}）")
+        """/input/DropRight を押して離す。OSC の窓で、private 相当・干し芋・焼き芋のときだけ
+        （config.DROP_ITEM_INSTANCES。HF）。持っているかは見ない"""
+        if self._osc is None or self._st.instance_type not in config.DROP_ITEM_INSTANCES:
+            DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でも干し芋・焼き芋でもない'}）")
             return
         self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._move_stopped)
         DebugLog.write(f"{head} /input/DropRight を押して離した")
