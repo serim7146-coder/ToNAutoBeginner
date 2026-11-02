@@ -2760,6 +2760,8 @@ class ActionExecutor:
                             return stop
                 if found is None:
                     if presses == 1:
+                        if shot is not None:
+                            RunFace.save_shot(shot, st.window_idx, "respawn_notfound")     # HG: 報告の「撮影」に入る
                         return "リスポーンのボタンが見つからない"
                     DebugLog.write(f"{head} ボタンがもう写っていない → 押し直さない")
                     self._respawn_menu_open = False     # 閉じている（Esc を送らない）

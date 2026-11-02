@@ -11,7 +11,10 @@ import config
 TEMPLATE_FILE = "assets/templates/respawn/btn_respawn.png"
 MATCH_MIN = 0.8             # これ未満は「無い」
 MATCH_GOOD = 0.95           # これ以上が出たら、残りの倍率は試さない（1 枚 1〜2 秒かかるため）
-SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 2.0, 0.05
+SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.2, 2.5, 0.05
+# 絵を切り出した窓の高さ。メニューは窓の高さに比例して縮む（高さ 702 の窓で 0.51 倍 ≒ 702/1399。
+# HG: 958×484 の窓は約 0.35 倍で、0.5〜2.0 の枠では一度も試されなかった）
+TEMPLATE_WINDOW_H = 1399
 # 粗く探して一番よかった倍率の前後を細かく探し直す（DO: 867×702 の窓ではボタンが 0.51 倍で写り、
 # 0.50 の一致は 0.796 で MATCH_MIN を下回って見つからなかった。0.51 は 0.89）
 FINE_SPAN, FINE_STEP = 0.05, 0.01
@@ -40,11 +43,20 @@ def available() -> bool:
     return _load() is not None and len(_load()) > 0
 
 
-def scales() -> list:
-    """試す倍率。今の窓（1.0）に近い順"""
+def expected_scale(height: int) -> float:
+    """撮影の高さから見込みの倍率（高さ ÷ TEMPLATE_WINDOW_H）。高さが無ければ 1.0"""
+    try:
+        h = float(height)
+    except (TypeError, ValueError):
+        return 1.0
+    return h / TEMPLATE_WINDOW_H if h > 0 else 1.0
+
+
+def scales(expected: float = 1.0) -> list:
+    """試す倍率。expected（見込みの倍率）に近い順"""
     n = int(round((SCALE_MAX - SCALE_MIN) / SCALE_STEP))
     values = [round(SCALE_MIN + i * SCALE_STEP, 2) for i in range(n + 1)]
-    return sorted(values, key=lambda s: (abs(s - 1.0), s))
+    return sorted(values, key=lambda s: (abs(s - expected), s))
 
 
 # 照合する撮影の高さ。これより高い撮影は縮めてから照合する（全画面 2560×1440 で、ボタンが無いときの
@@ -60,11 +72,12 @@ def find(bgr, template=None):
     if template is None or len(template) == 0 or not hasattr(bgr, "shape"):
         return None
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    expected = expected_scale(gray.shape[0])        # 縮める前の高さで見込む
     shrink = min(1.0, WORK_HEIGHT / gray.shape[0])
     if shrink < 1.0:
         gray = cv2.resize(gray, None, fx=shrink, fy=shrink, interpolation=cv2.INTER_AREA)
     best = None
-    for s in scales():
+    for s in scales(expected):
         hit = _match(gray, template, s, shrink)
         if hit is not None and (best is None or hit[2] > best[2]):
             best = hit

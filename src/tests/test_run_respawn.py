@@ -167,6 +167,29 @@ class TestTheWholeRun(_Case):
                                          "return", ("cursor", (11, 22))])
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンのボタンが見つからない）"])
 
+    @staticmethod
+    def _kept(save):
+        """リスポーンのボタンの撮影の保存だけ（向きの直しの "notfound" は別）"""
+        return [c for c in save.call_args_list if c.args[2] == "respawn_notfound"]
+
+    def test_the_last_shot_is_kept_when_the_button_is_never_found(self):
+        """HG: 3 回とも見つからなかったら、最後の撮影を 1 枚だけ "respawn_notfound" で残す（偽の保存。ディスクに書かない）"""
+        self.w.found = None
+        with patch.object(ActionExecutor.RunFace, "save_shot") as save:
+            self._run()
+        self.assertEqual(self._kept(save), [call("shot", 2, "respawn_notfound")])
+
+    def test_no_shot_is_kept_when_the_button_is_found(self):
+        with patch.object(ActionExecutor.RunFace, "save_shot") as save:
+            self._run()
+        self.assertEqual(self._kept(save), [])
+
+    def test_no_shot_is_kept_when_nothing_was_captured(self):
+        self.w.found = None
+        with patch.object(self.ex, "_capture_bgr", return_value=None),                 patch.object(ActionExecutor.RunFace, "save_shot") as save:
+            self._run()
+        self.assertEqual(self._kept(save), [])
+
     def test_no_respawn_line_presses_once_more_then_closes_the_menu(self):
         """行が来ない → ボタンがまだ写っているのを確かめて、もう1回だけ押す → それでも来なければ Esc（DQ）。
         行を待つ間は前面を返して鍵を離す（ほかの窓の Begin を止めない）。押し直しとメニューを閉じるのは
@@ -213,8 +236,9 @@ class TestTheWholeRun(_Case):
         self.w.respawns = False
         found = iter([(BUTTON[0], BUTTON[1], 0.99, 1.0), None])
         self.w.found = None
-        with patch.object(RespawnButton, "find", side_effect=lambda _s: self.w.events.append("find") or next(found)):
+        with patch.object(RespawnButton, "find", side_effect=lambda _s: self.w.events.append("find") or next(found)),                 patch.object(ActionExecutor.RunFace, "save_shot") as save:
             self._run()
+        self.assertEqual(self._kept(save), [])    # HG: 2 回目の「写っていない」は残さない
         self.assertEqual(self.w.events.count(("click", 0.15)), 1, "押し直さない")
         self.assertEqual(self.logs, ["Run: リスポーンできませんでした（リスポーンの行が来ない）"])
 
@@ -521,7 +545,28 @@ class TestTheButtonPicture(unittest.TestCase):
     def test_the_scales_start_at_the_window_it_was_cut_from(self):
         s = RespawnButton.scales()
         self.assertEqual(s[0], 1.0)
-        self.assertEqual((min(s), max(s)), (0.5, 2.0))
+        self.assertEqual((min(s), max(s)), (0.2, 2.5))
+
+    def test_the_scales_start_at_the_expected_scale(self):
+        s = RespawnButton.scales(0.35)
+        self.assertEqual(s[0], 0.35)
+        self.assertEqual((min(s), max(s)), (0.2, 2.5))
+
+    def test_the_expected_scale_follows_the_window_height(self):
+        self.assertEqual(RespawnButton.TEMPLATE_WINDOW_H, 1399)
+        self.assertAlmostEqual(RespawnButton.expected_scale(484), 0.346, places=3)
+        self.assertEqual(RespawnButton.expected_scale(1399), 1.0)
+        self.assertEqual(RespawnButton.expected_scale(0), 1.0)
+
+    def test_found_in_a_small_window(self):
+        """HG: 958×484 の窓（メニューは約 0.35 倍）でも見つかる"""
+        img, center = self._scene(0.35, at=(500, 400), size=(958, 484))
+        found = RespawnButton.find(img)
+        self.assertIsNotNone(found)
+        self.assertAlmostEqual(found[3], 0.35, delta=0.02)
+        self.assertAlmostEqual(found[0], center[0], delta=3)
+        self.assertAlmostEqual(found[1], center[1], delta=3)
+        self.assertGreaterEqual(found[2], RespawnButton.MATCH_MIN)
 
 
 class TestTheSetting(unittest.TestCase):
