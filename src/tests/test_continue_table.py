@@ -613,8 +613,8 @@ class TestIconData(unittest.TestCase):
         self.assertEqual(self.gui.terror_name(TerrorIds.SELF_INSERTS_BLOODTHIRSTY), "Self Inserts (Bloodthirsty)")
 
     def test_every_terror_in_the_table_has_a_picture(self):
-        self.assertEqual(len(TerrorIds.ids()), 330)
-        self.assertEqual(sum(1 for i in TerrorIds.ids() if TerrorIds.icon(i) is not None), 330)
+        self.assertEqual(len(TerrorIds.ids()), 331)
+        self.assertEqual(sum(1 for i in TerrorIds.ids() if TerrorIds.icon(i) is not None), 331)
         for tid in (3056, 3058, 4003, 4004, 4005, 4006, 4007, 4008, 4010, 4012, 4013):
             self.assertIsNotNone(TerrorIds.icon(tid), tid)
 

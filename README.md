@@ -95,7 +95,7 @@
 | 1000〜 | Alternate（1000 ＋ ログの番号。Alternate の枠に来た 36 以上の番号も 1000 番台） |
 | 2000〜 | Unbound（2000 ＋ ログの番号） |
 | 3000〜 | 8 Pages（3000 ＋ 8 Pages のログの番号。Classic の同じテラーとは別の番号） |
-| 4000〜 | 固定の表（4000 HHI・4001 Atrached・4002 Wild Yet Bloodthirsty Creature・4003〜4006 Moon の 4 体・4007 Rift Monsters・4008 Meatball Man・4009 The Gigabytes・4010 Neo Pilot・4011 Evil Purple Foxy・4012 Glorbo・4013 Self Inserts (Bloodthirsty)） |
+| 4000〜 | 固定の表（4000 HHI・4001 Atrached・4002 Wild Yet Bloodthirsty Creature・4003〜4006 Moon の 4 体・4007 Rift Monsters・4008 Meatball Man・4009 The Gigabytes・4010 Neo Pilot・4011 Evil Purple Foxy・4012 Glorbo・4013 Self Inserts (Bloodthirsty)（Unbound では統計にも記録）・4014 Pack of Wild Yet Bloodthirsty Creatures（統計の記録だけ。判定は 4002）） |
 
 * ログの番号を独自の番号に直すのは、ログを読む入口の 1 か所だけです。そこから先（判定・続行リスト・続行表・統計・DB）は、すべて独自の番号です。ToN ListTool の番号を使うのは、.tnl・.tnnl・主催リストとやり取りするときだけです。
 * ログの表示は番号ではなく名前です（`Terror set: Huggy / Classic`）。名前が分からない番号は `#番号` と出ます。表に無い 8 Pages のページは `#3070` のようになり、debug.log に 1 回だけ残ります。

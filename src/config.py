@@ -769,6 +769,8 @@ SLENDER_ID = 47
 HUNGRY_HOME_INVADER_ID = 4000       # Classic の Slender → Hungry Home Invader
 CURIOUS_CREATURE_ID = 106
 BLOODTHIRSTY_CREATURE_ID = 4002     # Curious → Wild Yet Bloodthirsty Creature（全ラウンド）
+PACK_CURIOUS_ID = 2065              # Unbound の Pack of Wild Yet Curious → Bloodthirsty 化で 4002（判定）
+PACK_BLOODTHIRSTY_STAT_ID = 4014    # 統計（DB・手元の店）にだけ使う Unbound の Pack of Wild Yet Bloodthirsty Creatures
 # Unbound の Self Inserts。中の Curious が Bloodthirsty 化しても
 # ToN ListTool では「Bloodthirsty 入りの Self Inserts」を指定できないので、
 # 出たらリストを見ずに必ず続行する（Pack of Wild Yet Curious は対象外）

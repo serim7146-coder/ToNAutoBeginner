@@ -17,6 +17,7 @@ def _frozen(name):
 # 4000 番台の (独自の番号, 前の番号)。後ろへ足すだけ。並びを変えたらこのテストが落ちる
 FIXED_PAIRS = [(4000, 190), (4001, 191), (4002, 192), (4003, 196), (4004, 197), (4005, 198), (4006, 199),
                (4007, 312), (4008, 313), (4009, 314), (4010, 315), (4011, 316), (4012, 317), (4013, 1283)]
+STAT_ONLY_PACK = 4014        # 統計の記録だけの番号（ListTool・前の版の番号は無い）
 
 
 class TestTable(unittest.TestCase):
@@ -26,7 +27,7 @@ class TestTable(unittest.TestCase):
             table = TerrorIds.parse(raw)
         write.assert_not_called()
         self.assertEqual(len(table.rows), len(raw["terrors"]))
-        self.assertEqual(len(table.rows), 330)
+        self.assertEqual(len(table.rows), 331)
 
     def test_every_row_is_in_the_range_of_its_kind(self):
         for own, found in TerrorIds.TABLE.rows.items():
@@ -35,7 +36,7 @@ class TestTable(unittest.TestCase):
         for found in TerrorIds.TABLE.rows.values():
             counts[found.kind] = counts.get(found.kind, 0) + 1
         self.assertEqual(counts, {"classic": 134, "alternate": 36, "unbound": 84, "eight_pages": 62,
-                                  "variant": 7, "moon": 4, "special": 3})
+                                  "variant": 8, "moon": 4, "special": 3})
 
     def test_the_indexes_do_not_overlap(self):
         table = TerrorIds.TABLE
@@ -51,7 +52,13 @@ class TestTable(unittest.TestCase):
     def test_the_fixed_numbers_are_the_agreed_ones(self):
         for own, legacy in FIXED_PAIRS:
             self.assertEqual(TerrorIds.row(own).legacy, legacy, own)
-        self.assertEqual([own for own in TerrorIds.ids() if own >= 4000], [own for own, _ in FIXED_PAIRS])
+        self.assertEqual([own for own in TerrorIds.ids() if own >= 4000],
+                         [own for own, _ in FIXED_PAIRS] + [STAT_ONLY_PACK])
+        pack = TerrorIds.row(STAT_ONLY_PACK)
+        self.assertEqual((pack.name, pack.kind, pack.category, pack.listtool, pack.legacy),
+                         ("Pack of Wild Yet Bloodthirsty Creatures", "variant", "unbound", None, None))
+        self.assertEqual(pack.icon, TerrorIds.row(4002).icon)
+        self.assertEqual((config.PACK_CURIOUS_ID, config.PACK_BLOODTHIRSTY_STAT_ID), (2065, STAT_ONLY_PACK))
         names = {own: TerrorIds.name(own) for own, _ in FIXED_PAIRS}
         self.assertEqual(names[4007], "Rift Monsters")
         self.assertEqual(names[4011], "Evil Purple Foxy")
@@ -76,8 +83,10 @@ class TestTable(unittest.TestCase):
                          {4000, 4001, 4002, 4009, 4012})
         self.assertEqual({o for o in TerrorIds.ids() if TerrorIds.category(o) == "alternate" and o >= 2000},
                          {4011})
+        self.assertEqual({o for o in TerrorIds.ids() if TerrorIds.category(o) == "unbound" and o >= 4000},
+                         {4013, 4014}, "統計の Unbound のタブに出る（統計の記録だけの番号）")
         self.assertEqual([o for o in TerrorIds.ids() if o >= 4000 and TerrorIds.category(o) is None],
-                         [4003, 4004, 4005, 4006, 4007, 4008, 4010, 4013])
+                         [4003, 4004, 4005, 4006, 4007, 4008, 4010])
         self.assertTrue(all(TerrorIds.category(o) is None for o in TerrorIds.eight_pages_ids()))
 
     def test_the_key_and_the_round_number_are_the_ones_the_tool_uses(self):
@@ -407,8 +416,10 @@ class TestTheToolUsesOwnNumbersEverywhere(unittest.TestCase):
 
     def test_every_candidate_for_the_statistics_is_in_terrors_json_and_the_other_way_round(self):
         for category in ("classic", "alternate", "unbound"):
+            # 4013・4014 は統計の記録だけの番号（terrors.json には無い）
+            stat_only = {4013, 4014} if category == "unbound" else set()
             self.assertEqual(Statistics.candidate_ids_for_category(category),
-                             {int(i) for i in config.TERRORS[category]}, category)
+                             {int(i) for i in config.TERRORS[category]} | stat_only, category)
 
     def test_terrors_json_has_no_list_id_for_the_pages_now(self):
         raw = json.loads(config.resource_path("assets/data/terrors.json").read_text(encoding="utf-8"))
