@@ -1195,11 +1195,11 @@ class LogMonitor:
     def _waiting_for_terror_replacement(self) -> bool:
         """テラーIDがまだ確定していないか。統計登録の待ち合わせに使う。
 
-        IDが変わらない行（Self Inserts）は含めない。統計に送るIDは同じなので
-        待つ意味が無い。Gigabytes は元IDが不定なので、Classicの1体構成は
+        IDが変わらない行でも、統計の番号が変わる Self Inserts（Bloodthirsty 化で 4013）は含める。
+        Gigabytes は元IDが不定なので、Classicの1体構成は
         すべて候補になり、統計はGigabytesの行かラウンド終了まで遅れる。
         """
-        return any(row.changes_id for row in self._pending_replacements())
+        return any(row.changes_stat_id for row in self._pending_replacements())
 
     def _replacement_changes_decision(self, round_type: str) -> bool:
         """置き換えが起きると結論が変わるか。変わるときだけ判定を待つ。
@@ -1242,9 +1242,13 @@ class LogMonitor:
         if changed:
             for row in changed:
                 self._log(f"{row.name} に差し替え")
-            self._send_round_statistics_once()
         else:
             self._log(f"{' / '.join(row.name for row in rows)} の合図")
+        # IDが変わらなくても統計の番号が変わる行（Unbound の Self Inserts）は、合図が来たので送る
+        stat_only = any(row.changes_stat_id and not row.changes_id and row.source in st.terror_ids
+                        for row in rows)
+        if changed or stat_only:
+            self._send_round_statistics_once()
 
     def _variant_wait_sec(self) -> float:
         return config.TERROR_VARIANT_WAIT_SEC
@@ -2774,6 +2778,7 @@ class LogMonitor:
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
             players=st.round_players,
+            bloodthirsty=st.bloodthirsty_creature_variant,
         )
 
     def _send_null_terror_round(self):
@@ -2790,6 +2795,7 @@ class LogMonitor:
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
             players=st.round_players,
+            bloodthirsty=st.bloodthirsty_creature_variant,
         )
 
     def _round_type_for_db(self, terror_ids) -> str:
@@ -2826,7 +2832,7 @@ class LogMonitor:
         ConnectDB.register_round(
             self._round_type_for_db([tid]), [tid], st.map_id, st.transformed_uid, quiet=True,
             instance_key=self._db_instance_key(), round_time=st.round_start_time,
-            players=st.round_players)
+            players=st.round_players, bloodthirsty=st.bloodthirsty_creature_variant)
 
     def _on_network_object(self, name: str):
         """看破: 霧の間に [NetworkProcessing] に出たオブジェクト名を照合する。

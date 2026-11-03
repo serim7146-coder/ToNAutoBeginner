@@ -164,17 +164,32 @@ def db_time(epoch: float | None) -> int:
     return int(time.time() if epoch is None else epoch) - config.DB_TIME_EPOCH
 
 
+def stat_terror_ids(round_name: str, terror_ids, bloodthirsty: bool = False) -> list[int]:
+    """統計（DB・手元の店）に記録するテラーの番号。判定・画面・続行表はこの番号を使わない。
+    Unbound だけ、4002（Pack of Wild Yet Curious の Bloodthirsty 化）を 4014 に、
+    bloodthirsty（合図の行が来た）のとき Self Inserts（2083）を 4013 にする"""
+    ids = list(terror_ids or [])
+    if str(round_name or "").strip() != "Unbound":
+        return ids
+    mapped = {config.BLOODTHIRSTY_CREATURE_ID: config.PACK_BLOODTHIRSTY_STAT_ID}
+    if bloodthirsty:
+        mapped[config.SELF_INSERTS_ID] = config.SELF_INSERTS_BLOODTHIRSTY_ID
+    return [mapped.get(tid, tid) for tid in ids]
+
+
 def register_round(round_name: str, terror_ids: list[int], map_id: int,
                    transformed_uid: int | None, quiet: bool = False,
                    instance_key: int | None = None, round_time: float | None = None,
-                   players: int | None = None):
+                   players: int | None = None, bloodthirsty: bool = False):
     """ラウンドを DB v2（"ToNRounds_v2"）へ送る（関数 register_round_v2 を通す）。
 
     instance_key が同じで開始の差が15秒以内なら、DB 側で1行にまとめる（ソロなら None）。
     round_time はそのラウンドの開始の行の時刻（epoch）。テラーは先頭3つ（ツールの独自の番号）。
     players はラウンド開始の瞬間のインスタンスの人数（自分を含む。分からなければ None → DB の NULL）。
-    quiet なら送信について何も出さない（霧の看破・Enrage 系）
+    quiet なら送信について何も出さない（霧の看破・Enrage 系）。
+    bloodthirsty は合図の行が来たか（Unbound の Self Inserts を 4013 で記録するため。`stat_terror_ids`）
     """
+    terror_ids = stat_terror_ids(round_name, terror_ids, bloodthirsty)
     say = (lambda _m: None) if quiet else print
     round_id = round_type_id(round_name)
     if round_id == config.ROUND_TYPE_UNKNOWN_ID:

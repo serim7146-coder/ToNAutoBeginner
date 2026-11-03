@@ -569,13 +569,19 @@ class TestReplacementWait(unittest.TestCase):
         self.sent.assert_called_once()
         self.assertEqual(self.sent.call_args.args[1], [self.BLOODTHIRSTY, 5])
 
-    def test_statistics_do_not_wait_for_self_inserts(self):
-        """IDが変わらないので待つ意味が無い"""
+    def test_statistics_wait_for_self_inserts(self):
+        """Unbound の Self Inserts は合図の行が来ると統計では 4013 になるので、合図まで待つ。
+        合図が来ないまま終わったら、そのまま 2083 で送る（bloodthirsty は False）"""
         monitor = self._monitor("Unbound")
 
         self._killers(monitor, [config.SELF_INSERTS_ID])
 
+        self.sent.assert_not_called()
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._process("Verified Round End")
         self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[1], [config.SELF_INSERTS_ID])
+        self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], False)
 
     def test_statistics_do_not_wait_without_a_candidate(self):
         monitor = self._monitor("Double Trouble")
@@ -1382,3 +1388,138 @@ class TestGlorboDetect(unittest.TestCase):
         self.assertFalse(ReadJson.is_alternate_terror(config.GLORBO_ID,
                                                       config.TERRORS))
         self.assertNotIn(config.GLORBO_ID, config.VARIANT_TERROR_IDS)
+
+
+class TestPackBloodthirsty(unittest.TestCase):
+    """HH: Unbound の Pack of Wild Yet Curious（2065）も、合図の行で 4002 になる（判定は 4002 の枠）。
+    統計の記録だけは ConnectDB が 4014 にする（判定・画面は 4002 のまま）。Self Inserts は 2083＋フラグのまま、
+    統計だけ 4013"""
+
+    UNBOUND_KEY = "Unbound/アンバウンド"
+    PACK = config.PACK_CURIOUS_ID
+    SELF_INSERTS = config.SELF_INSERTS_ID
+    SIGNAL = TerrorReplacement.signal("bloodthirsty_creature_variant").sample
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        self.addCleanup(ContinueTable.set_current, choice_store())
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        stats = patch.object(ConnectDB, "register_round")
+        self.sent = stats.start()
+        self.addCleanup(stats.stop)
+
+    def _table(self, default=None):
+        ContinueTable.set_current(choice_store(
+            disabled_presets={"基本": {}}, default_presets={"基本": default or {}},
+            windows={1: {ContinueTable.DISABLED: "基本", ContinueTable.DEFAULT: "基本"}}))
+
+    def _monitor(self, round_type="Unbound"):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor.st.map_id = 12
+        monitor.st.transformed_uid = 99
+        return monitor
+
+    def _killers(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+
+    def _signal(self, monitor):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._process(self.SIGNAL)
+
+    # ── 置き換えの表 ──
+    def test_the_row_follows_the_106_row_and_is_limited_to_unbound(self):
+        names = [r.name for r in TerrorReplacement.TABLE]
+        row = TerrorReplacement.TABLE[names.index("Pack of Wild Yet Bloodthirsty Creatures")]
+        self.assertEqual(names.index(row.name), names.index("Wild Yet Bloodthirsty Creature") + 1)
+        self.assertEqual((row.source, row.target_id(), row.rounds, row.flag),
+                         (2065, 4002, frozenset({"Unbound"}), "bloodthirsty_creature_variant"))
+        self.assertTrue(row.enabled)
+
+    # ── 判定 ──
+    def test_the_pack_becomes_4002_in_unbound_when_the_line_comes(self):
+        monitor = self._monitor()
+        self._killers(monitor, [self.PACK])
+        self._signal(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+
+    def test_the_line_before_the_killers_works_too(self):
+        monitor = self._monitor()
+        self._signal(monitor)
+        self._killers(monitor, [self.PACK])
+
+        self.assertEqual(monitor.st.terror_ids, [config.BLOODTHIRSTY_CREATURE_ID])
+
+    def test_without_the_line_the_pack_stays(self):
+        monitor = self._monitor()
+        self._killers(monitor, [self.PACK])
+
+        self.assertEqual(monitor.st.terror_ids, [self.PACK])
+
+    def test_other_rounds_do_not_replace_the_pack(self):
+        monitor = self._monitor("Classic")
+        self._killers(monitor, [self.PACK])
+        self._signal(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [self.PACK])
+
+    def test_the_4002_slot_of_unbound_in_the_default_continue_table_continues(self):
+        slot = config.BLOODTHIRSTY_CREATURE_ID
+        for default, expected in (({self.UNBOUND_KEY: frozenset({slot})}, True), ({}, False)):
+            self._table(default=default)
+            monitor = self._monitor()
+            self._killers(monitor, [self.PACK])
+            self._signal(monitor)
+
+            self.assertEqual(monitor._list_plan(monitor.st.terror_ids, True)[1], expected, default)
+
+    def test_the_forced_continue_of_self_inserts_does_not_cover_the_pack(self):
+        self.assertFalse(RoundDecision.is_self_inserts_bloodthirsty([self.PACK], "Unbound", True))
+        self.assertFalse(RoundDecision.is_self_inserts_bloodthirsty(
+            [config.BLOODTHIRSTY_CREATURE_ID], "Unbound", True))
+        self.assertTrue(RoundDecision.is_self_inserts_bloodthirsty([self.SELF_INSERTS], "Unbound", True))
+
+    # ── 統計に渡すもの（LogMonitor → ConnectDB.register_round） ──
+    def test_the_monitor_sends_4002_and_the_flag_to_the_statistics(self):
+        monitor = self._monitor()
+        self._killers(monitor, [self.PACK])
+        self.sent.assert_not_called()                 # 合図を待つ
+        self._signal(monitor)
+
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[:2], ("Unbound", [config.BLOODTHIRSTY_CREATURE_ID]))
+        self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], True)
+
+    def test_self_inserts_keeps_2083_for_the_judgment_and_sends_the_flag(self):
+        monitor = self._monitor()
+        self._killers(monitor, [self.SELF_INSERTS])
+        self.sent.assert_not_called()                 # 統計は合図まで待つ
+        self._signal(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [self.SELF_INSERTS])
+        self.assertTrue(monitor.st.bloodthirsty_creature_variant)
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[:2], ("Unbound", [self.SELF_INSERTS]))
+        self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], True)
+
+    def test_self_inserts_with_the_line_before_the_killers_sends_the_flag(self):
+        monitor = self._monitor()
+        self._signal(monitor)
+        self._killers(monitor, [self.SELF_INSERTS])
+
+        self.sent.assert_called_once()
+        self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], True)
+
+    def test_the_self_inserts_forced_continue_is_unchanged(self):
+        monitor = self._monitor()
+        self._killers(monitor, [self.SELF_INSERTS])
+        self._signal(monitor)
+
+        self.assertTrue(monitor._list_plan([self.SELF_INSERTS], True)[1])

@@ -100,6 +100,12 @@ class Replacement:
     def changes_id(self) -> bool:
         return self.source is None or self.source != self.target_id()
 
+    @property
+    def changes_stat_id(self) -> bool:
+        """統計に記録する番号が変わるか。IDが変わる行のほか、Unbound の Self Inserts は
+        合図の行が来ると統計では 4013 になる（ConnectDB.stat_terror_ids）ので、合図を待つ"""
+        return self.changes_id or self.source == config.SELF_INSERTS_ID
+
     def matches_round(self, round_type: str) -> bool:
         return self.rounds is None or round_type in self.rounds
 
@@ -130,6 +136,11 @@ TABLE: tuple[Replacement, ...] = (
     # 全ラウンドで起きる（Bloodbath なども）
     Replacement("Wild Yet Bloodthirsty Creature", config.CURIOUS_CREATURE_ID,
                 config.BLOODTHIRSTY_CREATURE_ID, None,
+                "bloodthirsty_creature_variant"),
+    # Unbound の Pack of Wild Yet Curious も同じ合図で 4002 になる（判定は 4002 の枠。
+    # 統計だけは ConnectDB が 4014 にする）
+    Replacement("Pack of Wild Yet Bloodthirsty Creatures", config.PACK_CURIOUS_ID,
+                config.BLOODTHIRSTY_CREATURE_ID, frozenset({"Unbound"}),
                 "bloodthirsty_creature_variant"),
     # IDは変わらない。中の Curious が Bloodthirsty 化するとリストを見ずに
     # 続行になる（RoundDecision.is_self_inserts_bloodthirsty）ので、合図を

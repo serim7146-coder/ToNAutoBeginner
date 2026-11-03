@@ -330,5 +330,6 @@
   {"id": 4010, "kind": "variant", "category": null, "name": "Neo Pilot", "log": null, "listtool": 315, "legacy": 315, "icon": ["terrors", 6, 9]},
   {"id": 4011, "kind": "variant", "category": "alternate", "name": "Evil Purple Foxy", "log": null, "listtool": 316, "legacy": 316, "icon": ["terrors", 7, 9]},
   {"id": 4012, "kind": "variant", "category": "classic", "name": "Glorbo", "log": null, "listtool": 317, "legacy": 317, "icon": ["terrors", 0, 0]},
-  {"id": 4013, "kind": "variant", "category": null, "name": "Self Inserts (Bloodthirsty)", "log": null, "listtool": null, "legacy": 1283, "icon": ["terrors", 21, 8]}
+  {"id": 4013, "kind": "variant", "category": "unbound", "name": "Self Inserts (Bloodthirsty)", "log": null, "listtool": null, "legacy": 1283, "icon": ["terrors", 21, 8]},
+  {"id": 4014, "kind": "variant", "category": "unbound", "name": "Pack of Wild Yet Bloodthirsty Creatures", "log": null, "listtool": null, "legacy": null, "icon": ["terrors", 21, 8]}
  ]}
