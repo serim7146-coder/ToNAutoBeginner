@@ -328,20 +328,17 @@ class TestKeybindDialog(_AppCase):
 
 
 class TestFreezeFrame(_AppCase):
+    """全窓フリーズの枠は窓のタブの折りたたみ（HJ）。中の並びは共通の枠だったときと同じ"""
+
     def setUp(self):
         super().setUp()
-        for var in (self.app.v_freeze_8pages, self.app.v_freeze_punish,
-                    *self.app.v_freeze_rounds.values()):
-            var.set(False)
-        self.app._apply_freeze_settings()
-        self.addCleanup(SharedState.set_freeze_rounds, [])
-        self.addCleanup(SharedState.set_freeze_on_8pages, False)
-        self.addCleanup(SharedState.set_freeze_on_punish, False)
+        self.tab = self.app.tabs[0]
+        self.tab.set_freeze_values({})
+        self.addCleanup(self.tab.set_freeze_values, {})
 
     def _rows(self):
         """[(見出し, [チェック])]。FG: 見出しの列（0）とチェックの列（1）の grid。折り返しの行は見出しが空"""
-        frame = self.app.freeze_frame
-        self.assertEqual(frame.cget("text"), "フリーズ")
+        frame = self.tab.freeze_box
         rows = {}
         for w in frame.grid_slaves():
             info = w.grid_info()
@@ -352,13 +349,18 @@ class TestFreezeFrame(_AppCase):
                 row[1] = list(w.pack_slaves())
         return [tuple(rows[r]) for r in sorted(rows)]
 
+    def _open_section(self):
+        self.tab.set_section_collapsed("freeze", False)
+        self.addCleanup(self.tab.set_section_collapsed, "freeze", True)
+
     def test_the_checks_start_right_after_the_titles_and_line_up(self):
         """FG（依頼者「A で」）: 見出しのすぐ右から並べ、2 行目は 1 行目のチェックにそろえる"""
+        self._open_section()
         self.app.update_idletasks()
         rows = self._rows()
         starts = {r[1][0].winfo_rootx() for r in rows}
         self.assertEqual(len(starts), 1, "速度検知・ラウンド突入の 1 行目・2 行目のチェックが同じ位置から")
-        titles = [w for w in self.app.freeze_frame.grid_slaves(column=0)]
+        titles = [w for w in self.tab.freeze_box.grid_slaves(column=0)]
         right = max(w.winfo_rootx() + w.winfo_reqwidth() for w in titles)
         self.assertLessEqual(starts.pop() - right, 8, "見出しのすぐ右（見出しの幅は文字にぴったり）")
         for w in titles:
@@ -372,18 +374,24 @@ class TestFreezeFrame(_AppCase):
         self.assertEqual([len(rows[1][1]), len(rows[2][1])], [7, 4])
         self.assertEqual([w.cget("text") for w in pre], ["8 Pages", "Punished"])
         self.assertEqual([str(w.cget("variable")) for w in pre],
-                         [str(self.app.v_freeze_8pages), str(self.app.v_freeze_punish)])
-        self.assertEqual([w.cget("text") for w in entry], list(self.app.v_freeze_rounds))
-        self.assertEqual(list(self.app.v_freeze_rounds),
+                         [str(self.tab.v_freeze_8pages), str(self.tab.v_freeze_punish)])
+        self.assertEqual([w.cget("text") for w in entry], list(self.tab.v_freeze_rounds))
+        self.assertEqual(list(self.tab.v_freeze_rounds),
                          ["Alternate", "Midnight", "Unbound", "Fog", "Ghost", "8 Pages", "Punished",
                           "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble"])
         self.assertEqual([str(w.cget("variable")) for w in entry],
-                         [str(v) for v in self.app.v_freeze_rounds.values()])
+                         [str(v) for v in self.tab.v_freeze_rounds.values()])
 
-    def test_right_below_the_speed_detect_button(self):
-        order = self.app.pack_slaves()
-        self.assertEqual(order.index(self.app.freeze_frame),
-                         order.index(self.app.btn_speed_detect.master) + 1)
+    def test_the_frame_is_a_collapsible_section_of_the_tab(self):
+        """共通の「フリーズ」の枠は無い。窓のタブの折りたたみ（既定は閉じた状態・開閉は全タブでそろう）"""
+        self.assertFalse(hasattr(self.app, "freeze_frame"))
+        self.assertIn("freeze", mainGUI.WindowTab.SECTIONS)
+        section = self.tab.sections["freeze"]
+        self.assertTrue(section.collapsed)
+        titles = [w.cget("text") for w in _all_widgets(section) if isinstance(w, tk.Label)]
+        self.assertIn("全窓フリーズ（この窓が当たったらほかの窓を止める）", titles)
+        self.assertIs(self.tab.freeze_box.winfo_toplevel(), self.app)
+        self.assertEqual(self.app._tab_sections["freeze"], True)
 
     def test_no_freeze_checks_left_outside(self):
         outside = [w.cget("text") for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
@@ -393,30 +401,32 @@ class TestFreezeFrame(_AppCase):
     def test_the_checks_work_as_before(self):
         pre = self._rows()[0][1]
         pre[1].invoke()                                       # Punished
-        self.assertTrue(SharedState.get_freeze_on_punish())
-        self.assertTrue(self.app.v_freeze_rounds["Punished"].get(), "突入側も入る（今までどおり）")
+        self.assertTrue(self.tab.live_settings()["freeze_punish"])
+        self.assertTrue(self.tab.v_freeze_rounds["Punished"].get(), "突入側も入る（今までどおり）")
         entry = self._rows()[1][1]
         entry[3].invoke()                                     # Fog
-        self.assertIn("Fog", SharedState.get_freeze_rounds())
+        self.assertIn("Fog", self.tab.live_settings()["freeze_rounds"])
 
-    def test_the_saved_settings_load_and_save_under_the_same_names(self):
+    def test_the_saved_settings_load_and_save(self):
+        """窓ごとのキー window_freezes に保存する。古い共通のキーは全窓へ写して読み、保存では消える"""
         data = {"freeze_8pages": True, "freeze_punish": False, "freeze_rounds": ["Fog", "Ghost"],
                 "start_key": "f9", "chase_enabled": False}
         with patch.object(mainGUI, "load_settings", return_value=data):
             self.app._load_saved_settings()
         self.addCleanup(self.app.v_start_key.set, "")
-        self.assertTrue(self.app.v_freeze_8pages.get())
-        self.assertEqual({n for n, v in self.app.v_freeze_rounds.items() if v.get()}, {"Fog", "Ghost"})
+        self.assertTrue(self.tab.v_freeze_8pages.get())
+        self.assertEqual({n for n, v in self.tab.v_freeze_rounds.items() if v.get()}, {"Fog", "Ghost"})
         self.assertEqual(self.app.v_start_key.get(), "f9")
         self.assertFalse(self.app.v_chase_enabled.get())
         self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
         stored = {}
-        with patch.object(mainGUI, "save_settings", stored.update), \
-             patch.object(mainGUI, "load_settings", return_value={}):
+        with patch.object(mainGUI, "save_settings", stored.update),              patch.object(mainGUI, "load_settings", return_value=dict(data)):
             self.app._save_launch_settings()
-        self.assertEqual((stored["freeze_8pages"], stored["freeze_punish"], stored["freeze_rounds"],
-                          stored["start_key"], stored["chase_enabled"]),
-                         (True, False, ["Fog", "Ghost"], "f9", False))
+        self.assertEqual(stored["window_freezes"]["1"],
+                         {"freeze_8pages": True, "freeze_punish": False, "freeze_rounds": ["Fog", "Ghost"]})
+        self.assertEqual((stored["start_key"], stored["chase_enabled"]), ("f9", False))
+        for old in ("freeze_8pages", "freeze_punish", "freeze_rounds"):
+            self.assertNotIn(old, stored)
 
 
 # ── DV2（依頼者が DV の画面を見て頼んだ手直し）──────────────────────
@@ -459,7 +469,7 @@ class TestDv2MainScreen(_AppCase):
                                                       self.app.v_follow_utils)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
-        title = self.app.freeze_frame.grid_slaves(row=0, column=0)[0]       # FG: grid
+        title = self.app.tabs[0].freeze_box.grid_slaves(row=0, column=0)[0]       # FG: grid
         self.assertEqual(title.cget("text"), "速度検知:")
 
 

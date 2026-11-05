@@ -311,21 +311,13 @@ class TestSpeedVoiceFollowsAutoBegin(unittest.TestCase):
     """
 
     def setUp(self):
-        self._saved = (SharedState.get_freeze_on_8pages(),
-                       SharedState.get_freeze_on_punish())
         SharedState.set_hands_free(False)
-        self.addCleanup(self._restore)
-
-    def _restore(self):
-        SharedState.set_freeze_on_8pages(self._saved[0])
-        SharedState.set_freeze_on_punish(self._saved[1])
-        SharedState.set_hands_free(False)
+        self.addCleanup(SharedState.set_hands_free, False)
 
     def _announce(self, kind, active, freeze_8pages=False, freeze_punish=False):
         """鳴ったかを返す。フリーズそのものは別に見るので止めておく"""
-        SharedState.set_freeze_on_8pages(freeze_8pages)
-        SharedState.set_freeze_on_punish(freeze_punish)
-        cfg = WindowConfig(voice_8pages="8pages.mp3", voice_punish="punish.mp3")
+        cfg = WindowConfig(voice_8pages="8pages.mp3", voice_punish="punish.mp3",
+                           freeze_8pages=freeze_8pages, freeze_punish=freeze_punish)
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None,
                                            auto_begin_active=lambda: active)
@@ -413,7 +405,6 @@ class TestSpeedVoiceFollowsAutoBegin(unittest.TestCase):
 
     def test_without_a_callable_it_counts_as_not_active(self):
         """渡されなければ「機能していない」＝鳴らす側"""
-        SharedState.set_freeze_on_8pages(False)
         cfg = WindowConfig(voice_8pages="8pages.mp3")
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         ex = ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
@@ -446,7 +437,6 @@ class TestSpeedVoiceFollowsAutoBegin(unittest.TestCase):
 
     def test_silence_adds_no_log(self):
         """鳴らさなかったことはログに足さない（依頼者はログが増えるのを嫌う）"""
-        SharedState.set_freeze_on_8pages(False)
         logs = []
         cfg = WindowConfig(voice_8pages="8pages.mp3")
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)

@@ -871,16 +871,15 @@ class TestWindowVolumeSettings(unittest.TestCase):
         fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
-        fake.v_freeze_rounds = {}
         fake._window_volume_settings = lambda: mainGUI.App._window_volume_settings(app)
         fake._fog_early_read_setting = lambda: {}
         fake._launch_options_setting = lambda: {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            fake._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(fake)
         for key in ("window_volume_enabled", "window_volume_continue", "window_volume_all_continue",
                     "window_volume_freeze", "window_volume_other"):

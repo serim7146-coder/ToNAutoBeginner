@@ -2240,10 +2240,8 @@ class TestSkipRoundsSettings(unittest.TestCase):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = tabs
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish"):
+                     "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
-        app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.tool_rows = []
@@ -2258,6 +2256,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -2354,8 +2353,11 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         def set(self, v):
             self._v = v
 
-    def _tab(self):
+    def _tab(self, idx=0):
         tab = type("FakeTab", (), {})()
+        tab.idx = idx
+        tab.freeze_loaded = None            # 全窓フリーズは窓ごと: タブへ渡された値
+        tab.set_freeze_values = lambda values, tab=tab: setattr(tab, "freeze_loaded", values)
         tab.v_profile = TestRoundSettingsAreNotLoaded.FakeVar(0)
         tab.v_skip_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
                              for n in config.SKIP_ROUND_SELECTABLE}
@@ -2365,21 +2367,17 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
 
     def _load(self, data):
         app = _with_cancel_key(type("FakeApp", (), {})())
-        app.tabs = [self._tab(), self._tab()]
+        app.tabs = [self._tab(0), self._tab(1)]
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))
         app._apply_obs_settings = lambda: None
-        app.v_freeze_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
-                               for n in config.SKIP_ROUND_SELECTABLE}
         app.added_tools = []
         app._add_tool_row = lambda p, save=True: app.added_tools.append(p)
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._load_own_list = lambda: None
         app._apply_saved_window_settings = \
             lambda: mainGUI.App._apply_saved_window_settings(app)
@@ -2436,9 +2434,9 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
 
         self.assertEqual(app.v_emergency_key.get(), "f9")
         self.assertEqual(app.added_tools, ["D:/tools/one.exe"])
-        self.assertTrue(app.v_freeze_8pages.get())
-        self.assertTrue(app.v_freeze_punish.get())
-        self.assertTrue(app.v_freeze_rounds["Classic"].get())
+        for tab in app.tabs:        # 古い共通の値は全窓へ写る
+            self.assertEqual(tab.freeze_loaded, {"freeze_8pages": True, "freeze_punish": True,
+                                                 "freeze_rounds": ["Classic"]})
 
 
 

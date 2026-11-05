@@ -136,6 +136,8 @@ BROADCAST_CHECK_LABELS = {
     "cancel_afk": "DTM/Waldo続行 (3クラまで)",
     "cancel_afk_after_unlock": "3クラ後もDTM/Waldo続行",
     "announce_intermission": "Intermissionアナウンス",
+    "freeze_8pages": "速度検知 8 Pages",
+    "freeze_punish": "速度検知 Punished",
 }
 BROADCAST_ROUND_LABELS = {"skip": "全自爆", "continue": "全続行"}
 BROADCAST_CHOICE_LABELS = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
@@ -238,6 +240,34 @@ def _as_round_names(value) -> set:
         elif isinstance(item, str):
             names.add(item)
     return names
+
+
+def _as_window_freezes(data) -> dict:
+    """保存した窓ごとの全窓フリーズ（window_freezes: {"1": {...}}）を {1: {...}} に。
+    新しいキーが無い（古い settings.json）ときは、古い共通の値（freeze_8pages・freeze_punish・freeze_rounds）を
+    窓 1〜MAX_WINDOWS の全部へ写す——動きは変わらない。壊れた窓・値は OFF"""
+    data = data if isinstance(data, dict) else {}
+
+    def one(value) -> dict:
+        value = value if isinstance(value, dict) else {}
+        rounds = value.get("freeze_rounds")
+        return {"freeze_8pages": _as_flag(value.get("freeze_8pages")),
+                "freeze_punish": _as_flag(value.get("freeze_punish")),
+                "freeze_rounds": sorted(_as_round_names(rounds) if isinstance(rounds, (list, tuple, set)) else ())}
+
+    if "window_freezes" in data:
+        saved = data["window_freezes"]
+        freezes = {}
+        for key, value in (saved.items() if isinstance(saved, dict) else ()):
+            if not (isinstance(key, str) and key.isascii() and key.isdigit()):
+                continue
+            number = int(key)
+            if 1 <= number <= config.MAX_WINDOWS:
+                freezes[number] = one(value)
+        return freezes
+    old = one({key: data.get(key) for key in ("freeze_8pages", "freeze_punish", "freeze_rounds")})
+    return {number: {**old, "freeze_rounds": list(old["freeze_rounds"])}
+            for number in range(1, config.MAX_WINDOWS + 1)}
 
 
 def load_settings() -> dict:
@@ -353,13 +383,16 @@ COLOR_CT_DIM = "#7f849c"
 
 class WindowTab(ttk.Frame):
     # 全窓でそろえる折りたたみ（App が枠ごとの開閉を持って全タブへ配る）
-    SECTIONS = ("assign", "rounds")
+    SECTIONS = ("assign", "rounds", "freeze")
 
     def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
                  section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
-                 on_open_window_table=None, on_item_switch=None, on_broadcast=None):
+                 on_open_window_table=None, on_item_switch=None, on_broadcast=None,
+                 on_freeze_changed=None):
         super().__init__(parent)
         self.idx = idx
+        self._on_freeze_changed = on_freeze_changed             # (): 全窓フリーズの設定が変わった（App が保存を予約する）
+        self._freeze_loading = False                            # 読み込み・戻す書き込みの間は True（保存を予約しない）
         self._on_broadcast = on_broadcast                       # (タブ, 種類, キー, 値): Ctrl を押して変えた設定を全窓へ写す
         self._on_continue_choice = on_continue_choice           # (タブ, 種類, プリセット名|None): 窓の表に写す
         self._on_open_window_table = on_open_window_table       # (タブ, 種類): その窓の表の画面を開く
@@ -395,12 +428,24 @@ class WindowTab(ttk.Frame):
 
     def _watch_settings(self):
         """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
-        if self._on_settings_changed is None:
-            return
-        for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
-                    self.v_cancel_afk_after_unlock, self.v_announce_intermission, *self.v_skip_rounds.values(),
-                    *self.v_continue_rounds.values()):
-            var.trace_add("write", lambda *_a: self._on_settings_changed(self))
+        if self._on_settings_changed is not None:
+            for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
+                        self.v_cancel_afk_after_unlock, self.v_announce_intermission,
+                        *self.v_skip_rounds.values(), *self.v_continue_rounds.values(),
+                        *self._freeze_vars()):
+                var.trace_add("write", lambda *_a: self._on_settings_changed(self))
+        if self._on_freeze_changed is not None:
+            for var in self._freeze_vars():
+                var.trace_add("write", lambda *_a: self._notify_freeze_changed())
+
+    def _notify_freeze_changed(self):
+        """手で変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
+        if not self._freeze_loading:
+            self._on_freeze_changed()
+
+    def _freeze_vars(self) -> list:
+        """全窓フリーズの変数（速度検知 2 つ・ラウンド突入）"""
+        return [self.v_freeze_8pages, self.v_freeze_punish, *self.v_freeze_rounds.values()]
 
     def _broadcast_if_ctrl(self, kind: str, key, value) -> bool:
         """Ctrl を押して変えたなら、全窓へ写すよう App に頼む（変えた瞬間に見る）。頼んだら True"""
@@ -416,11 +461,50 @@ class WindowTab(ttk.Frame):
     def _checks(self) -> dict:
         return {"auto_begin": self.v_auto_begin, "do_skip": self.v_do_skip,
                 "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
-                "announce_intermission": self.v_announce_intermission}
+                "announce_intermission": self.v_announce_intermission,
+                "freeze_8pages": self.v_freeze_8pages, "freeze_punish": self.v_freeze_punish}
 
     def set_check(self, key: str, value: bool):
-        """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）"""
+        """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）。
+        速度検知のフリーズは、手で入れたときと同じく、入れたらラウンド突入の同じラウンドも入れる"""
         self._checks()[key].set(bool(value))
+        if key.startswith("freeze_"):
+            self._link_speed_freeze(key)
+
+    def _on_speed_freeze(self, key: str):
+        """速度検知のフリーズのチェックを手で変えた: 連動してから、Ctrl を押していれば全窓へ写す"""
+        self._link_speed_freeze(key)
+        self._changed(key, self._checks()[key])
+
+    def _link_speed_freeze(self, key: str):
+        """速度検知のフリーズを入れたら、ラウンド突入の同じラウンドも入れる。入れるときだけ（外しても突入側はそのまま）。
+        読み込み（set_freeze_values）では呼ばない"""
+        name = {"freeze_8pages": "8 Pages", "freeze_punish": "Punished"}.get(key)
+        if name in self.v_freeze_rounds and self._checks()[key].get():
+            self.v_freeze_rounds[name].set(True)
+
+    def set_freeze_round(self, name: str, value: bool):
+        """全窓へ写されたラウンド突入のフリーズのチェックを書く"""
+        if name in self.v_freeze_rounds:
+            self.v_freeze_rounds[name].set(bool(value))
+
+    def freeze_values(self) -> dict:
+        """保存する、この窓の全窓フリーズの設定"""
+        return {"freeze_8pages": bool(self.v_freeze_8pages.get()),
+                "freeze_punish": bool(self.v_freeze_punish.get()),
+                "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items() if var.get())}
+
+    def set_freeze_values(self, values: dict):
+        """保存から読んだ値を書く（読み込み用。連動しない・保存を予約しない）"""
+        self._freeze_loading = True
+        try:
+            self.v_freeze_8pages.set(bool(values.get("freeze_8pages")))
+            self.v_freeze_punish.set(bool(values.get("freeze_punish")))
+            rounds = set(values.get("freeze_rounds") or ())
+            for name, var in self.v_freeze_rounds.items():
+                var.set(name in rounds)
+        finally:
+            self._freeze_loading = False
 
     def set_round(self, which: str, name: str, value: bool):
         """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。手で入れたときと同じく、入れたら反対側を外す"""
@@ -441,6 +525,9 @@ class WindowTab(ttk.Frame):
             "announce_intermission": self.v_announce_intermission.get(),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
+            "freeze_8pages": bool(self.v_freeze_8pages.get()),
+            "freeze_punish": bool(self.v_freeze_punish.get()),
+            "freeze_rounds": {name for name, var in self.v_freeze_rounds.items() if var.get()},
         }
 
     def snapshot(self) -> dict:
@@ -455,16 +542,22 @@ class WindowTab(ttk.Frame):
         }
 
     def restore(self, saved: dict):
-        """snapshot() で控えた状態へ戻す"""
-        for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
-                         ("cancel_afk", self.v_cancel_afk),
-                         ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
-                         ("announce_intermission", self.v_announce_intermission)):
-            var.set(saved[key])
-        for key, vars_ in (("skip_rounds", self.v_skip_rounds),
-                           ("continue_rounds", self.v_continue_rounds)):
-            for name, var in vars_.items():
-                var.set(name in saved[key])
+        """snapshot() で控えた状態へ戻す（全窓フリーズの書き込みは保存を予約しない）"""
+        self._freeze_loading = True
+        try:
+            for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
+                             ("cancel_afk", self.v_cancel_afk),
+                             ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
+                             ("announce_intermission", self.v_announce_intermission),
+                             ("freeze_8pages", self.v_freeze_8pages), ("freeze_punish", self.v_freeze_punish)):
+                var.set(saved[key])
+            for key, vars_ in (("skip_rounds", self.v_skip_rounds),
+                               ("continue_rounds", self.v_continue_rounds),
+                               ("freeze_rounds", self.v_freeze_rounds)):
+                for name, var in vars_.items():
+                    var.set(name in saved[key])
+        finally:
+            self._freeze_loading = False
         self.v_profile.set(saved["profile"])
         self.v_log.set(saved["log"])
         self._hwnd_map = dict(saved["hwnd_choices"])
@@ -574,6 +667,43 @@ class WindowTab(ttk.Frame):
         self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0), which="continue")
+
+        # ── 全窓フリーズ（この窓が当たったらほかの窓を止める）: 速度検知とラウンド突入。止める範囲は全窓 ──
+        freeze = self._section(p, "freeze", text="全窓フリーズ（この窓が当たったらほかの窓を止める）")
+        freeze.pack(fill="x", pady=(4, 0))
+        self._build_freeze(freeze.content)
+
+    def _build_freeze(self, parent):
+        """全窓フリーズの枠の中身。見出しの列（文字にぴったり）とチェックの列に分け、チェックは見出しのすぐ右から並べる。
+        2 行目（折り返し）は 1 行目のチェックと同じ位置から始める。FREEZE_ROUNDS_PER_ROW 個ずつ折り返す（EZ・FB）"""
+        box = self.freeze_box = ttk.Frame(parent)
+        box.pack(anchor="w", padx=2, pady=(2, 0))
+
+        def checks_line(row):
+            line = ttk.Frame(box)
+            line.grid(row=row, column=1, sticky="w")
+            return line
+        ttk.Label(box, text="速度検知:").grid(row=0, column=0, sticky="w", padx=(0, 4))
+        fpre = checks_line(0)
+        self.v_freeze_8pages = tk.BooleanVar(value=False)
+        self.v_freeze_punish = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fpre, text="8 Pages", variable=self.v_freeze_8pages,
+                        command=lambda: self._on_speed_freeze("freeze_8pages")
+                        ).pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(fpre, text="Punished", variable=self.v_freeze_punish,
+                        command=lambda: self._on_speed_freeze("freeze_punish")
+                        ).pack(side="left", padx=(0, 8))
+        self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
+        ttk.Label(box, text="ラウンド突入:").grid(row=1, column=0, sticky="w", padx=(0, 4))
+        names = list(self.v_freeze_rounds)
+        for i, start in enumerate(range(0, len(names), FREEZE_ROUNDS_PER_ROW)):
+            ffr = checks_line(1 + i)
+            for name in names[start:start + FREEZE_ROUNDS_PER_ROW]:
+                var = self.v_freeze_rounds[name]
+                ttk.Checkbutton(ffr, text=name, variable=var,
+                                command=lambda n=name, v=var: self._broadcast_if_ctrl(
+                                    "freeze_round", n, bool(v.get()))
+                                ).pack(side="left", padx=(0, 8))
 
     def refresh_continue_choices(self, held: int | None = None, group: bool = False):
         """窓の行（チェック・2 つのドロップダウン）を今の保存内容に合わせる。選択肢は「なし」とプリセットの名前。
@@ -1091,6 +1221,8 @@ class App(tk.Tk):
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._window_table_windows: dict = {}      # (窓の番号, 種類) → 開いている窓の表の画面（GR）
+        # 窓ごとの全窓フリーズの設定（窓の番号 → freeze_values()）。タブが無い窓の分もここに残す（窓数を減らして戻しても残る）
+        self._window_freezes: dict[int, dict] = {}
         self._running = False
         self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
@@ -2358,36 +2490,6 @@ class App(tk.Tk):
         self.btn_item_fetch.pack(side="left", padx=(8, 0))
         self._refresh_item_fetch_button()
 
-        # フリーズ設定（全窓共通）。フリーズは全窓を止める仕組みなので窓ごとに分けない。
-        # 先読み（速度検知）とラウンド突入を1つの枠に（DV）。速度検知のボタンのすぐ下
-        self.freeze_frame = ttk.LabelFrame(self, text="フリーズ", padding=(8, 2))
-        self.freeze_frame.pack(pady=(0, 4))
-        # 見出しの列（文字にぴったり）とチェックの列に分ける（FG: 依頼者「A で」）。チェックは見出しのすぐ右から並べ、
-        # 2 行目（折り返し）は 1 行目のチェックと同じ位置から始める。11 個を 1 行に並べると窓の幅（最小 880）を
-        # 超えるので FREEZE_ROUNDS_PER_ROW 個ずつ折り返す（EZ・FB）
-        def checks_line(row):
-            line = ttk.Frame(self.freeze_frame)
-            line.grid(row=row, column=1, sticky="w")
-            return line
-        ttk.Label(self.freeze_frame, text="速度検知:").grid(row=0, column=0, sticky="w", padx=(0, 4))
-        fpre = checks_line(0)
-        self.v_freeze_8pages = tk.BooleanVar(value=False)
-        self.v_freeze_punish = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fpre, text="8 Pages", variable=self.v_freeze_8pages,
-                        command=lambda: self._on_speed_freeze_changed("8 Pages")
-                        ).pack(side="left", padx=(0, 8))
-        ttk.Checkbutton(fpre, text="Punished", variable=self.v_freeze_punish,
-                        command=lambda: self._on_speed_freeze_changed("Punished")
-                        ).pack(side="left", padx=(0, 8))
-        self.v_freeze_rounds = freeze_round_vars(lambda: tk.BooleanVar(value=False))
-        ttk.Label(self.freeze_frame, text="ラウンド突入:").grid(row=1, column=0, sticky="w", padx=(0, 4))
-        names = list(self.v_freeze_rounds)
-        for i, start in enumerate(range(0, len(names), FREEZE_ROUNDS_PER_ROW)):
-            ffr = checks_line(1 + i)
-            for name in names[start:start + FREEZE_ROUNDS_PER_ROW]:
-                ttk.Checkbutton(ffr, text=name, variable=self.v_freeze_rounds[name],
-                                command=self._apply_freeze_settings).pack(side="left", padx=(0, 8))
-
         # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
         fcr = ttk.Frame(self)
         fcr.pack(pady=(0, 4))
@@ -2443,6 +2545,7 @@ class App(tk.Tk):
             memory = self._tab_memory = {}
         for tab in self.tabs:
             memory[tab.idx] = tab.snapshot()
+            self._window_freezes[tab.idx + 1] = tab.freeze_values()     # 消すタブの分も残す
         for tab in self.tabs:
             try:
                 self.nb.forget(tab)
@@ -2457,8 +2560,10 @@ class App(tk.Tk):
                             on_open_window_table=self._open_window_table,
                             on_item_switch=self._on_item_switch,
                             on_broadcast=self._broadcast_tab_setting,
+                            on_freeze_changed=lambda: self._schedule_settings_save(),
                             section_collapsed=self._tab_sections,
                             on_section_toggled=self._on_tab_section_toggled)
+            tab.set_freeze_values(self._window_freezes.get(i + 1, {}))
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
@@ -2851,22 +2956,6 @@ class App(tk.Tk):
 
     def _fog_early_read_setting(self) -> dict:
         return {"fog_early_read_enabled": bool(self.v_fog_early_read.get())}
-
-    def _on_speed_freeze_changed(self, round_name: str):
-        """速度検知でフリーズにチェックを入れたら、ラウンド突入でフリーズの同じラウンドも
-        入れる。入れるときだけ（外しても突入側はそのまま）。起動時の読み込みでは呼ばない"""
-        var = self.v_freeze_8pages if round_name == "8 Pages" else self.v_freeze_punish
-        if var.get() and round_name in self.v_freeze_rounds:
-            self.v_freeze_rounds[round_name].set(True)
-        self._apply_freeze_settings()
-        self._schedule_settings_save()
-
-    def _apply_freeze_settings(self):
-        """GUIのフリーズ設定を全窓共通の状態へ反映する"""
-        SharedState.set_freeze_on_8pages(self.v_freeze_8pages.get())
-        SharedState.set_freeze_on_punish(self.v_freeze_punish.get())
-        SharedState.set_freeze_rounds(
-            name for name, var in self.v_freeze_rounds.items() if var.get())
 
     def _refresh_speed_detect_button(self):
         on = SharedState.get_speed_detect()
@@ -3336,8 +3425,6 @@ class App(tk.Tk):
         for path in data.get("tool_launchers", []) or []:
             if isinstance(path, str) and path.strip():
                 self._add_tool_row(path, save=False)
-        # 旧形式は窓ごとの配列。全窓共通へ移したので畳んで読む
-        self.v_freeze_8pages.set(_as_flag(data.get("freeze_8pages")))
         SharedState.set_item_fetch(data.get("item_fetch") is True)    # 無い・壊れた値は OFF（マウスを動かすので true だけ）
         SharedState.set_item_fetch_gain(data.get("item_fetch_gain"))   # 壊れた値は無し
         self._refresh_item_fetch_button()
@@ -3349,10 +3436,10 @@ class App(tk.Tk):
         App._refresh_hands_free_button(self)
         SharedState.set_item_begin_mode(data.get("item_begin_mode") is True)
         App._refresh_item_begin_button(self)
-        self.v_freeze_punish.set(_as_flag(data.get("freeze_punish")))
-        for name, var in self.v_freeze_rounds.items():
-            var.set(name in _as_round_names(data.get("freeze_rounds")))
-        self._apply_freeze_settings()
+        # 全窓フリーズは窓ごと。新しいキーが無い古い settings.json は、古い共通の値を全窓へ写す
+        self._window_freezes = _as_window_freezes(data)
+        for tab in self.tabs:
+            tab.set_freeze_values(self._window_freezes.get(tab.idx + 1, {}))
         self.v_obs_enabled.set(_as_flag(data.get("obs_record")))
         self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
         self.v_obs_port.set(str(data.get("obs_port") or config.OBS_DEFAULT_PORT))
@@ -3410,7 +3497,7 @@ class App(tk.Tk):
 
     def _broadcast_tab_setting(self, tab, kind: str, key, value):
         """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
-        kind は "check"（key=設定のキー）・"round"（key=(skip か continue, ラウンド名)）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
+        kind は "check"（key=設定のキー）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
         tabs = list(getattr(self, "tabs", []))
         if kind == "check":
             for t in tabs:
@@ -3421,6 +3508,10 @@ class App(tk.Tk):
             for t in tabs:
                 t.set_round(which, name, value)
             what = f"「{BROADCAST_ROUND_LABELS.get(which, which)} {name}」を {'ON' if value else 'OFF'} にして"
+        elif kind == "freeze_round":
+            for t in tabs:
+                t.set_freeze_round(key, value)
+            what = f"「ラウンド突入 {key}」を {'ON' if value else 'OFF'} にして"
         elif kind == "item_switch":
             for t in tabs:
                 self._on_item_switch(t, bool(value))
@@ -3840,14 +3931,13 @@ class App(tk.Tk):
                     f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
                     f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
                     f" Intermission={cfg.announce_intermission}"
-                    f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}")
+                    f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}"
+                    f" 8Pagesフリーズ={cfg.freeze_8pages} Punishedフリーズ={cfg.freeze_punish}"
+                    f" 突入フリーズ={sorted(cfg.freeze_rounds)}")
             DebugLog.write(
                 f"[環境] 開始 共通 放置={SharedState.get_hands_free()}"
                 f" 速度検知={SharedState.get_speed_detect()}"
                 f" アイテム取得→Begin={SharedState.get_item_begin_mode()}"
-                f" 8Pagesフリーズ={SharedState.get_freeze_on_8pages()}"
-                f" Punishedフリーズ={SharedState.get_freeze_on_punish()}"
-                f" 突入フリーズ={sorted(SharedState.get_freeze_rounds())}"
                 f" 霧の即時判定={FogEarlyRead.early_read_enabled()}"
                 f" 音量={self._window_volume_settings()}")
         except Exception:
@@ -4605,6 +4695,12 @@ class App(tk.Tk):
         for kind, var in (getattr(self, "v_voice_volumes", None) or {}).items():
             var.set(got[kind])
 
+    def _window_freeze_setting(self) -> dict:
+        """保存する窓ごとの全窓フリーズ {"1": {...}}。今のタブの値で上書きする（タブに無い窓の分は残す）"""
+        for tab in self.tabs:
+            self._window_freezes[tab.idx + 1] = tab.freeze_values()
+        return {str(number): dict(values) for number, values in sorted(self._window_freezes.items())}
+
     def _save_launch_settings(self):
         data = {
             **load_settings(),
@@ -4622,16 +4718,13 @@ class App(tk.Tk):
             "emergency_stop_key": self.v_emergency_key.get(),
             "start_key":     self.v_start_key.get(),
             "suicide_cancel_key": self.v_suicide_cancel_key.get(),
-            "freeze_8pages": self.v_freeze_8pages.get(),
             "item_fetch":    SharedState.get_item_fetch(),
             "speed_detect":  SharedState.get_speed_detect(),
             "hands_free":    SharedState.get_hands_free(),
             "item_begin_mode": SharedState.get_item_begin_mode(),
             "item_fetch_gain": (list(SharedState.get_item_fetch_gain())
                                 if SharedState.get_item_fetch_gain() else None),
-            "freeze_punish": self.v_freeze_punish.get(),
-            "freeze_rounds": sorted(name for name, var in self.v_freeze_rounds.items()
-                                    if var.get()),
+            "window_freezes": self._window_freeze_setting(),
             "obs_record":    self.v_obs_enabled.get(),
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
@@ -4655,8 +4748,9 @@ class App(tk.Tk):
         # skip_variant_exempt はチェックボックスごと廃止した。古いファイルに
         # 残っていても読まないが、ついでに消しておく。big_window_key / enlarge_window_key は
         # 窓を大きくするキーの名残（機能ごと消した）
+        # freeze_8pages・freeze_punish・freeze_rounds は全窓共通の古い形（window_freezes に移した）
         for key in ("skip_rounds", "skip_variant_exempt", "continue_rounds", "big_window_key",
-                    "enlarge_window_key"):
+                    "enlarge_window_key", "freeze_8pages", "freeze_punish", "freeze_rounds"):
             data.pop(key, None)
         save_settings(with_obs_password(data, self.v_obs_password.get()))
 

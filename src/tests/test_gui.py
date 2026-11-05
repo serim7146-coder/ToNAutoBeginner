@@ -497,16 +497,16 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key",
+                     "v_emergency_key", "v_start_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
         app.v_obs_password = self.FakeVar(password)
-        app.v_freeze_rounds = {}
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 
@@ -541,15 +541,12 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
         app._load_own_list = lambda: None
@@ -1070,11 +1067,9 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tabs = []
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages",
-                     "v_freeze_punish", "v_emergency_key", "v_start_key",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         app._win_count_pref = 6
         saved = {}
 
@@ -1083,6 +1078,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["win_count"], 6)
@@ -1119,15 +1115,12 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password", "v_win_count"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
         app._load_own_list = lambda: None
@@ -1250,17 +1243,16 @@ class TestSettingsLive(unittest.TestCase):
         fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
-        fake.v_freeze_rounds = {}
         fake._window_volume_settings = lambda: {}
         fake.v_fog_early_read = self.Var(True)
         fake._fog_early_read_setting = lambda: mainGUI.App._fog_early_read_setting(fake)
         fake._launch_options_setting = lambda: {}
         with patch.object(mainGUI, "save_settings", stored.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            fake._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(fake)
         self.assertIs(stored["fog_early_read_enabled"], True)
 
@@ -1349,13 +1341,9 @@ class TestGuiTweaks(unittest.TestCase):
         self.save = patch.object(self.app, "_schedule_settings_save")
         self.saved = self.save.start()
         self.addCleanup(self.save.stop)
-        for var in (self.app.v_freeze_8pages, self.app.v_freeze_punish,
-                    *self.app.v_freeze_rounds.values()):
-            var.set(False)
-        self.app._apply_freeze_settings()
-        self.addCleanup(SharedState.set_freeze_rounds, [])
-        self.addCleanup(SharedState.set_freeze_on_8pages, False)
-        self.addCleanup(SharedState.set_freeze_on_punish, False)
+        self.tab = self.app.tabs[0]
+        self.tab.set_freeze_values({})
+        self.addCleanup(self.tab.set_freeze_values, {})
 
     # ── 1・2. 名前 ───────────────────────────
     def test_the_renamed_labels(self):
@@ -1368,7 +1356,7 @@ class TestGuiTweaks(unittest.TestCase):
     # ── 3. 速度検知でフリーズ → 突入でフリーズも入れる ─────────────
     def _speed_check(self, text):
         """フリーズの枠の「速度検知」の行（DV・DV2）"""
-        row = self.app.freeze_frame.grid_slaves(row=0, column=1)[0]        # FG: grid の 1 行目のチェック
+        row = self.tab.freeze_box.grid_slaves(row=0, column=1)[0]        # FG: grid の 1 行目のチェック
         for child in row.winfo_children():
             if isinstance(child, ttk.Checkbutton) and child.cget("text") == text:
                 return child
@@ -1377,29 +1365,28 @@ class TestGuiTweaks(unittest.TestCase):
     def test_checking_a_speed_freeze_checks_the_same_round_entry_freeze(self):
         for text, name, other in (("8 Pages", "8 Pages", "Punished"),
                                   ("Punished", "Punished", "8 Pages")):
-            for var in self.app.v_freeze_rounds.values():
+            for var in self.tab.v_freeze_rounds.values():
                 var.set(False)
             self.saved.reset_mock()
             self._speed_check(text).invoke()                 # 入れる
 
-            self.assertTrue(self.app.v_freeze_rounds[name].get(), name)
-            self.assertFalse(self.app.v_freeze_rounds[other].get(), "もう一方は変えない")
-            self.assertIn(name, SharedState.get_freeze_rounds(), "全窓の状態へ反映")
+            self.assertTrue(self.tab.v_freeze_rounds[name].get(), name)
+            self.assertFalse(self.tab.v_freeze_rounds[other].get(), "もう一方は変えない")
+            self.assertIn(name, self.tab.live_settings()["freeze_rounds"], "その窓の設定へ反映")
             self.saved.assert_called()
 
             self._speed_check(text).invoke()                 # 外す
-            self.assertTrue(self.app.v_freeze_rounds[name].get(), "外しても突入側はそのまま")
+            self.assertTrue(self.tab.v_freeze_rounds[name].get(), "外しても突入側はそのまま")
 
     def test_unchecking_does_not_check_the_round_entry_side(self):
-        self.app.v_freeze_8pages.set(True)          # 読み込みなどで入っていた
+        self.tab.v_freeze_8pages.set(True)          # 読み込みなどで入っていた
         self._speed_check("8 Pages").invoke()      # 外す
-        self.assertFalse(self.app.v_freeze_8pages.get())
-        self.assertFalse(self.app.v_freeze_rounds["8 Pages"].get(), "外すときは連動しない")
+        self.assertFalse(self.tab.v_freeze_8pages.get())
+        self.assertFalse(self.tab.v_freeze_rounds["8 Pages"].get(), "外すときは連動しない")
 
     def test_the_round_entry_side_does_not_touch_the_speed_side(self):
-        self.app.v_freeze_rounds["8 Pages"].set(True)
-        self.app._apply_freeze_settings()
-        self.assertFalse(self.app.v_freeze_8pages.get())
+        self.tab.v_freeze_rounds["8 Pages"].set(True)
+        self.assertFalse(self.tab.v_freeze_8pages.get())
 
     def test_loading_does_not_link(self):
         data = {"freeze_8pages": True, "freeze_punish": True, "freeze_rounds": []}
@@ -1407,9 +1394,9 @@ class TestGuiTweaks(unittest.TestCase):
              patch.object(self.app, "_load_own_list", lambda: None), \
              patch.object(self.app, "_add_tool_row", lambda p, save=True: None):
             self.app._load_saved_settings()
-        self.assertTrue(self.app.v_freeze_8pages.get())
-        self.assertFalse(self.app.v_freeze_rounds["8 Pages"].get())
-        self.assertFalse(self.app.v_freeze_rounds["Punished"].get())
+        self.assertTrue(self.tab.v_freeze_8pages.get())
+        self.assertFalse(self.tab.v_freeze_rounds["8 Pages"].get())
+        self.assertFalse(self.tab.v_freeze_rounds["Punished"].get())
 
     def test_the_launch_options_are_loaded_at_start(self):
         self.addCleanup(self.app.v_launch_options.set, "")
@@ -1421,7 +1408,7 @@ class TestGuiTweaks(unittest.TestCase):
     def test_eight_pages_comes_before_punished(self):
         rounds = list(config.ROUND_FREEZE_SELECTABLE)
         self.assertLess(rounds.index("8 Pages"), rounds.index("Punished"))
-        self.assertEqual(list(self.app.v_freeze_rounds), rounds)
+        self.assertEqual(list(self.tab.v_freeze_rounds), rounds)
 
     # ── 5. インスタンスタイプ ───────────────────────
     def test_four_instance_types_in_this_order(self):
@@ -2303,10 +2290,8 @@ class TestEmergencyKeySettings(unittest.TestCase):
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish"):
+                     "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
-        app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         saved = {}
@@ -2316,6 +2301,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["emergency_stop_key"], "f9")
@@ -2969,15 +2955,12 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
         app._load_own_list = lambda: None
@@ -3019,10 +3002,9 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key", "v_tnl",
+                     "v_emergency_key", "v_start_key", "v_tnl",
                      "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         return app
 
     def _load(self, data, var="v_ton_access"):
@@ -3030,7 +3012,6 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
         app._load_own_list = lambda: None
@@ -3059,6 +3040,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertIs(saved["join_world"], True)
@@ -3075,6 +3057,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["ton_instance_access"], config.TON_INSTANCE_ACCESS_INVITE)
@@ -3185,9 +3168,8 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
+                     "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
@@ -3197,12 +3179,13 @@ class TestSettingsArePersisted(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(set(saved), {
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
-            "ton_instance_access", "profiles", "freeze_8pages",
-            "freeze_punish", "freeze_rounds", "emergency_stop_key", "start_key",
+            "ton_instance_access", "profiles", "window_freezes",
+            "emergency_stop_key", "start_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
@@ -3224,9 +3207,8 @@ class TestSettingsArePersisted(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish", "v_emergency_key", "v_start_key"):
+                     "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
@@ -3237,6 +3219,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["tnl_path"], "C:/list/my.tnl")
@@ -3375,10 +3358,8 @@ class TestToolLauncherSettings(unittest.TestCase):
         app.tool_rows = [self._row(p) for p in paths]
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
-                     "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_freeze_8pages", "v_freeze_punish"):
+                     "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        app.v_freeze_rounds = {}
         for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
@@ -3392,6 +3373,7 @@ class TestToolLauncherSettings(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         return saved
 

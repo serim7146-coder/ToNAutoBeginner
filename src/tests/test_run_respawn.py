@@ -589,12 +589,11 @@ class TestTheSetting(unittest.TestCase):
             app.tabs = []
             for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world",
                          "v_ton_access", "v_instance_link", "v_emergency_key", "v_start_key",
-                         "v_freeze_8pages", "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                         "v_tnl", "v_obs_enabled", "v_obs_host",
                          "v_obs_port", "v_obs_password"):
                 setattr(app, name, MagicMock())
-            app.v_freeze_rounds = {}
             for name in ("_add_tool_row", "_refresh_emergency_key_label", "_refresh_start_key_label",
-                         "_apply_freeze_settings", "_apply_obs_settings", "_apply_saved_window_settings",
+                         "_apply_obs_settings", "_apply_saved_window_settings",
                          "_load_own_list", "_log", "_load_window_volume_settings", "_load_fog_early_read_setting",
                          "_load_launch_options_setting"):
                 setattr(app, name, lambda *a, **k: None)

@@ -3129,13 +3129,12 @@ class ActionExecutor:
             return
         PlaySound.play_sound(self._speed_voice(kind), kind=kind)
 
-    @staticmethod
-    def _freeze_enabled_for(kind: str) -> bool:
-        """その種別でフリーズする設定か。音声とフリーズで同じものを見るための1か所"""
+    def _freeze_enabled_for(self, kind: str) -> bool:
+        """その種別でフリーズする設定か（この窓の設定）。音声とフリーズで同じものを見るための1か所"""
         if kind == "8pages":
-            return SharedState.get_freeze_on_8pages()
+            return self._cfg.freeze_8pages
         if kind == "punish":
-            return SharedState.get_freeze_on_punish()
+            return self._cfg.freeze_punish
         return False
 
     def _freeze_for_speed_kind(self, kind: str):

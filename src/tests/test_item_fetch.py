@@ -1169,17 +1169,16 @@ class TestItemFetch(unittest.TestCase):
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
-        app.v_freeze_rounds = {}
         app._window_volume_settings = lambda: {}
         app._fog_early_read_setting = lambda: {}
         app._launch_options_setting = lambda: {}
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         self.assertIs(saved["item_fetch"], True)
         self.assertEqual(saved["item_fetch_gain"], [1.2, 0.4, 0.005, "calib"])
@@ -1803,17 +1802,16 @@ os._exit(0)
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages", "v_freeze_punish",
-                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
-        app.v_freeze_rounds = {}
         app._window_volume_settings = lambda: {}
         app._fog_early_read_setting = lambda: {}
         app._launch_options_setting = lambda: {}
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \
              patch.object(mainGUI, "load_settings", return_value={}):
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         self.assertEqual(saved["suicide_cancel_key"], "f8")
 
@@ -1881,15 +1879,12 @@ class TestStartKeySettings(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_freeze_8pages",
-                     "v_freeze_punish", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
-        app.v_freeze_rounds = {}
         app._add_tool_row = lambda p, save=True: None
         app._refresh_emergency_key_label = lambda: None
         app._refresh_start_key_label = lambda: None
-        app._apply_freeze_settings = lambda: None
         app._apply_obs_settings = lambda: None
         app._apply_saved_window_settings = lambda: None
         app._load_own_list = lambda: None
@@ -1917,12 +1912,10 @@ class TestStartKeySettings(unittest.TestCase):
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_freeze_8pages",
-                     "v_freeze_punish", "v_emergency_key", "v_obs_enabled",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_obs_enabled",
                      "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_start_key = self.FakeVar("f9")
-        app.v_freeze_rounds = {}
         saved = {}
 
         with patch.object(mainGUI, "save_settings", saved.update), \
@@ -1930,6 +1923,7 @@ class TestStartKeySettings(unittest.TestCase):
             app._window_volume_settings = lambda: {}
             app._fog_early_read_setting = lambda: {}
             app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
 
         self.assertEqual(saved["start_key"], "f9")

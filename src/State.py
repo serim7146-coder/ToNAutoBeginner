@@ -23,6 +23,10 @@ class WindowConfig:
     skip_rounds: set = field(default_factory=set)
     # 続行リストを見ずに自爆しない（privateのみ）。skip_rounds より優先する
     continue_rounds: set = field(default_factory=set)
+    # 全窓フリーズ（この窓が当たったらほかの窓を止める）。速度検知の 8 Pages・Punished と、突入で止めるラウンド
+    freeze_8pages: bool = False
+    freeze_punish: bool = False
+    freeze_rounds: set = field(default_factory=set)
     voice_continue: str = ""
     voice_fog: str = ""
     voice_item_lost: str = ""
