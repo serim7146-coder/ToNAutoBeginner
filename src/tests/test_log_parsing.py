@@ -292,6 +292,121 @@ class TestLogParser(unittest.TestCase):
 
 
 
+class TestMergedLogLines(unittest.TestCase):
+    """VRChat は 2〜3 行分を 1 行につなげて書くことがある（前の部分の中身は空。HI）。
+    最後の中身を普通の 1 行として読み、時刻は最後のものを使う"""
+
+    HEAD1 = "2026.11.06 02:51:22"
+    HEAD2 = "2026.11.06 02:51:25"
+    HEAD3 = "2026.11.06 02:51:27"
+    KINDS = [("Debug", "Debug"), ("Warning", "Debug"),
+             ("Debug", "Warning"), ("Warning", "Warning")]
+    BODIES = [
+        ("RoundOver", LogParser.EVENT_ROUND_OVER),
+        ("Verified Round End", LogParser.EVENT_VERIFIED_END),
+        ("Verified", LogParser.EVENT_VERIFIED),
+        ("You died.", LogParser.EVENT_YOU_DIED),
+        ("Killers have been set - 1 2 3 // Round type is Classic",
+         LogParser.EVENT_KILLERS_SET),
+    ]
+
+    def _merged(self, first, second, body):
+        return (f"{self.HEAD1} {first:<10} -  "
+                f"{self.HEAD2} {second:<10} -  {body}")
+
+    def _plain(self, body):
+        return f"{self.HEAD2} Debug      -  {body}"
+
+    def test_a_merged_line_parses_like_a_plain_line(self):
+        for body, kind in self.BODIES:
+            plain = LogParser.parse(self._plain(body))
+            self.assertEqual(plain.kind, kind, body)
+            for first, second in self.KINDS:
+                line = self._merged(first, second, body)
+                self.assertEqual(LogParser.parse(line), plain, line)
+
+    def test_a_line_merged_three_times_parses(self):
+        for body, kind in self.BODIES:
+            line = (f"{self.HEAD1} Debug      -  {self.HEAD2} Warning    -  "
+                    f"{self.HEAD3} Debug      -  {body}")
+            self.assertEqual(LogParser.parse(line), LogParser.parse(self._plain(body)), body)
+            self.assertEqual(LogParser.parse(line).kind, kind, body)
+
+    def test_strip_prefix_keeps_a_plain_line_as_it_was(self):
+        self.assertEqual(LogParser.strip_prefix(self._plain("RoundOver")), "RoundOver")
+        self.assertEqual(LogParser.strip_prefix("RoundOver"), "RoundOver")
+        self.assertEqual(LogParser.strip_prefix("2026.05.24 10:00:00 Log - x y"), "x y")
+
+    def test_strip_prefix_strips_every_head_of_a_merged_line(self):
+        self.assertEqual(LogParser.strip_prefix(self._merged("Warning", "Debug", "RoundOver")),
+                         "RoundOver")
+
+    def test_strip_prefix_keeps_a_time_inside_the_body(self):
+        """先頭の直後でない時刻の文字列は中身。消さない"""
+        body = f"note {self.HEAD3} Debug      -  tail"
+        self.assertEqual(LogParser.strip_prefix(self._plain(body)), body)
+        self.assertEqual(LogParser.strip_prefix(self._merged("Debug", "Debug", body)), body)
+
+    def test_log_time_of_a_merged_line_is_the_last_time(self):
+        want = datetime(2026, 11, 6, 2, 51, 25).timestamp()
+        for first, second in self.KINDS:
+            self.assertEqual(LogParser.log_time(self._merged(first, second, "Verified Round End")),
+                             want, (first, second))
+        line = (f"{self.HEAD1} Debug      -  {self.HEAD2} Debug      -  "
+                f"{self.HEAD3} Debug      -  x")
+        self.assertEqual(LogParser.log_time(line), datetime(2026, 11, 6, 2, 51, 27).timestamp())
+
+    def test_log_time_of_a_plain_line_is_unchanged(self):
+        self.assertEqual(LogParser.log_time(self._plain("x")),
+                         datetime(2026, 11, 6, 2, 51, 25).timestamp())
+        self.assertEqual(LogParser.log_time(f"{self.HEAD1} Debug      -  note {self.HEAD3} x"),
+                         datetime(2026, 11, 6, 2, 51, 22).timestamp(),
+                         "中身の途中の時刻は使わない")
+
+    def test_log_time_without_a_time_stays_none(self):
+        for line in ("", None, "RoundOver", "Debug      -  RoundOver",
+                     "2026.11.06 Debug      -  x"):
+            self.assertIsNone(LogParser.log_time(line), repr(line))
+        self.assertIsNone(LogParser.log_time(f"{self.HEAD1} Debug      -  RoundOver"
+                                             .replace("02:51:22", "99:99:99")))
+
+    def _monitor(self):
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10), {},
+                                        lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor._running = True
+        return monitor
+
+    def _feed(self, monitor, lines):
+        with patch.object(WindowOperator, "focus_window", return_value=True),              patch.object(PlaySound, "play_sound"),              patch.object(monitor, "_start_daemon"):
+            for line in lines:
+                monitor._process(line)
+
+    START = "This round is taking place at Cheese Maze (59) and the round type is Classic"
+
+    def test_a_merged_round_over_ends_the_round(self):
+        monitor = self._monitor()
+        self._feed(monitor, [self._plain(self.START)])
+        self.assertTrue(monitor.st.in_round)
+        self.assertTrue(monitor._verified._in_round)
+
+        self._feed(monitor, [self._merged("Warning", "Debug", "RoundOver")])
+
+        self.assertFalse(monitor.st.in_round)
+        self.assertFalse(monitor._verified._in_round, "Verified を無視し続けない")
+        self.assertEqual(monitor.st.log_now, datetime(2026, 11, 6, 2, 51, 25).timestamp())
+
+    def test_a_merged_verified_round_end_marks_the_round_end(self):
+        monitor = self._monitor()
+        self._feed(monitor, [self._plain(self.START),
+                             self._merged("Debug", "Debug", "RoundOver")])
+        monitor.st.round_end_seen = False
+
+        self._feed(monitor, [self._merged("Debug", "Warning", "Verified Round End")])
+
+        self.assertTrue(monitor.st.round_end_seen)
+
+
 class TestStartScanPrefilter(unittest.TestCase):
     """ログを末尾から遡る2つの処理は、印の文字列を含む行だけを parse() にかける。
 
