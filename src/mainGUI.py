@@ -369,12 +369,51 @@ def tabs_to_launch(tabs: list, count: int) -> list:
 
 
 def build_launch_plan(tabs: list) -> list:
-    """起動計画 (表示用の窓番号, プロファイルID, OSC/インスタンス割当index)。
+    """起動計画 (表示用の窓番号, プロファイルID, インスタンス割当index)。
 
-    OSC割当はタブ番号そのものを使う。監視開始時のポート決定
-    （App._start の ports_for_window(tab.idx)）と一致させるため。
+    3つ目はタブ番号そのもの（インスタンス番号 build_ton_link(index=) と、空きが見つからないときの
+    決め打ちのOSCポート ports_for_window に使う）。起動時のOSCポートは plan_launch_ports が
+    空いている組から選ぶ（HK）。
     """
     return [(tab.idx + 1, tab.v_profile.get(), tab.idx) for tab in tabs]
+
+
+def plan_launch_ports(count: int, plan_indices: list, tab_ports: list, used) -> tuple:
+    """起動する窓ごとの OSC のポートの組を決める（HK）。(組のリスト, 文言 or None, 探し直したか)。
+
+    count 個の窓それぞれに (受信, 送信)。plan_indices はその窓のタブ番号（決め打ちに戻すときに使う）。
+    tab_ports は全タブの (osc_in, osc_out)、used は netstat の UDP ポートの和（取れなければ None）。
+    使用中は used と全タブのポート。探し始めは全タブの osc_in の最大＋OSC_PORT_STRIDE（どのタブにも
+    無ければ OSC_BASE_IN_PORT）。assign_windows は受信ポートの昇順で窓を並べるので、既存の窓より
+    小さいポートを取らない。used が None・組が足りないときは、足りない窓だけタブ番号の決め打ち
+    （ports_for_window）にして文言を返す
+    """
+    if used is None:
+        return ([OSCClient.ports_for_window(plan_indices[i]) for i in range(count)],
+                "[起動] 空いているポートを調べられないので、窓ごとの決まったポートで起動します", False)
+    taken = set(used)
+    highest = 0
+    for in_port, out_port in tab_ports:
+        taken.update(p for p in (in_port, out_port) if p)
+        highest = max(highest, in_port or 0)
+    start = highest + config.OSC_PORT_STRIDE if highest else config.OSC_BASE_IN_PORT
+    pairs, wrapped = OSCClient.free_port_pairs(count, taken, start)
+    message = None
+    if len(pairs) < count:
+        pairs = pairs + [OSCClient.ports_for_window(plan_indices[i])
+                         for i in range(len(pairs), count)]
+        message = "[起動] 空いているポートが無いので、窓ごとの決まったポートで起動します"
+    return pairs, message, wrapped
+
+
+def entry_osc_port(osc_in: int, log_path: str):
+    """入室操作でその窓へ OSC を送るポート。タブの osc_in、0 ならログの --osc の受信。分からなければ None（HK）"""
+    if osc_in:
+        return osc_in
+    if not log_path:
+        return None
+    ports = VRChatDiscovery.read_log_osc_ports(log_path)
+    return ports[0] if ports else None
 
 
 STYLE_CT_DIM = "CtDim.TCombobox"   # アイテムの決まりが代わりに使われている間のドロップダウン（灰色。触れない）
@@ -4312,6 +4351,8 @@ class App(tk.Tk):
         self._launched_tab_indices = [tab.idx for tab in plan_tabs]
         existing = len(baseline)
         use_osc = self.v_use_osc.get()
+        # 使用中のポート（立ち上げ途中でまだ netstat に出ない窓のぶん）。Tk の外では読まないのでここで控える
+        tab_ports = [(tab.osc_in, tab.osc_out) for tab in tabs]
         if use_osc:
             OSCQuery.ensure()       # 起動する VRChat が最初から名乗りを見つけられるように（DS）
         self.btn_launch.config(state="disabled")
@@ -4320,6 +4361,16 @@ class App(tk.Tk):
 
         def worker():
             try:
+                ports = [None] * len(launch_plan)
+                if use_osc:
+                    # 空いている OSC のポートの組（netstat は裏のスレッドで 1 回）
+                    ports, note, wrapped = plan_launch_ports(
+                        len(launch_plan), [p[2] for p in launch_plan], tab_ports,
+                        OSCClient.used_udp_ports())
+                    if note:
+                        self._log(note)
+                    if wrapped:
+                        DebugLog.write("[起動] 既存の窓より上に空きが無いので、小さいポートから探し直しました")
                 # まとめて投げると取りこぼす窓が出るので、1窓ずつ出現を待ってから次へ。
                 # 待ち切れなくても次に進む（残りの窓まで巻き添えにしない）。
                 for i, (window_no, profile_id, osc_index) in enumerate(launch_plan):
@@ -4329,7 +4380,7 @@ class App(tk.Tk):
                         if join_ton else None)
                     args = VRChatLauncher.launch_one(
                         exe, profile_id, desktop, link,
-                        osc_index=osc_index if use_osc else None,
+                        osc_ports=ports[i] if use_osc else None,
                         extra_options=extra_options)
                     self._log("[起動] 窓%d: %s" % (window_no, " ".join(args[1:])))
                     appeared = VRChatLauncher.wait_for_windows(
@@ -4519,10 +4570,10 @@ class App(tk.Tk):
                 self._log("[入室操作] 設定がOFFのためスキップします")
             return
         launched = getattr(self, "_launched_tab_indices", None)
-        targets = [(tab.idx + 1, tab._get_selected_hwnd(), tab.v_log.get().strip())
+        targets = [(tab.idx + 1, tab._get_selected_hwnd(), tab.v_log.get().strip(), tab.osc_in)
                    for tab in self.tabs
                    if launched is None or tab.idx in launched]
-        targets = [(no, h, log) for no, h, log in targets if h]
+        targets = [(no, h, log, port) for no, h, log, port in targets if h]
         if not targets:
             self._log("[入室操作] 対象の窓がありません")
             return
@@ -4536,13 +4587,17 @@ class App(tk.Tk):
 
         def worker():
             try:
-                for window_no, hwnd, log_path in targets:
+                for window_no, hwnd, log_path, osc_in in targets:
                     if self._entry_stop.is_set():
                         self._log("[入室操作] 中止しました")
                         return
+                    port = entry_osc_port(osc_in, log_path)
+                    if port is None:
+                        self._log("[窓%d] 入室操作: OSC のポートが分からないのでスキップします" % window_no)
+                        continue
                     entry = ToNEntry.ToNEntry(
                         hwnd,
-                        window_index=window_no - 1,   # OSCポートの割り当てに使う
+                        osc_port=port,
                         log=lambda m, n=window_no: self._log("[窓%d] %s" % (n, m)),
                         is_running=lambda: not self._entry_stop.is_set(),
                         # 移動・クリックは private だけ（ログの最後の入室で見る。分からなければしない）

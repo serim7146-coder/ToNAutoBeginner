@@ -112,7 +112,7 @@ class TestVRChatLauncher(unittest.TestCase):
     def test_the_launch_options_enable_the_early_read(self):
         """看破は --enable-sdk-log-levels 付きのログにしか出ない行を読む"""
         self.assertIn(config.FOG_EARLY_READ_LAUNCH_FLAG, config.LAUNCH_OPTION)
-        args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0, osc_index=1)
+        args = VRChatLauncher.build_launch_args(Path("C:/VRChat.exe"), 0, osc_ports=(9010, 9011))
         self.assertIn(config.FOG_EARLY_READ_LAUNCH_FLAG, args)
 
     def test_find_vrchat_exe_prefers_launch_exe(self):

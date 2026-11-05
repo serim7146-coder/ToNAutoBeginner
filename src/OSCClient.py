@@ -244,6 +244,50 @@ def udp_ports_by_pid():
     return ports_by_pid
 
 
-def osc_launch_arg(index: int, host: str = "127.0.0.1") -> str:
-    in_port, out_port = ports_for_window(index)
+def used_udp_ports():
+    """netstat の全プロセスの UDP ポートの和（set）。netstat が失敗したら None（HK）。"""
+    table = udp_ports_by_pid()
+    if table is None:
+        return None
+    used: set = set()
+    for ports in table.values():
+        used |= set(ports)
+    return used
+
+
+def free_port_pairs(count: int, used, start=None) -> tuple:
+    """空いている (受信, 送信) の組を count 個まで探す。戻り値は (組のリスト, 探し直したか)（HK）。
+
+    候補は OSC_BASE_IN_PORT から OSC_PORT_STRIDE 刻みで OSC_MAX_IN_PORT まで（受信＝基準・送信＝基準＋1）。
+    受信・送信の両方が used に無い組だけ使う。start（None なら OSC_BASE_IN_PORT）から上へ探し、
+    足りないときだけ OSC_BASE_IN_PORT から start の手前までを探し直す（探し直したら True）。
+    足りなければ見つかった分だけ返す。同じ組は 2 回返さない（純粋な関数）
+    """
+    used = set(used or ())
+    if start is None:
+        start = config.OSC_BASE_IN_PORT
+    bases = range(config.OSC_BASE_IN_PORT, config.OSC_MAX_IN_PORT + 1, config.OSC_PORT_STRIDE)
+    pairs: list = []
+    wrapped = False
+    for pass_no, group in enumerate(([b for b in bases if b >= start],
+                                     [b for b in bases if b < start])):
+        for base in group:
+            if len(pairs) >= count:
+                break
+            if base in used or base + 1 in used:
+                continue
+            used.update((base, base + 1))
+            pairs.append((base, base + 1))
+            if pass_no == 1:
+                wrapped = True
+    return pairs, wrapped
+
+
+def osc_arg(ports: tuple, host: str = "127.0.0.1") -> str:
+    """VRChat の起動引数 --osc=<受信>:<host>:<送信>"""
+    in_port, out_port = ports
     return f"--osc={in_port}:{host}:{out_port}"
+
+
+def osc_launch_arg(index: int, host: str = "127.0.0.1") -> str:
+    return osc_arg(ports_for_window(index), host)

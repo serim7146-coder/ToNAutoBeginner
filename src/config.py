@@ -681,6 +681,7 @@ TON_PANEL_STABLE_COUNT   = 2      # 連続で検出できたら確定
 # VRChatは既定でUDP 9000を掴む。多重起動では --osc= で分けないと競合する。
 OSC_BASE_IN_PORT = 9000   # 窓1の受信ポート（送信は+1）
 OSC_PORT_STRIDE  = 10     # 窓ごとのポート間隔
+OSC_MAX_IN_PORT  = 9990   # 空きの受信ポートを探す上限（HK。9000 から PORT_STRIDE 刻みで、送信は+1）
 OSC_ENABLED      = True   # 起動時に --osc= を付けるか
 
 # ── OBS 自動録画（obs-websocket v5） ──
