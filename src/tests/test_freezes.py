@@ -21,13 +21,9 @@ class TestRoundFreezeFocus(unittest.TestCase):
         SharedState.equip_freeze_reset()
         for name in self.EVENTS:
             getattr(SharedState, name).set()
-        self._rounds = patch.object(SharedState, "get_freeze_rounds",
-                                   return_value={"Midnight"})
-        self._rounds.start()
         self._stats = patch.object(ConnectDB, "register_round")
         self._stats.start()
         self.addCleanup(self._stats.stop)
-        self.addCleanup(self._rounds.stop)
         self.addCleanup(SharedState.set_list_source, None)
         self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
         self.addCleanup(SharedState.set_hands_free, False)
@@ -39,7 +35,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
                                  for n in self.EVENTS])
 
     def _monitor(self):
-        cfg = WindowConfig(hwnd=self.HWND, do_skip=True)
+        cfg = WindowConfig(hwnd=self.HWND, do_skip=True, freeze_rounds={"Midnight"})
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor._running = True
@@ -2622,41 +2618,33 @@ class TestOscMoveDuringFreeze(unittest.TestCase):
 
 
 class TestFreezeSettings(unittest.TestCase):
-    """フリーズ設定は全窓共通（フリーズ自体が全窓を止めるため）"""
-
-    def setUp(self):
-        SharedState.set_freeze_on_8pages(False)
-        SharedState.set_freeze_on_punish(False)
-        SharedState.set_freeze_rounds(())
-
-    tearDown = setUp
+    """フリーズ設定は窓ごと（WindowConfig。止める範囲は今までどおり全窓）"""
 
     def test_flags_round_trip(self):
-        SharedState.set_freeze_on_8pages(True)
-        SharedState.set_freeze_on_punish(True)
+        cfg = WindowConfig(freeze_8pages=True, freeze_punish=True)
 
-        self.assertTrue(SharedState.get_freeze_on_8pages())
-        self.assertTrue(SharedState.get_freeze_on_punish())
+        self.assertTrue(cfg.freeze_8pages)
+        self.assertTrue(cfg.freeze_punish)
+        self.assertFalse(WindowConfig().freeze_8pages, "既定は OFF")
+        self.assertFalse(WindowConfig().freeze_punish)
 
     def test_rounds_round_trip(self):
-        SharedState.set_freeze_rounds(["Alternate", "Ghost"])
+        cfg = WindowConfig(freeze_rounds={"Alternate", "Ghost"})
 
-        self.assertEqual(SharedState.get_freeze_rounds(), {"Alternate", "Ghost"})
+        self.assertEqual(cfg.freeze_rounds, {"Alternate", "Ghost"})
+        self.assertEqual(WindowConfig().freeze_rounds, set(), "既定は無し")
 
-    def test_rounds_accepts_any_iterable(self):
-        SharedState.set_freeze_rounds(name for name in ("Midnight",))
+    def test_each_window_has_its_own_settings(self):
+        """共通の値を読む箇所が残っていないこと。片方を書き換えてももう片方は変わらない"""
+        a, b = WindowConfig(), WindowConfig()
+        a.freeze_rounds.add("Alternate")
+        a.freeze_8pages = True
 
-        self.assertEqual(SharedState.get_freeze_rounds(), {"Midnight"})
-
-    def test_getter_returns_a_copy(self):
-        """返した set を書き換えても内部状態は変わらない"""
-        SharedState.set_freeze_rounds(["Alternate"])
-
-        got = SharedState.get_freeze_rounds()
-        got.add("Unbound")
-        got.discard("Alternate")
-
-        self.assertEqual(SharedState.get_freeze_rounds(), {"Alternate"})
+        self.assertEqual(b.freeze_rounds, set())
+        self.assertFalse(b.freeze_8pages)
+        for name in ("get_freeze_on_8pages", "get_freeze_on_punish", "get_freeze_rounds",
+                     "set_freeze_on_8pages", "set_freeze_on_punish", "set_freeze_rounds"):
+            self.assertFalse(hasattr(SharedState, name), name)
 
     def test_checkbox_order_follows_the_config_list(self):
         """ソートせず ROUND_FREEZE_SELECTABLE の順序で並べる"""
@@ -2705,14 +2693,12 @@ class TestSpeedFreeze(unittest.TestCase):
         SharedState.equip_freeze_reset()
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
-        SharedState.set_freeze_on_8pages(False)
-        SharedState.set_freeze_on_punish(False)
 
     tearDown = setUp
 
-    def _executor(self):
+    def _executor(self, **freeze):
         cfg = WindowConfig(hwnd=123, osc_port=9000,
-                           voice_8pages="8p.mp3", voice_punish="pn.mp3")
+                           voice_8pages="8p.mp3", voice_punish="pn.mp3", **freeze)
         st = WindowState(instance_type=config.INSTANCE_PRIVATE)
         return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None), st
 
@@ -2727,8 +2713,7 @@ class TestSpeedFreeze(unittest.TestCase):
             ex._announce_speed_kind(kind, 6.5)
 
     def test_eight_pages_freezes_when_enabled(self):
-        SharedState.set_freeze_on_8pages(True)
-        ex, st = self._executor()
+        ex, st = self._executor(freeze_8pages=True)
 
         self._detect(ex, "8pages")
 
@@ -2745,8 +2730,7 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertFalse(st.speed_freeze_held)
 
     def test_punish_freezes_when_enabled(self):
-        SharedState.set_freeze_on_punish(True)
-        ex, st = self._executor()
+        ex, st = self._executor(freeze_punish=True)
 
         self._detect(ex, "punish")
 
@@ -2754,9 +2738,7 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertEqual(st.speed_freeze_kind, "punish")
 
     def test_normal_never_freezes(self):
-        SharedState.set_freeze_on_8pages(True)
-        SharedState.set_freeze_on_punish(True)
-        ex, st = self._executor()
+        ex, st = self._executor(freeze_8pages=True, freeze_punish=True)
 
         self._detect(ex, "normal")
 
@@ -2764,8 +2746,7 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertFalse(st.speed_freeze_held)
 
     def test_first_window_is_brought_to_front(self):
-        SharedState.set_freeze_on_8pages(True)
-        ex, _st = self._executor()
+        ex, _st = self._executor(freeze_8pages=True)
 
         with patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window", return_value=True) as mock_focus:
@@ -2774,10 +2755,9 @@ class TestSpeedFreeze(unittest.TestCase):
         mock_focus.assert_called_once_with(123)
 
     def test_second_window_does_not_steal_focus(self):
-        SharedState.set_freeze_on_8pages(True)
         other = WindowState()
         SharedState.speed_freeze_start(other)
-        ex, st = self._executor()
+        ex, st = self._executor(freeze_8pages=True)
 
         with patch.object(ActionExecutor.PlaySound, "play_sound"), \
              patch.object(WindowOperator, "focus_window") as mock_focus:
@@ -2841,8 +2821,7 @@ class TestSpeedFreeze(unittest.TestCase):
         self.assertTrue(SharedState.SPEED_FREEZE_EVENT.is_set())
 
     def test_the_window_that_froze_does_not_wait_for_itself(self):
-        SharedState.set_freeze_on_8pages(True)
-        ex, _st = self._executor()
+        ex, _st = self._executor(freeze_8pages=True)
         self._detect(ex, "8pages")
 
         self.assertTrue(ex._wait_other_windows(), "自分が張ったフリーズで詰まらない")
@@ -2867,14 +2846,13 @@ class TestRoundFreezeVoice(unittest.TestCase):
         SharedState.round_freeze_reset()
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
-        SharedState.set_freeze_rounds(())
 
     def _monitor(self, rounds, **voices):
-        SharedState.set_freeze_rounds(rounds)
         cfg = WindowConfig(voice_fog="fog.mp3", voice_unbound="unbound.mp3",
                            voice_midnight="midnight.mp3",
                            voice_alternate="alternate.mp3", voice_ghost="ghost.mp3",
-                           voice_punish="punish.mp3", voice_8pages="8pages.mp3")
+                           voice_punish="punish.mp3", voice_8pages="8pages.mp3",
+                           freeze_rounds=set(rounds))
         for name, value in voices.items():
             setattr(cfg, name, value)
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
@@ -2973,13 +2951,12 @@ class TestRoundFreeze(unittest.TestCase):
         SharedState.equip_freeze_reset()
         SharedState.continue_round_reset()
         SharedState.set_hands_free(False)
-        SharedState.set_freeze_rounds(())
 
     tearDown = setUp
 
     def _monitor(self, rounds=("Alternate",)):
-        SharedState.set_freeze_rounds(rounds)
-        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor = LogMonitor.LogMonitor(WindowConfig(freeze_rounds=set(rounds)), {},
+                                        lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         return monitor
 
@@ -3235,12 +3212,10 @@ class TestEightPagesSurviveItemLost(unittest.TestCase):
         SharedState.set_item_fetch(False)
         SharedState.set_item_begin_mode(False)
         SharedState.set_hands_free(False)
-        SharedState.set_freeze_rounds(("8 Pages",))
         for reset in (SharedState.round_freeze_reset, SharedState.speed_freeze_reset,
                       SharedState.equip_freeze_reset, SharedState.continue_round_reset):
             reset()
             self.addCleanup(reset)
-        self.addCleanup(SharedState.set_freeze_rounds, ())
         self.sounds = []
         self.focus = []
         for p in (patch.object(PlaySound, "play_sound", side_effect=lambda p, kind=None, **_kw: self.sounds.append(p)),
@@ -3253,7 +3228,8 @@ class TestEightPagesSurviveItemLost(unittest.TestCase):
             self.addCleanup(p.stop)
 
     def _monitor(self):
-        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10, auto_begin=False, voice_item_lost="lost.mp3"),
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=0x10, auto_begin=False, voice_item_lost="lost.mp3",
+                                                     freeze_rounds={"8 Pages"}),
                                         {}, lambda _m: None, window_idx=1)
         st = monitor.st
         st.instance_type = config.INSTANCE_PRIVATE

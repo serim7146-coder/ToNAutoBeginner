@@ -125,7 +125,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 ## 4. 状態
 
 ### 4.1 `WindowConfig`（窓ごとの設定）
-`hwnd`・`log_path`・自動 Begin・自動自爆・DTM/Waldo 続行・OSC のポート・ラウンドごとの自爆/続行の指定（`skip_rounds`・`continue_rounds`。インスタンスが変わると外す）・音声のパス。
+`hwnd`・`log_path`・自動 Begin・自動自爆・DTM/Waldo 続行・OSC のポート・ラウンドごとの自爆/続行の指定（`skip_rounds`・`continue_rounds`。インスタンスが変わると外す）・全窓フリーズの選択（`freeze_8pages`・`freeze_punish`・`freeze_rounds`。窓ごとに持ち、settings.json の `window_freezes` に保存する）・音声のパス。
 窓数を変えて窓タブを作り直しても、各窓の設定と割り当ては引き継ぐ（`WindowTab.snapshot`/`restore`。減らした窓の分も、ツールを閉じるまで覚えておく）。
 
 ### 4.2 `WindowState`（窓ごとの実行時の状態）
@@ -142,7 +142,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面化・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知・フリーズ設定（8 Pages・Punished・突入するラウンド）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判断に従う（`follow_utils`）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判断に従う（`follow_utils`）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）
@@ -155,8 +155,8 @@ LogMonitor が1窓に1つ持つ。主なもの:
 |---|---|---|
 | 続行 | 続行ラウンド（アナウンスが鳴るもの）が決まったとき。DTM/Waldo の続行は張らない | 死亡・RoundOver から猶予の後（`_release_continue_freeze_after_delay`）／次のラウンド開始 |
 | 装備待ち | アイテムロストの窓。自動で取りに行かない窓は Begin が通ったとき（通らなければ張らない）、取りに行く窓は店で前面を借りてボタンを押す間だけ、アイテム取得→Begin モードは Begin の前（ロストした回はツールは移動もしないし押さない。装備も Begin も利用者がして、その Begin の受理で解く。FY・FZ）。張った順に並び、先頭の窓だけが前面化＋音声 | 装備＋Begin の受理から猶予の後（Begin を押さない窓は装備から猶予の後）・取りに行く窓は店の操作の後（取れた・取れない・時間切れとも）／ラウンド開始 |
-| 速度検知 | 速度で 8 Pages / Punished と分かったとき（設定で選ぶ） | 8 Pages はアイテムを取ったら猶予の後／ラウンド開始で必ず |
-| 突入 | 選んだ種類のラウンドに入ったとき（Sabotage は Sus player の行で murder／star に分ける。行は開始の行より前に来る） | 死亡から猶予の後／ラウンド開始で必ず |
+| 速度検知 | 速度で 8 Pages / Punished と分かったとき（その窓の設定で選ぶ） | 8 Pages はアイテムを取ったら猶予の後／ラウンド開始で必ず |
+| 突入 | その窓で選んだ種類のラウンドに入ったとき（Sabotage は Sus player の行で murder／star に分ける。行は開始の行より前に来る） | 死亡から猶予の後／ラウンド開始で必ず |
 
 - 続行フリーズの死亡からの解除は、待っている間に猫（Maxwell）で復活した（「LOL JK, REBORN!」の行）ら、死亡を取り消してしない（復活の後に本当に死んだら、その死亡から数え直す。RoundOver からの解除の予約は今のまま）。突入フリーズの死亡からの解除も同じ。
 - どれも `_Freeze`: 張っている窓の数で管理し、0 になったら解除。窓ごとの保持（`*_held`）で多重登録・多重解除を防ぐ（足していない窓が引くと、別の窓の本物のフリーズを解いてしまう）。

@@ -420,7 +420,7 @@ class LogMonitor:
         """選んだラウンドに入ったら全窓を止める（張っていなければ）。テラー判明は待たない。自窓の自爆は止めない。
         放置モード中は Fog に揃えて張らない"""
         st = self.st
-        if (name not in SharedState.get_freeze_rounds() or self._hands_free()
+        if (name not in self.cfg.freeze_rounds or self._hands_free()
                 or st.round_freeze_held):
             return
         self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
@@ -1835,7 +1835,7 @@ class LogMonitor:
             # いない分を引き、別の窓の本物の続行フリーズを解除してしまう
             # 突入フリーズで Fog を選んでいれば、上で鳴らしている（二重にしない）
             if (config.ANNOUNCE_FOG_ON_ENTRY and not self._hands_free()
-                    and "Fog" not in SharedState.get_freeze_rounds()):
+                    and "Fog" not in self.cfg.freeze_rounds):
                 PlaySound.play_sound(self.cfg.voice_fog, kind="fog")
             self._log(f"開始: {st.round_type}")
             return

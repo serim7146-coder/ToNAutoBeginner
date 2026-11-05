@@ -116,21 +116,6 @@ get_hands_free, set_hands_free = _HANDS_FREE.get, _HANDS_FREE.set
 _SPEED_DETECT = _Setting(config.SPEED_DETECT_ENABLED)
 get_speed_detect, set_speed_detect = _SPEED_DETECT.get, _SPEED_DETECT.set
 
-# フリーズ設定（全窓共通）。フリーズ自体が全窓を止める仕組みなので、窓ごとに分ける意味がない
-_FREEZE_ON_8PAGES = _Setting(False, bool)
-get_freeze_on_8pages, set_freeze_on_8pages = _FREEZE_ON_8PAGES.get, _FREEZE_ON_8PAGES.set
-_FREEZE_ON_PUNISH = _Setting(False, bool)
-get_freeze_on_punish, set_freeze_on_punish = _FREEZE_ON_PUNISH.get, _FREEZE_ON_PUNISH.set
-# 突入で全窓を止めるラウンド種別。読むときはコピーを返す（呼び出し側の書き換え防止）
-_FREEZE_ROUNDS = _Setting(set(), lambda names: set(names or ()))
-
-
-def get_freeze_rounds() -> set:
-    return set(_FREEZE_ROUNDS.get())
-
-
-set_freeze_rounds = _FREEZE_ROUNDS.set
-
 # 続行リストの供給元（全窓共通）。"host" = ToN ListTool の主催リスト / "tnl" = tnlファイル / None = 未決定
 _LIST_SOURCE = _Setting(None)
 get_list_source, set_list_source = _LIST_SOURCE.get, _LIST_SOURCE.set

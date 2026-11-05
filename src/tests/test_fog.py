@@ -2183,10 +2183,9 @@ class TestLogMonitorFogRound(unittest.TestCase):
 
     def test_choosing_fog_freezes_every_window(self):
         SharedState.round_freeze_reset()
-        SharedState.set_freeze_rounds({"Fog"})
-        self.addCleanup(SharedState.set_freeze_rounds, set())
         self.addCleanup(SharedState.round_freeze_reset)
         monitor = self._monitor()
+        monitor.cfg.freeze_rounds = {"Fog"}
 
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")
@@ -2198,8 +2197,8 @@ class TestLogMonitorFogRound(unittest.TestCase):
 
     def test_fog_is_not_frozen_unless_chosen(self):
         SharedState.round_freeze_reset()
-        SharedState.set_freeze_rounds(set())
         monitor = self._monitor()
+        monitor.cfg.freeze_rounds = set()
 
         with patch.object(PlaySound, "play_sound"):
             monitor._process("This round is taking place at Facility (12) and the round type is Fog")

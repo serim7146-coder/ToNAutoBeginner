@@ -106,18 +106,26 @@ class TestAppTabLifecycle(unittest.TestCase):
             def snapshot(self):
                 return {"idx": self.idx}
 
+            def freeze_values(self):
+                return {"from": self.idx}
+
             def destroy(self):
                 self.destroyed = True
 
         class NewTab:
             def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None,
                          section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
-                         on_open_window_table=None, on_item_switch=None, on_broadcast=None):
+                         on_open_window_table=None, on_item_switch=None, on_broadcast=None,
+                         on_freeze_changed=None):
                 self.parent = parent
                 self.idx = idx
                 self.on_log_selected = on_log_selected
                 self.destroyed = False
                 self.restored = None
+                self.freeze_set = None
+
+            def set_freeze_values(self, values):
+                self.freeze_set = values
 
             def restore(self, saved):
                 self.restored = saved
@@ -136,6 +144,8 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._broadcast_tab_setting = lambda tab, kind, key, value: None
         app._tab_sections = {}
         app._on_tab_section_toggled = lambda _key, _collapsed: None
+        app._schedule_settings_save = lambda: None
+        app._window_freezes = {}
         app.tabs = [OldTab(0), OldTab(1)]
         old_tabs = list(app.tabs)
 
@@ -149,6 +159,8 @@ class TestAppTabLifecycle(unittest.TestCase):
         self.assertEqual(len(app.nb.added), 3)
         self.assertEqual([tab.restored for tab in app.tabs], [{"idx": 0}, {"idx": 1}, None],
                          "残った窓は前の設定のまま。増えた窓は既定")
+        self.assertEqual([tab.freeze_set for tab in app.tabs], [{"from": 0}, {"from": 1}, {}],
+                         "全窓フリーズの値は窓の番号で渡す（増えた窓は既定）")
 
     def test_win_count_change_skips_rebuild_when_count_is_unchanged(self):
         class FakeVar:

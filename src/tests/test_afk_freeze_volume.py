@@ -158,12 +158,11 @@ class _Freeze(unittest.TestCase):
     def setUp(self):
         SharedState.round_freeze_reset()
         self.addCleanup(SharedState.round_freeze_reset)
-        self.addCleanup(SharedState.set_freeze_rounds, [])
 
     def _monitor(self, freeze):
-        SharedState.set_freeze_rounds(list(freeze))
         cfg = WindowConfig(hwnd=0x10, do_skip=False, voice_murder="murder.mp3", voice_sabotage="sabotage.mp3",
-                           voice_cracked="cracked.mp3", voice_double_trouble="dt.mp3")
+                           voice_cracked="cracked.mp3", voice_double_trouble="dt.mp3",
+                           freeze_rounds=set(freeze))
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor._running = True
