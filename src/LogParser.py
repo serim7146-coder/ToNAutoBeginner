@@ -105,7 +105,10 @@ RESPAWN_MARK = "Player respawned"
 YOU_DIED_MARK = "You died"
 REBORN_MARK = "LOL JK, REBORN"
 SUS_PLAYER_MARK = "Sus player"
-RE_LOG_PREFIX = re.compile(r"^\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+")
+# VRChat は 2〜3 行分を 1 行につなげて書くことがある（前の部分の中身は空。2026-11 の報告）:
+#   2026.11.06 02:51:22 Debug      -  2026.11.06 02:51:25 Debug      -  Verified Round End
+# 先頭の「時刻 種類 -」を 1 回以上外して、最後の中身を普通の 1 行として読む（種類は \w+ のまま）
+RE_LOG_PREFIX = re.compile(r"^(?:\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+)+")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
 JOINING_MARK = "Joining wrld_"
 RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
@@ -134,7 +137,10 @@ class LogEvent:
     flag: str = ""          # 置き換えの合図の WindowState の属性（EVENT_REPLACEMENT）
 
 
-RE_LOG_TIME = re.compile(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
+# つながった行（RE_LOG_PREFIX のコメント参照）では最後の時刻を取る。普通の行は今まで通り先頭の時刻
+RE_LOG_TIME = re.compile(
+    r"^(?:\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+)*"
+    r"(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})")
 
 
 def log_time(line: str) -> float | None:
