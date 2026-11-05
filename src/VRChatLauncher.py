@@ -173,13 +173,13 @@ def build_launch_args(
     profile_id: int,
     desktop_mode: bool = True,
     instance_link: Optional[str] = None,
-    osc_index: Optional[int] = None,
+    osc_ports: Optional[tuple] = None,
     extra_options: str = "",
 ) -> list[str]:
     """起動引数を組み立てる。
 
-    osc_index を渡すと窓ごとに別のOSCポートを割り当てる。VRChatは既定で
-    UDP 9000 を掴むため、多重起動では指定しないと2窓目以降が受信できない。
+    osc_ports（(受信ポート, 送信ポート)）を渡すと、その組で --osc を付ける。VRChatは既定で
+    UDP 9000 を掴むため、多重起動では指定しないと2窓目以降が受信できない。None なら --osc を付けない。
     extra_options は画面の「起動オプション」の文字。空白で区切って、その順で
     LAUNCH_OPTION の後ろに付ける。`-` で始まる語（オプションの名前）は、すでに引数に
     ある（LAUNCH_OPTION・欄の前のほうを含む）完全に同じ語なら付けない。`-` で始まらない
@@ -188,9 +188,9 @@ def build_launch_args(
     args = [str(exe), f"--profile={int(profile_id)}"]
     if desktop_mode:
         args.append("--no-vr")
-    if osc_index is not None:
+    if osc_ports is not None:
         import OSCClient
-        args.append(OSCClient.osc_launch_arg(osc_index))
+        args.append(OSCClient.osc_arg(osc_ports))
     if instance_link:
         args.append(instance_link)
     args.extend(config.LAUNCH_OPTION)
@@ -206,10 +206,10 @@ def launch_one(
     profile_id: int,
     desktop_mode: bool = True,
     instance_link: Optional[str] = None,
-    osc_index: Optional[int] = None,
+    osc_ports: Optional[tuple] = None,
     extra_options: str = "",
 ):
-    args = build_launch_args(exe, profile_id, desktop_mode, instance_link, osc_index,
+    args = build_launch_args(exe, profile_id, desktop_mode, instance_link, osc_ports,
                              extra_options)
     subprocess.Popen(args, cwd=str(Path(exe).parent))
     return args

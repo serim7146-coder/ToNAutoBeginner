@@ -352,7 +352,7 @@ class TestClipboard(unittest.TestCase):
 class _Entry:
     made = []
 
-    def __init__(self, hwnd, window_index=0, log=None, is_running=None, can_operate=None):
+    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None):
         self.hwnd, self.calls = hwnd, []
         _Entry.made.append(self)
 
@@ -384,6 +384,7 @@ class TestTheEntryFlow(unittest.TestCase):
         for i in range(n):
             tab = MagicMock()
             tab.idx = i
+            tab.osc_in = 9000 + 10 * i
             tab._get_selected_hwnd.return_value = 0x100 + i
             tab.v_log.get.return_value = f"C:/logs/output_log_{i}.txt"
             app.tabs.append(tab)

@@ -510,6 +510,7 @@ class TestSitesGoThroughTaskStats(unittest.TestCase):
         app.v_launch_options, app.v_launch_count = Var(""), Var(1)
         tab = type("FakeTab", (), {})()
         tab.idx, tab.v_profile = 0, Var(0)
+        tab.osc_in = tab.osc_out = 0
         app.tabs = [tab]
         app.btn_launch = app.lbl_launch = MagicMock()
         app._launch_count_value = lambda n: 1
@@ -536,6 +537,7 @@ class TestSitesGoThroughTaskStats(unittest.TestCase):
         app._launched_tab_indices = None
         tab = MagicMock()
         tab.idx = 0
+        tab.osc_in = 9000
         tab._get_selected_hwnd.return_value = 0x100
         tab.v_log.get.return_value = "C:/logs/output_log_0.txt"
         app.tabs = [tab]

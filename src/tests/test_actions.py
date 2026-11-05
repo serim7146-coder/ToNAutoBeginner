@@ -173,12 +173,12 @@ class TestOSCClient(unittest.TestCase):
         # 押している間は 0.1 秒ごとに 1 を送り直す（0.1・0.2・0.3・0.4 の4回）
         self.assertEqual([v for _a, v in sent], [0, 1, 1, 1, 1, 1, 0])
 
-    def test_launch_args_include_osc_when_index_given(self):
+    def test_launch_args_include_osc_when_ports_given(self):
         args = VRChatLauncher.build_launch_args(
-            Path("C:/launch.exe"), 0, True, None, osc_index=1)
+            Path("C:/launch.exe"), 0, True, None, osc_ports=(9010, 9011))
         self.assertIn("--osc=9010:127.0.0.1:9011", args)
 
-    def test_launch_args_omit_osc_when_index_none(self):
+    def test_launch_args_omit_osc_when_ports_none(self):
         args = VRChatLauncher.build_launch_args(Path("C:/launch.exe"), 0, True, None)
         self.assertFalse(any(a.startswith("--osc=") for a in args))
 

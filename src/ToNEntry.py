@@ -60,7 +60,7 @@ def wait_verified(path: str, offset: int, timeout: float, is_running=None,
 
 
 class ToNEntry:
-    def __init__(self, hwnd: int, osc_port: int = None, window_index: int = 0,
+    def __init__(self, hwnd: int, osc_port: int,
                  log=None, is_running=None, can_operate=None):
         self._hwnd = hwnd
         self._log = log or (lambda _m: None)
@@ -68,8 +68,6 @@ class ToNEntry:
         # この窓で移動・クリックしてよいか（private だけ。ActionExecutor.can_operate_in）。
         # 渡されなければ分からない → しない
         self._can_operate = can_operate or (lambda: False)
-        if osc_port is None:
-            osc_port, _out = OSCClient.ports_for_window(window_index)
         self._osc = OSCClient.OSCClient(osc_port)
         self._osc_port = osc_port
 

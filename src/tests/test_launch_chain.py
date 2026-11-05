@@ -36,6 +36,7 @@ def _chain_app(join=True, entry=True, begin=True, plush=True, running=False, n=2
     for i in range(n):
         tab = MagicMock()
         tab.idx = i
+        tab.osc_in = 9000 + 10 * i
         tab._get_selected_hwnd.return_value = 0x100 + i
         tab.v_log.get.return_value = f"C:/logs/output_log_{i}.txt"
         app.tabs.append(tab)

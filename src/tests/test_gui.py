@@ -2845,6 +2845,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
             tab = type("FakeTab", (), {})()
             tab.idx = i
             tab.v_profile = self.FakeVar(i)
+            tab.osc_in = tab.osc_out = 0
             app.tabs.append(tab)
         app.btn_launch = self.FakeWidget()
         app.lbl_launch = self.FakeWidget()
@@ -2870,6 +2871,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
              patch.object(VRChatLauncher, "launch_one",
                           side_effect=lambda *a, **kw: launched.append((a, kw)) or ["exe"]), \
              patch.object(VRChatLauncher, "wait_for_windows", return_value=set()), \
+             patch.object(OSCClient, "used_udp_ports", return_value=set()), \
              patch.object(VRChatDiscovery, "get_vrchat_windows_by_start_time", return_value=[]), \
              patch.object(mainGUI.threading, "Thread", side_effect=fake_thread), \
              patch.object(mainGUI.time, "sleep"):
