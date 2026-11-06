@@ -66,10 +66,11 @@ def set_sound_volume(volume: float):
 
 
 # 声の種類ごとの音量（EO）。鳴らす音量 ＝ 全体（sound_volume）× その声の音量。種類の名前は窓の設定の
-# voice_<種類> と同じ。ファイルのパスでは引かない（同じファイルを 2 種類に使っても別々に効くように）
+# voice_<種類> と同じ（窓のものでない "queue" だけ窓の設定を持たない）。ファイルのパスでは引かない（同じファイルを 2 種類に使っても別々に効くように）
 VOICE_KINDS = ("continue", "alternate", "midnight", "unbound", "fog", "ghost", "8pages", "punish",
                "item_lost", "intermission", "foxy", "list_lost",
-               "murder", "sabotage", "cracked", "double_trouble", "afk")     # 後ろの 5 つは EZ（FB で EX を外した）
+               "murder", "sabotage", "cracked", "double_trouble", "afk",     # murder〜afk の 5 つは EZ（FB で EX を外した）
+               "queue")                                                  # 待機列の合図。窓の設定（voice_<種類>）は持たない
 _voice_volumes: dict = {}
 _voice_enabled: dict = {}       # 声ごとのオン・オフ（FG。覚えていなければオン）
 

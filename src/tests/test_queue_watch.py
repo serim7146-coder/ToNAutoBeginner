@@ -9,6 +9,7 @@ from tests.support import *  # noqa: F401,F403
 
 import QueueWatch
 import PhoneNotify
+import PlaySound
 
 WORLD = "wrld_X"
 TAIL = "~group(grp_X)~groupAccessType(plus)~region(jp)"
@@ -16,6 +17,8 @@ DATE = "2026.11.06"
 TOPIC = "tonab-unit_test-topic-0123456789abcdef"
 LOG_A = "output_log_2026-11-06_19-00-00.txt"
 LOG_B = "output_log_2026-11-06_19-30-00.txt"
+VOICE = "C:/voices/Queue.mp3"          # 偽のパス（鳴らさない）
+_REAL_PLAY_SOUND = PlaySound.play_sound     # _Env が偽物に差し替える前の本物
 
 
 def inst(number) -> str:
@@ -84,6 +87,13 @@ class _Env(unittest.TestCase):
         SharedState.set_phone_notify(True)
         SharedState.set_phone_topic(TOPIC)
         SharedState.set_hands_free(False)
+        SharedState.set_queue_voice(VOICE)
+        self.addCleanup(SharedState.set_queue_voice, "")
+        self.played = []                    # 声は鳴らさない（PlaySound.play_sound を偽物にする）
+        sound = patch.object(PlaySound, "play_sound",
+                             side_effect=lambda path, kind=None, force=False: self.played.append((path, kind)))
+        sound.start()
+        self.addCleanup(sound.stop)
         self.addCleanup(SharedState.set_phone_notify, False)
         self.addCleanup(SharedState.set_phone_topic, "")
         self.addCleanup(SharedState.set_hands_free, False)
@@ -149,6 +159,81 @@ class TestCompletion(_Env):
         self.poll()
         self.settle()
         self.assertEqual(self.texts(), ["待機列に入れるようになりました"])
+
+
+class TestQueueVoice(_Env):
+    """合図で声「待機列」を 1 回鳴らす。「通知する」が ON のときだけ。声と送信は互いに影響しない"""
+
+    def fire(self):
+        self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
+        self.poll()
+        self.settle()
+
+    def test_on_plays_once_with_the_configured_path_and_sends_once(self):
+        self.fire()
+        self.assertEqual(self.played, [(VOICE, "queue")])
+        self.assertEqual(len(self.sent), 1)
+        self.pass_time(10)
+        self.poll()
+        self.assertEqual(len(self.played), 1)
+
+    def test_phone_notify_off_plays_nothing_and_sends_nothing(self):
+        SharedState.set_phone_notify(False)
+        self.fire()
+        self.assertEqual(self.played, [])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.logs, ["[スマホ通知] 待機列に入れるようになりました"], "ツールのログは書く（今までどおり）")
+
+    def test_an_invalid_topic_still_plays_and_does_not_send(self):
+        SharedState.set_phone_topic("bad topic!")
+        self.fire()
+        self.assertEqual(self.played, [(VOICE, "queue")])
+        self.assertEqual(self.sent, [])
+
+    def test_a_failing_sound_still_sends(self):
+        PlaySound.play_sound.side_effect = RuntimeError("boom")
+        self.fire()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_failing_send_does_not_escape_and_the_sound_already_played(self):
+        PhoneNotify.send.side_effect = RuntimeError("boom")
+        self.fire()
+        self.assertEqual(self.played, [(VOICE, "queue")])
+
+    def test_a_signal_whose_get_is_60_seconds_old_makes_no_sound(self):
+        """VRChat の通知が消えている古い合図は、黙って使い切る（声も送信も無い）"""
+        self.wall.now = at("19:50:32") + 60
+        self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
+        self.touch(LOG_A)
+        self.poll()
+        self.settle()
+        self.assertEqual(self.played, [])
+        self.assertEqual(self.sent, [])
+
+    def test_the_same_get_in_two_logs_plays_once(self):
+        self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
+        self.write(LOG_B, get("19:50:32", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.played), 1)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_hands_free_still_plays(self):
+        SharedState.set_hands_free(True)
+        self.fire()
+        self.assertEqual(self.played, [(VOICE, "queue")])
+
+    def test_the_real_play_sound_honours_the_voice_checkbox(self):
+        """本物の PlaySound で、声のチェックが OFF なら再生のスレッドを起こさない（音は鳴らさない）"""
+        self.addCleanup(PlaySound.set_voice_enabled, "queue", True)
+        PlaySound.set_voice_enabled("queue", False)
+        with patch.object(PlaySound, "play_sound", _REAL_PLAY_SOUND),              patch("pathlib.Path.exists", return_value=True),              patch.object(PlaySound.TaskStats, "thread") as thread:
+            self.fire()
+            thread.assert_not_called()
+            PlaySound.set_voice_enabled("queue", True)
+            _REAL_PLAY_SOUND(VOICE, kind="queue")
+            thread.assert_called_once()     # ON なら再生に進む（スレッドは偽物なので鳴らない）
+        self.assertEqual(len(self.sent), 1, "声が OFF でもスマホへは送る")
 
 
 class TestAcrossLogs(_Env):
@@ -510,8 +595,28 @@ class TestNotifyReady(unittest.TestCase):
                                    self.sent.append((topic, title, message)), self.done.append(on_done)))
         patcher.start()
         self.addCleanup(patcher.stop)
-        for setter, value in ((SharedState.set_phone_notify, False), (SharedState.set_phone_topic, "")):
+        self.played = []
+        sound = patch.object(PlaySound, "play_sound",
+                             side_effect=lambda path, kind=None, force=False: self.played.append((path, kind)))
+        sound.start()
+        self.addCleanup(sound.stop)
+        SharedState.set_queue_voice(VOICE)
+        for setter, value in ((SharedState.set_phone_notify, False), (SharedState.set_phone_topic, ""),
+                              (SharedState.set_queue_voice, "")):
             self.addCleanup(setter, value)
+
+    def test_the_sound_is_off_when_notify_is_off(self):
+        SharedState.set_phone_notify(False)
+        SharedState.set_phone_topic(TOPIC)
+        QueueWatch.notify_ready(self.logs.append)
+        self.assertEqual(self.played, [])
+
+    def test_the_sound_is_checked_after_the_logger_and_a_sound_error_still_sends(self):
+        SharedState.set_phone_notify(True)
+        SharedState.set_phone_topic(TOPIC)
+        with patch.object(PlaySound, "play_sound", side_effect=RuntimeError("boom")):
+            QueueWatch.notify_ready(self.logs.append)
+        self.assertEqual(len(self.sent), 1)
 
     def test_it_logs_and_sends_when_on_with_a_valid_topic(self):
         SharedState.set_phone_notify(True)

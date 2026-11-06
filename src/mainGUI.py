@@ -2392,6 +2392,11 @@ class App(tk.Tk):
         self.v_voice_cracked      = tk.StringVar(value=config.VOICE_CRACKED)
         self.v_voice_double_trouble = tk.StringVar(value=config.VOICE_DOUBLE_TROUBLE)
         self.v_voice_afk          = tk.StringVar(value=config.VOICE_AFK)
+        # 待機列の合図の声。窓のものではないので、窓ごとの設定（cfg.voice_*）には入れず、SharedState に置く
+        # （見張りの裏のスレッドは Tk の変数を読めない）
+        self.v_voice_queue        = tk.StringVar(value=config.VOICE_QUEUE)
+        SharedState.set_queue_voice(self.v_voice_queue.get().strip())
+        self.v_voice_queue.trace_add("write", lambda *_a: SharedState.set_queue_voice(self.v_voice_queue.get().strip()))
         # 音声ファイルの12行は「アナウンス」に畳む（長すぎるので。既定は閉じた状態。
         # ② の「VRChat起動の詳細設定」と同じ入れ子）。音量の2つはこの下（外）に残す
         self._announce_frame = CollapsibleFrame(fv, text="アナウンス", collapsed=True)
@@ -2409,6 +2414,7 @@ class App(tk.Tk):
                 ("Intermission", self.v_voice_intermission, "intermission"),
                 ("Foxy", self.v_voice_foxy, "foxy"),
                 ("主催リスト喪失", self.v_voice_list_lost, "list_lost"),
+                ("待機列", self.v_voice_queue, "queue"),
                 ("Sabotage murder", self.v_voice_murder, "murder"),
                 ("Sabotage star", self.v_voice_sabotage, "sabotage"),
                 ("Cracked", self.v_voice_cracked, "cracked"),

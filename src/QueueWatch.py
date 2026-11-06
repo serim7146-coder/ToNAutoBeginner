@@ -40,6 +40,7 @@ import config
 import DebugLog
 import LogParser
 import PhoneNotify
+import PlaySound
 import SharedState
 import TaskStats
 import VRChatDiscovery
@@ -339,12 +340,22 @@ class Watcher:
 
 
 def notify_ready(logger):
-    """合図が出た（Watcher の裏のスレッドから）。ツールのログに書き、通知が ON で宛先が正しければスマホへ送る。
+    """合図が出た（Watcher の裏のスレッドから）。ツールのログに書き、「通知する」が ON なら、待機列の声を 1 回鳴らし
+    （「アナウンス」の待機列のチェックが OFF なら鳴らない）、宛先が正しければスマホへ送る。「通知する」が OFF なら
+    声も送信もしない。声の失敗は送信を止めず、送信の失敗は声に響かない。完全放置モードでも鳴る。
     logger は裏のスレッドから呼んでよいもの。宛先・インスタンスの印はログに出さない"""
     logger("[スマホ通知] 待機列に入れるようになりました")
     try:
         if not SharedState.get_phone_notify():
             return
+    except Exception:
+        DebugLog.exception("QueueWatch.notify_ready")
+        return
+    try:
+        PlaySound.play_sound(SharedState.get_queue_voice(), kind="queue")
+    except Exception:
+        DebugLog.exception("QueueWatch.notify_ready.sound")
+    try:
         topic = SharedState.get_phone_topic()
         if not PhoneNotify.is_valid_topic(topic):
             return

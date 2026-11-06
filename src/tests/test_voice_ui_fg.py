@@ -166,6 +166,17 @@ class TestVoiceOnOff(unittest.TestCase):
         self.assertEqual(set(PlaySound.voice_enabled_setting()), set(PlaySound.VOICE_KINDS))
         self.assertTrue(all(PlaySound.load_voice_enabled(None).values()), "無ければ全部オン")
 
+    def test_old_settings_without_the_queue_voice_load_and_default_to_on(self):
+        """待機列の声が入る前の settings.json（voice_enabled・voice_volumes に "queue" が無い）"""
+        old = [k for k in PlaySound.VOICE_KINDS if k != "queue"]
+        enabled = PlaySound.load_voice_enabled({k: True for k in old})
+        self.assertTrue(enabled["queue"])
+        self.assertTrue(PlaySound.get_voice_enabled("queue"))
+        volumes = PlaySound.load_voice_volumes({k: 0.5 for k in old})
+        self.assertEqual(volumes["queue"], 1.0)
+        self.assertEqual(PlaySound.get_voice_volume("queue"), 1.0)
+        self.addCleanup(PlaySound.load_voice_volumes, None)
+
 
 class TestTheAnnounceRows(unittest.TestCase):
     @classmethod
@@ -187,7 +198,7 @@ class TestTheAnnounceRows(unittest.TestCase):
         return [r.winfo_children() for r in self.app._announce_frame.content.pack_slaves()]
 
     def test_a_check_turns_the_voice_off_and_is_saved(self):
-        kids = self._rows()[16]                                 # AFK
+        kids = self._rows()[17]                                 # AFK（待機列が主催リスト喪失の後ろに入った）
         self.assertEqual(kids[1].cget("text"), "AFK")
         with patch.object(self.app, "_schedule_settings_save") as save:
             kids[0].invoke()
