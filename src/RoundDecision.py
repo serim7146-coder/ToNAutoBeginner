@@ -26,9 +26,20 @@ def selectable_round_name(round_type: str) -> str:
     return round_type
 
 
-def open_special_active(wins: int, after_unlock: bool = False) -> bool:
-    """DTM/Waldo を続行する時期か（3勝前。窓の設定で3勝の後も）"""
-    return after_unlock or wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
+def unlock_target(cancel_afk_two: bool) -> int:
+    """この窓の DTM/Waldo 続行の目標勝数。「2クラまで」が入っていれば 2、なければ 3
+    （2クラまでは 3クラまでより優先。数える勝利数そのものは窓によらず 3 まで）"""
+    if cancel_afk_two:
+        return config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS
+    return config.OPEN_SPECIAL_ROUND_TARGET_WINS
+
+
+def open_special_active(wins: int, after_unlock: bool = False, target: int | None = None) -> bool:
+    """DTM/Waldo を続行する時期か（目標の勝数の前。窓の設定で目標の後も）。
+    target が None なら config.OPEN_SPECIAL_ROUND_TARGET_WINS（3）"""
+    if target is None:
+        target = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+    return after_unlock or wins < target
 
 
 def open_special_round_type(round_type: str) -> bool:
@@ -59,11 +70,12 @@ def is_open_special_round_target(
     cancel_afk: bool,
     after_unlock: bool = False,
     holds_plush: bool | None = None,
+    target: int | None = None,
 ) -> bool:
     return (
         bool(open_special_ids(terror_ids, holds_plush))
         and open_special_round_type(round_type)
-        and open_special_active(wins, after_unlock)
+        and open_special_active(wins, after_unlock, target)
         and cancel_afk
     )
 
@@ -110,9 +122,10 @@ def decide_killers(
     after_unlock: bool = False,
     holds_plush: bool | None = None,
     self_inserts_table_disabled: bool = False,
+    target: int | None = None,
 ) -> KillerDecision:
     open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk,
-                                                after_unlock, holds_plush)
+                                                after_unlock, holds_plush, target)
     # リストで表現できない組み合わせ。3クラ解放とは別物なので、
     # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,

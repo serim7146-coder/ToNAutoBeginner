@@ -3287,7 +3287,8 @@ class ActionExecutor:
                 not st.is_open_special_round_round
                 or not RoundDecision.open_special_active(
                     st.open_special_round_wins,
-                    getattr(self._cfg, "cancel_afk_after_unlock", False))
+                    getattr(self._cfg, "cancel_afk_after_unlock", False),
+                    RoundDecision.unlock_target(getattr(self._cfg, "cancel_afk_two", False)))
             )
 
         while not _should_stop():

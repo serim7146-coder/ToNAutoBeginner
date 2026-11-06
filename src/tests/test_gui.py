@@ -3602,3 +3602,133 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
             side_effect=RuntimeError("main thread is not in main loop"))
 
         mainGUI.App._clear_tab_round_settings(app, 1)      # 落ちないこと
+
+
+class TestCancelAfkTwoCheck(unittest.TestCase):
+    """窓ごとのチェック「DTM/Waldo続行 (2クラまで)」: 位置・既定・控え・監視への受け渡し"""
+
+    TWO = "DTM/Waldo続行 (2クラまで)"
+    THREE = "DTM/Waldo続行 (3クラまで)"
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+
+    def _tab(self, **kwargs):
+        return mainGUI.WindowTab(self.root, 1, **kwargs)
+
+    @staticmethod
+    def _buttons(tab):
+        def walk(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from walk(child)
+        return [w for w in walk(tab) if isinstance(w, ttk.Checkbutton)]
+
+    def test_it_sits_directly_before_the_three_clear_check_and_defaults_to_off(self):
+        tab = self._tab()
+        buttons = self._buttons(tab)
+        texts = [b.cget("text") for b in buttons]
+        self.assertEqual(texts.count(self.TWO), 1)
+        two = buttons[texts.index(self.TWO)]
+        three = buttons[texts.index(self.THREE)]
+        row = two.master
+        self.assertIs(three.master, row)
+        siblings = row.winfo_children()
+        self.assertEqual(siblings.index(three), siblings.index(two) + 1)
+        self.assertFalse(tab.v_cancel_afk_two.get())
+        self.assertTrue(tab.v_cancel_afk.get(), "3クラまでの既定は今までどおり ON")
+        self.assertEqual(tab.live_settings()["cancel_afk_two"], False)
+
+    def test_snapshot_and_restore_round_trip(self):
+        tab = self._tab()
+        tab.v_cancel_afk_two.set(True)
+        tab.v_cancel_afk.set(False)
+        saved = tab.snapshot()
+        self.assertIs(saved["cancel_afk_two"], True)
+        other = self._tab()
+        other.restore(saved)
+        self.assertTrue(other.v_cancel_afk_two.get())
+        self.assertFalse(other.v_cancel_afk.get())
+        saved["cancel_afk_two"] = False
+        other.restore(saved)
+        self.assertFalse(other.v_cancel_afk_two.get())
+
+    def test_an_old_snapshot_without_the_key_loads_off(self):
+        tab = self._tab()
+        tab.v_cancel_afk_two.set(True)
+        old = tab.snapshot()
+        del old["cancel_afk_two"]
+        tab.restore(old)                                  # 落ちない
+        self.assertFalse(tab.v_cancel_afk_two.get())
+
+    def test_the_label_is_in_the_broadcast_table_before_the_three_clear_label(self):
+        labels = mainGUI.BROADCAST_CHECK_LABELS
+        self.assertEqual(labels["cancel_afk_two"], self.TWO)
+        keys = list(labels)
+        self.assertEqual(keys.index("cancel_afk"), keys.index("cancel_afk_two") + 1)
+        self.assertEqual(set(labels), set(self._tab()._checks()))
+
+    def test_set_check_writes_it(self):
+        tab = self._tab()
+        tab.set_check("cancel_afk_two", True)
+        self.assertTrue(tab.v_cancel_afk_two.get())
+
+    def test_it_reaches_the_window_config(self):
+        tab = self._tab()
+        tab.v_cancel_afk_two.set(True)
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as log:
+            pass
+        self.addCleanup(os.unlink, log.name)
+        tab.v_log.set(log.name)
+        cfg, error = tab.get_config()
+        self.assertIsNone(error)
+        self.assertTrue(cfg.cancel_afk_two)
+        tab.v_cancel_afk_two.set(False)
+        cfg, _error = tab.get_config()
+        self.assertFalse(cfg.cancel_afk_two)
+
+    def test_it_reaches_a_running_monitor(self):
+        app = type("FakeApp", (), {})()
+        app._running = True
+        cfg = WindowConfig()
+        monitor = MagicMock()
+        monitor.window_idx = 2                            # 窓のタブ idx 1 の監視
+        monitor.cfg = cfg
+        app.monitors = [monitor]
+        tab = self._tab(on_settings_changed=lambda t: mainGUI.App._apply_tab_settings_live(app, t))
+        self.assertFalse(cfg.cancel_afk_two)
+        tab.v_cancel_afk_two.set(True)
+        self.assertTrue(cfg.cancel_afk_two)
+        tab.v_cancel_afk_two.set(False)
+        self.assertFalse(cfg.cancel_afk_two)
+
+    def test_the_debug_start_line_names_it(self):
+        src = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn("2クラまで={getattr(cfg, 'cancel_afk_two', False)}", src)
+
+
+class TestCancelAfkTwoKeptOnRebuild(unittest.TestCase):
+    """窓数を変えてタブを作り直しても、「DTM/Waldo続行 (2クラまで)」は引き継ぐ"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = mainGUI.App()
+        cls.app.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.destroy()
+
+    def test_changing_the_window_count_keeps_it(self):
+        count = len(self.app.tabs)
+        self.addCleanup(self.app._rebuild_tabs, count)
+        self.addCleanup(setattr, self.app, "_tab_memory", {})
+        self.app._tab_memory = {}
+        self.app._rebuild_tabs(2)
+        self.app.tabs[1].v_cancel_afk_two.set(True)
+        self.app._rebuild_tabs(3)
+        self.app._rebuild_tabs(2)
+        self.assertTrue(self.app.tabs[1].v_cancel_afk_two.get())
+        self.assertFalse(self.app.tabs[0].v_cancel_afk_two.get())
