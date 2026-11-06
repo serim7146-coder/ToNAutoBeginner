@@ -3352,3 +3352,294 @@ class TestEquippingNothing(unittest.TestCase):
         self.assertFalse(monitor.st.waiting_for_equip)
         self.assertIn(monitor._release_equip_wait_after_delay,
                       [c.args[0] for c in daemon.call_args_list])
+
+
+class TestTwoClearTargetRule(unittest.TestCase):
+    """窓の設定「DTM/Waldo続行 (2クラまで)」: 目標の勝数だけを変える純粋な規則"""
+
+    # (2クラまで, 3クラまで, 3クラ後も) → 勝利数 0,1,2,3 のときの DTM/Waldo の続行
+    TABLE = (
+        ((True, False, False), (True, True, False, False)),     # 2クラまでだけ: 2 勝で止まる
+        ((True, True, False), (True, True, False, False)),      # 3クラまでも ON: 2クラまでが優先
+        ((True, True, True), (True, True, True, True)),         # 3クラ後もが最優先: 止まらない
+        ((True, False, True), (True, True, True, True)),
+        ((False, True, False), (True, True, True, False)),      # 2クラまで OFF: 今までどおり
+        ((False, True, True), (True, True, True, True)),
+        ((False, False, False), (False, False, False, False)),  # どちらも OFF: 続行しない
+    )
+
+    def test_the_target(self):
+        self.assertEqual(RoundDecision.unlock_target(False), 3)
+        self.assertEqual(RoundDecision.unlock_target(True), 2)
+        self.assertEqual(config.OPEN_SPECIAL_ROUND_TARGET_WINS, 3)
+        self.assertEqual(config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS, 2)
+
+    def test_all_the_rows_through_decide_killers(self):
+        for (two, three, after), expected in self.TABLE:
+            for wins, want in enumerate(expected):
+                decision = RoundDecision.decide_killers(
+                    {}, [config.DTM_ID], "Classic", wins, bool(two or three),
+                    after_unlock=after, target=RoundDecision.unlock_target(two))
+                self.assertEqual(
+                    (decision.is_open_special_round_target, decision.is_continue_round), (want, want),
+                    (two, three, after, wins))
+
+    def test_the_active_rule(self):
+        self.assertEqual([RoundDecision.open_special_active(w, False, 2) for w in range(4)],
+                         [True, True, False, False])
+        self.assertEqual([RoundDecision.open_special_active(w, True, 2) for w in range(4)], [True] * 4)
+
+    def test_omitting_the_target_is_as_before(self):
+        for after in (False, True):
+            for wins in range(4):
+                today = after or wins < 3
+                self.assertEqual(RoundDecision.open_special_active(wins, after), today)
+                self.assertEqual(RoundDecision.open_special_active(wins, after, None), today)
+                self.assertEqual(RoundDecision.open_special_active(wins, after, 3), today)
+                for kwargs in ({}, {"target": None}, {"target": 3}):
+                    self.assertEqual(RoundDecision.is_open_special_round_target(
+                        [config.WALDO_ID], "Classic", wins, True, after, **kwargs), today)
+                    decision = RoundDecision.decide_killers(
+                        {}, [config.DTM_ID], "Classic", wins, True, after_unlock=after, **kwargs)
+                    self.assertEqual(decision, RoundDecision.KillerDecision(today, today))
+                    self.assertEqual(RoundDecision.decide_killers(
+                        {}, [config.DTM_ID], "Classic", wins, False, after_unlock=after, **kwargs),
+                        RoundDecision.KillerDecision(False, False))
+
+    def test_the_list_still_continues_after_the_target(self):
+        keep_on = {"Classic/クラシック": {config.DTM_ID}}
+        decision = RoundDecision.decide_killers(keep_on, [config.DTM_ID], "Classic", 2, True, target=2)
+        self.assertEqual((decision.is_open_special_round_target, decision.is_continue_round), (False, True))
+
+
+class TestTwoClearWindow(unittest.TestCase):
+    """「2クラまで」の窓を LogMonitor の本当の判定の道（_list_plan・自爆指定・放置モードの理由・AFK ループ）に通す"""
+
+    def _monitor(self, two=False, three=False, after=False, wins=0):
+        cfg = WindowConfig(cancel_afk=three, cancel_afk_two=two, cancel_afk_after_unlock=after)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.round_type = "Classic"
+        monitor.st.item_id = 1
+        monitor.st.open_special_round_wins = wins
+        return monitor
+
+    def test_default_is_off(self):
+        self.assertFalse(WindowConfig().cancel_afk_two)
+        self.assertTrue(WindowConfig().cancel_afk)
+
+    def test_all_the_rows_through_the_monitor(self):
+        for (two, three, after), expected in TestTwoClearTargetRule.TABLE:
+            for wins, want in enumerate(expected):
+                monitor = self._monitor(two, three, after, wins)
+                _kind, is_continue, open_special = monitor._list_plan([config.DTM_ID], False)
+                self.assertEqual((is_continue, open_special), (want, want), (two, three, after, wins))
+                self.assertEqual(monitor._hands_free_skip_reason([config.DTM_ID]) is None, want,
+                                 (two, three, after, wins))
+
+    def test_the_two_check_alone_enables_waldo_too(self):
+        monitor = self._monitor(two=True, wins=1)
+        monitor.st.held_item_id = RoundDecision.guidance_plush_id()
+        _kind, is_continue, _open = monitor._list_plan([config.WALDO_ID], False)
+        self.assertTrue(is_continue)
+
+    def test_the_target_changes_the_round_skip_exception(self):
+        """全自爆の指定より 3クラ解放が勝つのも、窓の目標まで"""
+        for two, wins, expect_skip in ((True, 1, False), (True, 2, True), (False, 2, False), (False, 3, True)):
+            monitor = self._monitor(two=two, three=not two, wins=wins)
+            monitor.cfg.skip_rounds = {"Classic"}
+            self.assertEqual(monitor._should_skip_by_round([config.DTM_ID], False), expect_skip, (two, wins))
+
+    def _loop_moves(self, wins, **cfg):
+        st = WindowState(in_round=True, is_open_special_round_round=True, open_special_round_wins=wins,
+                         instance_type=config.INSTANCE_PRIVATE)
+        moves = []
+        ex = ActionExecutor.ActionExecutor(WindowConfig(**cfg), st, lambda: True, lambda _m: None)
+        ticks = iter(range(1000))
+
+        def sleep(_sec):
+            if next(ticks) > config.OPEN_SPECIAL_ROUND_INTERVAL_SEC + 1:
+                st.in_round = False
+        with patch.object(ActionExecutor.time, "sleep", side_effect=sleep), \
+             patch.object(ex, "move", side_effect=lambda *a: moves.append(a)):
+            ex.do_open_special_round_loop()
+        return len(moves)
+
+    def test_the_afk_loop_stops_at_two_only_for_a_two_clear_window(self):
+        self.assertEqual(self._loop_moves(2, cancel_afk_two=True), 0)
+        self.assertEqual(self._loop_moves(2, cancel_afk=True), 1, "3クラだけの窓は 2 勝では続ける")
+        self.assertEqual(self._loop_moves(2, cancel_afk_two=True, cancel_afk_after_unlock=True), 1,
+                         "3クラ後もが入っていれば止まらない")
+        self.assertEqual(self._loop_moves(3, cancel_afk_two=True, cancel_afk_after_unlock=True), 1)
+
+    def test_the_afk_loop_keeps_running_below_the_target(self):
+        self.assertEqual(self._loop_moves(1, cancel_afk_two=True), 1)
+
+    def test_the_round_start_log_uses_the_target(self):
+        monitor = self._monitor(two=True, wins=1)
+        monitor.st.terror_ids = [config.DTM_ID]
+        with patch.object(monitor, "_start_daemon") as daemon:
+            monitor._decide_with_keep_on_set("Classic")
+        self.assertIn("[窓1] 2クラ解放ラウンド開始（勝利数: 1/2）", monitor.logs)
+        self.assertIn(monitor._action.do_open_special_round_loop, [c.args[0] for c in daemon.call_args_list])
+
+    def test_a_three_clear_window_keeps_its_old_round_start_log(self):
+        monitor = self._monitor(three=True, wins=2)
+        monitor.st.terror_ids = [config.DTM_ID]
+        with patch.object(monitor, "_start_daemon"):
+            monitor._decide_with_keep_on_set("Classic")
+        self.assertIn("[窓1] 3クラ解放ラウンド開始（勝利数: 2/3）", monitor.logs)
+
+    def test_the_already_reached_log_uses_the_target(self):
+        for two, text in ((True, "DTM/Waldoラウンドだが2勝達成済み→AFK解除なし"),
+                          (False, "DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")):
+            monitor = self._monitor(two=two, three=not two, wins=3)
+            monitor.st.terror_ids = [config.DTM_ID]
+            with patch.object(monitor, "_start_daemon"):
+                monitor._decide_with_keep_on_set("Classic", ("list", True, True))
+            self.assertIn("[窓1] " + text, monitor.logs)
+
+
+class TestTwoClearLogs(unittest.TestCase):
+    """「2クラまで」の窓のログは目標（2）で出し、3/2 とは出さない。内部の勝利数は 3 まで数える"""
+
+    ME = TestThreeWinsRestored.ME
+    PREFIX = TestThreeWinsRestored.PREFIX
+    JOIN = TestThreeWinsRestored.JOIN
+    OLD_JOIN = TestThreeWinsRestored.OLD_JOIN
+    LIVED = TestThreeWinsRestored.LIVED
+    NEXT_JOIN = "[Behaviour] Joining wrld_next:3~private(usr_me)~region(jp)"
+    _round = staticmethod(TestThreeWinsRestored._round)
+
+    def _monitor(self, path=None, two=True, three=False):
+        cfg = WindowConfig(log_path=path, cancel_afk=three, cancel_afk_two=two)
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        return monitor
+
+    def _scan(self, after_join, two=True, three=False):
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        lines = [f"User Authenticated: serim01 ({self.ME})", self.JOIN, *after_join]
+        tmp.write("\n".join(self.PREFIX + line for line in lines) + "\n")
+        tmp.close()
+        self.addCleanup(os.unlink, tmp.name)
+        monitor = self._monitor(Path(tmp.name), two, three)
+        with patch.object(ConnectDB, "send_Users", return_value=1), \
+             patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: None):
+            monitor._detect_instance_from_log()
+        return monitor
+
+    def _live(self, monitor, *lines):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            for line in lines:
+                monitor._process(self.PREFIX + line)
+
+    @staticmethod
+    def _said(monitor):
+        return [m for m in monitor.logs if "クラ" in m or "勝" in m or "生存数" in m]
+
+    def test_lives_show_one_and_two_and_the_achievement_fires_once(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED)
+        self.assertEqual(self._said(monitor), [
+            "[窓1] 生存数: 1/2", "[窓1] 生存数: 2/2",
+            "[窓1] 🎉 2勝達成！以降のDTM/Waldoラウンドはスキップします"])
+
+    def test_a_third_life_counts_inside_but_never_prints_three_over_two(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED, self.LIVED)
+        self.assertEqual(monitor.st.open_special_round_wins, 3, "内部は 3 まで数える")
+        self.assertEqual(sum("生存数" in m for m in monitor.logs), 2)
+        self.assertEqual(sum("🎉 2勝達成" in m for m in monitor.logs), 1)
+        self.assertFalse(any("3/2" in m or "🎉 3勝" in m for m in monitor.logs))
+
+    def test_the_achievement_with_the_after_unlock_text(self):
+        monitor = self._monitor()
+        monitor.cfg.cancel_afk_after_unlock = True
+        self._live(monitor, self.LIVED, self.LIVED)
+        self.assertIn("[窓1] 🎉 2勝達成！3クラ解放後も続行の設定なので、DTM/Waldoは続けます", monitor.logs)
+
+    def test_a_rejoin_goes_back_to_zero_of_two(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED)
+        self._live(monitor, self.NEXT_JOIN)
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertIn("[窓1] 2クラ: 別のインスタンスに入ったので 0/2 に戻します", monitor.logs)
+        self.assertFalse(any("0/3" in m for m in monitor.logs))
+        self._live(monitor, self.LIVED)
+        self.assertIn("[窓1] 生存数: 1/2", monitor.logs)
+
+    def test_a_rejoin_after_a_third_life_still_says_two(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED)
+        self._live(monitor, self.NEXT_JOIN)
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        self.assertIn("[窓1] 2クラ: 別のインスタンスに入ったので 0/2 に戻します", monitor.logs)
+
+    def test_restoring_with_three_lives_never_prints_three_over_two(self):
+        monitor = self._scan([self._round("Classic"), self.LIVED] * 3)
+        self.assertEqual(monitor.st.open_special_round_wins, 3, "内部は 3 のまま")
+        self.assertEqual(self._said(monitor), ["[窓1] 2クラ: 入室後のログから 生存3回・特殊ラウンドなし → 2/2"])
+        self.assertFalse(any("3/2" in m for m in monitor.logs))
+
+    def test_restoring_with_one_life(self):
+        monitor = self._scan([self._round("Classic"), self.LIVED])
+        self.assertEqual(monitor.st.open_special_round_wins, 1)
+        self.assertEqual(self._said(monitor), ["[窓1] 2クラ: 入室後のログから 生存1回・特殊ラウンドなし → 1/2"])
+
+    def test_restoring_with_a_special_round_and_two_twilights(self):
+        monitor = self._scan([self._round("Classic"), self._round("Fog")])
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), ["[窓1] 2クラ: 入室後に Fog → 2勝扱い"])
+        monitor = self._scan([self._round("Twilight"), self._round("Classic"), self._round("Twilight")])
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), ["[窓1] 2クラ: 入室後に Twilight 2回 → 2勝扱い"])
+
+    def test_a_special_round_stops_a_two_clear_window_at_zero(self):
+        monitor = self._monitor()
+        monitor.st.round_type = "Fog"
+        self._live(monitor, "Killers have been set - 1 0 0 // Round type is Fog")
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), [
+            "[窓1] 特殊ラウンド（Fog）を経験したので2勝扱い → 以降のDTM/Waldoはスキップします"])
+        monitor.st.item_id = 1
+        monitor.st.round_type = "Classic"
+        _kind, is_continue, open_special = monitor._list_plan([config.DTM_ID], False)
+        self.assertEqual((is_continue, open_special), (False, False))
+        # 入り直すと 0 に戻り、また続行する
+        self._live(monitor, self.NEXT_JOIN)
+        self.assertEqual(monitor.st.open_special_round_wins, 0)
+        _kind, is_continue, open_special = monitor._list_plan([config.DTM_ID], False)
+        self.assertEqual((is_continue, open_special), (True, True))
+
+    def test_a_special_round_at_two_wins_says_nothing(self):
+        monitor = self._monitor()
+        self._live(monitor, self.LIVED, self.LIVED)
+        monitor.logs.clear()
+        monitor.st.round_type = "Fog"
+        self._live(monitor, "Killers have been set - 1 0 0 // Round type is Fog")
+        self.assertEqual(monitor.st.open_special_round_wins, 3)
+        self.assertEqual(self._said(monitor), [])
+
+    def test_a_three_clear_window_keeps_every_log_text(self):
+        monitor = self._monitor(two=False, three=True)
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED, self.LIVED)
+        self.assertEqual(self._said(monitor), [
+            "[窓1] 生存数: 1/3", "[窓1] 生存数: 2/3", "[窓1] 生存数: 3/3",
+            "[窓1] 🎉 3勝達成！以降のDTM/Waldoラウンドはスキップします"])
+        self._live(monitor, self.NEXT_JOIN)
+        self.assertIn("[窓1] 3クラ: 別のインスタンスに入ったので 0/3 に戻します", monitor.logs)
+        monitor = self._monitor(two=False, three=True)
+        monitor.st.round_type = "Fog"
+        self._live(monitor, "Killers have been set - 1 0 0 // Round type is Fog")
+        self.assertEqual(self._said(monitor), [
+            "[窓1] 特殊ラウンド（Fog）を経験したので3勝扱い → 以降のDTM/Waldoはスキップします"])
+
+    def test_with_both_off_nothing_is_said(self):
+        monitor = self._monitor(two=False, three=False)
+        self._live(monitor, self.LIVED, self.LIVED, self.LIVED)
+        self.assertEqual(self._said(monitor), [])

@@ -783,24 +783,25 @@ class LogMonitor:
         足りないことがある）
         """
         st = self.st
-        target = config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        target = config.OPEN_SPECIAL_ROUND_TARGET_WINS      # 数えるのは窓によらず 3 まで
+        shown = self._unlock_target()                       # ログに出すのはこの窓の目標（3/2 とは出さない）
         proofs = [t for t in round_types if t in config.SPECIAL_ROUND
                   and t not in config.OPEN_SPECIAL_ROUND_NOT_PROOF]
         twilights = [t for t in round_types if t in config.OPEN_SPECIAL_ROUND_NOT_PROOF]
         st.twilight_count = len(twilights)
         if proofs:
             st.open_special_round_wins = target
-            said = f"入室後に {proofs[0]} → 3勝扱い"
+            said = f"入室後に {proofs[0]} → {shown}勝扱い"
         elif len(twilights) >= 2:
             st.open_special_round_wins = target
-            said = f"入室後に {twilights[0]} {len(twilights)}回 → 3勝扱い"
+            said = f"入室後に {twilights[0]} {len(twilights)}回 → {shown}勝扱い"
         else:
             st.open_special_round_wins = min(lived, target)
             specials = f"{twilights[0]} 1回" if twilights else "特殊ラウンドなし"
             said = (f"入室後のログから 生存{lived}回・{specials}"
-                    f" → {st.open_special_round_wins}/{target}")
-        if self.cfg.cancel_afk:
-            self._log(f"3クラ: {said}")
+                    f" → {min(st.open_special_round_wins, shown)}/{shown}")
+        if self._cancel_afk():
+            self._log(f"{shown}クラ: {said}")
 
     def _fetch_transformed_uid(self, user_id, name=None):
         """統計用のIDを取りに行く（裏のスレッドで）。
@@ -1549,7 +1550,8 @@ class LogMonitor:
             return False
         if RoundDecision.is_open_special_round_target(
                 ids, st.round_type, st.open_special_round_wins,
-                self.cfg.cancel_afk, self._after_unlock(), self._holds_plush()):
+                self._cancel_afk(), self._after_unlock(), self._holds_plush(),
+                self._unlock_target()):
             return False        # 3クラ解放が勝つ。通常判定へ落とす
         if GroupRound.is_variant(ids):
             return False        # Variantは自爆しない。通常判定へ落とす
@@ -1915,9 +1917,9 @@ class LogMonitor:
         elif st.round_type in config.SPECIAL_ROUND:
             proof = st.round_type
         if proof is not None:
-            if (st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS
-                    and self.cfg.cancel_afk):
-                self._log(f"特殊ラウンド（{proof}）を経験したので3勝扱い"
+            if (st.open_special_round_wins < self._unlock_target()
+                    and self._cancel_afk()):
+                self._log(f"特殊ラウンド（{proof}）を経験したので{self._unlock_target()}勝扱い"
                           f" → {self._after_unlock_text('以降のDTM/Waldoはスキップします')}")
             st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
@@ -2199,9 +2201,10 @@ class LogMonitor:
         # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
         self.sequence.reset()
         # 3クラはインスタンスに入り直すと0に戻る
-        if st.open_special_round_wins and self.cfg.cancel_afk:
-            self._log("3クラ: 別のインスタンスに入ったので 0/"
-                      f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS} に戻します")
+        if st.open_special_round_wins and self._cancel_afk():
+            target = self._unlock_target()
+            self._log(f"{target}クラ: 別のインスタンスに入ったので 0/"
+                      f"{target} に戻します")
         st.open_special_round_wins = 0
         st.twilight_count = 0
         st.enrage_identified = None
@@ -2269,11 +2272,12 @@ class LogMonitor:
         # どのラウンドでも生き残ったら1勝（3で打ち止め）
         if st.open_special_round_wins < config.OPEN_SPECIAL_ROUND_TARGET_WINS:
             st.open_special_round_wins += 1
-            if self.cfg.cancel_afk:
-                self._log(f"生存数: {st.open_special_round_wins}/"
-                          f"{config.OPEN_SPECIAL_ROUND_TARGET_WINS}")
-                if st.open_special_round_wins >= config.OPEN_SPECIAL_ROUND_TARGET_WINS:
-                    self._log("🎉 3勝達成！" + self._after_unlock_text(
+            target = self._unlock_target()
+            # 数えるのは3まで。2クラの窓は目標を超えた分（3/2）をログに出さない
+            if self._cancel_afk() and st.open_special_round_wins <= target:
+                self._log(f"生存数: {st.open_special_round_wins}/{target}")
+                if st.open_special_round_wins == target:
+                    self._log(f"🎉 {target}勝達成！" + self._after_unlock_text(
                         "以降のDTM/Waldoラウンドはスキップします"))
         st.is_open_special_round_round = False
         self._remove_survived_from_list()
@@ -2525,10 +2529,11 @@ class LogMonitor:
         st = self.st
         decision = RoundDecision.decide_killers(
             self._keep_on(), ids, st.round_type,
-            st.open_special_round_wins, self.cfg.cancel_afk,
+            st.open_special_round_wins, self._cancel_afk(),
             bloodthirsty_variant=bloodthirsty,
             after_unlock=self._after_unlock(), holds_plush=self._holds_plush(),
-            self_inserts_table_disabled=self._self_inserts_table_disabled())
+            self_inserts_table_disabled=self._self_inserts_table_disabled(),
+            target=self._unlock_target())
         return ("list", decision.is_continue_round,
                 decision.is_open_special_round_target)
 
@@ -2553,6 +2558,14 @@ class LogMonitor:
     def _after_unlock(self) -> bool:
         """DTM/Waldo を3クラ解放（3勝）の後も続行する窓か"""
         return bool(getattr(self.cfg, "cancel_afk_after_unlock", False))
+
+    def _cancel_afk(self) -> bool:
+        """DTM/Waldo の続行が有効な窓か（「3クラまで」か「2クラまで」のどちらか）"""
+        return bool(self.cfg.cancel_afk or getattr(self.cfg, "cancel_afk_two", False))
+
+    def _unlock_target(self) -> int:
+        """この窓の DTM/Waldo 続行の目標勝数（「2クラまで」なら 2、そうでなければ 3）"""
+        return RoundDecision.unlock_target(bool(getattr(self.cfg, "cancel_afk_two", False)))
 
     def _after_unlock_text(self, otherwise: str) -> str:
         """3勝扱いになったときに出す続き（3クラ解放後も続行する窓なら、そう言う）"""
@@ -2584,16 +2597,16 @@ class LogMonitor:
         """放置モードで即自爆するならその理由。DTM/Waldo は例外"""
         st = self.st
         if not RoundDecision.open_special_active(st.open_special_round_wins,
-                                                 self._after_unlock()):
-            return f"放置モード(3クラ済み): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
+                                                 self._after_unlock(), self._unlock_target()):
+            return f"放置モード({self._unlock_target()}クラ済み): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         if not RoundDecision.open_special_round_type(st.round_type):
             return f"放置モード(複数体のラウンド): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         if not st.item_id:
-            has_dtm = self.cfg.cancel_afk and config.DTM_ID in ids
+            has_dtm = self._cancel_afk() and config.DTM_ID in ids
             if not has_dtm:
                 return (f"放置モード(アイテムなし・DTM続行対象外): 即自爆 {format_terror_ids(ids)} / "
                         f"{st.round_type}")
-        has_cancel_afk = bool(self.cfg.cancel_afk and
+        has_cancel_afk = bool(self._cancel_afk() and
                               RoundDecision.open_special_ids(ids, self._holds_plush()))
         if not has_cancel_afk:
             return f"放置モード(DTM/Waldo続行対象外): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
@@ -2789,14 +2802,14 @@ class LogMonitor:
                 self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
             if (is_open_special_round_target and is_private
                     and RoundDecision.open_special_active(st.open_special_round_wins,
-                                                          self._after_unlock())):
+                                                          self._after_unlock(), self._unlock_target())):
                 st.is_open_special_round_round = True
-                self._log(f"3クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{config.OPEN_SPECIAL_ROUND_TARGET_WINS}）")
+                self._log(f"{self._unlock_target()}クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{self._unlock_target()}）")
                 self._start_daemon(self._action.do_open_special_round_loop)
             elif is_open_special_round_target and not is_private:
                 self._log("DTM/WaldoラウンドだがAFK解除はprivateのみ")
             elif is_open_special_round_target:
-                self._log("DTM/Waldoラウンドだが3勝達成済み→AFK解除なし")
+                self._log(f"DTM/Waldoラウンドだが{self._unlock_target()}勝達成済み→AFK解除なし")
         else:
             # 続行にならなければ自爆する。グループもここに含める
             if self.cfg.do_skip and (is_judge or is_group):

@@ -135,6 +135,7 @@ def ctrl_held() -> bool:
 BROADCAST_CHECK_LABELS = {
     "auto_begin": "自動Begin",
     "do_skip": "自動自爆",
+    "cancel_afk_two": "DTM/Waldo続行 (2クラまで)",
     "cancel_afk": "DTM/Waldo続行 (3クラまで)",
     "cancel_afk_after_unlock": "3クラ後もDTM/Waldo続行",
     "announce_intermission": "Intermissionアナウンス",
@@ -470,7 +471,7 @@ class WindowTab(ttk.Frame):
     def _watch_settings(self):
         """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
         if self._on_settings_changed is not None:
-            for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk,
+            for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk_two, self.v_cancel_afk,
                         self.v_cancel_afk_after_unlock, self.v_announce_intermission,
                         *self.v_skip_rounds.values(), *self.v_continue_rounds.values(),
                         *self._freeze_vars()):
@@ -501,6 +502,7 @@ class WindowTab(ttk.Frame):
 
     def _checks(self) -> dict:
         return {"auto_begin": self.v_auto_begin, "do_skip": self.v_do_skip,
+                "cancel_afk_two": self.v_cancel_afk_two,
                 "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
                 "announce_intermission": self.v_announce_intermission,
                 "freeze_8pages": self.v_freeze_8pages, "freeze_punish": self.v_freeze_punish}
@@ -561,6 +563,7 @@ class WindowTab(ttk.Frame):
         return {
             "auto_begin": self.v_auto_begin.get(),
             "do_skip": self.v_do_skip.get(),
+            "cancel_afk_two": self.v_cancel_afk_two.get(),
             "cancel_afk": self.v_cancel_afk.get(),
             "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
             "announce_intermission": self.v_announce_intermission.get(),
@@ -587,11 +590,13 @@ class WindowTab(ttk.Frame):
         self._freeze_loading = True
         try:
             for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
+                             ("cancel_afk_two", self.v_cancel_afk_two),
                              ("cancel_afk", self.v_cancel_afk),
                              ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
                              ("announce_intermission", self.v_announce_intermission),
                              ("freeze_8pages", self.v_freeze_8pages), ("freeze_punish", self.v_freeze_punish)):
-                var.set(saved[key])
+                # 古い控えにはこのキーが無い（「2クラまで」は OFF として戻す）
+                var.set(saved.get(key, False) if key == "cancel_afk_two" else saved[key])
             for key, vars_ in (("skip_rounds", self.v_skip_rounds),
                                ("continue_rounds", self.v_continue_rounds),
                                ("freeze_rounds", self.v_freeze_rounds)):
@@ -654,6 +659,7 @@ class WindowTab(ttk.Frame):
         cf.pack(fill="x", padx=10)
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
+        self.v_cancel_afk_two = tk.BooleanVar(value=False)
         self.v_cancel_afk  = tk.BooleanVar(value=True)
         self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
         self.v_announce_intermission = tk.BooleanVar(value=False)
@@ -661,6 +667,8 @@ class WindowTab(ttk.Frame):
                         command=lambda k="auto_begin", v=self.v_auto_begin: self._changed(k, v)).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip,
                         command=lambda k="do_skip", v=self.v_do_skip: self._changed(k, v)).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(cf, text="DTM/Waldo続行 (2クラまで)", variable=self.v_cancel_afk_two,
+                        command=lambda k="cancel_afk_two", v=self.v_cancel_afk_two: self._changed(k, v)).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk,
                         command=lambda k="cancel_afk", v=self.v_cancel_afk: self._changed(k, v)).pack(side="left", padx=(12, 0))
         ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock,
@@ -4084,6 +4092,7 @@ class App(tk.Tk):
                     f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
                     f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
                     f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
+                    f"（2クラまで={getattr(cfg, 'cancel_afk_two', False)}）"
                     f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
                     f" Intermission={cfg.announce_intermission}"
                     f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}"

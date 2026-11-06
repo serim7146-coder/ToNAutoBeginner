@@ -11,6 +11,8 @@ class WindowConfig:
     auto_begin: bool = True
     do_skip: bool = True
     cancel_afk: bool = True
+    # DTM/Waldo を2クラ（2勝）まで続行する。これだけでも続行は有効。3クラまでより優先、3クラ後もには負ける
+    cancel_afk_two: bool = False
     # DTM/Waldo を3クラ解放（3勝）の後も続行する
     cancel_afk_after_unlock: bool = False
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）

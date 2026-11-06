@@ -542,6 +542,7 @@ DTM_ID   = ReadJson.terror_id("Don't Touch Me", TERRORS)
 WALDO_ID = ReadJson.terror_id("Waldo", TERRORS)
 OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {DTM_ID, WALDO_ID}
 OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）。窓の設定で、3勝の後も続けられる
+OPEN_SPECIAL_ROUND_TWO_TARGET_WINS = 2   # 窓の設定「DTM/Waldo続行 (2クラまで)」のときの目標。数えるのは3まで変わらない
 # Waldo を続行するのは、このアイテムを持っているときだけ（依頼者）。番号は item.json から名前で引く。
 # item.json に無い間は GUIDANCE_PLUSH_ITEM_ID（分かっていれば番号を書く）。どちらも無ければ、
 # 持っているか分からないので前と同じ（アイテムに関係なく続行）
