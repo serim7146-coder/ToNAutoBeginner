@@ -170,6 +170,9 @@ _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set
 _PHONE_TOPIC = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_phone_topic, set_phone_topic = _PHONE_TOPIC.get, _PHONE_TOPIC.set
+# 待機列の合図で鳴らす声のファイル（窓のものではない。見張りの裏のスレッドは Tk の変数を読めないので、ここに置く）。空なら鳴らさない
+_QUEUE_VOICE = _Setting("", lambda v: v if isinstance(v, str) else "")
+get_queue_voice, set_queue_voice = _QUEUE_VOICE.get, _QUEUE_VOICE.set
 get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
                                                             _CONTINUE_RESTORE_WINDOW.set)
 

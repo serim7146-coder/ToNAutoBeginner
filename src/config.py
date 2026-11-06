@@ -866,6 +866,8 @@ VOICE_CRACKED      = str(resource_path("assets/voice/Cracked.mp3"))
 VOICE_DOUBLE_TROUBLE = str(resource_path("assets/voice/DoubleTrouble.mp3"))
 # 生き残るラウンドで AFK_STILL_SEC 動かなかったとき、private でない窓で鳴らす警告音（EZ）
 VOICE_AFK          = str(resource_path("assets/voice/AFK.mp3"))
+# 待機列に入れるようになった合図（QueueWatch）で鳴らす。窓のものではなく、スマホ通知の「通知する」が ON のときだけ鳴る
+VOICE_QUEUE        = str(resource_path("assets/voice/Queue.mp3"))
 # ツールが自爆しないラウンドの AFK 回避（EZ。依頼者 2026-10-15）。速さ（OSC の受信）が AFK_MOVING_SPEED 未満の
 # 状態が AFK_STILL_SEC 続いたら、private の窓は微移動（DTM/Waldo と同じ）、それ以外は警告音。受信が無い窓は止まっていると見る
 AFK_STILL_SEC      = 70.0

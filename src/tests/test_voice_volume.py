@@ -58,8 +58,11 @@ class TestTheVolume(unittest.TestCase):
         self.assertEqual(PlaySound.get_voice_volume("fog"), 0.0)
 
     def test_twelve_kinds_named_after_the_window_settings(self):
-        self.assertEqual(len(PlaySound.VOICE_KINDS), 17, "EZ で 5 つ（突入フリーズの 4 つと AFK。FB で EX を外した）")
+        self.assertEqual(len(PlaySound.VOICE_KINDS), 18, "EZ で 5 つ（突入フリーズの 4 つと AFK。FB で EX を外した）＋待機列")
         for kind in PlaySound.VOICE_KINDS:
+            if kind == "queue":         # 待機列は窓のものではない（SharedState に置く）
+                self.assertFalse(hasattr(WindowConfig(), "voice_queue"))
+                continue
             self.assertTrue(hasattr(WindowConfig(), f"voice_{kind}"), kind)
 
 
@@ -183,14 +186,14 @@ class TestTheScreen(unittest.TestCase):
     def test_every_row_has_its_kind(self):
         src = inspect.getsource(mainGUI.App)
         rows = re.findall(r'\("[^"]+", self\.v_voice_(\w+), "(\w+)"\)', src)      # FG: 行の一覧
-        self.assertEqual(len(rows), 17)
+        self.assertEqual(len(rows), 18)
         for attr, kind in rows:
             self.assertEqual(attr, kind)
         self.assertEqual({k for _a, k in rows}, set(PlaySound.VOICE_KINDS))
 
 
 class TestTheRealRows(unittest.TestCase):
-    """本物の App の「アナウンス」の 17 行に、スライダー・%・▶ が付いている"""
+    """本物の App の「アナウンス」の 18 行に、スライダー・%・▶ が付いている"""
 
     @classmethod
     def setUpClass(cls):
@@ -213,7 +216,7 @@ class TestTheRealRows(unittest.TestCase):
 
     def test_each_row_has_a_slider_a_percent_and_a_play_button(self):
         rows = self._rows()
-        self.assertEqual(len(rows), 17)
+        self.assertEqual(len(rows), 18)
         for classes, kids in rows:
             self.assertEqual(classes, ["TCheckbutton", "TLabel", "TEntry", "TButton", "TScale", "TLabel",
                                        "TButton"], "FG: 頭にオン・オフのチェック")

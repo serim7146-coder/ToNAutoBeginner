@@ -2016,12 +2016,12 @@ class TestAnnounceFold(unittest.TestCase):
 
     LABELS = ["続行ラウンド", "Alternate", "Midnight", "Unbound", "Fog", "Ghost",
               "8 Pages(速度検知)", "Punish(速度検知)", "アイテムロスト", "Intermission",
-              "Foxy", "主催リスト喪失", "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
+              "Foxy", "主催リスト喪失", "待機列", "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
               "AFK"]                         # FG: 見出しの「:」は外した（依頼者了承の案）
     VARS = ["v_voice_continue", "v_voice_alternate", "v_voice_midnight", "v_voice_unbound",
             "v_voice_fog", "v_voice_ghost", "v_voice_8pages", "v_voice_punish",
             "v_voice_item_lost", "v_voice_intermission", "v_voice_foxy", "v_voice_list_lost",
-            "v_voice_murder", "v_voice_sabotage", "v_voice_cracked", "v_voice_double_trouble",
+            "v_voice_queue", "v_voice_murder", "v_voice_sabotage", "v_voice_cracked", "v_voice_double_trouble",
             "v_voice_afk"]
 
     @classmethod
@@ -2086,6 +2086,17 @@ class TestAnnounceFold(unittest.TestCase):
         self.assertEqual(fold.content.winfo_manager(), "pack")
         labels = [row.winfo_children()[1].cget("text") for row in fold.content.pack_slaves()]
         self.assertEqual(labels, self.LABELS)
+
+    def test_the_queue_voice_follows_the_entry_into_shared_state(self):
+        """待機列の声は窓のものではない。見張りの裏のスレッドが Tk を読まないよう、SharedState に写す"""
+        var = self.app.v_voice_queue
+        old = var.get()
+        self.addCleanup(lambda: var.set(old))
+        self.assertEqual(SharedState.get_queue_voice(), old.strip())
+        var.set("  C:/voices/other.mp3  ")
+        self.assertEqual(SharedState.get_queue_voice(), "C:/voices/other.mp3")
+        var.set("")
+        self.assertEqual(SharedState.get_queue_voice(), "")
 
 
 
