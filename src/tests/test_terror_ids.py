@@ -82,11 +82,11 @@ class TestTable(unittest.TestCase):
         self.assertEqual({o for o in TerrorIds.ids() if TerrorIds.category(o) == "classic" and o >= 1000},
                          {4000, 4001, 4002, 4009, 4012})
         self.assertEqual({o for o in TerrorIds.ids() if TerrorIds.category(o) == "alternate" and o >= 2000},
-                         {4011})
+                         {4010, 4011}, "Neo Pilot（4010）も Alternate のタブに出る")
         self.assertEqual({o for o in TerrorIds.ids() if TerrorIds.category(o) == "unbound" and o >= 4000},
                          {4013, 4014}, "統計の Unbound のタブに出る（統計の記録だけの番号）")
         self.assertEqual([o for o in TerrorIds.ids() if o >= 4000 and TerrorIds.category(o) is None],
-                         [4003, 4004, 4005, 4006, 4007, 4008, 4010])
+                         [4003, 4004, 4005, 4006, 4007, 4008])
         self.assertTrue(all(TerrorIds.category(o) is None for o in TerrorIds.eight_pages_ids()))
 
     def test_the_key_and_the_round_number_are_the_ones_the_tool_uses(self):
@@ -416,8 +416,10 @@ class TestTheToolUsesOwnNumbersEverywhere(unittest.TestCase):
 
     def test_every_candidate_for_the_statistics_is_in_terrors_json_and_the_other_way_round(self):
         for category in ("classic", "alternate", "unbound"):
-            # 4013・4014 は統計の記録だけの番号（terrors.json には無い）
-            stat_only = {4013, 4014} if category == "unbound" else set()
+            # 4013・4014 は統計の記録だけの番号（terrors.json には無い）。
+            # 4010（Neo Pilot。HL で Alternate に入れた）も terrors.json にはまだ無い（4011 Foxy は有る）。
+            # ReadJson.is_alternate_terror は terrors.json を見るので、足すかどうかは別に決める（HL の報告）
+            stat_only = {4013, 4014} if category == "unbound" else {4010} if category == "alternate" else set()
             self.assertEqual(Statistics.candidate_ids_for_category(category),
                              {int(i) for i in config.TERRORS[category]} | stat_only, category)
 

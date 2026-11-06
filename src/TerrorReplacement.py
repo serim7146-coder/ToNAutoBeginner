@@ -45,6 +45,10 @@ SIGNALS: tuple[Signal, ...] = (
     # 正確な大文字小文字と句点が分からないので緩く受ける。実物が取れたら締める
     Signal("glorbo", re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE),
            "the real g has appeared", "🫠 Glorbo 出現（Arkus の Variant）"),
+    # 10/20 のログの文字列の一覧で Neo Pilot の隣にあった候補。実物は Winterfest まで未確認。
+    # 大文字小文字と末尾の記号（. !）は問わない
+    Signal("neo_pilot", re.compile(r"^neo time[.!]?$", re.IGNORECASE),
+           "neo time", "⚔ Neo Pilot 出現（Fusion Pilot の Variant）"),
     # テラーIDでは判別できない（実測でIDが毎回異なる）。この行だけが手がかり。
     # Killers have been set と同じ秒に出る
     Signal("gigabytes", re.compile(r"^The Gigabytes have come[.]$"),
@@ -151,10 +155,7 @@ TABLE: tuple[Replacement, ...] = (
     # alternate のIDはほかのカテゴリと重ならないので、ラウンドを絞らなくても
     # オルタ枠でしか起きない
     Replacement("Foxy", config.SANIC_ID, config.FOXY_ID, None, "foxy"),
-    # 枠だけ。合図のログ（LogParser）が分かるまで無効。有効にするには合図の行を LogParser の
-    # SIGNALS に足して neo_pilot を立てるようにしてから wired=True にする
-    Replacement("Neo Pilot", config.FUSION_PILOT_ID, config.NEO_PILOT_ID, None, "neo_pilot",
-                wired=False),
+    Replacement("Neo Pilot", config.FUSION_PILOT_ID, config.NEO_PILOT_ID, None, "neo_pilot"),
     # Punished の Sewers で、Arkus が低確率で Glorbo になる。マップは条件に
     # 入れない（表に map の欄が無く、合図が来た時点で確定する）。ほかのマップの
     # Punished + Arkus では 0.3 秒の変種待ちが入るだけ

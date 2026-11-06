@@ -1906,8 +1906,7 @@ class TestFogFoxy(unittest.TestCase):
              patch.object(PlaySound, "play_sound"):
             for line in lines:
                 monitor._process(line)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return _decision_threads(mock_thread)
 
     def test_it_is_judged_as_foxy(self):
         monitor = self._monitor({self.FOG_KEY: {TerrorIds.FOXY}})

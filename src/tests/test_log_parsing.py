@@ -127,7 +127,7 @@ class TestTerrorsJsonFormat(unittest.TestCase):
 
         # 統計の分類と名前は独自の番号の表（TerrorIds）から。terrors.json の形ではなく
         self.assertEqual(Statistics.candidate_ids_for_category("Alternate", data),
-                         {1000 + n for n in range(36)} | {4011})
+                         {1000 + n for n in range(36)} | {4010, 4011})
         self.assertEqual(Statistics.terror_name(24, data), "The Guidance")
 
     def test_string_ids_stay_out_of_the_id_lookup(self):

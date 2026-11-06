@@ -1197,7 +1197,9 @@ class LogMonitor:
 
         IDが変わらない行でも、統計の番号が変わる Self Inserts（Bloodthirsty 化で 4013）は含める。
         Gigabytes は元IDが不定なので、Classicの1体構成は
-        すべて候補になり、統計はGigabytesの行かラウンド終了まで遅れる。
+        すべて候補になる。候補があるラウンドの統計は、合図の行が来るか、
+        Killers から最大 TERROR_STAT_WAIT_SEC 秒（_send_statistics_after_wait）
+        待ってから送る。RoundOver・Verified Round End は取りこぼしの保険。
         """
         return any(row.changes_stat_id for row in self._pending_replacements())
 
@@ -1252,6 +1254,20 @@ class LogMonitor:
 
     def _variant_wait_sec(self) -> float:
         return config.TERROR_VARIANT_WAIT_SEC
+
+    def _stat_wait_sec(self) -> float:
+        return config.TERROR_STAT_WAIT_SEC
+
+    def _send_statistics_after_wait(self, round_seq: int):
+        """置き換えの候補があるラウンドの統計を、合図が来なくても一定時間後に送る。
+
+        待つ間に合図が来たら _mark_replacement がその場で送っている（_send_round_statistics_once は
+        1回だけ）。待つ間にラウンドが終わった・次のラウンドになったら送らない
+        （RoundOver・Verified Round End の送信がそのラウンドの分を送る）。
+        """
+        time.sleep(self._stat_wait_sec())
+        if self._round_still_active(round_seq):
+            self._send_round_statistics_once()
 
     def _round_still_active(self, round_seq: int) -> bool:
         return self._running and self.st.in_round and self.st.round_seq == round_seq
@@ -2344,6 +2360,8 @@ class LogMonitor:
 
         if not self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
+        else:
+            self._start_daemon(self._send_statistics_after_wait, st.round_seq)
 
         if (revealed and st.enrage_identified is not None
                 and st.utils_deferred_seq != st.round_seq):   # Utils を待っているなら判定へ進む（EB）
