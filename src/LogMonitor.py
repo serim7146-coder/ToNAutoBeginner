@@ -2541,8 +2541,20 @@ class LogMonitor:
     def _list_plan(self, ids, bloodthirsty) -> tuple:
         """続行リストでの判定"""
         st = self.st
+        keep_on = self._keep_on()
+        round_type = st.round_type
+        if round_type == "Sabotage" and st.instance_type in config.JUDGE_LIKE_INSTANCES:
+            # private 系の Sabotage は 1 つのラウンド。リストには「Sabotage」の枠が無く、Sabotage star と
+            # Sabotage murder の 2 枠がある。参加者の希望が使えないここでは、リストの Star の枠で決める。
+            # ただしリストの Murder の枠にもあるテラーは続行しない（Star にもあっても）。
+            # 窓の表（デフォ続行・続行無効）の Murder の枠は見ない。Murder の枠は表を重ねる前のリストから読む。
+            # テラーの番号は外さない（DTM/Waldo の判定にそのまま渡す）。どちらの元の dict も書き換えない
+            star = GroupRound.SABOTAGE_STAR_KEY
+            murder = self._keep_on_base().get(GroupRound.SABOTAGE_MURDER_KEY, ())
+            keep_on = {**keep_on, star: set(keep_on.get(star, ())) - set(murder)}
+            round_type = "Sabotage star"
         decision = RoundDecision.decide_killers(
-            self._keep_on(), ids, st.round_type,
+            keep_on, ids, round_type,
             st.open_special_round_wins, self._cancel_afk(),
             bloodthirsty_variant=bloodthirsty,
             after_unlock=self._after_unlock(), holds_plush=self._holds_plush(),
