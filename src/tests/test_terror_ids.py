@@ -411,15 +411,13 @@ class TestTheToolUsesOwnNumbersEverywhere(unittest.TestCase):
                 if entry["id"] != TerrorIds.FOXY:            # 表示名は正式名が長いので Evil Purple Foxy
                     self.assertEqual(found.name, entry["name"], entry)
         self.assertEqual({e["id"] for e in raw["classic"]} - set(range(134)), {4000, 4001, 4002, 4009, 4012})
-        self.assertEqual({e["id"] for e in raw["alternate"]}, set(range(1000, 1036)) | {4011})
+        self.assertEqual({e["id"] for e in raw["alternate"]}, set(range(1000, 1036)) | {4010, 4011})
         self.assertEqual({e["id"] for e in raw["unbound"]}, set(range(2000, 2084)))
 
     def test_every_candidate_for_the_statistics_is_in_terrors_json_and_the_other_way_round(self):
         for category in ("classic", "alternate", "unbound"):
             # 4013・4014 は統計の記録だけの番号（terrors.json には無い）。
-            # 4010（Neo Pilot。HL で Alternate に入れた）も terrors.json にはまだ無い（4011 Foxy は有る）。
-            # ReadJson.is_alternate_terror は terrors.json を見るので、足すかどうかは別に決める（HL の報告）
-            stat_only = {4013, 4014} if category == "unbound" else {4010} if category == "alternate" else set()
+            stat_only = {4013, 4014} if category == "unbound" else set()
             self.assertEqual(Statistics.candidate_ids_for_category(category),
                              {int(i) for i in config.TERRORS[category]} | stat_only, category)
 
