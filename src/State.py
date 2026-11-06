@@ -66,7 +66,10 @@ class WindowState:
     round_type: str = ""
     terror_ids: list[int] = field(default_factory=list)
     map_id: int = 0
+    map_name: str = ""             # ラウンド開始の行のマップの名前（番号なし。スマホ通知の文に使う）
     round_seq: int = 0
+    # スマホ通知（続行・全続行）を出した（出さないと決めた）ラウンドの round_seq。ラウンドに 1 回だけ（-1 = 無し）
+    phone_notified_seq: int = -1
     round_over_time: float = 0.0   # RoundOverを受けた時刻（Begin移動の起点）
     # マクロの回（SharedState.begin_run）。前の回の窓がフリーズを張ったり解いたりしないため。
     # None は回を問わない（監視だけで使うとき・テスト）

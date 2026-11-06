@@ -27,7 +27,8 @@ SETTINGS_PATH = Path(os.environ.get("APPDATA", ".")) / "ToNAutoBeginner" / "sett
 DEBUG_LOG_PATH = SETTINGS_PATH.parent / "debug.log"
 DEBUG_LOG_MAX_BYTES = 20 * 1024 * 1024       # これを超えたら世代を回す（.1〜.3 を残す）
 # 設定を debug.log・不具合の報告へ出すときに抜く項目（OBS のパスワード。暗号化したものも）
-REPORT_SETTINGS_EXCLUDE_KEYS = ("obs_password_dpapi", "obs_password")
+# （スマホ通知の宛先 phone_notify_topic も。知られると誰でも通知を読める・送れる）
+REPORT_SETTINGS_EXCLUDE_KEYS = ("obs_password_dpapi", "obs_password", "phone_notify_topic")
 
 # ── 不具合の報告（Discord の Webhook。URL は .env の DISCORD_REPORT_WEBHOOK_URL）──
 REPORT_COOLDOWN_SEC = 60                         # 送れたら、この秒数は続けて送れない
@@ -752,6 +753,18 @@ LOG_LIVE_GRACE_SEC        = 120.0
 # ── ログの更新頻度 ──
 LOG_POLL_INTERVAL    = 0.3
 LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
+
+# ── スマホ通知（ntfy。PhoneNotify・QueueWatch）──
+PHONE_NOTIFY_URL = "https://ntfy.sh/"       # JSON で送る（宛先の topic は URL に入れず、本文に入れる）
+PHONE_NOTIFY_TIMEOUT_SEC = 10.0             # 送信のタイムアウト（裏のスレッドで待つだけ。判定は待たない）
+PHONE_NOTIFY_PRIORITY = 4                   # 通知の優先度（4 = high。ほかの優先度・通知音の指定はしない）
+PHONE_NOTIFY_TOPIC_PREFIX = "tonab-"        # 宛先の頭。あとに secrets で作った推測しにくい文字が続く
+PHONE_NOTIFY_TOPIC_BYTES = 24               # secrets.token_urlsafe に渡すバイト数（32 文字になる）
+PHONE_NOTIFY_TOPIC_MAX_LEN = 64             # ntfy の topic の上限（文字は [-_A-Za-z0-9]）
+# 待機列に入れるようになった合図（グループインスタンスの待機列。VRChat のログから読む）
+QUEUE_READY_AFTER_POST_SEC = 10.0           # 待機列に入れた（POST）から、これ以上たってから出た Get だけが合図になる
+QUEUE_READY_QUIET_SEC = 3.0                 # その窓のログで、前後この秒数以内に別のインスタンスの Get が無いこと
+QUEUE_FORGET_SEC = 3 * 3600.0               # 待機列に入れてからこの秒数たったら忘れる
 
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする

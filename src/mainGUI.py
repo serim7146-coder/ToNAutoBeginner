@@ -25,6 +25,7 @@ import AutoUpdate
 import LogMonitor
 import SharedState
 import PlaySound
+import PhoneNotify
 import MatchTNL
 import Migration
 import ProcessCheck
@@ -2428,6 +2429,7 @@ class App(tk.Tk):
         self.v_volume.trace_add("write", lambda *_: self.lbl_volume.config(
             text=f"{int(self.v_volume.get()*100)}%"))
         self._build_window_volume(fv)
+        self._build_phone_notify(fv)
 
         # ④ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
         f4_wrap = CollapsibleFrame(self, text="④ 外部ツール起動", collapsed=True)
@@ -2871,6 +2873,89 @@ class App(tk.Tk):
             shown.pack(side="left")
             var.trace_add("write", lambda *_a, x=var, s=shown: s.config(text=f"{x.get()}%"))
             self.v_wvol[key] = var
+
+    # ── スマホ通知（ntfy）──────────────────────
+    def _build_phone_notify(self, parent):
+        """枠「スマホ通知（ntfy）」。全窓共通。通知する（デフォルト OFF）・宛先（ツールが作る）・コピー・テスト送信・作り直す"""
+        box = ttk.LabelFrame(parent, text="スマホ通知（ntfy）")
+        box.pack(fill="x", pady=(6, 0))
+        self.v_phone_notify = tk.BooleanVar(value=False)
+        ttk.Checkbutton(box, text="通知する", variable=self.v_phone_notify,
+                        command=self._on_phone_notify_changed).pack(anchor="w")
+        ttk.Label(box, text="続行ラウンド・全続行・待機列に入れるようになったときに、スマホへ通知します。"
+                            "スマホに ntfy のアプリを入れて、下の宛先を購読してください。"
+                            "宛先を知っている人は、この通知を読めます（人に見せないでください）。",
+                  wraplength=420).pack(anchor="w")
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        ttk.Label(row, text="宛先:", width=6).pack(side="left")
+        self.v_phone_topic = tk.StringVar(value="")
+        ttk.Entry(row, textvariable=self.v_phone_topic, state="readonly", width=38).pack(side="left", padx=(0, 4))
+        ttk.Button(row, text="コピー", width=7, command=self._copy_phone_topic).pack(side="left")
+        row2 = ttk.Frame(box)
+        row2.pack(fill="x", pady=(2, 0))
+        ttk.Button(row2, text="テスト送信", command=self._test_phone_notify).pack(side="left")
+        ttk.Button(row2, text="作り直す", command=self._renew_phone_topic).pack(side="left", padx=(6, 0))
+
+    def _on_phone_notify_changed(self):
+        on = bool(self.v_phone_notify.get())
+        SharedState.set_phone_notify(on)
+        self._log("[スマホ通知] " + ("通知します" if on else "通知しません"))
+        self._schedule_settings_save()
+
+    def _copy_phone_topic(self):
+        topic = SharedState.get_phone_topic()
+        if not PhoneNotify.is_valid_topic(topic):
+            return
+        self.clipboard_clear()
+        self.clipboard_append(topic)
+        self._log("[スマホ通知] 宛先をコピーしました")
+        self._schedule_settings_save()          # 作ったばかりの宛先を残す（次の起動で変わらないように）
+
+    def _test_phone_notify(self):
+        """テスト送信（通知が OFF でも送る）。結果はツールのログに出す。失敗してもログに出すだけ"""
+        topic = SharedState.get_phone_topic()
+        if not PhoneNotify.is_valid_topic(topic):
+            self._log("[スマホ通知] 宛先がありません。「作り直す」で作ってください")
+            return
+        self._log("[スマホ通知] テスト送信します")
+        self._schedule_settings_save()          # 作ったばかりの宛先を残す（次の起動で変わらないように）
+        PhoneNotify.send(topic, PhoneNotify.APP_TITLE, PhoneNotify.TEST_MESSAGE,
+                         on_done=self._phone_test_done)
+
+    def _phone_test_done(self, ok: bool, reason: str):
+        """テスト送信が終わった（裏のスレッドから。_log は裏のスレッドから呼んでよい）"""
+        self._log("[スマホ通知] テスト送信しました（スマホに届くか確かめてください）" if ok
+                  else f"[スマホ通知] テスト送信に失敗しました（{reason}）")
+
+    def _renew_phone_topic(self):
+        """宛先を作り直す。前の宛先への通知は届かなくなる（スマホの購読を入れ直す）"""
+        topic = PhoneNotify.new_topic()
+        PhoneNotify.register_topic(topic)
+        SharedState.set_phone_topic(topic)
+        self.v_phone_topic.set(topic)
+        self._log("[スマホ通知] 宛先を作り直しました。スマホの購読を入れ直してください")
+        self._schedule_settings_save()
+
+    def _load_phone_notify(self, data: dict):
+        """保存した設定を戻す。通知は無い・壊れた値は OFF。宛先が無い・壊れていれば新しく作る。
+        読み込みでは保存しない（ほかの設定と同じ）。作った宛先は、通知を入れる・コピー・テスト送信の
+        ときに保存する（スマホで購読するのはそのあとなので、次の起動で変わらない）"""
+        SharedState.set_phone_notify(data.get("phone_notify") is True)
+        topic = data.get("phone_notify_topic")
+        if not PhoneNotify.is_valid_topic(topic):
+            topic = PhoneNotify.new_topic()
+        PhoneNotify.register_topic(topic)
+        SharedState.set_phone_topic(topic)
+        App._refresh_phone_notify_view(self)
+
+    def _refresh_phone_notify_view(self):
+        """画面の表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_phone_notify.set(SharedState.get_phone_notify())
+            self.v_phone_topic.set(SharedState.get_phone_topic())
+        except (tk.TclError, AttributeError):
+            pass
 
     def _window_volume_values(self) -> tuple:
         return (bool(self.v_wvol_enabled.get()),
@@ -3504,6 +3589,7 @@ class App(tk.Tk):
         self._refresh_chase_check()
         SharedState.set_follow_utils(data.get("follow_utils") is True)    # 無い・壊れた値は OFF（EB）
         App._refresh_follow_utils_check(self)
+        App._load_phone_notify(self, data)
         self._window_layout = _as_window_layout(data.get("window_layout"))   # 壊れた値は捨てる（DX）
         App._refresh_forget_layout_button(self)
         self._apply_saved_window_settings()
@@ -4791,6 +4877,8 @@ class App(tk.Tk):
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "follow_utils":            SharedState.get_follow_utils(),
+            "phone_notify":            SharedState.get_phone_notify(),
+            "phone_notify_topic":      SharedState.get_phone_topic(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
             **{field: self._move_key_var(target).get() for target, field, _label in App.MOVE_KEY_FIELDS},

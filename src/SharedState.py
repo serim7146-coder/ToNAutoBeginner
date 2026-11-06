@@ -164,6 +164,12 @@ get_follow_utils, set_follow_utils = _FOLLOW_UTILS.get, _FOLLOW_UTILS.set
 
 _RUN_RESPAWN = _Setting(True, bool)
 get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set
+
+# スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
+_PHONE_NOTIFY = _Setting(False, bool)
+get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set
+_PHONE_TOPIC = _Setting("", lambda v: v if isinstance(v, str) else "")
+get_phone_topic, set_phone_topic = _PHONE_TOPIC.get, _PHONE_TOPIC.set
 get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
                                                             _CONTINUE_RESTORE_WINDOW.set)
 
