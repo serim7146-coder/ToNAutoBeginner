@@ -7,6 +7,7 @@ import Recorder
 
 HOSHI, YAKI = config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO
 FOG_KEY, PAGES_KEY = "Fog/霧", "8 Pages/8ページ"
+MOON_KEY = MatchTNL.SPECIAL_MOON_KEY
 LISTED, UNLISTED = 99, 12
 GROUP_LINE = "[窓1] グループ判定: {} 【全続行】"
 PRIVATE_LINE = "[窓1] ラウンド指定で続行: {}"
@@ -156,6 +157,30 @@ class TestGroupWhileUnknown(_Case):
         record.assert_not_called()
         self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
 
+    def test_yakiimo_twilight_is_set_while_unknown_only_when_checked(self):
+        monitor = self._monitor(YAKI, "Twilight", continue_rounds={"Twilight"})
+        started = self._unknown(monitor, "Twilight")
+        self.assertTrue(monitor.st.all_continue_round)
+        self.assertEqual(WindowVolume.category_of(monitor.st), WindowVolume.ALL_CONTINUE)
+        self.assertEqual(monitor.logs.count(GROUP_LINE.format("Twilight")), 1, monitor.logs)
+        self.assertNotIn("do_skip", started)
+        monitor = self._monitor(YAKI, "Twilight")
+        self._unknown(monitor, "Twilight")
+        self.assertFalse(monitor.st.all_continue_round)
+        self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
+
+    def test_yakiimo_twilight_checked_and_listed_becomes_a_continue_round(self):
+        monitor = self._monitor(YAKI, "Twilight", keep_on={MOON_KEY: {LISTED}}, continue_rounds={"Twilight"})
+        self._unknown(monitor, "Twilight")
+        started, play, record = self._killers(monitor, [LISTED])
+        st = monitor.st
+        self.assertTrue(st.is_continue_round)
+        self.assertTrue(st.continue_freeze_held)
+        play.assert_any_call("continue.mp3", kind="continue")
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.CONTINUE)
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(any("【全続行 → 続行リストで続行】" in m for m in monitor.logs), monitor.logs)
+
     def test_a_skip_moon_is_not_set_while_unknown(self):
         monitor = self._monitor(HOSHI, "Twilight", skip_rounds={"Twilight"})
         self._unknown(monitor, "Twilight")
@@ -174,7 +199,7 @@ class TestPureFunction(unittest.TestCase):
     def test_first_moon_is_yes(self):
         for moon in ("Blood Moon", "Twilight"):
             self.assertTrue(self.f(HOSHI, moon), moon)
-            self.assertTrue(self.f(YAKI, moon), moon)
+        self.assertTrue(self.f(YAKI, "Blood Moon"))     # 焼き芋の Twilight は全続行を指定した窓だけ（下のテスト）
         self.assertTrue(self.f(HOSHI, "Mystic Moon"))
         self.assertTrue(self.f(HOSHI, "Solstice"))
 
@@ -201,6 +226,15 @@ class TestPureFunction(unittest.TestCase):
         self.assertFalse(self.f(YAKI, "8 Pages", moon_repeat=True, skip_moons={"8 Pages"}))
         self.assertTrue(self.f(HOSHI, "8 Pages"))
 
+    def test_yakiimo_twilight_follows_continue_moons(self):
+        for repeat in (False, True):
+            self.assertFalse(self.f(YAKI, "Twilight", moon_repeat=repeat), repeat)
+            self.assertFalse(self.f(YAKI, "Twilight", moon_repeat=repeat, continue_moons={"Blood Moon"}), repeat)
+            self.assertTrue(self.f(YAKI, "Twilight", moon_repeat=repeat, continue_moons={"Twilight"}), repeat)
+        self.assertTrue(self.f(HOSHI, "Twilight", continue_moons=set()))
+        self.assertFalse(self.f(YAKI, "Mystic Moon", continue_moons={"Mystic Moon", "Twilight"}))
+        self.assertFalse(self.f(YAKI, "Blood Moon", moon_repeat=True, continue_moons={"Blood Moon"}))
+
     def test_not_a_group_instance_is_no(self):
         for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_PUBLIC):
             self.assertFalse(self.f(itype, "Fog"))
@@ -213,12 +247,15 @@ class TestPureFunction(unittest.TestCase):
             for name in names:
                 for repeat in (False, True):
                     for skip in (set(), {name}):
-                        want = GroupRound.decide(itype, name, [7], killers_round_type="Fog",
-                                                 moon_repeat=repeat, skip_moons=skip) == GroupRound.CONTINUE
-                        if itype == YAKI and name == "Fog":
-                            want = False        # Killers 行が Fog だと SKIP（含めない）
-                        self.assertEqual(self.f(itype, name, moon_repeat=repeat, skip_moons=skip), want,
-                                         (itype, name, repeat, skip))
+                        for cont in (set(), {"Twilight"}, {name}):
+                            want = GroupRound.decide(itype, name, [7], killers_round_type="Fog",
+                                                     moon_repeat=repeat, skip_moons=skip,
+                                                     continue_moons=cont) == GroupRound.CONTINUE
+                            if itype == YAKI and name == "Fog":
+                                want = False        # Killers 行が Fog だと SKIP（含めない）
+                            self.assertEqual(self.f(itype, name, moon_repeat=repeat, skip_moons=skip,
+                                                    continue_moons=cont), want,
+                                             (itype, name, repeat, skip, cont))
 
 
 class TestPrivate(_Case):
