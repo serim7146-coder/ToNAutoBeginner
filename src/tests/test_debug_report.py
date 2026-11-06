@@ -57,7 +57,8 @@ class TestDebugLogRich(unittest.TestCase):
         self.assertNotIn("hook.example", self._text())
 
     def test_the_settings_lose_the_obs_items(self):
-        self.assertEqual(config.REPORT_SETTINGS_EXCLUDE_KEYS, ("obs_password_dpapi", "obs_password"))
+        self.assertEqual(config.REPORT_SETTINGS_EXCLUDE_KEYS,
+                         ("obs_password_dpapi", "obs_password", "phone_notify_topic"))
         app = type("FakeApp", (), {})()
         app.winfo_screenwidth = lambda: 2560
         app.winfo_screenheight = lambda: 1440

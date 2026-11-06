@@ -20,6 +20,8 @@ import ReadJson
 import VerifiedTracker
 import LogParser
 import MatchTNL
+import PhoneNotify
+import QueueWatch
 import RoundDecision
 import RoundSequence
 import TerrorIds
@@ -95,6 +97,8 @@ class LogMonitor:
         # 定期として無視した Verified（ログの時刻, 覚える前の定期の時刻）。すぐラウンドが始まったら
         # 本物の Begin だったので、覚えた位相を元に戻す
         self._ignored_verified = None
+        # 待機列に入れるようになった合図（この窓のログの Get。POST の記録は QueueWatch で窓どうし共有）
+        self._queue_watch = QueueWatch.Candidates(window_idx, self._on_queue_ready, hands_free=self._hands_free)
         self._action = ActionExecutor(
             cfg=cfg,
             st=self.st,
@@ -1001,6 +1005,10 @@ class LogMonitor:
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
                     try:
+                        self._queue_watch.tick()        # 読んだ行のあとで（まとめて読んだ後ろの行も先に見る）
+                    except Exception as e:
+                        DebugLog.exception("LogMonitor._run")
+                    try:
                         self._check_group_list_state()
                     except Exception as e:
                         DebugLog.exception("LogMonitor._run")
@@ -1124,6 +1132,52 @@ class LogMonitor:
         """
         return (SharedState.get_hands_free()
                 and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES)
+
+    # ── スマホ通知（ntfy）─────────────────────
+    def _notify_phone(self, kind: str, ids=None):
+        """続行・全続行の通知。その窓のそのラウンドの最初の決定で 1 回だけ（テラーが分かっても、全続行が続行に
+        変わっても、逆でも送り直さない）。通知が OFF・放置モードの窓は送らない。送れなくても判定は止めない
+        （送信は裏のスレッド）。ids が None なら今のラウンドのテラー（無ければ「テラー: 不明」）"""
+        try:
+            st = self.st
+            if st.phone_notified_seq == st.round_seq:
+                return
+            st.phone_notified_seq = st.round_seq
+            topic = self._phone_topic()
+            if topic is None or self._hands_free():
+                return
+            terror_text = format_terror_ids(st.terror_ids if ids is None else ids)
+            title, message = PhoneNotify.round_text(
+                kind, self.window_idx, st.round_type, st.map_name, terror_text)
+            PhoneNotify.send(topic, title, message, on_done=self._phone_done)
+        except Exception:
+            DebugLog.exception("LogMonitor._notify_phone")
+
+    @staticmethod
+    def _phone_topic():
+        """通知してよいなら宛先。OFF・宛先が壊れているときは None"""
+        if not SharedState.get_phone_notify():
+            return None
+        topic = SharedState.get_phone_topic()
+        return topic if PhoneNotify.is_valid_topic(topic) else None
+
+    def _phone_done(self, ok: bool, reason: str):
+        """送信が終わった（裏のスレッドから）。失敗はログに出すだけ"""
+        if not ok:
+            self._log(f"スマホ通知: 送信に失敗しました（{reason}）")
+
+    def _on_queue_ready(self, post):
+        """待機列に入れるようになった。post は待機列に入れた窓の記録。ツールのログには常に出す。
+        スマホへは、通知が ON で、待機列に入れた窓（POST の行を読んだ時点）が放置モードでないときだけ"""
+        self.logger(f"[窓{post.window_idx}] 待機列に入れるようになりました")
+        try:
+            topic = self._phone_topic()
+            if topic is None or post.hands_free:
+                return
+            title, message = PhoneNotify.queue_ready_text(post.window_idx)
+            PhoneNotify.send(topic, title, message, on_done=self._phone_done)
+        except Exception:
+            DebugLog.exception("LogMonitor._on_queue_ready")
 
     def _mark_item_lost(self, message: str = ""):
         """アイテムロストとして扱う。message は「<理由>: アイテムロスト」の形。
@@ -1364,6 +1418,7 @@ class LogMonitor:
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)
+                self._notify_phone(PhoneNotify.KIND_CONTINUE)
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
                 self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
@@ -1376,6 +1431,7 @@ class LogMonitor:
             if self.st.all_continue_early_seq != self.st.round_seq:     # テラー不明の時点で出した行を二度出さない
                 self._log(f"グループ判定: {self.st.round_type} 【全続行】")
             self.st.all_continue_round = True     # 音量「全続行」（FG: 干し芋の Mystic Moon など）
+            self._notify_phone(PhoneNotify.KIND_ALL_CONTINUE)
             return True
         return False
 
@@ -1581,6 +1637,11 @@ class LogMonitor:
             st.log_now = at         # 判定はすべてこのログの時刻で行う
             if st.fog_no_object_deadline and at >= st.fog_no_object_deadline:
                 self._check_fog_no_object()     # この行を読む前に（5秒までに出た行だけで）
+        # 待機列の合図の行（インスタンスの ID が入っている）は、事象にもログにもしない。_debug_event の前に読む
+        try:
+            self._queue_watch.feed(at, line)
+        except Exception:
+            DebugLog.exception("LogMonitor._process")
         event = LogParser.parse(line)
         if not event:
             return
@@ -1755,6 +1816,7 @@ class LogMonitor:
         st.terror_ids                  = []
         st.enrage_identified           = None
         st.map_id                      = event.map_id
+        st.map_name                    = PhoneNotify.map_name_from_raw(event.raw_map)
         st.statistics_sent             = False
         st.statistics_quiet            = False
         # 人数はラウンド開始の瞬間のもの（テラーが決まるころには入退室で変わっているため、ここで覚える）
@@ -1842,6 +1904,7 @@ class LogMonitor:
                 self._clear_stale_continue_round()      # ("continue_rounds",) の経路と同じ後始末
                 # 音量は Run のまま「その他」（WindowVolume が Run を先に返す。依頼者 2026-10-17）
                 st.all_continue_round = True
+                self._notify_phone(PhoneNotify.KIND_ALL_CONTINUE)
             else:
                 self._log(f"Round: {st.round_type} 【死亡待ち・アイテム購入予定】")
             return
@@ -2125,6 +2188,7 @@ class LogMonitor:
         self._log(text)
         st.all_continue_round = True
         st.all_continue_early_seq = st.round_seq
+        self._notify_phone(PhoneNotify.KIND_ALL_CONTINUE)
 
     def _on_killers_revealed(self, event):
         """霧のテラーが公開された"""
@@ -2593,6 +2657,7 @@ class LogMonitor:
                 self._log(f"ラウンド指定で続行: {st.round_type}")
             self._clear_stale_continue_round()
             st.all_continue_round = True        # 音量の「全続行」（EZ）
+            self._notify_phone(PhoneNotify.KIND_ALL_CONTINUE)
             return
         if kind == "round_skip":
             self._start_round_skip()
@@ -2695,6 +2760,7 @@ class LogMonitor:
                 self._log("🎙 続行アナウンス再生")
             self._focus_for_freeze("続行ラウンド")           # 数える前に見る
             SharedState.continue_round_start(st)
+            self._notify_phone(PhoneNotify.KIND_CONTINUE)
             if not self._hands_free():          # 放置中は録らない
                 Recorder.on_continue_start(self.window_idx)
             self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
@@ -2739,6 +2805,7 @@ class LogMonitor:
                     self._log("🎙 続行アナウンス再生")
                 self._focus_for_freeze("続行ラウンド")           # 数える前に見る
                 SharedState.continue_round_start(st)
+                self._notify_phone(PhoneNotify.KIND_CONTINUE)
                 # 録画も同じ瞬間に始める。霧の前倒し判明（Enrage など）も
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
                 if not self._hands_free():

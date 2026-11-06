@@ -3196,6 +3196,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "ton_entry_plush",                                   # DZ で足した
             "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）
             "follow_utils",                                      # EB で足した
+            "phone_notify", "phone_notify_topic",                # スマホ通知（ntfy）で足した
             "speed_detect", "hands_free", "item_begin_mode",     # GC で足した（前回のトグルを引き継ぐ）
             "voice_volumes",                                     # EO で足した
             "win_count",
