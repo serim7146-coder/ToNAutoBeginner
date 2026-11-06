@@ -62,9 +62,9 @@ def round_text(kind: str, window_idx: int, round_type: str, map_name: str, terro
     return title, f"{where}\nテラー: {terror_text or '不明'}"
 
 
-def queue_ready_text(window_idx: int) -> tuple:
-    """待機列に入れるようになった通知 (見出し, 本文)。window_idx は待機列に入れた窓"""
-    return APP_TITLE, f"窓{window_idx} 待機列に入れるようになりました"
+def queue_ready_text() -> tuple:
+    """待機列に入れるようになった通知 (見出し, 本文)。待機列はアカウントのものなので窓の番号は入れない"""
+    return APP_TITLE, "待機列に入れるようになりました"
 
 
 # ── 送信 ───────────────────────────────

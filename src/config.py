@@ -763,8 +763,11 @@ PHONE_NOTIFY_TOPIC_BYTES = 24               # secrets.token_urlsafe に渡すバ
 PHONE_NOTIFY_TOPIC_MAX_LEN = 64             # ntfy の topic の上限（文字は [-_A-Za-z0-9]）
 # 待機列に入れるようになった合図（グループインスタンスの待機列。VRChat のログから読む）
 QUEUE_READY_AFTER_POST_SEC = 10.0           # 待機列に入れた（POST）から、これ以上たってから出た Get だけが合図になる
-QUEUE_READY_QUIET_SEC = 3.0                 # その窓のログで、前後この秒数以内に別のインスタンスの Get が無いこと
+QUEUE_READY_QUIET_SEC = 3.0                 # その Get のログで、前後この秒数以内に別のインスタンスの Get が無いこと
 QUEUE_FORGET_SEC = 3 * 3600.0               # 待機列に入れてからこの秒数たったら忘れる
+QUEUE_WATCH_INTERVAL_SEC = 1.0              # ログの増えた分を読む間隔（通知する が ON のあいだ、ツールが自分で読む）
+QUEUE_WATCH_SCAN_SEC = 5.0                  # ログの一覧を見直す間隔
+QUEUE_READY_NOTICE_SEC = 60.0               # Get のログの時刻がこれ以上前の合図は黙って使い切る（VRChat の通知は 60 秒で消える）
 
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする

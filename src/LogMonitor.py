@@ -21,7 +21,6 @@ import VerifiedTracker
 import LogParser
 import MatchTNL
 import PhoneNotify
-import QueueWatch
 import RoundDecision
 import RoundSequence
 import TerrorIds
@@ -97,8 +96,6 @@ class LogMonitor:
         # 定期として無視した Verified（ログの時刻, 覚える前の定期の時刻）。すぐラウンドが始まったら
         # 本物の Begin だったので、覚えた位相を元に戻す
         self._ignored_verified = None
-        # 待機列に入れるようになった合図（この窓のログの Get。POST の記録は QueueWatch で窓どうし共有）
-        self._queue_watch = QueueWatch.Candidates(window_idx, self._on_queue_ready, hands_free=self._hands_free)
         self._action = ActionExecutor(
             cfg=cfg,
             st=self.st,
@@ -1006,10 +1003,6 @@ class LogMonitor:
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
                     try:
-                        self._queue_watch.tick()        # 読んだ行のあとで（まとめて読んだ後ろの行も先に見る）
-                    except Exception as e:
-                        DebugLog.exception("LogMonitor._run")
-                    try:
                         self._check_group_list_state()
                     except Exception as e:
                         DebugLog.exception("LogMonitor._run")
@@ -1166,19 +1159,6 @@ class LogMonitor:
         """送信が終わった（裏のスレッドから）。失敗はログに出すだけ"""
         if not ok:
             self._log(f"スマホ通知: 送信に失敗しました（{reason}）")
-
-    def _on_queue_ready(self, post):
-        """待機列に入れるようになった。post は待機列に入れた窓の記録。ツールのログには常に出す。
-        スマホへは、通知が ON で、待機列に入れた窓（POST の行を読んだ時点）が放置モードでないときだけ"""
-        self.logger(f"[窓{post.window_idx}] 待機列に入れるようになりました")
-        try:
-            topic = self._phone_topic()
-            if topic is None or post.hands_free:
-                return
-            title, message = PhoneNotify.queue_ready_text(post.window_idx)
-            PhoneNotify.send(topic, title, message, on_done=self._phone_done)
-        except Exception:
-            DebugLog.exception("LogMonitor._on_queue_ready")
 
     def _mark_item_lost(self, message: str = ""):
         """アイテムロストとして扱う。message は「<理由>: アイテムロスト」の形。
@@ -1638,11 +1618,6 @@ class LogMonitor:
             st.log_now = at         # 判定はすべてこのログの時刻で行う
             if st.fog_no_object_deadline and at >= st.fog_no_object_deadline:
                 self._check_fog_no_object()     # この行を読む前に（5秒までに出た行だけで）
-        # 待機列の合図の行（インスタンスの ID が入っている）は、事象にもログにもしない。_debug_event の前に読む
-        try:
-            self._queue_watch.feed(at, line)
-        except Exception:
-            DebugLog.exception("LogMonitor._process")
         event = LogParser.parse(line)
         if not event:
             return
