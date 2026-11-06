@@ -41,9 +41,9 @@ class TestIsAlternateTerror(unittest.TestCase):
         for data in ({}, {"classic": {"1": "A"}}, {"alternate": None}):
             self.assertFalse(ReadJson.is_alternate_terror(167, data), data)
 
-    def test_every_alternate_id_is_in_the_alternate_range_or_is_foxy(self):
+    def test_every_alternate_id_is_in_the_alternate_range_or_is_a_replacement(self):
         for id_ in (config.TERRORS.get("alternate") or {}):
-            self.assertTrue(1000 <= int(id_) < 2000 or int(id_) == TerrorIds.FOXY, id_)
+            self.assertTrue(1000 <= int(id_) < 2000 or int(id_) in (TerrorIds.FOXY, TerrorIds.NEO_PILOT), id_)
 
 
 

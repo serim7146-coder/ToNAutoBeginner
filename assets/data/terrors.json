@@ -178,6 +178,7 @@
     {"id": 1033, "name": "Walpurgisnacht", "terrors": ["Walpurgisnacht", "Unknown Witch"], "objects": ["WALPURGISNACHT", "witchling"]},
     {"id": 1034, "name": "Azrael", "terrors": ["Azrael"], "objects": ["azrael"]},
     {"id": 1035, "name": "The Restless", "terrors": ["The Restless", "Husk"], "objects": ["Restless Creator"]},
+    {"id": 4010, "name": "Neo Pilot", "terrors": ["Neo Pilot"], "objects": []},
     {"id": 4011, "name": "Foxy", "terrors": ["Foxy"], "objects": []}
   ],
 
