@@ -328,6 +328,75 @@ class TestRecordPlan(unittest.TestCase):
         self.assertEqual(config.OBS_RECORD_MAX_SEC, 900)
         self.assertEqual(config.OBS_RECORD_TAIL_SEC, 3.0)
 
+    # ── 突入フリーズ ────────────────────────────
+    def test_the_start_log_names_the_continue_round_or_the_freeze(self):
+        for label_args, expected in (((), "（続行ラウンド）"), (("突入フリーズ",), "（突入フリーズ）")):
+            self.logs.clear()
+            plan = self._plan(FakeOBS())
+
+            plan.continue_start(2, *label_args)
+
+            self.assertEqual(self.logs, [f"[窓2] 🎥 OBS録画を開始しました{expected}"])
+
+    def test_a_failed_start_says_to_try_again_at_the_next_recording(self):
+        plan = self._plan(FakeOBS(fail="OBSに接続できません"))
+
+        plan.continue_start(1)
+
+        self.assertEqual(self.logs, ["[窓1] ⚠ OBS録画を開始できません: OBSに接続できません"
+                                     "（次の録画でまた試します）"])
+
+    def test_a_freeze_start_stops_three_seconds_after_round_over_not_at_release(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1, "突入フリーズ")
+
+        self._advance(plan, 60)                 # フリーズ解除（死亡・生存の後）に当たる時間。止めない
+        self.assertEqual(obs.count("StopRecord"), 0)
+        plan.round_over(1)
+        self._advance(plan, 2.9)
+        self.assertEqual(obs.count("StopRecord"), 0)
+        self._advance(plan, 0.2)
+
+        self.assertEqual((obs.count("StartRecord"), obs.count("StopRecord")), (1, 1))
+
+    def test_a_freeze_that_becomes_a_continue_round_is_one_recording(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1, "突入フリーズ")
+        plan.continue_start(1)                  # 同じラウンドで続行と決まった
+        plan.round_over(1)
+        self._advance(plan, 5)
+
+        self.assertEqual((obs.count("StartRecord"), obs.count("StopRecord")), (1, 1))
+        self.assertEqual(len([m for m in self.logs if "開始しました" in m]), 1, self.logs)
+
+    def test_two_windows_share_one_recording_until_the_last_tail(self):
+        obs = FakeOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1, "突入フリーズ")
+        plan.continue_start(2, "突入フリーズ")
+        plan.round_over(1)
+        self._advance(plan, 5)
+        self.assertEqual(obs.count("StopRecord"), 0, "窓2がまだ終わっていない")
+        plan.round_over(2)
+        self._advance(plan, 5)
+
+        self.assertEqual((obs.count("StartRecord"), obs.count("StopRecord")), (1, 1))
+
+    def test_a_manual_recording_is_left_alone_by_a_freeze_start(self):
+        obs = FakeOBS(recording=True)
+        plan = self._plan(obs)
+
+        plan.continue_start(1, "突入フリーズ")
+        plan.round_over(1)
+        self._advance(plan, 5)
+
+        self.assertEqual((obs.count("StartRecord"), obs.count("StopRecord")), (0, 0))
+        self.assertTrue(obs.recording)
+
 
 
 
@@ -347,6 +416,69 @@ class TestRecorderThread(unittest.TestCase):
 
     def test_the_default_is_disabled(self):
         self.assertFalse(Recorder.Recorder().enabled)
+
+    # ── 2つのスイッチ（続行／突入フリーズ）。_post を差し替えて何を投げるかだけ見る ──
+    @staticmethod
+    def _posted(**switches):
+        rec = Recorder.Recorder()
+        rec.configure(**switches)
+        posted = []
+        rec._post = posted.append
+        rec.on_continue_start(1)
+        rec.on_round_freeze_start(2)
+        rec.on_round_over(3)
+        return posted
+
+    def test_the_freeze_switch_is_off_by_default(self):
+        rec = Recorder.Recorder()
+        rec.configure(True)
+
+        self.assertFalse(rec._record_freeze)
+
+    def test_only_the_continue_switch_on_is_todays_behaviour(self):
+        self.assertEqual(self._posted(enabled=True),
+                         [("start", 1, "続行ラウンド"), ("round_over", 3)])
+
+    def test_only_the_freeze_switch_on_records_the_freeze_and_still_handles_round_over(self):
+        """続行スイッチOFFでも RoundOver は受ける。続行の開始では録らない"""
+        self.assertEqual(self._posted(enabled=False, record_freeze=True),
+                         [("start", 2, "突入フリーズ"), ("round_over", 3)])
+
+    def test_both_switches_off_post_nothing(self):
+        self.assertEqual(self._posted(enabled=False, record_freeze=False), [])
+
+    def test_both_switches_on_post_both_starts(self):
+        self.assertEqual(self._posted(enabled=True, record_freeze=True),
+                         [("start", 1, "続行ラウンド"), ("start", 2, "突入フリーズ"),
+                          ("round_over", 3)])
+
+    def test_enabled_means_either_switch_is_on(self):
+        for kw, expected in (({"enabled": False}, False), ({"enabled": True}, True),
+                             ({"enabled": False, "record_freeze": True}, True)):
+            rec = Recorder.Recorder()
+            rec.configure(**kw)
+            self.assertEqual(rec.enabled, expected, kw)
+
+    def test_the_freeze_hook_is_exported_next_to_the_continue_hook(self):
+        self.assertTrue(callable(Recorder.on_round_freeze_start))
+        self.assertTrue(callable(Recorder.on_continue_start))
+
+    def test_the_worker_records_a_freeze_and_stops_after_round_over(self):
+        obs = FakeOBS()
+        logs = []
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(False, log=logs.append, record_freeze=True)
+        rec._plan.tail_sec = 0.05
+
+        rec.on_continue_start(1)                # 続行スイッチOFF。録らない
+        rec.on_round_freeze_start(1)
+        rec.on_round_over(1)
+        deadline = time.monotonic() + 3
+        while obs.count("StopRecord") == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(obs.calls, ["GetRecordStatus", "StartRecord", "StopRecord"])
+        self.assertTrue(any("（突入フリーズ）" in m for m in logs), logs)
 
     def test_a_hanging_obs_does_not_block_the_caller(self):
         release = threading.Event()
@@ -430,6 +562,7 @@ class TestRecordingHooks(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.started = patch.object(Recorder, "on_continue_start").start()
+        self.freeze_started = patch.object(Recorder, "on_round_freeze_start").start()
         self.over = patch.object(Recorder, "on_round_over").start()
         self.addCleanup(patch.stopall)
         self.addCleanup(SharedState.continue_round_reset)
@@ -559,6 +692,56 @@ class TestRecordingHooks(unittest.TestCase):
         monitor._process("2026.09.20 12:00:00 Debug      -  RoundOver")
 
         self.over.assert_called_once_with(3)
+
+    # ── 突入フリーズ ─────────────────────────────
+    def _freeze_monitor(self, rounds=("Classic",)):
+        monitor = self._monitor()
+        monitor.cfg.freeze_rounds = set(rounds)
+        monitor._focus_for_freeze = MagicMock()         # 窓の前面化はしない
+        self.addCleanup(SharedState.round_freeze_reset)
+        return monitor
+
+    def test_entering_a_chosen_round_freeze_starts_the_recording_hook(self):
+        monitor = self._freeze_monitor()
+
+        monitor._enter_round_freeze("Classic")
+
+        self.assertTrue(monitor.st.round_freeze_held)
+        self.freeze_started.assert_called_once_with(3)
+        self.started.assert_not_called()
+
+    def test_a_round_that_is_not_chosen_does_not_start_the_hook(self):
+        monitor = self._freeze_monitor(rounds=("Fog",))
+
+        monitor._enter_round_freeze("Classic")
+
+        self.assertFalse(monitor.st.round_freeze_held)
+        self.freeze_started.assert_not_called()
+
+    def test_an_already_held_freeze_does_not_start_the_hook_again(self):
+        monitor = self._freeze_monitor()
+        monitor._enter_round_freeze("Classic")
+        self.freeze_started.reset_mock()
+
+        monitor._enter_round_freeze("Classic")
+
+        self.freeze_started.assert_not_called()
+
+    def test_hands_free_does_not_start_the_freeze_hook(self):
+        SharedState.set_hands_free(True)
+        monitor = self._freeze_monitor()
+
+        monitor._enter_round_freeze("Classic")
+
+        self.assertFalse(monitor.st.round_freeze_held)
+        self.freeze_started.assert_not_called()
+
+    def test_the_late_sabotage_murder_freeze_also_starts_the_hook(self):
+        monitor = self._freeze_monitor(rounds=("Sabotage murder",))
+
+        monitor._enter_round_freeze("Sabotage murder")
+
+        self.freeze_started.assert_called_once_with(3)
 
 
 
@@ -871,7 +1054,7 @@ class TestWindowVolumeSettings(unittest.TestCase):
         fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
         fake._window_volume_settings = lambda: mainGUI.App._window_volume_settings(app)

@@ -98,7 +98,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `Migration.py` | exe 単体で動いている人をインストーラー版へ移す（Setup を落として画面なしで実行。入れる場所は元の exe のフォルダ）。開発実行では無効。 |
 | `PlaySound.py` | MCI（winmm）で音声を鳴らす。 |
 | `WindowVolume.py` | Windows のアプリごとの音量で、窓の状態ごとに VRChat の音量を変える。見張りのスレッドが Core Audio を使い、止めると元の音量に戻す。 |
-| `Recorder.py` / `OBSClient.py` | 続行ラウンドを OBS（obs-websocket v5）で録る。通信は専用のスレッド。 |
+| `Recorder.py` / `OBSClient.py` | 続行ラウンドと突入フリーズのラウンドを OBS（obs-websocket v5）で録る。スイッチは別々（続行は `obs_record`・突入フリーズは `obs_record_freeze`。どちらもデフォルト OFF）。開始は続行と決まった瞬間（`on_continue_start`）と、窓が突入フリーズに入った瞬間（`on_round_freeze_start`。`LogMonitor._enter_round_freeze` の `round_freeze_start(st)` の直後の 1 か所。放置モードは `_enter_round_freeze` が先に返すので録らない）。終了はどちらも最後の窓の RoundOver から `OBS_RECORD_TAIL_SEC` 秒後（フリーズの解除では止めない）。1 本を全窓で共有し、手動の録画には触らない。`on_round_over` はどちらかが ON なら受ける。両方 OFF にしたときだけ GUI がこのツールの録画を止める。通信は専用のスレッド。 |
 | `ConnectDB.py` | Supabase との通信。ラウンドの送信（`rpc/register_round_v2`。独自の番号と `p_players`）、transformed_uid の取得（`rpc/get_transformed_uid`）、統計画面の差分取得（`fetch_rounds(..., table=)`。既定は `ToNRounds_v2`）。`.env` が無ければ何もしない。 |
 | `RoundStore.py` / `Statistics.py` / `StatisticsGUI.py` | 統計画面。DB の差分を手元の SQLite に取り込み、手元で集計する。二項分布の検定。`RoundStore` は取り込み元（`Source`。今は v2 だけ）ごとに取り込んだ位置を別に覚え（meta の `initial_done:v2`・`synced_to:v2` など。404 でも巻き戻さない）、`sync_all()` で全部を取り込む。`rounds` の列 `players` はラウンド開始時の人数（自分を含む・不明は NULL）。前の版の rounds.sqlite は初回に独自の番号へ直し（1 つのトランザクション）、直す前を `rounds.sqlite.listtool.bak` に残す。8 Pages の行は 3000 番台のまま貯め、集計のときだけ通常の同じテラーに足す（`TerrorIds.statistics_id`）。 |
 | `DebugLog.py` / `BugReport.py` | debug.log（秘密・ユーザー名を伏せる）と、不具合の報告（Discord の Webhook。窓を複数・全部選べる）。 |
@@ -207,7 +207,7 @@ LogMonitor._process(line)
 ```
 
 主なイベント:
-- **ラウンド開始**: ラウンドごとの状態を落とす。Moon の何回目か（`RoundSequence`）、突入フリーズ、ラウンド開始でのアイテムロスト、Run ならリスポーン（§9）。テラーを持たないラウンド（Moon・Run・Special）はここで統計を送る。
+- **ラウンド開始**: ラウンドごとの状態を落とす。Moon の何回目か（`RoundSequence`）、突入フリーズ（張った瞬間に録画の開始も知らせる。上の `Recorder.py`）、ラウンド開始でのアイテムロスト、Run ならリスポーン（§9）。テラーを持たないラウンド（Moon・Run・Special）はここで統計を送る。
 - **テラー確定**（Killers set / revealed・Enrage・Stunned・Joy・Foxy・看破）→ `_on_killers` → `_plan()` で手順を決めて `_decide()`。置き換えで結論が変わるときだけ合図を待つ。Utils の判断に従う窓は Utils を待つ（§9）。
 - **置き換えの合図**（`EVENT_REPLACEMENT`）: 知らせる → `TerrorReplacement.TABLE` で差し替える。
 - **RoundOver**: チェイス停止・録画の終了予約・続行フリーズの解除予約・アイテムロストの案内・`do_after_round`。
@@ -281,7 +281,7 @@ LogMonitor._process(line)
 
 | ファイル | 中身 |
 |---|---|
-| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`run_respawn` |
+| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `obs_record_freeze`・`window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`run_respawn` |
 | `%APPDATA%\ToNAutoBeginner\debug.log`（.1〜.3） | デバッグログ。20MB で世代を回す |
 | `%APPDATA%\ToNAutoBeginner\rounds.sqlite`（`.listtool.bak`） | 統計画面の手元の保存（独自の番号。列 `players` あり）。前の版のものは初回に直し、直す前を `rounds.sqlite.listtool.bak` に残す |
 | `%APPDATA%\ToNAutoBeginner\continue_list.json`（`.listtool.bak`） | ツールの中の続行リスト（`{"version": 2, …}`。独自の番号。前の版のものは初回に直し、直す前を `continue_list.json.listtool.bak` に残す） |

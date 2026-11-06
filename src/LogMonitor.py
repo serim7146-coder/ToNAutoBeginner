@@ -429,6 +429,7 @@ class LogMonitor:
             return
         self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
         SharedState.round_freeze_start(st)
+        Recorder.on_round_freeze_start(self.window_idx)     # 録画は別スイッチ（RoundOver+tail で止まる）
         self._log(f"⏸ {name} 突入 → 全窓フリーズ"
                   f"（死亡・生存{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
         # 音声は選べるラウンドのもの。Punished / 8 Pages の音声は速度検知用

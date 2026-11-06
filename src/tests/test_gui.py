@@ -327,9 +327,10 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
         def set(self, value):
             self.value = value
 
-    def _app(self, enabled=True, host="127.0.0.1", port="4455", password="hunter2"):
+    def _app(self, enabled=True, host="127.0.0.1", port="4455", password="hunter2", freeze=False):
         app = type("FakeApp", (), {})()
         app.v_obs_enabled = self.FakeVar(enabled)
+        app.v_obs_freeze = self.FakeVar(freeze)
         app.v_obs_host = self.FakeVar(host)
         app.v_obs_port = self.FakeVar(port)
         app.v_obs_password = self.FakeVar(password)
@@ -361,6 +362,39 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
             mainGUI.App._apply_obs_settings(app)
 
         mock_stop.assert_not_called()
+
+    # ── 突入フリーズのスイッチ ───────────────────
+    def test_the_freeze_switch_reaches_the_recorder(self):
+        for freeze in (True, False):
+            app = self._app(enabled=False, freeze=freeze)
+            with patch.object(Recorder, "configure") as mock_configure, \
+                    patch.object(Recorder, "stop_all"):
+                mainGUI.App._apply_obs_settings(app)
+
+            self.assertIs(mock_configure.call_args.kwargs["record_freeze"], freeze)
+            self.assertIs(mock_configure.call_args.args[0], False)
+
+    def test_both_off_stops_our_recording(self):
+        app = self._app(enabled=False, freeze=False)
+        with patch.object(Recorder, "configure"), patch.object(Recorder, "stop_all") as mock_stop:
+            mainGUI.App._apply_obs_settings(app)
+
+        mock_stop.assert_called_once_with()
+
+    def test_turning_one_off_while_the_other_stays_on_does_not_stop(self):
+        for enabled, freeze in ((False, True), (True, False), (True, True)):
+            app = self._app(enabled=enabled, freeze=freeze)
+            with patch.object(Recorder, "configure"), patch.object(Recorder, "stop_all") as mock_stop:
+                mainGUI.App._apply_obs_settings(app)
+
+            mock_stop.assert_not_called()
+
+    def test_the_gui_has_a_separate_default_off_freeze_checkbox(self):
+        source = Path(mainGUI.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("self.v_obs_freeze = tk.BooleanVar(value=False)", source)
+        self.assertRegex(source, r'text="突入フリーズのラウンドを録画する", variable=self\.v_obs_freeze,\s+'
+                                 r'command=self\._apply_obs_settings')
 
     def _recorder_after_turning_off(self, obs):
         rec = Recorder.Recorder(client_factory=obs.factory)
@@ -490,7 +524,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
             self.assertIsNone(SecretStore.unprotect(value), value)
 
     # ── 保存 ─────────────────────────────────
-    def _save(self, password, stored=None):
+    def _save(self, password, stored=None, freeze=""):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
@@ -498,9 +532,10 @@ class TestOBSPasswordStorage(unittest.TestCase):
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_emergency_key", "v_start_key",
-                     "v_obs_enabled", "v_obs_host", "v_obs_port"):
+                     "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port"):
             setattr(app, name, self.FakeVar(""))
         app.v_obs_password = self.FakeVar(password)
+        app.v_obs_freeze = self.FakeVar(freeze)
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value=dict(stored or {})):
             app._window_volume_settings = lambda: {}
@@ -541,7 +576,7 @@ class TestOBSPasswordStorage(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app._add_tool_row = lambda p, save=True: None
@@ -566,6 +601,31 @@ class TestOBSPasswordStorage(unittest.TestCase):
         self.assertEqual(app.v_obs_password.get(), self.PASSWORD)
         self.assertEqual(written, [], "書き直さない")
         self.assertEqual(app.logs, [])
+
+    # ── obs_record_freeze（突入フリーズの録画）の保存と読み込み ──
+    def test_the_freeze_record_flag_is_saved(self):
+        self.assertIs(self._save("", freeze=True)["obs_record_freeze"], True)
+        self.assertIs(self._save("", freeze=False)["obs_record_freeze"], False)
+
+    def test_the_freeze_record_flag_is_loaded(self):
+        app, _written = self._load({"obs_record_freeze": True})
+
+        self.assertIs(app.v_obs_freeze.get(), True)
+
+    def test_a_missing_or_broken_freeze_record_flag_is_off(self):
+        for data in ({}, {"obs_record_freeze": None}, {"obs_record_freeze": "yes"},
+                     {"obs_record_freeze": "false"}, {"obs_record_freeze": 1},
+                     {"obs_record_freeze": [True]}, {"obs_record_freeze": {}}):
+            app, _written = self._load(data)
+
+            self.assertIs(app.v_obs_freeze.get(), False, data)
+
+    def test_the_freeze_record_flag_is_independent_of_the_continue_flag(self):
+        app, _written = self._load({"obs_record": True})
+        self.assertEqual((app.v_obs_enabled.get(), app.v_obs_freeze.get()), (True, False))
+
+        app, _written = self._load({"obs_record_freeze": True})
+        self.assertEqual((app.v_obs_enabled.get(), app.v_obs_freeze.get()), (False, True))
 
     def test_an_old_plaintext_password_is_migrated(self):
         app, written = self._load({"obs_password": self.PASSWORD, "tnl_path": ""})
@@ -1068,7 +1128,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tool_rows = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key",
-                     "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+                     "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app._win_count_pref = 6
         saved = {}
@@ -1115,7 +1175,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password", "v_win_count"):
             setattr(app, name, self.FakeVar(""))
         app._add_tool_row = lambda p, save=True: None
@@ -1243,7 +1303,7 @@ class TestSettingsLive(unittest.TestCase):
         fake = _with_cancel_key(type("FakeApp", (), {})())
         fake.tabs, fake.tool_rows, fake._win_count_pref = [], [], None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(fake, name, self.Var(""))
         fake._window_volume_settings = lambda: {}
@@ -2292,7 +2352,7 @@ class TestEmergencyKeySettings(unittest.TestCase):
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
-        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+        for name in ("v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestEmergencyKeySettings.FakeVar(""))
         saved = {}
 
@@ -2957,7 +3017,7 @@ class TestLaunchAlwaysMakesNewInstances(unittest.TestCase):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app._add_tool_row = lambda p, save=True: None
@@ -3005,7 +3065,7 @@ class TestTonInstanceAccessSetting(unittest.TestCase):
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_emergency_key", "v_start_key", "v_tnl",
-                     "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+                     "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         return app
 
@@ -3172,7 +3232,7 @@ class TestSettingsArePersisted(unittest.TestCase):
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+        for name in ("v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
 
@@ -3200,7 +3260,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "speed_detect", "hands_free", "item_begin_mode",     # GC で足した（前回のトグルを引き継ぐ）
             "voice_volumes",                                     # EO で足した
             "win_count",
-            "tool_launchers", "obs_record", "obs_host", "obs_port", "obs_password_dpapi",
+            "tool_launchers", "obs_record", "obs_record_freeze", "obs_host", "obs_port", "obs_password_dpapi",
         }, "ラウンド指定3種は保存しない")
 
     def test_other_keys_in_the_file_survive(self):
@@ -3212,7 +3272,7 @@ class TestSettingsArePersisted(unittest.TestCase):
                      "v_ton_begin", "v_join_world", "v_ton_access",
                      "v_emergency_key", "v_start_key"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+        for name in ("v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         saved = {}
 
@@ -3363,7 +3423,7 @@ class TestToolLauncherSettings(unittest.TestCase):
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
-        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+        for name in ("v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestToolLauncherSettings.FakeVar(""))
         app.v_emergency_key = TestToolLauncherSettings.FakeVar("p")
         app.v_start_key = TestToolLauncherSettings.FakeVar("")

@@ -2282,7 +2282,7 @@ class TestSkipRoundsSettings(unittest.TestCase):
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry",
                      "v_ton_begin", "v_join_world", "v_ton_access"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
-        for name in ("v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+        for name in ("v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, TestSkipRoundsSettings.FakeVar(""))
         app.tool_rows = []
         app._win_count_pref = None
@@ -2410,7 +2410,7 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         app.tabs = [self._tab(0), self._tab(1)]
         for name in ("v_desktop_mode", "v_use_osc",
                      "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
-                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_instance_link", "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, TestRoundSettingsAreNotLoaded.FakeVar(""))
         app._apply_obs_settings = lambda: None

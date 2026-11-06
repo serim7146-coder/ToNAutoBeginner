@@ -2449,9 +2449,14 @@ class App(tk.Tk):
         self.v_obs_enabled = tk.BooleanVar(value=False)
         ttk.Checkbutton(of1, text="続行ラウンドを録画する", variable=self.v_obs_enabled,
                         command=self._apply_obs_settings).pack(side="left")
-        ttk.Label(of1, text="※ OBSの「ツール → WebSocketサーバー設定」で有効にしてください。"
-                            "シーンは切り替えません",
-                  foreground=config.GUI_YLW).pack(side="left", padx=(10, 0))
+        self.v_obs_freeze = tk.BooleanVar(value=False)
+        ttk.Checkbutton(of1, text="突入フリーズのラウンドを録画する", variable=self.v_obs_freeze,
+                        command=self._apply_obs_settings).pack(side="left", padx=(10, 0))
+        of1n = ttk.Frame(f5)
+        of1n.pack(fill="x", pady=2)
+        ttk.Label(of1n, text="※ OBSの「ツール → WebSocketサーバー設定」で有効にしてください。"
+                             "シーンは切り替えません",
+                  foreground=config.GUI_YLW).pack(side="left")
         of2 = ttk.Frame(f5)
         of2.pack(fill="x", pady=2)
         ttk.Label(of2, text="ホスト:").pack(side="left")
@@ -3565,6 +3570,7 @@ class App(tk.Tk):
         for tab in self.tabs:
             tab.set_freeze_values(self._window_freezes.get(tab.idx + 1, {}))
         self.v_obs_enabled.set(_as_flag(data.get("obs_record")))
+        self.v_obs_freeze.set(data.get("obs_record_freeze") is True)
         self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
         self.v_obs_port.set(str(data.get("obs_port") or config.OBS_DEFAULT_PORT))
         password, state = load_obs_password(data)
@@ -4867,6 +4873,7 @@ class App(tk.Tk):
                                 if SharedState.get_item_fetch_gain() else None),
             "window_freezes": self._window_freeze_setting(),
             "obs_record":    self.v_obs_enabled.get(),
+            "obs_record_freeze": self.v_obs_freeze.get(),
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
             **self._window_volume_settings(),
@@ -4910,10 +4917,11 @@ class App(tk.Tk):
         """GUIの設定を録画係へ渡す。パスワードはログに出さない"""
         host, port = self._obs_endpoint()
         enabled = self.v_obs_enabled.get()
+        freeze = self.v_obs_freeze.get()
         Recorder.configure(enabled, host, port,
-                           self.v_obs_password.get(), log=self._log)
-        if not enabled:
-            # 録画中にOFFにしたら、このツールが始めた録画をその場で止める
+                           self.v_obs_password.get(), log=self._log, record_freeze=freeze)
+        if not enabled and not freeze:
+            # 録画中に両方OFFにしたら、このツールが始めた録画をその場で止める
             # （手動の録画には触らない）。GUI操作なので待たない
             Recorder.stop_all()
 
