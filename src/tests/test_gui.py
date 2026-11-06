@@ -1260,7 +1260,7 @@ class TestSettingsLive(unittest.TestCase):
     def test_the_two_renamed_labels(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('text="ラウンド突入:"', src)          # フリーズの枠の中（DV）
-        self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ）"', src)
+        self.assertIn('text="ラウンドごとの自爆設定（プライベートインスタンスのみ。焼き芋の Twilight の全続行は有効）"', src)
         self.assertNotIn("突入で全窓停止", src)
         self.assertNotIn("ラウンドごとの扱い", src)
         self.assertIn('text="霧即時判定"', src)              # DV3 で短く

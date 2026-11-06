@@ -141,10 +141,9 @@ class TestGroupRoundTable(unittest.TestCase):
         for moon in ("Mystic Moon", "Solstice"):
             self.assertEqual(self._decide(self.YAKIIMO, moon), GroupRound.SKIP, moon)
 
-    def test_yakiimo_plays_the_first_blood_moon_and_twilight(self):
-        for moon in ("Blood Moon", "Twilight"):
-            self.assertEqual(self._decide(self.YAKIIMO, moon),
-                             GroupRound.CONTINUE, moon)
+    def test_yakiimo_plays_the_first_blood_moon(self):
+        """焼き芋の Twilight は全続行のチェックが無ければ 1 回目から自爆する（TestYakiimoTwilightOptIn）"""
+        self.assertEqual(self._decide(self.YAKIIMO, "Blood Moon"), GroupRound.CONTINUE)
 
     def test_hoshiimo_plays_every_first_moon(self):
         for moon in RoundSequence.MOONS:
@@ -416,6 +415,50 @@ class TestGroupMoonSkip(unittest.TestCase):
             GroupRound.CONTINUE)
 
 
+
+
+class TestYakiimoTwilightOptIn(unittest.TestCase):
+    """焼き芋の Twilight は、その窓の全続行（continue_moons）にあるときだけ続行する（依頼者 2026-11-06）"""
+
+    HOSHIIMO = config.INSTANCE_HOSHIIMO
+    YAKIIMO = config.INSTANCE_YAKIIMO
+
+    def _decide(self, instance_type, moon, continue_moons=(), moon_repeat=False, skip_moons=()):
+        return GroupRound.decide(instance_type, moon, [7], continue_moons=continue_moons,
+                                 moon_repeat=moon_repeat, skip_moons=skip_moons)
+
+    def test_unchecked_skips_from_the_first_time(self):
+        for repeat in (False, True):
+            self.assertEqual(self._decide(self.YAKIIMO, "Twilight", moon_repeat=repeat),
+                             GroupRound.SKIP, repeat)
+
+    def test_unchecked_with_other_moons_checked_still_skips(self):
+        self.assertEqual(self._decide(self.YAKIIMO, "Twilight", {"Blood Moon", "Mystic Moon"}),
+                         GroupRound.SKIP)
+
+    def test_checked_continues_the_first_and_later_times(self):
+        for repeat in (False, True):
+            self.assertEqual(self._decide(self.YAKIIMO, "Twilight", {"Twilight"}, moon_repeat=repeat),
+                             GroupRound.CONTINUE, repeat)
+
+    def test_hoshiimo_twilight_is_unchanged(self):
+        for checked in ((), {"Twilight"}):
+            self.assertEqual(self._decide(self.HOSHIIMO, "Twilight", checked),
+                             GroupRound.CONTINUE, checked)
+        self.assertEqual(self._decide(self.HOSHIIMO, "Twilight", {"Twilight"}, moon_repeat=True),
+                         GroupRound.SKIP)
+
+    def test_yakiimo_blood_moon_is_unchanged(self):
+        for checked in ((), {"Blood Moon"}, {"Twilight"}):
+            self.assertEqual(self._decide(self.YAKIIMO, "Blood Moon", checked),
+                             GroupRound.CONTINUE, checked)
+            self.assertEqual(self._decide(self.YAKIIMO, "Blood Moon", checked, moon_repeat=True),
+                             GroupRound.SKIP, checked)
+
+    def test_continue_moons_do_not_change_the_other_yakiimo_moons(self):
+        for moon in ("Mystic Moon", "Solstice"):
+            self.assertEqual(self._decide(self.YAKIIMO, moon, {moon, "Twilight"}),
+                             GroupRound.SKIP, moon)
 
 
 class TestGroupMoonSkipWiring(unittest.TestCase):
@@ -2720,13 +2763,72 @@ class TestLogMonitorGroupRules(unittest.TestCase):
 
             self.assertIn("do_skip", started, moon)
 
-    def test_yakiimo_plays_the_first_blood_moon_and_twilight(self):
-        for moon in ("Blood Moon", "Twilight"):
-            monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+    def test_yakiimo_plays_the_first_blood_moon(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
 
-            started = self._round(monitor, moon, [7])
+        started = self._round(monitor, "Blood Moon", [7])
 
-            self.assertEqual(started, [], moon)
+        self.assertEqual(started, [])
+
+    # ── 焼き芋の Twilight は全続行のチェックを入れた回だけ続行 ──
+    def _twilight_monitor(self, continue_rounds=(), keep_on=None,
+                          instance_type=config.INSTANCE_YAKIIMO):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3",
+                           continue_rounds=set(continue_rounds))
+        monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _msg: None, window_idx=1)
+        monitor.st.instance_type = instance_type
+        monitor.st.in_round = True
+        return monitor
+
+    def test_yakiimo_twilight_unchecked_self_destructs_the_first_time(self):
+        monitor = self._twilight_monitor()
+
+        started = self._round(monitor, "Twilight", [7])
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.all_continue_round)
+        self.assertFalse(monitor.st.is_continue_round)
+
+    def test_yakiimo_twilight_unchecked_self_destructs_even_if_the_terror_is_listed(self):
+        monitor = self._twilight_monitor(
+            keep_on={MatchTNL.SPECIAL_MOON_KEY: {99}})
+
+        started = self._round(monitor, "Twilight", [99])
+
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertFalse(monitor.st.all_continue_round)
+
+    def test_yakiimo_twilight_checked_is_all_continue(self):
+        for repeat in (False, True):
+            SharedState.continue_round_reset()
+            monitor = self._twilight_monitor(continue_rounds={"Twilight"})
+            monitor.st.moon_repeat = repeat
+
+            started = self._round(monitor, "Twilight", [7])
+
+            self.assertNotIn("do_skip", started, repeat)
+            self.assertTrue(monitor.st.all_continue_round, repeat)
+            self.assertFalse(monitor.st.is_continue_round, repeat)
+
+    def test_yakiimo_twilight_checked_and_listed_is_a_continue_round(self):
+        monitor = self._twilight_monitor(
+            continue_rounds={"Twilight"}, keep_on={MatchTNL.SPECIAL_MOON_KEY: {99}})
+
+        started = self._round(monitor, "Twilight", [99])
+
+        self.assertNotIn("do_skip", started)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_hoshiimo_twilight_is_unchanged_by_the_check(self):
+        for checked in (set(), {"Twilight"}):
+            SharedState.continue_round_reset()
+            monitor = self._twilight_monitor(
+                continue_rounds=checked, instance_type=config.INSTANCE_HOSHIIMO)
+
+            started = self._round(monitor, "Twilight", [7])
+
+            self.assertNotIn("do_skip", started, checked)
 
     # ── 焼き芋 Fog ──────────────────────────
     def test_yakiimo_fog_revealed_as_alternate_uses_the_keep_list(self):

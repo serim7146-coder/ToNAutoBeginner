@@ -21,7 +21,7 @@ class WindowConfig:
     announce_intermission: bool = False
     # 問答無用で自爆するラウンド（privateのみ）。続行リストより優先する
     skip_rounds: set = field(default_factory=set)
-    # 続行リストを見ずに自爆しない（privateのみ）。skip_rounds より優先する
+    # 続行リストを見ずに自爆しない（privateのみ。焼き芋の Twilight だけはグループでも効く）。skip_rounds より優先する
     continue_rounds: set = field(default_factory=set)
     # 全窓フリーズ（この窓が当たったらほかの窓を止める）。速度検知の 8 Pages・Punished と、突入で止めるラウンド
     freeze_8pages: bool = False

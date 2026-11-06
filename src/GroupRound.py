@@ -32,6 +32,9 @@ YAKIIMO_LIST_ROUNDS = frozenset({"8 Pages"})
 # 焼き芋では1回目でもスキップするmoon
 YAKIIMO_SKIP_FIRST_MOONS = frozenset({"Mystic Moon", "Solstice"})
 
+# 焼き芋では、その窓の「全続行」にチェックを入れた回だけ続行するmoon。チェックが無ければ1回目でも自爆する（依頼者 2026-11-06）
+YAKIIMO_OPT_IN_MOONS = frozenset({"Twilight"})
+
 MOONS = frozenset({"Mystic Moon", "Blood Moon", "Twilight", "Solstice"})
 
 SABOTAGE_STAR_KEY   = MatchTNL.LOG_TO_TNL["Sabotage star"]
@@ -69,6 +72,7 @@ def decide(
     killers_round_type: str = "",
     moon_repeat: bool = False,
     skip_moons=(),
+    continue_moons=(),
     sus_players=(),
     host_wishes: dict | None = None,
     follow_host: bool = False,
@@ -80,6 +84,9 @@ def decide(
     `moon_repeat` はこのmoonが2回目以降か（`RoundSequence.is_moon_repeat()`）。
     `skip_moons` は窓ごとに自爆指定された moon 名。指定されていれば1回目でも
     自爆する（消化済み扱いにはしない——ラウンド並びの推定に影響させないため）。
+    `continue_moons` は窓ごとに全続行を指定された moon 名。焼き芋の YAKIIMO_OPT_IN_MOONS
+    （Twilight）だけがこれを見て、指定があれば1回目も2回目以降も CONTINUE、無ければ1回目から SKIP
+    （skip_moons や moon_repeat より先に決める）。ほかの moon・干し芋は見ない。
     `sus_players` は Sabotage で選出されたマーダーの表示名。
     `host_wishes` は `{vrc_name: {round_key: set(ids)}}`。
     `follow_host` が False のときは参加者別の情報が無いので Sabotage は
@@ -108,6 +115,9 @@ def decide(
         return CONTINUE
 
     if round_type in MOONS:
+        if (instance_type == config.INSTANCE_YAKIIMO
+                and round_type in YAKIIMO_OPT_IN_MOONS):
+            return CONTINUE if round_type in continue_moons else SKIP
         if round_type in skip_moons:
             return SKIP          # 自爆指定。1回目かどうかを問わない
         if moon_repeat:
@@ -143,13 +153,15 @@ def is_all_continue_regardless_of_terror(
     *,
     moon_repeat: bool = False,
     skip_moons=(),
+    continue_moons=(),
 ) -> bool:
     """テラーが分からなくても、`decide` が必ず CONTINUE（全続行）を返すラウンドか。
 
     霧や 8 Pages はテラーが出るまで時間がかかる（8 Pages は最初のページまで）。そのあいだ音量を
     「全続行」にするために、テラー不明の時点で使う。決まりは `decide` と同じ:
     ALWAYS_CONTINUE_ROUNDS（焼き芋の 8 Pages は除く）・1回目の moon（自爆指定・2回目・焼き芋の
-    Mystic Moon/Solstice は除く）・干し芋の Fog。焼き芋の Fog は Killers 行の種別で決まる（SKIP になりうる）、
+    Mystic Moon/Solstice は除く）・干し芋の Fog・焼き芋の Twilight（全続行を指定された `continue_moons` にあるときだけ。
+    1回目でも2回目以降でも）。焼き芋の Fog は Killers 行の種別で決まる（SKIP になりうる）、
     焼き芋の 8 Pages は続行リスト次第（自爆になりうる）ので含めない。
     """
     if instance_type not in GROUP_INSTANCES:
@@ -158,6 +170,9 @@ def is_all_continue_regardless_of_terror(
         return not (instance_type == config.INSTANCE_YAKIIMO
                     and round_type in YAKIIMO_LIST_ROUNDS)
     if round_type in MOONS:
+        if (instance_type == config.INSTANCE_YAKIIMO
+                and round_type in YAKIIMO_OPT_IN_MOONS):
+            return round_type in continue_moons
         if round_type in skip_moons or moon_repeat:
             return False
         return not (instance_type == config.INSTANCE_YAKIIMO

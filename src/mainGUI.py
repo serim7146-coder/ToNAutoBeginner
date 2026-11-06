@@ -694,7 +694,7 @@ class WindowTab(ttk.Frame):
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
         rounds = self._section(
-            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
+            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ。焼き芋の Twilight の全続行は有効）")
         rounds.pack(fill="x", pady=(4, 0))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))

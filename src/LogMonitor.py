@@ -1317,6 +1317,9 @@ class LogMonitor:
             # （Classic など）は private 限定のまま
             skip_moons={name for name in self.cfg.skip_rounds
                         if name in GroupRound.MOONS},
+            # 全続行の指定のうち、焼き芋の Twilight だけがグループでも効く（GroupRound.YAKIIMO_OPT_IN_MOONS）
+            continue_moons={name for name in self.cfg.continue_rounds
+                            if name in GroupRound.MOONS},
             sus_players=st.sus_players,
             host_wishes=self._group_wishes(),
             follow_host=bool(self._group_wishes()),
@@ -2110,7 +2113,8 @@ class LogMonitor:
         if st.instance_type in GroupRound.GROUP_INSTANCES:
             if not GroupRound.is_all_continue_regardless_of_terror(
                     st.instance_type, st.round_type, moon_repeat=st.moon_repeat,
-                    skip_moons={name for name in self.cfg.skip_rounds if name in GroupRound.MOONS}):
+                    skip_moons={name for name in self.cfg.skip_rounds if name in GroupRound.MOONS},
+                    continue_moons={name for name in self.cfg.continue_rounds if name in GroupRound.MOONS}):
                 return
             text = f"グループ判定: {st.round_type} 【全続行】"
         elif self._is_all_continue_round():

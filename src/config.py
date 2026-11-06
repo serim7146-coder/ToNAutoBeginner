@@ -273,6 +273,7 @@ ANNOUNCE_FOG_ON_ENTRY = False
 # ── ラウンドごとの自動自爆 ──
 # 選んだラウンドは続行リストを見ずに自爆する。効くのは private だけ——
 # ただし4種moonは干し芋/焼き芋でも効く（指定すれば1回目でも自爆する）。
+# 焼き芋の Twilight は全続行の指定も効く（GroupRound.YAKIIMO_OPT_IN_MOONS）。
 # 並び順はこのリストのまま表示する。ソートも独自順序も作らない
 # （このリストを編集して表示順と項目を変えられるようにするため）。
 SKIP_ROUND_SELECTABLE = [
