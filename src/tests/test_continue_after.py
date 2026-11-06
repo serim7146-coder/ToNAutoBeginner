@@ -373,7 +373,7 @@ class TestTheSettings(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world",
                      "v_ton_access", "v_instance_link", "v_emergency_key", "v_start_key",
-                     "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, MagicMock())
         for name in ("_add_tool_row", "_refresh_emergency_key_label", "_refresh_start_key_label",
@@ -431,7 +431,7 @@ class TestTheSettings(unittest.TestCase):
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world",
                      "v_ton_access", "v_emergency_key",
-                     "v_start_key", "v_obs_enabled", "v_obs_host", "v_obs_port", "v_obs_password"):
+                     "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, MagicMock(get=lambda: ""))
         saved = {}
         with patch.object(mainGUI, "save_settings", saved.update), \

@@ -1,7 +1,9 @@
-"""続行ラウンドを OBS で録画する。1本の録画を全窓で共有する。
+"""続行ラウンドと突入フリーズのラウンドを OBS で録画する。1本の録画を全窓で共有する。
 
-- 録画開始: 続行と決まった瞬間（LogMonitor が continue_round_start(st) を呼ぶ直後）
-- 録画終了: 最後の窓の RoundOver から OBS_RECORD_TAIL_SEC 秒後
+- 録画開始（続行）: 続行と決まった瞬間（LogMonitor が continue_round_start(st) を呼ぶ直後）
+- 録画開始（突入フリーズ）: 窓が突入フリーズに入った瞬間（round_freeze_start(st) の直後）
+- 録画終了: 最後の窓の RoundOver から OBS_RECORD_TAIL_SEC 秒後（どちらで始めても同じ。
+  フリーズの解除では止めない）
 - このツールが始めた録画だけ止める。利用者が手で始めた録画は絶対に止めない
 
 OBS との通信はすべて専用のワーカースレッドで行う。LogMonitor のスレッドからは
@@ -34,7 +36,7 @@ class RecordPlan:
         self._clock = clock
         self.tail_sec = tail_sec
         self.max_sec = max_sec
-        self.active: set = set()                 # 続行中で、まだ RoundOver+tail を迎えていない窓
+        self.active: set = set()                 # 続行中・突入フリーズ中で、まだ RoundOver+tail を迎えていない窓
         self.release_at: dict = {}               # 窓 → active から外す時刻
         self.we_started = False                  # このツールが録画を始めたか
         self.started_at: Optional[float] = None
@@ -43,7 +45,8 @@ class RecordPlan:
         self._hide_windows = hide_windows
 
     # ── 窓からの知らせ ─────────────────────────
-    def continue_start(self, window: int):
+    def continue_start(self, window: int, label: str = "続行ラウンド"):
+        """録画の開始。label は開始ログの（）の中身（続行ラウンド／突入フリーズ）"""
         self.active.add(window)
         self.release_at.pop(window, None)        # 停止の予約があれば取り消す
         if self.we_started:
@@ -64,7 +67,7 @@ class RecordPlan:
         self.started_at = self._clock()
         self._warned = ""
         self._hide_own_windows(True)
-        self._log(f"[窓{window}] 🎥 OBS録画を開始しました（続行ラウンド）")
+        self._log(f"[窓{window}] 🎥 OBS録画を開始しました（{label}）")
 
     def round_over(self, window: int):
         if window in self.active:
@@ -149,11 +152,11 @@ class RecordPlan:
                 pass
 
     def _warn(self, window: int, reason: str):
-        """同じ理由は1回だけ出す。次の続行でまた試す"""
+        """同じ理由は1回だけ出す。次の録画でまた試す"""
         if reason == self._warned:
             return
         self._warned = reason
-        self._log(f"[窓{window}] ⚠ OBS録画を開始できません: {reason}（次の続行ラウンドでまた試します）")
+        self._log(f"[窓{window}] ⚠ OBS録画を開始できません: {reason}（次の録画でまた試します）")
 
     def _note(self, msg: str):
         if msg != self._warned:
@@ -171,7 +174,8 @@ class Recorder:
         self._lock = threading.Lock()
         self._queue: queue.Queue = queue.Queue()
         self._thread: Optional[threading.Thread] = None
-        self._enabled = False
+        self._record_continue = False       # 続行ラウンドを録画する
+        self._record_freeze = False         # 突入フリーズのラウンドを録画する
         self._log: Callable[[str], None] = lambda _m: None
         self._hide_windows: Optional[Callable[[bool], None]] = None
         self._plan = RecordPlan(self._make_client, self._emit, clock,
@@ -193,9 +197,11 @@ class Recorder:
 
     def configure(self, enabled: bool, host: str = config.OBS_DEFAULT_HOST,
                   port: int = config.OBS_DEFAULT_PORT, password: str = "",
-                  log: Callable[[str], None] = None):
+                  log: Callable[[str], None] = None, record_freeze: bool = False):
+        """enabled は続行ラウンドの録画、record_freeze は突入フリーズの録画（別々のスイッチ）"""
         with self._lock:
-            self._enabled = bool(enabled)
+            self._record_continue = bool(enabled)
+            self._record_freeze = bool(record_freeze)
             self._host = host or config.OBS_DEFAULT_HOST
             self._port = int(port or config.OBS_DEFAULT_PORT)
             self._password = password or ""
@@ -204,15 +210,20 @@ class Recorder:
 
     @property
     def enabled(self) -> bool:
-        return self._enabled
+        """どちらかの録画がONか（RoundOver を受け付けるか）"""
+        return self._record_continue or self._record_freeze
 
     # ── 窓のスレッドから（待たない） ──────────────
     def on_continue_start(self, window: int):
-        if self._enabled:
-            self._post(("start", window))
+        if self._record_continue:
+            self._post(("start", window, "続行ラウンド"))
+
+    def on_round_freeze_start(self, window: int):
+        if self._record_freeze:
+            self._post(("start", window, "突入フリーズ"))
 
     def on_round_over(self, window: int):
-        if self._enabled:
+        if self.enabled:
             self._post(("round_over", window))
 
     def stop_all(self, wait_sec: float = 0.0):
@@ -254,9 +265,9 @@ class Recorder:
                 self._emit(f"⚠ OBS録画の処理でエラー: {e}")
 
     def _handle(self, item):
-        kind, arg = item
+        kind, arg, *rest = item
         if kind == "start":
-            self._plan.continue_start(arg)
+            self._plan.continue_start(arg, *rest)
         elif kind == "round_over":
             self._plan.round_over(arg)
         elif kind == "stop_all":
@@ -284,6 +295,7 @@ class Recorder:
 _default = Recorder()
 configure = _default.configure
 on_continue_start = _default.on_continue_start
+on_round_freeze_start = _default.on_round_freeze_start
 on_round_over = _default.on_round_over
 stop_all = _default.stop_all
 set_window_hider = _default.set_window_hider

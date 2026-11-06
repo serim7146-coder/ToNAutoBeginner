@@ -395,7 +395,8 @@ class TestFreezeFrame(_AppCase):
 
     def test_no_freeze_checks_left_outside(self):
         outside = [w.cget("text") for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
-                   and "フリーズ" in w.cget("text")]
+                   and "フリーズ" in w.cget("text")
+                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # ⑤ OBS自動録画のスイッチ
         self.assertEqual(outside, [])
 
     def test_the_checks_work_as_before(self):

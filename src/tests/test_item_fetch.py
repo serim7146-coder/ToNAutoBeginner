@@ -1169,7 +1169,7 @@ class TestItemFetch(unittest.TestCase):
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
         app._window_volume_settings = lambda: {}
@@ -1802,7 +1802,7 @@ os._exit(0)
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_host",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, _CancelKeyVar(""))
         app._window_volume_settings = lambda: {}
@@ -1879,7 +1879,7 @@ class TestStartKeySettings(unittest.TestCase):
         app.tabs = []
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
                      "v_join_world", "v_ton_access", "v_instance_link",
-                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_host",
+                     "v_emergency_key", "v_start_key", "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
                      "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app._add_tool_row = lambda p, save=True: None
@@ -1912,7 +1912,7 @@ class TestStartKeySettings(unittest.TestCase):
         app.tool_rows = []
         app._win_count_pref = None
         for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin",
-                     "v_join_world", "v_ton_access", "v_emergency_key", "v_obs_enabled",
+                     "v_join_world", "v_ton_access", "v_emergency_key", "v_obs_enabled", "v_obs_freeze",
                      "v_obs_host", "v_obs_port", "v_obs_password"):
             setattr(app, name, self.FakeVar(""))
         app.v_start_key = self.FakeVar("f9")
