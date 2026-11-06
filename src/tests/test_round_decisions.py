@@ -1,5 +1,6 @@
 """ラウンドの判定（続行リスト・グループ・moon・Sabotage・自爆/続行の指定）"""
 from tests.support import *  # noqa: F401,F403
+import ContinueTable
 
 
 
@@ -742,6 +743,312 @@ class TestPrivateSabotageContinues(unittest.TestCase):
         self.assertIn("do_skip", self._run(sabo), "Sabotage では数えない")
 
 
+
+
+class TestPrivateSabotageContinueTables(unittest.TestCase):
+    """private 系の Sabotage は、参加者の希望より先に、その窓の続行表（デフォ続行・続行無効）の Sabotage star を見る。
+
+    実例: Mope Mope（18）がその窓のデフォ続行にあるのに、参加者の誰も希望していないと自爆していた。
+    本物の %APPDATA% の続行表は読まない（ContinueTable.set_current で差し替える）。送る先は全部偽物
+    """
+
+    STAR = GroupRound.SABOTAGE_STAR_KEY
+    MURDER = GroupRound.SABOTAGE_MURDER_KEY
+    SABO = TestPrivateSabotageContinues.SABO
+    MOPE = 18               # ツールの独自の番号（TerrorIds）。ログの 18 と同じ
+    OTHER = 42
+    UNRELATED = 99
+    ITEM = 5
+
+    _start = TestPrivateSabotageContinues._start
+    _monitor = TestPrivateSabotageContinues._monitor
+
+    def setUp(self):
+        TestPrivateSabotageContinues.setUp(self)
+        self.addCleanup(ContinueTable.set_current, ContinueTable.Store())
+        ContinueTable.set_current(ContinueTable.Store())
+
+    def _tables(self, disabled=None, default=None):
+        """窓 1 の表（Sabotage star の枠）。disabled・default は番号の並び"""
+        def body(ids):
+            return {self.STAR: frozenset(ids)} if ids else {}
+        ContinueTable.set_current(ContinueTable.Store(
+            windows={1: ContinueTable.WindowTable(disabled=body(disabled), default=body(default))}))
+
+    def _item_store(self, disabled=None, default=None):
+        """窓 1 はアイテムで切り替える ON。ITEM を持っている間だけ、決まりのプリセットが窓の表の代わりになる"""
+        def body(ids):
+            return {self.STAR: frozenset(ids)} if ids else {}
+        Rule = ContinueTable.ItemRule
+        ContinueTable.set_current(ContinueTable.Store(
+            disabled_presets={"無": body(disabled)}, default_presets={"足": body(default)},
+            windows={1: ContinueTable.WindowTable(item_switch=True)},
+            item_rules=(Rule(self.ITEM, "無" if disabled else ContinueTable.KEEP,
+                             "足" if default else ContinueTable.KEEP),)))
+
+    def _reset(self):
+        self.thread.reset_mock()
+        self.play.reset_mock()
+        self.record.reset_mock()
+        SharedState.continue_round_reset()
+
+    def _run(self, monitor, round_type="Sabotage", ids=None):
+        ids = ids or f"{self.MOPE} 0 0"
+        monitor._process(f"Killers have been set - {ids} // Round type is {round_type}")
+        return [c.kwargs["target"].__func__.__name__
+                for c in self.thread.call_args_list if "target" in c.kwargs]
+
+    def _wishing(self, *terrors):
+        """マーダー以外の参加者が star 枠で terrors を希望している"""
+        return {"ほかのひと": {self.STAR: set(terrors)}}
+
+    @staticmethod
+    def _plan(monitor):
+        st = monitor.st
+        return monitor._plan(st.round_type, st.terror_ids, False)
+
+    def _plan_for(self, monitor):
+        monitor.st.round_type = "Sabotage"
+        monitor.st.terror_ids = [self.MOPE]
+        return self._plan(monitor)
+
+    def _assert_continued(self, monitor, started):
+        self.assertNotIn("do_skip", started, "自爆しない")
+        self.assertTrue(monitor.st.is_continue_round)
+        self.play.assert_called_once_with("continue.mp3", kind="continue")
+        self.assertEqual(SharedState.get_continue_round_count(), 1, "他窓フリーズ（普通の続行ラウンド）")
+        self.record.assert_called_once_with(1)
+        self.assertFalse(any("グループ自動自爆" in m for m in monitor.logs), monitor.logs)
+
+    def _assert_skipped(self, monitor, started):
+        self.assertIn("do_skip", started)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.play.assert_not_called()
+
+    # ── 1・2: デフォ続行 ──────────────────────
+    def test_a_default_continue_terror_continues_when_nobody_wishes_it(self):
+        """実例（窓 1 のデフォ続行の Sabotage star に Mope Mope。参加者は誰も希望していない）"""
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.OTHER))
+
+        started = self._run(monitor)
+
+        self.assertEqual(monitor.st.terror_ids, [self.MOPE])
+        self.assertEqual(self._plan(monitor), ("list", True, False))
+        self._assert_continued(monitor, started)
+        self.assertTrue(any("判定" in m and "【プレイ】" in m for m in monitor.logs), monitor.logs)
+
+    def test_without_the_table_the_same_round_self_destructs(self):
+        """対照: 表が空ならこの構成は自爆（これが直す前の実例）"""
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.OTHER))
+
+        started = self._run(monitor)
+
+        self._assert_skipped(monitor, started)
+        self.assertTrue(any("グループ自動自爆" in m for m in monitor.logs), monitor.logs)
+
+    def test_a_default_continue_terror_beats_a_murderers_wish(self):
+        """選出されたマーダーが Sabotage murder 枠で希望していても、デフォ続行が先"""
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(
+            murderer="マーダー",
+            wishes={"マーダー": {self.MURDER: {self.MOPE}}, "ほかのひと": {self.STAR: {self.OTHER}}})
+
+        started = self._run(monitor)
+
+        self._assert_continued(monitor, started)
+
+    def test_the_murderers_wish_still_skips_without_the_default_table(self):
+        """対照: 表が無ければ、マーダーの希望で自爆"""
+        monitor = self._monitor(murderer="マーダー", wishes={"マーダー": {self.MURDER: {self.MOPE}}})
+
+        self._assert_skipped(monitor, self._run(monitor))
+
+    # ── 3・4: 続行無効 ───────────────────────
+    def test_a_disabled_terror_does_not_continue_even_if_a_participant_wishes_it(self):
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.MOPE))
+        self.assertNotIn("do_skip", self._run(monitor), "対照: 表が無ければ希望どおり続行")
+
+        self._reset()
+        self._tables(disabled=[self.MOPE])
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.MOPE))
+
+        started = self._run(monitor)
+
+        self.assertEqual(self._plan(monitor), ("group", GroupRound.SKIP))
+        self._assert_skipped(monitor, started)
+
+    def test_the_default_table_wins_when_a_terror_is_in_both(self):
+        self._tables(disabled=[self.MOPE], default=[self.MOPE])
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.OTHER))
+
+        started = self._run(monitor)
+
+        self._assert_continued(monitor, started)
+
+    # ── 5: どちらの表にも無い ─────────────────
+    def test_a_terror_in_neither_table_follows_the_participants_wishes(self):
+        for disabled, default in (([], []), ([self.UNRELATED], []), ([], [self.UNRELATED]),
+                                  ([self.UNRELATED], [self.UNRELATED])):
+            for label, wishes, skipped in (("WANTED", self._wishing(self.MOPE), False),
+                                           ("SKIP", self._wishing(self.OTHER), True)):
+                with self.subTest(disabled=disabled, default=default, result=label):
+                    self._reset()
+                    self._tables(disabled=disabled, default=default)
+                    monitor = self._monitor(murderer="マーダー", wishes=wishes)
+
+                    started = self._run(monitor)
+
+                    self.assertEqual("do_skip" in started, skipped)
+                    self.assertEqual(monitor.st.is_continue_round, not skipped)
+
+    def test_empty_tables_and_unrelated_tables_give_the_same_plans(self):
+        cases = (dict(wishes=self._wishing(self.MOPE)), dict(wishes=self._wishing(self.OTHER)),
+                 dict(murderer="マーダー", wishes={"マーダー": {self.MURDER: {self.MOPE}}}),
+                 dict(wishes={}), dict(wishes={}, keep={self.SABO: {self.MOPE}}))
+        for kwargs in cases:
+            monitor = self._monitor(**kwargs)
+            self._tables()
+            empty = self._plan_for(monitor)
+            self._tables(disabled=[self.UNRELATED], default=[self.UNRELATED + 1])
+            self.assertEqual(self._plan_for(monitor), empty, kwargs)
+
+    # ── 6: 希望が分からない（NORMAL → 続行リスト）──────
+    def test_a_disabled_terror_without_host_wishes_does_not_continue(self):
+        self._tables(disabled=[self.MOPE])
+        monitor = self._monitor(wishes={})
+
+        started = self._run(monitor)
+
+        self.assertEqual(self._plan(monitor), ("list", False, False))
+        self._assert_skipped(monitor, started)
+
+    def test_a_default_terror_without_host_wishes_continues(self):
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(wishes={})
+
+        started = self._run(monitor)
+
+        self.assertEqual(self._plan(monitor), ("list", True, False))
+        self._assert_continued(monitor, started)
+
+    def test_without_host_wishes_a_terror_in_neither_table_uses_the_list_as_before(self):
+        self._tables(disabled=[self.UNRELATED], default=[self.UNRELATED])
+        monitor = self._monitor(wishes={}, keep={self.SABO: {self.MOPE}})
+        self.assertEqual(self._plan_for(monitor), ("list", True, False))
+        monitor = self._monitor(wishes={}, keep={})
+        self.assertEqual(self._plan_for(monitor), ("list", False, False))
+
+    # ── 7: アイテムで切り替える ──────────────
+    def test_the_table_chosen_by_the_held_item_applies_to_a_disabled_terror(self):
+        self._item_store(disabled=[self.MOPE])
+        for held, skipped in ((self.ITEM, True), (0, False), (self.ITEM + 1, False)):
+            with self.subTest(held=held):
+                self._reset()
+                monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.MOPE))
+                monitor.st.held_item_id = held
+
+                self.assertEqual("do_skip" in self._run(monitor), skipped)
+
+    def test_the_table_chosen_by_the_held_item_applies_to_a_default_terror(self):
+        self._item_store(default=[self.MOPE])
+        for held, continued in ((self.ITEM, True), (0, False), (self.ITEM + 1, False)):
+            with self.subTest(held=held):
+                self._reset()
+                monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.OTHER))
+                monitor.st.held_item_id = held
+
+                self.assertEqual("do_skip" not in self._run(monitor), continued)
+
+    # ── 8: 干し芋・焼き芋は表を使わない ────────
+    def test_group_instances_ignore_the_tables(self):
+        cases = (
+            # (インスタンス, 参加者の希望, 結果が自爆か)
+            (config.INSTANCE_HOSHIIMO, self._wishing(self.MOPE), False),
+            (config.INSTANCE_HOSHIIMO, self._wishing(self.OTHER), True),
+            (config.INSTANCE_YAKIIMO, self._wishing(self.MOPE), True),
+            (config.INSTANCE_YAKIIMO, self._wishing(self.OTHER), True),
+        )
+        for instance, wishes, skipped in cases:
+            for disabled, default in (([self.MOPE], []), ([], [self.MOPE]), ([self.MOPE], [self.MOPE])):
+                with self.subTest(instance=instance, wishes=wishes, disabled=disabled, default=default):
+                    self._reset()
+                    self._tables(disabled=disabled, default=default)
+                    monitor = self._monitor(instance_type=instance, murderer="マーダー", wishes=wishes)
+
+                    started = self._run(monitor)
+
+                    self.assertEqual("do_skip" in started, skipped)
+                    self.assertEqual(monitor.st.is_continue_round, not skipped)
+                    self.assertEqual(monitor._keep_on(), monitor._keep_on_base(), "表を重ねない")
+
+    # ── 9: 先に効く決まり ────────────────────
+    def test_the_skip_round_setting_still_comes_first(self):
+        """「自爆する」の指定（デフォ続行に無いテラー）は、今までどおり参加者の希望より先に自爆"""
+        for disabled, default in (([], []), ([self.MOPE], []), ([], [self.UNRELATED])):
+            with self.subTest(disabled=disabled, default=default):
+                self._reset()
+                self._tables(disabled=disabled, default=default)
+                monitor = self._monitor(skip_rounds={"Sabotage"}, murderer="マーダー",
+                                        wishes=self._wishing(self.MOPE))
+
+                started = self._run(monitor)
+
+                self.assertEqual(self._plan(monitor), ("round_skip",))
+                self._assert_skipped(monitor, started)
+
+    def test_the_skip_round_setting_is_still_overridden_by_the_default_table(self):
+        """既存の決まり（GS）: 自爆の指定でも、その窓のデフォ続行にあれば続行"""
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(skip_rounds={"Sabotage"}, murderer="マーダー", wishes=self._wishing(self.OTHER))
+
+        started = self._run(monitor)
+
+        self._assert_continued(monitor, started)
+        self.assertTrue(any("（デフォ続行）" in m for m in monitor.logs), monitor.logs)
+
+    def test_hands_free_still_self_destructs_at_once(self):
+        SharedState.set_hands_free(True)
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(murderer="マーダー", wishes=self._wishing(self.MOPE))
+        monitor.st.item_id = 0
+
+        started = self._run(monitor)
+
+        self.assertEqual(self._plan(monitor)[0], "hands_free")
+        self.assertIn("do_skip", started)
+        self.assertTrue(any("放置モード" in m for m in monitor.logs), monitor.logs)
+
+    # ── 全続行の窓 ──────────────────────────
+    def test_an_all_continue_window_never_self_destructs(self):
+        for disabled, default in (([], []), ([self.MOPE], []), ([], [self.UNRELATED])):
+            for wishes in (self._wishing(self.MOPE), self._wishing(self.OTHER)):
+                with self.subTest(disabled=disabled, default=default, wishes=wishes):
+                    self._reset()
+                    self._tables(disabled=disabled, default=default)
+                    monitor = self._monitor(continue_rounds={"Sabotage"}, murderer="マーダー", wishes=wishes)
+
+                    started = self._run(monitor)
+
+                    plan = self._plan(monitor)
+                    self.assertNotEqual(LogMonitor.LogMonitor._outcome(plan), "skip", plan)
+                    self.assertNotIn("do_skip", started)
+                    if disabled:       # 続行無効のテラーは希望があっても続行リストでは続行にならない → 全続行（静かに）のまま
+                        self.assertEqual(plan, ("continue_rounds",))
+                    elif wishes == self._wishing(self.OTHER):
+                        self.assertEqual(plan, ("continue_rounds",))
+                        self.play.assert_not_called()
+                    else:              # 希望が当たれば、他の全続行のラウンドと同じく続行リストで続行
+                        self.assertEqual(plan, ("group", GroupRound.WANTED))
+
+    def test_an_all_continue_window_continues_as_a_listed_round_on_a_default_hit(self):
+        self._tables(default=[self.MOPE])
+        monitor = self._monitor(continue_rounds={"Sabotage"}, murderer="マーダー", wishes=self._wishing(self.OTHER))
+
+        started = self._run(monitor)
+
+        self.assertEqual(self._plan(monitor), ("list", True, False))
+        self._assert_continued(monitor, started)
 
 
 class TestGroupRoundSabotage(unittest.TestCase):

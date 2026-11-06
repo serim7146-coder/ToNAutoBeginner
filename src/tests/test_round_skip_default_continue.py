@@ -177,24 +177,26 @@ class TestSabotageLooksAtTheStarKeyOnly(_SkipCase):
 
         self.assertEqual(LogMonitor.LogMonitor._outcome(self._plan_of(monitor)), "continue")
 
-    def test_a_sabotage_window_without_the_skip_setting_keeps_the_sabotage_path(self):
-        """Sabotage を指定自爆に入れていない窓は、今までの _decide_sabotage の流れのまま"""
+    def test_a_sabotage_window_without_the_skip_setting_looks_at_the_default_table_first(self):
+        """Sabotage を指定自爆に入れていない窓も、参加者の希望（_decide_sabotage）より先にその窓のデフォ続行の
+        Sabotage star を見る（private 系。表が空なら今までの _decide_sabotage の流れのまま）"""
         ContinueTable.set_current(_defaults({STAR: [7]}))
         monitor = self._monitor({}, round_type="Sabotage", ids=(7,))
         monitor.cfg.skip_rounds = {"Classic"}
         monitor.host_wishes = {"みているひと": {STAR: {99}}}
         monitor.st.sus_players = ["だれか"]
-        before = self._plan_of(monitor)
+        with_table = self._plan_of(monitor)
 
         ContinueTable.set_current(Store())
         monitor_without_table = self._monitor({}, round_type="Sabotage", ids=(7,))
         monitor_without_table.cfg.skip_rounds = {"Classic"}
         monitor_without_table.host_wishes = {"みているひと": {STAR: {99}}}
         monitor_without_table.st.sus_players = ["だれか"]
+        without_table = self._plan_of(monitor_without_table)
 
-        self.assertEqual(before, self._plan_of(monitor_without_table))
-        self.assertNotEqual(before, ("round_skip",))
-        self.assertEqual(LogMonitor.LogMonitor._outcome(before), "skip", "Sabotage star のデフォ続行は、この経路では見ない（今のまま）")
+        self.assertEqual(without_table, ("group", GroupRound.SKIP), "表が空なら今までの Sabotage の流れ")
+        self.assertEqual(with_table, ("list", True, False))
+        self.assertNotEqual(with_table, ("round_skip",))
 
 
 class TestTheOtherRulesStayAsTheyAre(_SkipCase):
