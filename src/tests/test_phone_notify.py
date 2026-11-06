@@ -43,7 +43,7 @@ class TestText(unittest.TestCase):
                          "Fog\nテラー: X")
 
     def test_queue_text(self):
-        self.assertEqual(PhoneNotify.queue_ready_text(4)[1], "窓4 待機列に入れるようになりました")
+        self.assertEqual(PhoneNotify.queue_ready_text(), (PhoneNotify.APP_TITLE, "待機列に入れるようになりました"))
 
     def test_the_map_name_loses_its_number(self):
         self.assertEqual(PhoneNotify.map_name_from_raw("Cheese Maze (59)"), "Cheese Maze")
@@ -192,6 +192,10 @@ class _FakeApp:
     def _phone_test_done(self, ok, reason):
         mainGUI.App._phone_test_done(self, ok, reason)
 
+    def _sync_queue_watcher(self):
+        # 本物は VRChat のログを読む見張りを始める。偽の App では始めない（呼ばれたことだけ覚える）
+        self.syncs = getattr(self, "syncs", 0) + 1
+
 
 class TestSettings(unittest.TestCase):
     def setUp(self):
@@ -237,6 +241,7 @@ class TestSettings(unittest.TestCase):
         mainGUI.App._on_phone_notify_changed(app)
         self.assertTrue(SharedState.get_phone_notify())
         self.assertEqual(app.saves, 1)
+        self.assertEqual(app.syncs, 1, "見張りも「通知する」に合わせる")
         app.v_phone_notify.set(False)
         mainGUI.App._on_phone_notify_changed(app)
         self.assertFalse(SharedState.get_phone_notify())

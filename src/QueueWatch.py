@@ -1,35 +1,48 @@
 """グループインスタンスの待機列に入れるようになった合図を、VRChat のログから読む。
 
+マクロの開始・窓とログの割り当てとは関係なく、スマホ通知の「通知する」が ON のあいだ、ツールが自分で VRChat の
+ログ（output_log_*.txt）を読む（Watcher）。読むだけで、マクロの操作・入力・OSC は何もしない。待機列はアカウントの
+もので窓のものではない（1 つの窓で並ぶと、全部の窓が同じ待機列に動く）ので、窓の番号は使わない。
+
 読む行（接頭辞の `時刻 Debug -` を外した後。ID は伏せてある）:
   待機列に入れた   [API] Requesting Post instances/wrld_X:39837~group(grp_X)~groupAccessType(plus)~region(jp)/queue {{}} retryCount: 2
   入室の候補       [API] Requesting Get instances/wrld_X:39837~group(grp_X)~groupAccessType(plus)~region(jp) {{}} retryCount: 2
   待機列を抜けた   [API] Requesting Delete instances/wrld_X:39837~…/queue …
   入室した         [Behaviour] Joining wrld_X:39837~…
 
-合図の決まり。その窓の Get の行が、次の 3 つを全部満たしたとき:
-1. そのインスタンスが、どれかの監視中の窓で待機列に入れられている（POST。窓どうしで共有する。アカウントは
+合図の決まり。あるログの Get の行が、次の 3 つを全部満たしたとき:
+1. そのインスタンスが、どれかのログで待機列に入れられている（POST。ログどうしで共有する。アカウントは
    共通なので、POST しなかった窓にも同じ Get が出る）
 2. Get のログの時刻が、その POST のログの時刻より QUEUE_READY_AFTER_POST_SEC 秒以上後
-3. その窓のログに、前後 QUEUE_READY_QUIET_SEC 秒以内（両端を含む）に、別のインスタンスの Get が無い
+3. その Get のログに、前後 QUEUE_READY_QUIET_SEC 秒以内（両端を含む）に、別のインスタンスの Get が無い
    （同じインスタンスの Get は数えない。メニューの行は決まりに入れない）
 インスタンスの印は `wrld_…:番号~…` の全部。
 
 待機列に入れたものを忘れるとき: 合図が出た・Delete を読んだ・Joining を読んだ・POST から QUEUE_FORGET_SEC 秒たった。
-監視を始めてから読んだ POST だけを数える（さかのぼって探さない）。
+ログは最初に見つけたとき先頭から読む（ツールを開く前・通知を入れる前の POST も数える。そのとき読んだ合図は
+記録も一緒に使い切るので、あとで出直さない）。Get のログの時刻が QUEUE_READY_NOTICE_SEC 秒以上前の合図は、
+VRChat の通知が消えているので、黙って使い切る（ログにも出さず、送らない）。
 
 後ろの 3 秒は、次の行が来るのを待たない（行の間が 55 秒開いた窓があり、VRChat の通知は 60 秒しか出ない）。
-候補は「候補より 3 秒以上後の時刻の行を読んだ」か「読んでから実時間で 3 秒たった」（tick。読み取りのループが
-0.3 秒ごとに呼ぶ）ときに閉じる。閉じる前に読んだ行に別のインスタンスの Get があれば取り消す。
+候補は「候補より 3 秒以上後の時刻の行を読んだ」か「読んでから実時間で 3 秒たった」（tick。Watcher が読むたびに
+呼ぶ）ときに閉じる。閉じる前に読んだ行に別のインスタンスの Get があれば取り消す。
 
 インスタンスの ID はどのログにも出さない（ここは何も書かない。呼ぶ側のコールバックにも渡さない）。
 """
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import config
+import DebugLog
 import LogParser
+import PhoneNotify
+import SharedState
+import TaskStats
+import VRChatDiscovery
 
 # 全部の行がここを通るので、まず安い部分文字列の検査で絞ってから正規表現を使う
 _MARK_API = "instances/"
@@ -40,26 +53,24 @@ _RE_JOIN = re.compile(r"^\[Behaviour\] Joining (wrld_\S+)")
 
 
 # ═══════════════════════════════════════════════
-#  窓どうしで共有する、待機列に入れたインスタンス
+#  ログどうしで共有する、待機列に入れたインスタンス
 # ═══════════════════════════════════════════════
 @dataclass(frozen=True)
 class Post:
-    """待機列に入れた（POST）記録。window_idx はその行を読んだ窓、hands_free は読んだ時点のその窓の放置モード"""
-    window_idx: int
+    """待機列に入れた（POST）記録。at はその行のログの時刻"""
     at: float
-    hands_free: bool
 
 
 _lock = threading.Lock()
 _queued: dict = {}          # インスタンスの印 → Post
 
 
-def note_post(key: str, at: float, window_idx: int, hands_free: bool):
+def note_post(key: str, at: float):
     """待機列に入れた。同じインスタンスを入れ直したら、新しい方で置き換える（10 秒は新しい POST から数える）"""
     with _lock:
         for old in [k for k, p in _queued.items() if at - p.at >= config.QUEUE_FORGET_SEC]:
             del _queued[old]
-        _queued[key] = Post(window_idx, at, bool(hands_free))
+        _queued[key] = Post(at)
 
 
 def note_delete(key: str):
@@ -92,13 +103,13 @@ def take_ready(key: str, get_at: float):
 
 
 def reset():
-    """全部忘れる（テスト用）"""
+    """全部忘れる（Watcher.start とテスト用）"""
     with _lock:
         _queued.clear()
 
 
 # ═══════════════════════════════════════════════
-#  窓ごとの候補（その窓のログの Get）
+#  ログごとの候補（そのログの Get）
 # ═══════════════════════════════════════════════
 class _Candidate:
     __slots__ = ("key", "at", "read", "cancelled")
@@ -108,17 +119,15 @@ class _Candidate:
 
 
 class Candidates:
-    """1 窓ぶん。読み取りのスレッド 1 本からだけ使う（feed と tick は同じスレッド）。
+    """1 本のログぶん。読み取りのスレッド 1 本からだけ使う（feed と tick は同じスレッド）。
 
-    on_ready(post) は合図が出たとき 1 回呼ぶ（post は待機列に入れた記録。インスタンスの印は渡さない）。
-    hands_free() は POST の行を読んだ時点で呼び、記録に残す。clock は実時間（テストが差し替える）"""
+    on_ready(get_at) は合図が出たとき 1 回呼ぶ（get_at は Get のログの時刻 epoch 秒。インスタンスの印は渡さない）。
+    clock は実時間（テストが差し替える）"""
 
-    def __init__(self, window_idx: int, on_ready, hands_free=lambda: False, clock=time.monotonic):
-        self.window_idx = window_idx
+    def __init__(self, on_ready, clock=time.monotonic):
         self._on_ready = on_ready
-        self._hands_free = hands_free
         self._clock = clock
-        self._recent: list = []         # この窓で最近読んだ Get (ログの時刻, 印)。前後の判定用
+        self._recent: list = []         # このログで最近読んだ Get (ログの時刻, 印)。前後の判定用
         self._pending: list = []        # 閉じるのを待っている候補
 
     def feed(self, at, line: str):
@@ -129,7 +138,7 @@ class Candidates:
             self._close_due(at)
 
     def tick(self):
-        """読み取りのループから 0.3 秒ごとに。読んでから実時間で QUEUE_READY_QUIET_SEC 秒たった候補を閉じる"""
+        """読み取りのたびに。読んでから実時間で QUEUE_READY_QUIET_SEC 秒たった候補を閉じる"""
         if self._pending:
             self._close_due(None)
 
@@ -143,7 +152,7 @@ class Candidates:
                     self._on_get(at, key)
             elif verb == "Post" and queue:
                 if at is not None:
-                    note_post(key, at, self.window_idx, self._hands_free())
+                    note_post(key, at)
             elif verb == "Delete" and queue:
                 note_delete(key)
             return
@@ -179,6 +188,171 @@ class Candidates:
                 keep.append(cand)
         self._pending = keep                # 呼ぶ前に直す（コールバックが例外を出しても残らない）
         for cand in due:
-            post = take_ready(cand.key, cand.at)
-            if post is not None:
-                self._on_ready(post)
+            if take_ready(cand.key, cand.at) is not None:
+                self._on_ready(cand.at)
+
+
+# ═══════════════════════════════════════════════
+#  ログを自分で読む見張り（マクロとは別。通知する が ON のあいだ）
+# ═══════════════════════════════════════════════
+_CHUNK_BYTES = 256 * 1024
+_MARKS = (b"instances/", b"Joining")
+
+
+class _Followed:
+    """追いかけている 1 本のログ"""
+    __slots__ = ("path", "order", "pos", "rest", "cands", "last_grow")
+
+    def __init__(self, path, order, cands, now):
+        self.path, self.order, self.cands = path, order, cands
+        self.pos = 0                    # 見つけたら先頭から読む
+        self.rest = b""                 # 書きかけの行（改行がまだ来ていない末尾。バイトのまま持ち越す）
+        self.last_grow = now
+
+
+class Watcher:
+    """VRChat のログを自分で読み、待機列に入れるようになったら on_signal() を 1 回呼ぶ。
+
+    読むだけ（マクロの操作・入力・OSC はしない）。poll() が 1 回ぶんで、テストはこれを直接回す。
+    start() で裏のスレッド（daemon）が poll() を QUEUE_WATCH_INTERVAL_SEC ごとに回す。
+    on_signal は裏のスレッドから呼ばれる（Tk の変数には触らないこと）"""
+
+    def __init__(self, log_dir, on_signal, clock=time.monotonic, wall=time.time):
+        self._log_dir = Path(log_dir)
+        self._on_signal = on_signal
+        self._clock = clock
+        self._wall = wall
+        self._logs: dict = {}           # パス → _Followed（見つけた順）
+        self._order = 0
+        self._last_scan = None
+        self._stop = threading.Event()
+        self._thread = None
+
+    # ── 1 回ぶん ──────────────────────────
+    def poll(self):
+        now = self._clock()
+        if self._last_scan is None or now - self._last_scan >= config.QUEUE_WATCH_SCAN_SEC:
+            self._last_scan = now
+            self._scan(now)
+        # 全部のログで読んだ行を 1 つにまとめ、時刻順（同じ時刻はログを見つけた順）で渡す。
+        # ログAの POST とログBの Get は、時刻の順に判定する（最初の読みでも）
+        batch = []
+        followed = list(self._logs.values())
+        for log in followed:
+            try:
+                for at, text in self._read_new(log, now):
+                    batch.append((at, log.order, text, log))
+            except OSError:
+                continue
+        batch.sort(key=lambda item: (item[0], item[1]))
+        for at, _order, text, log in batch:
+            log.cands.feed(at, text)
+        for log in followed:
+            log.cands.tick()
+
+    def _scan(self, now):
+        """ログの一覧を見直す。生きているログを追いかけ始め、長く止まったログはやめる"""
+        for path, log in list(self._logs.items()):
+            if now - log.last_grow >= config.QUEUE_FORGET_SEC:
+                del self._logs[path]
+        try:
+            paths = VRChatDiscovery.find_latest_logs(self._log_dir, config.LOG_MATCH_CANDIDATE_COUNT)
+        except OSError:
+            return
+        wall = self._wall()
+        for path in paths:
+            if path in self._logs:
+                continue
+            try:
+                mtime = os.stat(path).st_mtime
+            except OSError:
+                continue
+            if wall - mtime > config.LOG_LIVE_GRACE_SEC:
+                continue
+            self._order += 1
+            self._logs[path] = _Followed(path, self._order, Candidates(self._ready, self._clock), now)
+
+    def _read_new(self, log, now) -> list:
+        """増えた分だけ読む。(ログの時刻, 行) の一覧（待機列に関係する行だけ）。
+        増えていないログは開かない。開いたらすぐ閉じる（ハンドルを持ち続けない）"""
+        size = os.stat(log.path).st_size
+        if size < log.pos:                  # 短くなった（作り直し）。先頭から読み直す
+            log.pos = 0
+            log.rest = b""
+        if size == log.pos:
+            return []
+        out = []
+        with open(log.path, "rb") as f:
+            f.seek(log.pos)
+            while True:
+                chunk = f.read(_CHUNK_BYTES)
+                if not chunk:
+                    break
+                # 書きかけの行は読まない（半分の行・日本語の文字の途中を判定に使わない）
+                lines = (log.rest + chunk).split(b"\n")
+                log.rest = lines.pop()
+                for raw in lines:
+                    if not any(mark in raw for mark in _MARKS):     # 関係ない行は持たない
+                        continue
+                    text = raw.rstrip(b"\r").decode("utf-8", errors="replace")
+                    at = LogParser.log_time(text)
+                    if at is not None:
+                        out.append((at, text))
+            log.pos = f.tell()
+        log.last_grow = now
+        return out
+
+    def _ready(self, get_at: float):
+        """合図が出た。Get が古い（VRChat の通知が消えている）ものは黙って使い切る"""
+        if self._wall() - get_at >= config.QUEUE_READY_NOTICE_SEC:
+            return
+        try:
+            self._on_signal()
+        except Exception:
+            DebugLog.exception("QueueWatch.Watcher")
+
+    # ── 裏のスレッド ───────────────────────
+    def start(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        reset()
+        self._stop.clear()
+        self._thread = TaskStats.thread("QueueWatch.Watcher._run", self._run, daemon=True,
+                                        thread_name="QueueWatcher")
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0):
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout)
+        self._thread = None
+
+    def _run(self):
+        while True:
+            try:
+                self.poll()
+            except Exception:
+                DebugLog.exception("QueueWatch.Watcher")
+            if self._stop.wait(config.QUEUE_WATCH_INTERVAL_SEC):
+                break
+
+
+def notify_ready(logger):
+    """合図が出た（Watcher の裏のスレッドから）。ツールのログに書き、通知が ON で宛先が正しければスマホへ送る。
+    logger は裏のスレッドから呼んでよいもの。宛先・インスタンスの印はログに出さない"""
+    logger("[スマホ通知] 待機列に入れるようになりました")
+    try:
+        if not SharedState.get_phone_notify():
+            return
+        topic = SharedState.get_phone_topic()
+        if not PhoneNotify.is_valid_topic(topic):
+            return
+        title, message = PhoneNotify.queue_ready_text()
+
+        def done(ok: bool, reason: str):
+            if not ok:
+                logger(f"スマホ通知: 送信に失敗しました（{reason}）")
+        PhoneNotify.send(topic, title, message, on_done=done)
+    except Exception:
+        DebugLog.exception("QueueWatch.notify_ready")

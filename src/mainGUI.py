@@ -26,6 +26,7 @@ import LogMonitor
 import SharedState
 import PlaySound
 import PhoneNotify
+import QueueWatch
 import MatchTNL
 import Migration
 import ProcessCheck
@@ -1296,10 +1297,12 @@ class App(tk.Tk):
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._stop_reason: str | None = None
+        self._queue_watcher = None            # 待機列の見張り（通知する が ON のあいだだけ。マクロの開始とは別）
         DebugLog.install_hooks(self)          # 例外をトレースバックごと debug.log へ
         self._build_ui()
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
+        self._sync_queue_watcher()            # 読み込んだ「通知する」に合わせて見張りを始める
         self._auto_detect_windows()
         self._sync_launch_count()
         AutoUpdate.cleanup_old_exe()
@@ -2906,7 +2909,22 @@ class App(tk.Tk):
         on = bool(self.v_phone_notify.get())
         SharedState.set_phone_notify(on)
         self._log("[スマホ通知] " + ("通知します" if on else "通知しません"))
+        self._sync_queue_watcher()
         self._schedule_settings_save()
+
+    def _sync_queue_watcher(self):
+        """待機列の見張りを「通知する」に合わせる。ON なら VRChat のログを自分で読み始め（マクロの開始とは別）、
+        OFF なら止める。ここは Tk のスレッド。見張りは裏のスレッドから _log を呼ぶ（_log は裏から呼んでよい。
+        Tk の変数には触らない）"""
+        watcher = getattr(self, "_queue_watcher", None)
+        if SharedState.get_phone_notify():
+            if watcher is None:
+                watcher = QueueWatch.Watcher(config.VRCHAT_LOG_DIR, lambda: QueueWatch.notify_ready(self._log))
+                self._queue_watcher = watcher
+                watcher.start()
+        elif watcher is not None:
+            self._queue_watcher = None
+            watcher.stop()
 
     def _copy_phone_topic(self):
         topic = SharedState.get_phone_topic()
@@ -4999,6 +5017,13 @@ class App(tk.Tk):
         # _stop() より前に書く
         self._save_settings_now()
         self._stop_reason = "ウィンドウを閉じた"      # debug.log の停止の理由
+        watcher = getattr(self, "_queue_watcher", None)
+        if watcher is not None:
+            self._queue_watcher = None
+            try:
+                watcher.stop()                      # 窓を壊す前に（見張りは _log を呼ぶ）
+            except Exception:
+                DebugLog.exception("mainGUI._on_close")
         self._stop()
         OSCQuery.shutdown()                         # 残っていれば広告を取り下げる
         self._unhook_chase_keys()
