@@ -1334,12 +1334,22 @@ class LogMonitor:
         """このラウンドをグループのルールでどう扱うか。干し芋・焼き芋の全続行（CONTINUE）は、その窓の続行リストが
         そのテラーを続行にするなら CONTINUE_LISTED に上げる（private の全続行が続行リストを先に見るのと同じ）"""
         st = self.st
-        decision = self._group_rule_decision(killers_round_type, ids)
+        decision = self._group_rule_decision(killers_round_type, self._without_disabled_sabotage(ids))
         if (decision == GroupRound.CONTINUE and st.instance_type in GroupRound.GROUP_INSTANCES
                 and RoundDecision.list_continues(self._keep_on(), st.terror_ids if ids is None else ids,
                                                  st.round_type)):
             return GroupRound.CONTINUE_LISTED
         return decision
+
+    def _without_disabled_sabotage(self, ids):
+        """private 系の Sabotage だけ、その窓の続行無効（アイテムで切り替え込み）の Sabotage star にあるテラーを ids から外す。
+        参加者の希望（_decide_sabotage）がそのテラーで続行にならないようにする。ほかのラウンド・干し芋・焼き芋では ids のまま。
+        本番の実行（_apply_group_decision）も同じ入口を通るので、_plan の判断と食い違わない"""
+        st = self.st
+        if st.round_type != "Sabotage" or st.instance_type not in config.JUDGE_LIKE_INSTANCES:
+            return ids
+        disabled = self._continue_table().disabled.get(GroupRound.SABOTAGE_STAR_KEY, ())
+        return [tid for tid in (st.terror_ids if ids is None else ids) if tid not in disabled]
 
     def _group_rule_decision(self, killers_round_type: str, ids=None) -> str:
         st = self.st
@@ -2513,6 +2523,10 @@ class LogMonitor:
         # プラベ系の Sabotage は焼き芋と同じ判定にする（依頼者の決定）。ここへ
         # 置くのは、「自爆する」の指定と放置モードの即自爆を先に効かせるため
         if is_judge and self.st.round_type == "Sabotage":
+            # その窓の表を、参加者の希望より先に見る。デフォ続行の Sabotage star にあれば続行（選出者の希望にも勝つ）。
+            # 続行無効の Sabotage star にあるテラーは、参加者が希望しても続行にならない（_group_decision が ids から外す）
+            if self._default_continue_hits(ids):
+                return ("list", True, False)
             decision = self._group_decision(round_type, ids)
             if decision != GroupRound.NORMAL:
                 return ("group", decision)
