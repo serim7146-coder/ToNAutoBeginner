@@ -704,7 +704,7 @@ class WindowTab(ttk.Frame):
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
         rounds = self._section(
-            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ。焼き芋の Twilight の全続行は有効）")
+            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
         rounds.pack(fill="x", pady=(4, 0))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
@@ -717,8 +717,8 @@ class WindowTab(ttk.Frame):
                          self.v_continue_rounds, self.v_skip_rounds,
                          pady=(8, 0), which="continue")
 
-        # ── 全窓フリーズ（この窓が当たったらほかの窓を止める）: 速度検知とラウンド突入。止める範囲は全窓 ──
-        freeze = self._section(p, "freeze", text="全窓フリーズ（この窓が当たったらほかの窓を止める）")
+        # ── 全窓フリーズ: この窓が当たったらほかの窓を止める。速度検知とラウンド突入。止める範囲は全窓 ──
+        freeze = self._section(p, "freeze", text="全窓フリーズ")
         freeze.pack(fill="x", pady=(4, 0))
         self._build_freeze(freeze.content)
 

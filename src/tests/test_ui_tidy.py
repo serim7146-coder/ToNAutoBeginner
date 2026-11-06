@@ -389,7 +389,7 @@ class TestFreezeFrame(_AppCase):
         section = self.tab.sections["freeze"]
         self.assertTrue(section.collapsed)
         titles = [w.cget("text") for w in _all_widgets(section) if isinstance(w, tk.Label)]
-        self.assertIn("全窓フリーズ（この窓が当たったらほかの窓を止める）", titles)
+        self.assertIn("全窓フリーズ", titles)
         self.assertIs(self.tab.freeze_box.winfo_toplevel(), self.app)
         self.assertEqual(self.app._tab_sections["freeze"], True)
 
