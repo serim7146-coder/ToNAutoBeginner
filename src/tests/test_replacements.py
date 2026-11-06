@@ -360,48 +360,166 @@ class TestTerrorReplacementTable(unittest.TestCase):
 
 
 
-class TestNeoPilotSlot(unittest.TestCase):
-    """Neo Pilot は枠だけ。合図のログが分かるまで無効（番号は 4010 に決まっている）"""
+class TestNeoPilot(unittest.TestCase):
+    """HL: Neo Pilot は Fusion Pilot（1029）のラウンドで `neo time` の行が来たら 4010 になる"""
+
+    SIGNAL = TerrorReplacement.signal("neo_pilot")
+    ALT = "Alternate/オルタネイト"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        self.addCleanup(ContinueTable.set_current, choice_store())
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        stats = patch.object(ConnectDB, "register_round")
+        self.sent = stats.start()
+        self.addCleanup(stats.stop)
 
     def _row(self):
         return [r for r in TerrorReplacement.TABLE if r.name == "Neo Pilot"][0]
 
-    def test_it_is_disabled_now(self):
+    def _table(self, slot):
+        ContinueTable.set_current(choice_store(
+            disabled_presets={"基本": {}}, default_presets={"基本": {self.ALT: slot}},
+            windows={1: {ContinueTable.DISABLED: "基本", ContinueTable.DEFAULT: "基本"}}))
+
+    def _monitor(self, round_type="Alternate", logs=None):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, (logs.append if logs is not None else lambda _m: None),
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor._running = True
+        return monitor
+
+    def _killers(self, monitor, ids):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+
+    def _line(self, monitor, line):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._process(line)
+
+    def test_the_row_is_enabled(self):
         row = self._row()
 
         self.assertEqual(row.source, config.FUSION_PILOT_ID)
         self.assertEqual(row.target_id(), config.NEO_PILOT_ID)
         self.assertEqual(config.NEO_PILOT_ID, TerrorIds.NEO_PILOT)
-        self.assertFalse(row.wired)
-        self.assertFalse(row.enabled)
+        self.assertIsNone(row.rounds)
+        self.assertTrue(row.wired)
+        self.assertTrue(row.enabled)
+        self.assertEqual(TerrorReplacement.rows_for_flag("neo_pilot"), [row])
 
-    def test_it_never_waits_while_disabled(self):
-        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None,
-                                        window_idx=1)
-        monitor.st.round_type = "Alternate"
+    def test_the_signal_is_in_the_table_and_the_flag_is_reset_every_round(self):
+        self.assertEqual(self.SIGNAL.sample, "neo time")
+        self.assertEqual(self.SIGNAL.flag, "neo_pilot")
+        self.assertIn("neo_pilot", TerrorReplacement.flags())
+        monitor = self._monitor()
+        monitor.st.neo_pilot = True
+        monitor.st.foxy = True
+        self._line(monitor, "This round is taking place at Somewhere and the round type is Classic")
+        self.assertFalse(monitor.st.neo_pilot, "ラウンド開始で、ほかの合図の flag と同じように落ちる")
+        self.assertFalse(monitor.st.foxy)
+
+    def test_the_line_shapes(self):
+        for line in ("neo time", "Neo Time.", "neo time!", "NEO TIME", "Neo time."):
+            event = LogParser.parse("2026.11.06 12:00:00 Debug      -  " + line)
+            self.assertIsNotNone(event, line)
+            self.assertEqual((event.kind, event.flag), (LogParser.EVENT_REPLACEMENT, "neo_pilot"), line)
+
+    def test_similar_lines_do_not_match(self):
+        for line in ("neo time now", "it is neo time", "neo times", "neo time?", "neo  time"):
+            self.assertIsNone(LogParser.parse("2026.11.06 12:00:00 Debug      -  " + line), line)
+
+    def test_fusion_pilot_with_the_line_becomes_neo_pilot(self):
+        for line in ("neo time", "Neo Time.", "neo time!"):
+            monitor = self._monitor()
+            self._killers(monitor, [config.FUSION_PILOT_ID])
+            self._line(monitor, line)
+
+            self.assertEqual(monitor.st.terror_ids, [config.NEO_PILOT_ID], line)
+            self.assertTrue(monitor.st.neo_pilot, line)
+
+    def test_the_line_before_the_killers_works_too(self):
+        monitor = self._monitor()
+        self._line(monitor, "neo time")
+        self._killers(monitor, [config.FUSION_PILOT_ID])
+
+        self.assertEqual(monitor.st.terror_ids, [config.NEO_PILOT_ID])
+
+    def test_without_the_line_it_stays_fusion_pilot(self):
+        monitor = self._monitor()
+        self._killers(monitor, [config.FUSION_PILOT_ID])
+
+        self.assertEqual(monitor.st.terror_ids, [config.FUSION_PILOT_ID])
+        self.assertFalse(monitor.st.neo_pilot)
+
+    def test_it_replaces_in_any_round_where_fusion_pilot_appears(self):
+        for round_type in ("Alternate", "Fog", "Midnight", "Special"):
+            monitor = self._monitor(round_type)
+            self._killers(monitor, [config.FUSION_PILOT_ID])
+            self._line(monitor, "neo time")
+
+            self.assertEqual(monitor.st.terror_ids, [config.NEO_PILOT_ID], round_type)
+
+    def test_other_terrors_are_not_replaced(self):
+        monitor = self._monitor()
+        self._killers(monitor, [config.SANIC_ID])
+        self._line(monitor, "neo time")
+
+        self.assertEqual(monitor.st.terror_ids, [config.SANIC_ID])
+
+    def test_the_log_line_for_the_screen(self):
+        logs = []
+        monitor = self._monitor(logs=logs)
+        self._killers(monitor, [config.FUSION_PILOT_ID])
+        self._line(monitor, "neo time")
+
+        self.assertTrue(any(m.endswith("⚔ Neo Pilot 出現（Fusion Pilot の Variant）") for m in logs), logs)
+
+    def test_the_statistics_get_4010_when_the_line_comes(self):
+        monitor = self._monitor()
+        self._killers(monitor, [config.FUSION_PILOT_ID])
+        self.sent.assert_not_called()
+        self._line(monitor, "neo time")
+
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[1], [config.NEO_PILOT_ID])
+
+    def test_it_is_a_candidate_while_waiting(self):
+        monitor = self._monitor()
         monitor.st.terror_ids = [config.FUSION_PILOT_ID]
 
-        self.assertEqual(monitor._pending_replacements(), [])
+        self.assertEqual([r.name for r in monitor._pending_replacements()], ["Neo Pilot"])
+        self.assertTrue(monitor._waiting_for_terror_replacement())
 
-    def test_the_id_alone_does_not_enable_it(self):
-        """合図のログが分からないまま待つと、毎回0.3秒むだに待つだけ"""
-        row = self._row()
-        self.assertIsNotNone(row.target_id())
-        self.assertFalse(row.enabled)
-        self.assertEqual(TerrorReplacement.rows_for_flag("neo_pilot"), [])
+    def test_the_slot_of_4010_in_the_table_decides_the_round(self):
+        """続行表の 4010 の枠が、置き換わったあとの判定に効く"""
+        for slot, expected in ((frozenset({config.NEO_PILOT_ID}), True), (frozenset(), False)):
+            self._table(slot)
+            monitor = self._monitor()
+            self._killers(monitor, [config.FUSION_PILOT_ID])
+            self._line(monitor, "neo time")
 
-    def test_the_id_and_the_signal_enable_it(self):
-        import dataclasses
-        row = dataclasses.replace(self._row(), wired=True)
+            self.assertEqual(monitor._list_plan(monitor.st.terror_ids, False)[1], expected, slot)
 
-        self.assertTrue(row.enabled)
-        self.assertEqual(row.apply([config.FUSION_PILOT_ID]), [config.NEO_PILOT_ID])
+    def test_the_slot_of_4010_makes_the_decision_wait_for_the_line(self):
+        self._table(frozenset({config.NEO_PILOT_ID}))
+        monitor = self._monitor()
+        monitor.st.terror_ids = [config.FUSION_PILOT_ID]
 
-    def test_the_signal_alone_does_not_enable_it(self):
-        import dataclasses
-        row = dataclasses.replace(self._row(), wired=True, target=None, target_name="")
+        self.assertTrue(monitor._replacement_changes_decision("Alternate"))
+        self._table(frozenset())
+        self.assertFalse(monitor._replacement_changes_decision("Alternate"))
 
-        self.assertFalse(row.enabled, "番号が無い行は表から外れる")
+    def test_4010_is_an_alternate_candidate_for_the_statistics(self):
+        self.assertEqual(TerrorIds.category(config.NEO_PILOT_ID), "alternate")
+        self.assertIn(config.NEO_PILOT_ID, Statistics.candidate_ids_for_category("alternate"))
+        for category in ("classic", "unbound"):
+            self.assertNotIn(config.NEO_PILOT_ID, Statistics.candidate_ids_for_category(category), category)
 
 
 
@@ -441,12 +559,15 @@ class TestReplacementWait(unittest.TestCase):
         monitor._running = True
         return monitor
 
-    def _killers(self, monitor, ids):
+    def _killers(self, monitor, ids, with_statistics_wait=False):
+        """判定のために始めた daemon の名前（統計の待ちは除く。with_statistics_wait で含める）"""
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
             monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        if with_statistics_wait:
+            return [c.kwargs["target"].__func__.__name__
+                    for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return _decision_threads(mock_thread)
 
     def _delayed(self, monitor, wait_sec=0.0):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
@@ -556,11 +677,13 @@ class TestReplacementWait(unittest.TestCase):
 
     # ── 統計の待ち ──────────────────────────
     def test_statistics_wait_even_when_the_decision_does_not(self):
+        """HL: 統計は合図の行が来れば置き換えた番号で送る（来なければ TERROR_STAT_WAIT_SEC 後に元の番号。
+        TestReplacementStatisticsWait）。判定は待たない"""
         monitor = self._monitor("Double Trouble")
 
-        started = self._killers(monitor, [self.CURIOUS, 5])
+        started = self._killers(monitor, [self.CURIOUS, 5], with_statistics_wait=True)
 
-        self.assertEqual(started, ["do_skip"], "判定は待たない")
+        self.assertEqual(started, ["_send_statistics_after_wait", "do_skip"], "判定は待たない")
         self.sent.assert_not_called()
 
         with patch.object(LogMonitor.threading, "Thread"):
@@ -570,15 +693,16 @@ class TestReplacementWait(unittest.TestCase):
         self.assertEqual(self.sent.call_args.args[1], [self.BLOODTHIRSTY, 5])
 
     def test_statistics_wait_for_self_inserts(self):
-        """Unbound の Self Inserts は合図の行が来ると統計では 4013 になるので、合図まで待つ。
-        合図が来ないまま終わったら、そのまま 2083 で送る（bloodthirsty は False）"""
+        """Unbound の Self Inserts は合図の行が来ると統計では 4013 になるので、合図まで最大 TERROR_STAT_WAIT_SEC 待つ。
+        合図が来ないまま待ちが明けたら、そのまま 2083 で送る（bloodthirsty は False）"""
         monitor = self._monitor("Unbound")
+        monitor.st.round_seq = 3
 
         self._killers(monitor, [config.SELF_INSERTS_ID])
 
         self.sent.assert_not_called()
-        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
-            monitor._process("Verified Round End")
+        with patch.object(LogMonitor.time, "sleep"):
+            monitor._send_statistics_after_wait(3)
         self.sent.assert_called_once()
         self.assertEqual(self.sent.call_args.args[1], [config.SELF_INSERTS_ID])
         self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], False)
@@ -619,6 +743,260 @@ class TestReplacementWait(unittest.TestCase):
                      ("list", False, False)):
             self.assertIn(LogMonitor.LogMonitor._outcome(plan),
                           {"skip", "quiet", "continue", "open_special"}, plan)
+
+
+
+
+class TestReplacementStatisticsWait(unittest.TestCase):
+    """HL: 置き換えの候補があるラウンドの統計は、合図が来ればその場で・来なければ Killers から
+    TERROR_STAT_WAIT_SEC 後に元の番号で、1回だけ送る（全部の置き換えで同じ）"""
+
+    SELF_INSERTS = config.SELF_INSERTS_ID
+    BLOODTHIRSTY = config.BLOODTHIRSTY_CREATURE_ID
+    # (名前, ラウンド, Killers の番号, 合図の flag, 置き換え後の番号, 合図が来たときの bloodthirsty)
+    CASES = (
+        ("Bloodthirsty", "Double Trouble", [config.CURIOUS_CREATURE_ID, 5],
+         "bloodthirsty_creature_variant", [config.BLOODTHIRSTY_CREATURE_ID, 5], True),
+        ("Atrached", "Classic", [config.SONIC_ID], "atrached_variant", [config.ATRACHED_ID], False),
+        ("HHI", "Classic", [config.SLENDER_ID], "hungry_home_invader_variant",
+         [config.HUNGRY_HOME_INVADER_ID], False),
+        ("Gigabytes", "Classic", [91], "gigabytes", [config.GIGABYTES_ID], False),
+        ("Foxy", "Alternate", [config.SANIC_ID], "foxy", [config.FOXY_ID], False),
+        ("Self Inserts", "Unbound", [config.SELF_INSERTS_ID], "bloodthirsty_creature_variant",
+         [config.SELF_INSERTS_ID], True),
+        ("Pack", "Unbound", [config.PACK_CURIOUS_ID], "bloodthirsty_creature_variant",
+         [config.BLOODTHIRSTY_CREATURE_ID], True),
+        ("Glorbo", "Punished", [config.ARKUS_ID], "glorbo", [config.GLORBO_ID], False),
+        ("Neo Pilot", "Alternate", [config.FUSION_PILOT_ID], "neo_pilot", [config.NEO_PILOT_ID], False),
+    )
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PUBLIC)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.addCleanup(SharedState.continue_round_reset)
+        stats = patch.object(ConnectDB, "register_round")
+        self.sent = stats.start()
+        self.addCleanup(stats.stop)
+
+    def _monitor(self, round_type):
+        monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = round_type
+        monitor.st.round_seq = 3
+        monitor._running = True
+        return monitor
+
+    def _killers(self, monitor, ids):
+        """Killers の行を流す。始めた daemon の名前と引数を返す"""
+        with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
+             patch.object(PlaySound, "play_sound"):
+            monitor._on_killers(list(ids), monitor.st.round_type, revealed=False)
+        return [(c.kwargs["target"].__func__.__name__, c.kwargs.get("args", ()))
+                for c in mock_thread.call_args_list if "target" in c.kwargs]
+
+    def _line(self, monitor, line):
+        with patch.object(LogMonitor.threading, "Thread"), patch.object(PlaySound, "play_sound"):
+            monitor._process(line)
+
+    def _wait(self, monitor, round_seq=None):
+        """待ちの daemon を、眠らずに最後まで走らせる。眠ろうとした秒数を返す"""
+        with patch.object(LogMonitor.time, "sleep") as nap:
+            monitor._send_statistics_after_wait(monitor.st.round_seq if round_seq is None else round_seq)
+        return [c.args[0] for c in nap.call_args_list]
+
+    def _waits(self, started):
+        return [item for item in started if item[0] == "_send_statistics_after_wait"]
+
+    # ── 長さ ──
+    def test_the_wait_is_one_second(self):
+        self.assertEqual(config.TERROR_STAT_WAIT_SEC, 1.0)
+        monitor = self._monitor("Classic")
+        self.assertEqual(monitor._stat_wait_sec(), config.TERROR_STAT_WAIT_SEC)
+        self.assertEqual(config.TERROR_VARIANT_WAIT_SEC, 0.3, "判定の待ちは変えない")
+
+    def test_the_daemon_sleeps_for_that_length(self):
+        monitor = self._monitor("Classic")
+        monitor.st.terror_ids = [91]
+
+        self.assertEqual(self._wait(monitor), [config.TERROR_STAT_WAIT_SEC])
+
+    # ── 全部の置き換えで同じ動き ──
+    def test_no_signal_sends_the_original_ids_once_after_the_wait(self):
+        for name, round_type, ids, _flag, _replaced, _bt in self.CASES:
+            self.sent.reset_mock()
+            monitor = self._monitor(round_type)
+
+            started = self._killers(monitor, ids)
+
+            self.assertEqual(self._waits(started), [("_send_statistics_after_wait", (3,))], name)
+            self.sent.assert_not_called()                       # 待つ前には送っていない
+            self._wait(monitor)
+            self.sent.assert_called_once()
+            self.assertEqual(self.sent.call_args.args[1], ids, name)
+            self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], False, name)
+            self._wait(monitor)
+            self.assertEqual(self.sent.call_count, 1, f"{name}: 待ちを何度走らせても1回")
+
+    def test_the_signal_during_the_wait_sends_the_replaced_ids_at_once(self):
+        for name, round_type, ids, flag, replaced, bloodthirsty in self.CASES:
+            self.sent.reset_mock()
+            monitor = self._monitor(round_type)
+            self._killers(monitor, ids)
+            self.sent.assert_not_called()
+
+            self._line(monitor, TerrorReplacement.signal(flag).sample)
+
+            self.sent.assert_called_once()                      # 待ちの終わりを待たずに
+            self.assertEqual(self.sent.call_args.args[1], replaced, name)
+            self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], bloodthirsty, name)
+            self._wait(monitor)
+            self.assertEqual(self.sent.call_count, 1, f"{name}: 待ちが終わっても2回目は無い")
+
+    def test_the_signal_after_the_wait_does_not_send_again(self):
+        """1秒待っても来なければ元の番号で送る。その後に合図が来ても送り直さない（判定・画面は置き換わる）"""
+        for name, round_type, ids, flag, replaced, _bt in self.CASES:
+            self.sent.reset_mock()
+            monitor = self._monitor(round_type)
+            self._killers(monitor, ids)
+            self._wait(monitor)
+            self.sent.assert_called_once()
+
+            self._line(monitor, TerrorReplacement.signal(flag).sample)
+
+            self.assertEqual(self.sent.call_count, 1, name)
+            self.assertEqual(self.sent.call_args.args[1], ids, name)
+            self.assertEqual(monitor.st.terror_ids, replaced if replaced != ids else ids, name)
+            self.assertTrue(getattr(monitor.st, flag), name)
+
+    def test_the_signal_before_the_killers_sends_the_replaced_ids(self):
+        for name, round_type, ids, flag, replaced, bloodthirsty in self.CASES:
+            self.sent.reset_mock()
+            monitor = self._monitor(round_type)
+            self._line(monitor, TerrorReplacement.signal(flag).sample)
+
+            started = self._killers(monitor, ids)
+
+            if name in ("Atrached", "HHI"):
+                # Classic の 1 体構成は Gigabytes の候補が残る（Gigabytes の合図はまだ）ので、1 秒の待ちは入る。
+                # 待ちが明けたとき、置き換えた番号で 1 回送る
+                self.assertEqual(len(self._waits(started)), 1, name)
+                self.sent.assert_not_called()
+                self._wait(monitor)
+            else:
+                self.assertEqual(self._waits(started), [], f"{name}: 待たない")
+            self.sent.assert_called_once()
+            self.assertEqual(self.sent.call_args.args[1], replaced, name)
+            self.assertIs(self.sent.call_args.kwargs["bloodthirsty"], bloodthirsty, name)
+
+    def test_round_over_during_the_wait_sends_that_round_once(self):
+        for name, round_type, ids, _flag, _replaced, _bt in self.CASES:
+            self.sent.reset_mock()
+            monitor = self._monitor(round_type)
+            self._killers(monitor, ids)
+            self.sent.assert_not_called()
+
+            self._line(monitor, "RoundOver")
+
+            self.sent.assert_called_once()                      # RoundOver の保険が送る
+            self.assertEqual(self.sent.call_args.args[1], ids, name)
+            self.assertFalse(monitor.st.in_round, name)
+            self._wait(monitor)
+            self.assertEqual(self.sent.call_count, 1, f"{name}: 待ちからは送らない")
+            self._line(monitor, "Verified Round End")
+            self.assertEqual(self.sent.call_count, 1, f"{name}: Verified Round End でも二重にならない")
+
+    def test_a_wait_that_ends_after_round_over_does_not_send(self):
+        """RoundOver がこのラウンドの分を送る前に待ちが明けても、ラウンドの外なら送らない"""
+        monitor = self._monitor("Classic")
+        self._killers(monitor, [91])
+        monitor.st.in_round = False
+
+        self._wait(monitor)
+
+        self.sent.assert_not_called()
+
+    def test_verified_round_end_is_the_fallback(self):
+        monitor = self._monitor("Classic")
+        self._killers(monitor, [91])
+        monitor.st.in_round = False
+        self._wait(monitor)
+        self.sent.assert_not_called()
+
+        self._line(monitor, "Verified Round End")
+
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[1], [91])
+
+    def test_the_next_round_is_not_sent_with_the_old_ids(self):
+        monitor = self._monitor("Classic")
+        started = self._killers(monitor, [91])
+        old_seq = started[0][1][0]
+        monitor.st.round_seq += 1                               # 次のラウンドに入った
+        monitor.st.terror_ids = [config.SONIC_ID]
+
+        self._wait(monitor, old_seq)
+
+        self.sent.assert_not_called()
+
+    def test_a_stopped_monitor_does_not_send(self):
+        monitor = self._monitor("Classic")
+        self._killers(monitor, [91])
+        monitor._running = False
+
+        self._wait(monitor)
+
+        self.sent.assert_not_called()
+
+    def test_two_killers_in_a_round_send_once(self):
+        """同じラウンドで Killers が2回来ても、送るのは1回（待ちが2本あっても）"""
+        monitor = self._monitor("Classic")
+        self._killers(monitor, [91])
+        self._killers(monitor, [92])
+
+        self._wait(monitor)
+        self._wait(monitor)
+
+        self.sent.assert_called_once()
+
+    # ── 候補が無い ──
+    def test_no_candidate_sends_at_once_and_starts_no_wait(self):
+        monitor = self._monitor("Double Trouble")
+
+        started = self._killers(monitor, [1, 2])
+
+        self.assertEqual(self._waits(started), [])
+        self.sent.assert_called_once()
+        self.assertEqual(self.sent.call_args.args[1], [1, 2])
+
+    def test_a_non_candidate_round_of_a_replacement_terror_sends_at_once(self):
+        """Atrached は Classic だけ。Sonic が Classic 以外で出ても候補ではない"""
+        monitor = self._monitor("Alternate")
+
+        started = self._killers(monitor, [config.SONIC_ID])
+
+        self.assertEqual(self._waits(started), [])
+        self.sent.assert_called_once()
+
+    # ── 判定の待ちは別 ──
+    def test_the_decision_wait_is_still_started_separately(self):
+        key = "Cracked/狂気"
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {key: {TerrorIds.BLOODTHIRSTY_CREATURE}}, lambda _m: None,
+                                        window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        monitor.st.round_type = "Cracked"
+        monitor.st.round_seq = 3
+        monitor._running = True
+
+        started = [name for name, _args in self._killers(monitor, [config.CURIOUS_CREATURE_ID])]
+
+        self.assertEqual(started, ["_send_statistics_after_wait", "_delayed_decision"])
 
 
 
@@ -666,8 +1044,7 @@ class TestSelfInsertsBloodthirstyWait(unittest.TestCase):
              patch.object(PlaySound, "play_sound"):
             monitor._on_killers(list(monitor.st.terror_ids), "Unbound",
                                 revealed=False)
-        return [c.kwargs["target"].__func__.__name__
-                for c in mock_thread.call_args_list if "target" in c.kwargs]
+        return _decision_threads(mock_thread)
 
     @staticmethod
     def _pending(monitor):

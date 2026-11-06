@@ -929,14 +929,15 @@ def _freeze_other_continue():
 def _decision_threads(mock_thread):
     """立ったデーモンのうち、判定に関わるものだけを返す。
 
-    続行ラウンドの前面化（_focus_this_window_for）は判定と無関係な
+    続行ラウンドの前面化（_focus_this_window_for）と、置き換えの候補があるラウンドの
+    統計の待ち（_send_statistics_after_wait。HL）は判定と無関係な
     付随機能なので、判定を見るテストからは除く
     """
     return [c.kwargs["target"].__func__.__name__
             for c in mock_thread.call_args_list
             if "target" in c.kwargs
             and c.kwargs["target"].__func__.__name__
-            != "_focus_this_window_for"]
+            not in ("_focus_this_window_for", "_send_statistics_after_wait")]
 
 
 def _real_keyboard():

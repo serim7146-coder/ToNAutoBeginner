@@ -94,8 +94,7 @@ class TestEmeraldCityInstance(unittest.TestCase):
              patch.object(PlaySound, "play_sound"), \
              patch.object(ConnectDB, "register_round"):
             monitor._on_killers([99], "Classic", revealed=False)
-        started = [c.kwargs["target"].__func__.__name__
-                   for c in mock_thread.call_args_list if "target" in c.kwargs]
+        started = _decision_threads(mock_thread)
 
         self.assertEqual(started, [])
         self.assertFalse(monitor.st.is_continue_round)
@@ -964,7 +963,7 @@ class TestLogMonitorPerWindowInstanceType(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread:
             monitor._on_killers([99], "Classic", revealed=False)
 
-        mock_thread.assert_called_once()
+        self.assertEqual(len(_decision_threads(mock_thread)), 1)
 
 
 class TestHeldItemChangedNotice(unittest.TestCase):

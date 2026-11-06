@@ -77,7 +77,7 @@ class _Case(unittest.TestCase):
         monitor._wait_utils(*args)
 
     def names(self):
-        return [n for n, _a in self.started]
+        return [n for n, _a in self.started if n != "_send_statistics_after_wait"]   # HL: 統計の待ちは判定ではない
 
 
 class TestTheDecision(_Case):

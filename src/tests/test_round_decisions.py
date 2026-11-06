@@ -2037,14 +2037,11 @@ class TestContinueRoundsByType(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound") as mock_play:
             monitor._on_killers(list(ids), round_type, revealed=False)
-            started = [c.kwargs["target"].__func__.__name__
-                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            started = _decision_threads(mock_thread)
             if "_delayed_decision" in started:
                 mock_thread.reset_mock()
                 monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
-                started += [c.kwargs["target"].__func__.__name__
-                            for c in mock_thread.call_args_list
-                            if "target" in c.kwargs]
+                started += _decision_threads(mock_thread)
         self.played = mock_play
         return started
 
@@ -2581,15 +2578,12 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         with patch.object(LogMonitor.threading, "Thread") as mock_thread, \
              patch.object(PlaySound, "play_sound"):
             monitor._on_killers(list(ids), round_type, revealed=revealed)
-            started = [c.kwargs["target"].__func__.__name__
-                       for c in mock_thread.call_args_list if "target" in c.kwargs]
+            started = _decision_threads(mock_thread)
             if settle and "_delayed_decision" in started:
                 monitor._running = True
                 mock_thread.reset_mock()
                 monitor._delayed_decision(round_type, 0.0, monitor.st.round_seq)
-                started += [c.kwargs["target"].__func__.__name__
-                            for c in mock_thread.call_args_list
-                            if "target" in c.kwargs]
+                started += _decision_threads(mock_thread)
         return started
 
     def _round(self, monitor, round_type, ids=(99,), **kw):

@@ -597,6 +597,9 @@ DROP_ITEM_INSTANCES = PRIVATE_LIKE_INSTANCES | frozenset({INSTANCE_HOSHIIMO, INS
 # ——Gigabytes 12件・Atrached 2件とも差0秒。Variantが確定した時点で打ち切る。
 TERROR_VARIANT_WAIT_SEC = 0.3
 TERROR_VARIANT_POLL_SEC = 0.2
+# 置き換えの候補があるラウンドの統計を、Killers の行から最大これだけ待ってから送る（合図が来たらその場で送る）。
+# ログの時刻は 1 秒単位なので、同じ秒の行でも 1 秒近く離れて届きうる。統計は急がないので、判定の待ちより長く取る
+TERROR_STAT_WAIT_SEC = 1.0
 
 # 起動オプション
 LAUNCH_OPTION = ["--enable-debug-gui", "--enable-sdk-log-levels", "--enable-udon-debug-logging"]
@@ -783,7 +786,7 @@ SELF_INSERTS_BLOODTHIRSTY_ID = 4013
 # alternate。Sanic は Foxy に置き換わることがある（表示名は Evil Purple Foxy）
 SANIC_ID = 1002
 FOXY_ID = 4011
-# alternate。Fusion Pilot は Neo Pilot に置き換わる。合図のログはまだ分からない
+# alternate。Fusion Pilot は Neo Pilot に置き換わる（合図は `neo time`。Winterfest まで実物は未確認）
 FUSION_PILOT_ID = 1029
 NEO_PILOT_ID = 4010
 # Punished の Sewers。Arkus が低確率で Glorbo に置き換わる（ListTool の special317）

@@ -327,7 +327,7 @@
   {"id": 4007, "kind": "special", "category": null, "name": "Rift Monsters", "log": null, "listtool": 312, "legacy": 312, "icon": ["terrors", 4, 9]},
   {"id": 4008, "kind": "special", "category": null, "name": "Meatball Man", "log": null, "listtool": 313, "legacy": 313, "icon": ["terrors", 5, 9]},
   {"id": 4009, "kind": "special", "category": "classic", "name": "The Gigabytes", "log": null, "listtool": 314, "legacy": 314, "icon": ["terrors", 8, 9]},
-  {"id": 4010, "kind": "variant", "category": null, "name": "Neo Pilot", "log": null, "listtool": 315, "legacy": 315, "icon": ["terrors", 6, 9]},
+  {"id": 4010, "kind": "variant", "category": "alternate", "name": "Neo Pilot", "log": null, "listtool": 315, "legacy": 315, "icon": ["terrors", 6, 9]},
   {"id": 4011, "kind": "variant", "category": "alternate", "name": "Evil Purple Foxy", "log": null, "listtool": 316, "legacy": 316, "icon": ["terrors", 7, 9]},
   {"id": 4012, "kind": "variant", "category": "classic", "name": "Glorbo", "log": null, "listtool": 317, "legacy": 317, "icon": ["terrors", 0, 0]},
   {"id": 4013, "kind": "variant", "category": "unbound", "name": "Self Inserts (Bloodthirsty)", "log": null, "listtool": null, "legacy": 1283, "icon": ["terrors", 21, 8]},
