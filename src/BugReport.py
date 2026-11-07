@@ -155,7 +155,7 @@ def window_label(window, all_windows: int = 0) -> str:
 def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_log_path,
                  settings: dict, now: datetime, debug_log_path=None,
                  version: str | None = None, all_windows: int = 0) -> tuple[str, bytes]:
-    """(zip のファイル名, zip の中身)。REPORT_MAX_BYTES を超えたら VRChat のログを減らす。
+    """(zip のファイル名, zip の中身)。REPORT_MAX_BYTES を超えたら撮影を新しい方から外し、それでも超えたら VRChat のログを減らす。
 
     window は窓の番号1つ（0 は窓なし）か番号の並び（DR: 複数・全部）。vrchat_log_path は1つの窓なら
     そのパス、複数なら {窓の番号: パス}。VRChat のログは全部の窓で同じ長さずつ（始めは
@@ -236,12 +236,12 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
         data = _zip({"report.txt": report.encode("utf-8"), **files, **images, **vr_files})
         if len(data) <= config.REPORT_MAX_BYTES:
             return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
-        if vr_files:
-            limit //= 2                 # 先に VRChat のログを削る（全部の窓で同じ長さずつ）
-        elif images:
-            name = list(images)[-1]     # それでも収まらなければ撮影を新しい方から外す
+        if images:
+            name = list(images)[-1]     # 先に撮影を新しい方から外す（ログは文字なのでほとんど場所を取らない）
             images.pop(name)
             dropped.append(name)
+        elif vr_files:
+            limit //= 2                 # 撮影が無くなってもまだ収まらなければ VRChat のログを削る（全部の窓で同じ長さずつ）
         else:
             return f"report_{now.strftime('%Y%m%d_%H%M%S')}.zip", data
 

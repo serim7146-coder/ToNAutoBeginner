@@ -577,6 +577,52 @@ class TestBugReportContent(unittest.TestCase):
         self.assertNotIn("vrchat_log_window2.txt", files)
         self.assertIn("入れていません（大きすぎて収まらない）", files["report.txt"])
 
+    def _shots(self, count=2, size=300 * 1024):
+        """Begin の撮影に見立てた、圧縮の効かない中身のファイル（窓2）"""
+        folder = self.dir / "begin_miss"
+        folder.mkdir(exist_ok=True)
+        rnd = random.Random(11)
+        for n in range(1, count + 1):
+            (folder / f"窓2_{n}.png").write_bytes(rnd.getrandbits(8 * size).to_bytes(size, "little"))
+
+    def _zip_names_and_report(self):
+        include = {k: True for k, _l in BugReport.ATTACHMENTS}
+        _n, data = BugReport.build_report("動かない", 2, include, "画面\n", str(self.vrchat), {},
+                                          self.NOW, debug_log_path=self.debug, version="v9.9.9")
+        z = zipfile.ZipFile(io.BytesIO(data))
+        return data, z, z.read("report.txt").decode("utf-8")
+
+    def test_shots_are_left_out_before_the_vrchat_log_is_cut(self):
+        self._big_log(lines=2000)                                   # 全部で 150KB ほど（始めの長さに収まる）
+        self._shots()
+        full = self.vrchat.read_bytes()
+        with patch.object(config, "REPORT_MAX_BYTES", 500 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_START_BYTES", 200 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_MIN_BYTES", 16 * 1024):
+            data, z, report = self._zip_names_and_report()
+        self.assertLessEqual(len(data), 500 * 1024)
+        self.assertEqual(z.read("vrchat_log_window2.txt"), full, "ログは始めの長さのまま（削らない）")
+        self.assertNotIn("（末尾）", report)
+        self.assertIn("撮影 begin_miss/窓2_2.png: 入れていません（大きすぎて収まらない）", report, "新しい方から外す")
+        self.assertIn("begin_miss/窓2_1.png", z.namelist(), "収まったところで外すのをやめる")
+        self.assertNotIn("begin_miss/窓2_2.png", z.namelist())
+
+    def test_the_vrchat_log_is_cut_once_all_shots_are_gone(self):
+        self._big_log()                                             # 2.9MB ほど
+        self._shots()
+        with patch.object(config, "REPORT_MAX_BYTES", 150 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_START_BYTES", 2 * 1024 * 1024), \
+             patch.object(config, "REPORT_VRCHAT_LOG_MIN_BYTES", 16 * 1024):
+            data, z, report = self._zip_names_and_report()
+        self.assertLessEqual(len(data), 150 * 1024)
+        self.assertFalse([n for n in z.namelist() if n.startswith("begin_miss/")], "撮影は全部外す")
+        for n in (1, 2):
+            self.assertIn(f"撮影 begin_miss/窓2_{n}.png: 入れていません（大きすぎて収まらない）", report)
+        text = z.read("vrchat_log_window2.txt").decode("utf-8")
+        self.assertLess(len(text), self.vrchat.stat().st_size, "撮影が無くなっても足りないのでログも削る")
+        self.assertIn("LINE-039999", text, "末尾を入れる")
+        self.assertIn("（末尾）", report)
+
     def test_the_real_limits(self):
         self.assertEqual(config.REPORT_MAX_BYTES, int(9.5 * 1024 * 1024))
         self.assertEqual(config.REPORT_VRCHAT_LOG_START_BYTES, 8 * 1024 * 1024)
