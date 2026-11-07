@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+import BanList
 import ContinueList
 import ContinueTable
 import SharedState
@@ -718,6 +719,7 @@ class LogMonitor:
 
     def _apply_user_auth(self, event):
         """ログインの行（自分の名前と usr_ID）を反映し、統計用の番号を取りに行く"""
+        BanList.enforce(event.user_id)
         self._log(f"UserID検出: {event.user_id}")
         self.st.local_player_name = event.player_name
         self.st.local_user_id = event.user_id

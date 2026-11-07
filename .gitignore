@@ -29,3 +29,6 @@ unins000.*
 
 # VS Code Code Runner が作る一時ファイル
 tempCodeRunnerFile.py
+
+# 締め出す UID の一覧（個人の UID が入っている。絶対にコミットしない）
+assets/data/ban_uids.txt
