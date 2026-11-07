@@ -333,9 +333,12 @@ def setUpModule():
                        debug=config.DEBUG_LOG_PATH,
                        rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust,
-                       items=config.ITEMS)
+                       items=config.ITEMS,
+                       ban=config.BAN_UIDS_PATH)
     # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
     config.ITEMS = {}
+    # 依頼者の手元の本物の締め出し一覧（ban_uids.txt）にテストを左右させない。無いパスにしておく
+    config.BAN_UIDS_PATH = root / "no_such_ban_uids.txt"
     config.SETTINGS_PATH = root / "settings.json"
     config.DEBUG_LOG_PATH = root / "debug.log"
     config.ROUND_STORE_PATH = root / "rounds.sqlite"
@@ -380,6 +383,7 @@ def tearDownModule():
     config.ROUND_STORE_PATH = _real_paths["rounds"]
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
+    config.BAN_UIDS_PATH = _real_paths["ban"]
     _sandbox.cleanup()
     _OscSocketTrap.check()
     input_guard.check_outside()             # テストの外（別のスレッドの残りなど）で本物に届いた分（FF）

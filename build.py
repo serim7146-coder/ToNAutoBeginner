@@ -86,7 +86,10 @@ def build_stamp(now: datetime | None = None) -> str:
 def build_command(version: str, stamp: str | None = None) -> list[str]:
     numbers = version_numbers(version)
     stamp = stamp or build_stamp()
-    return [sys.executable, "-m", "nuitka", "src/main.py", *BASE_ARGS,
+    extra = []
+    if (ROOT / "assets/data/ban_uids.txt").exists():   # nuitka は ROOT で動かすので ROOT で見る
+        extra.append("--include-data-files=assets/data/ban_uids.txt=assets/data/ban_uids.txt")
+    return [sys.executable, "-m", "nuitka", "src/main.py", *BASE_ARGS, *extra,
             f"--onefile-tempdir-spec={{CACHE_DIR}}/ToNAutoBeginner/{version}-{stamp}",
             f"--product-version={numbers}",
             f"--file-version={numbers}"]

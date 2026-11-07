@@ -129,6 +129,10 @@ def resource_path(filename: str) -> Path:
             return path
     return candidates[0]
 
+
+# 締め出す UID の一覧（gitignore。無ければ空として扱う）
+BAN_UIDS_PATH = resource_path("assets/data/ban_uids.txt")
+
 # ── テラーIDとテラー名の対応表.json ──
 TERRORS = ReadJson.load_terrors(resource_path("assets/data/terrors.json"))
 
