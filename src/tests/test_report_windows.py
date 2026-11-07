@@ -128,7 +128,8 @@ class TestTheZip(unittest.TestCase):
             _n, data, files = self._zip([1, 2, 3, 4, 5, 6], paths)
         self.assertFalse([f for f in files if f.startswith("vrchat_log_window")])
         report = files["report.txt"].decode("utf-8")
-        self.assertEqual(report.count("入れていません（大きすぎて収まらない）"), 6)
+        self.assertEqual(report.count("VRChat のログ: 入れていません（大きすぎて収まらない）"), 6,
+                         "撮影も先に外れるので、数えるのは VRChat のログの行だけ")
 
     def test_the_start_is_divided_by_the_window_count(self):
         paths = self._big_logs(2, 5 * 1024 * 1024)
