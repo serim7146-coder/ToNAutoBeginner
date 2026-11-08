@@ -1,4 +1,4 @@
-"""mDNS（OSCQuery の名乗り）も 127.0.0.1 だけで開く（GB。ファイアウォールの確認を出さない）。
+"""mDNS（OSCQuery の名乗り）を 127.0.0.1 だけで開く動き（GB。OSCQUERY_MDNS_LOOPBACK_ONLY が True のとき）のテスト。既定は 2026-11-08 から False。
 本物のソケットは開かない: zeroconf.Zeroconf は偽、zeroconf._utils.net.new_socket も記録用の偽に差し替える"""
 from tests.support import *  # noqa: F401,F403
 
@@ -85,8 +85,8 @@ class TestLoopbackZeroconf(_Fixture):
             self.advertise()
         self.assertFalse(OSCQuery._ADVERTISE_LOCK.locked())
 
-    def test_the_flag_is_on_by_default(self):
-        self.assertIs(config.OSCQUERY_MDNS_LOOPBACK_ONLY, True)
+    def test_the_flag_is_off_by_default(self):
+        self.assertIs(config.OSCQUERY_MDNS_LOOPBACK_ONLY, False)
 
     def test_flag_off_neither_swaps_nor_passes_interfaces(self):
         with patch.object(config, "OSCQUERY_MDNS_LOOPBACK_ONLY", False):
