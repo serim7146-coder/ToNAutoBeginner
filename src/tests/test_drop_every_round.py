@@ -13,9 +13,11 @@ ROUND_OVER = T + "RoundOver"
 class _Osc:
     def __init__(self):
         self.sent = []
+        self.stops = []                  # press に渡された stop（押している最中にやめるかの判定）
 
     def press(self, address, sec, stop=None):
         self.sent.append((address, sec))
+        self.stops.append(stop)
         return True
 
 
@@ -143,6 +145,26 @@ class TestDropOnDeathOrLife(_Case):
                 monitor._process(LIVED)
                 monitor._process(ROUND_OVER)
                 self.assertEqual(len(self._drops()), 1, (itype, why))
+
+    def test_the_drop_press_is_not_cut_short_in_hoshiimo_and_yakiimo(self):
+        """干し芋・焼き芋は can_operate が偽でも、動いている間は押し続ける（stop が偽。押す長さは 0.1 秒）"""
+        self.assertEqual(config.CONTINUE_DROP_PRESS_SEC, 0.1)
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype=itype)
+            self.assertFalse(monitor._action.can_operate(), itype)
+            monitor._process(DIED)
+            self.assertEqual(self.osc.sent, [("/input/DropRight", 0.1)], itype)
+            self.assertFalse(self.osc.stops[0](), itype)
+
+    def test_the_drop_press_is_released_at_once_when_stopped(self):
+        """マクロを止めたら、押している最中でも離す（stop が真）"""
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            monitor = self._monitor(itype=itype)
+            monitor._process(DIED)
+            stop = self.osc.stops[0]
+            self.assertFalse(stop(), itype)
+            monitor._action._is_running = lambda: False
+            self.assertTrue(stop(), itype)
 
     def test_hoshiimo_and_yakiimo_next_round_drops_again(self):
         for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
