@@ -159,6 +159,30 @@ class TestBanInTheMonitor(_BanFileCase):
             self.assertTrue(any("UserID検出" in m for m in monitor.logs), head)
             daemon.assert_called_once()
 
+    def test_a_banned_login_line_while_running_terminates(self):
+        """動作中に流れてくるログイン行（_process → _on_user_auth）でも止める"""
+        self._write(BANNED + "\n")
+        self.terminate.side_effect = _Terminated
+        for fmt in (self.LOGIN, self.POST_LOGIN):
+            self.terminate.reset_mock()
+            monitor = self._monitor(Path("unused.txt"))
+            with patch.object(DebugLog, "write") as written, self.assertRaises(_Terminated):
+                monitor._process(PREFIX + fmt.format(BANNED))
+            self.terminate.assert_called_once_with(0)
+            self.assertEqual(monitor.st.local_user_id, "", fmt)
+            self.assertEqual(monitor.st.local_player_name, "", fmt)
+            self.assertFalse(any(BANNED in m for m in monitor.logs), fmt)
+            self.assertFalse(any(BANNED in str(c) for c in written.call_args_list), fmt)   # 種類だけの行は出る。UID は出ない
+
+    def test_a_normal_login_line_while_running_goes_on(self):
+        self._write(BANNED + "\n")
+        for fmt in (self.LOGIN, self.POST_LOGIN):
+            self.terminate.reset_mock()
+            monitor = self._monitor(Path("unused.txt"))
+            monitor._process(PREFIX + fmt.format(OTHER))
+            self.terminate.assert_not_called()
+            self.assertEqual(monitor.st.local_user_id, OTHER, fmt)
+
 
 class TestBanAtStartup(_BanFileCase):
     def test_a_banned_latest_user_terminates(self):

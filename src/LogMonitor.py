@@ -1696,6 +1696,7 @@ class LogMonitor:
 
     def _on_user_auth(self, event):
         """ログイン（自分の名前と usr_ID）"""
+        BanList.enforce(event.user_id)
         st = self.st
         st.local_player_name = event.player_name
         st.local_user_id = event.user_id
