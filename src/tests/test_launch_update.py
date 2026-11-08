@@ -741,10 +741,31 @@ class TestBuildScript(unittest.TestCase):
                          args.index("--include-package=ifaddr") + 1)
 
     def test_the_extract_dir_and_version_come_from_app_version(self):
-        cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
+        # 本物の checkout に ban_uids.txt があるかで長さが変わるので、空の ROOT に向けて固定する
+        with tempfile.TemporaryDirectory() as d, patch.object(self.build, "ROOT", Path(d)):
+            cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
         self.assertEqual(cmd[-3:], ["--onefile-tempdir-spec={CACHE_DIR}/ToNAutoBeginner/v1.2.3-20261002123456000001",
                                     "--product-version=1.2.3", "--file-version=1.2.3"])
         self.assertEqual(len(cmd), 4 + len(self.build.BASE_ARGS) + 3, "足すのは3つだけ")
+
+    def test_the_ban_list_is_bundled_only_when_it_exists(self):
+        """assets/data/ban_uids.txt は gitignore 対象。あるときだけ exe に同梱する"""
+        arg = "--include-data-files=assets/data/ban_uids.txt=assets/data/ban_uids.txt"
+        base = len(self.build.BASE_ARGS)
+        with tempfile.TemporaryDirectory() as d, patch.object(self.build, "ROOT", Path(d)):
+            cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
+            self.assertFalse(any("ban_uids.txt" in a for a in cmd), "ファイルが無ければ足さない")
+            self.assertEqual(len(cmd), 4 + base + 3)
+
+            target = Path(d) / "assets" / "data" / "ban_uids.txt"
+            target.parent.mkdir(parents=True)
+            target.write_text("usr_00000000-0000-0000-0000-000000000000", encoding="utf-8")
+            cmd = self.build.build_command("v1.2.3", stamp="20261002123456000001")
+            self.assertEqual(cmd.count(arg), 1, "ファイルがあれば同梱の引数が1つだけ")
+            self.assertEqual(len(cmd), 4 + base + 4)
+            index = cmd.index(arg)
+            self.assertGreaterEqual(index, 4 + base, "BASE_ARGS より後")
+            self.assertLess(index, len(cmd) - 3, "最後の3つ（展開先・版）より前")
 
     def test_two_builds_of_the_same_version_get_different_folders(self):
         first = self.build.build_command("v1.0.0")[-3]
