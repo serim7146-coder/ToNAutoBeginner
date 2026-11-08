@@ -2905,11 +2905,12 @@ class ActionExecutor:
 
     def _press_drop(self, head: str, message: str):
         """/input/DropRight を押して離す。OSC の窓で、private 相当・干し芋・焼き芋のときだけ
-        （config.DROP_ITEM_INSTANCES。HF）。持っているかは見ない"""
+        （config.DROP_ITEM_INSTANCES。HF）。持っているかは見ない。押している最中にやめるのはマクロを止めたときだけ
+        （干し芋・焼き芋は can_operate が偽なので、_move_stopped だと押した直後に離してしまう）"""
         if self._osc is None or self._st.instance_type not in config.DROP_ITEM_INSTANCES:
             DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でも干し芋・焼き芋でもない'}）")
             return
-        self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._move_stopped)
+        self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._stopped)
         DebugLog.write(f"{head} /input/DropRight を押して離した")
         self._log(message)
 
