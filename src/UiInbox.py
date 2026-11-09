@@ -67,13 +67,17 @@ class UiInbox:
                 func, args = self._queue.get_nowait()
             except queue.Empty:
                 return
+            name = getattr(func, "__name__", None) or type(func).__name__     # lambda は「<lambda>」
             start = time.thread_time()
+            before = TaskStats.tk_enter(name)       # いま走っている関数の名前（メモリの急増の行用）
             try:
                 func(*args)
             except Exception:
                 DebugLog.exception(f"UiInbox: {getattr(func, '__qualname__', func)}")
-            # 画面のスレッドで何が CPU を使ったか（FO）。名前は関数の名前（lambda は「<lambda>」）
-            TaskStats.tk_account(getattr(func, "__name__", None) or type(func).__name__, time.thread_time() - start)
+            finally:
+                TaskStats.tk_exit(before)
+            # 画面のスレッドで何が CPU を使ったか（FO）
+            TaskStats.tk_account(name, time.thread_time() - start)
 
     def close(self):
         """Tk のスレッドから。残りを実行してから止める"""

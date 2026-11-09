@@ -19,6 +19,7 @@ import UIFont
 import UiInbox
 import ProcStats
 import TaskStats
+import MemoryWatch
 from config import resource_path
 import ActionExecutor
 import AutoUpdate
@@ -1328,6 +1329,7 @@ class App(tk.Tk):
         self._debug_environment()
         self._start_tool_poll()
         self._log_memory()
+        MemoryWatch.start()              # 最大 WS の急な増えを見張る（debug.log にだけ書く）
 
     @TaskStats.tk_timed
     def _log_memory(self):
