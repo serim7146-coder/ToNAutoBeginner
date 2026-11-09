@@ -158,6 +158,7 @@ import BeginMiss
 import RoundStore
 import VerifiedTracker
 import DebugLog
+import MemoryWatch
 import shutil
 import random
 import zipfile
@@ -354,6 +355,11 @@ def setUpModule():
     SharedState.set_continue_drop_item(False)
     SharedState.set_continue_restore_window(False)
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
+    # App を作るたびに最大 WS の見張り（MemoryWatch）の本物のスレッドが立つと、モジュールが終わって debug.log のパスが
+    # 本物に戻った後も生き残り、本物の debug.log に書きうる。立てた済みの印を入れて start() を何もしなくする。
+    # 見張りを確かめるテスト（test_memory_watch）は自分で _thread を None にして使う
+    _real_paths["memory_watch_thread"] = MemoryWatch._thread
+    MemoryWatch._thread = "テスト中は見張りを立てない"
 
 
 def end_sound_threads(timeout: float = 3.0) -> bool:
@@ -376,6 +382,7 @@ def _refuse_network(*_args, **_kwargs):
 
 def tearDownModule():
     MouseButtons.reset_for_tests()
+    MemoryWatch._thread = _real_paths["memory_watch_thread"]
     urllib.request.urlopen = _real_paths["urlopen"]
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]

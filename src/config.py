@@ -250,6 +250,10 @@ MOVE_REPRESS_GAP_SEC  = 0.1
 # 受理したのに始まらない取り違えが 206件 → 18件
 # debug.log にメモリ・ハンドル数・スレッド数を書く間隔（FC: Tcl の Event の漏れを見張る。起動時にも 1 行）
 MEMORY_LOG_SEC             = 600.0
+# 最大 WS（ピーク）の急な増えを見張る間隔（秒）と、「急に増えた」とみなす増え（MB）。MemoryWatch が間隔ごとに最大 WS を読み、
+# 前回から MEMORY_JUMP_MB 以上増えていたら、そのとき動いていた仕事を debug.log に 1 行書く（10 分の行では原因が分からないため）
+MEMORY_JUMP_CHECK_SEC      = 5.0
+MEMORY_JUMP_MB             = 100
 # 同じ時刻の [CPU] の行に出す仕事の名前の数（終わった仕事・生きているスレッドのそれぞれ。CPU の多い順。FI）
 MEMORY_LOG_TOP             = 8
 VERIFIED_PERIODIC_SEC      = 300.0

@@ -26,6 +26,8 @@ _last_tk_cpu = None
 _last_peak_ws = None
 _tk: dict = {}              # 名前 → [回数, CPU 秒]。前回の行からの、画面（Tk）のスレッドで走った関数の集計（FO）
 _others: dict = {}          # ident → [名前, native_id, 最後に読んだ CPU 秒]。TaskStats が知らない Python のスレッド（FS）
+_finished_total: dict = {}  # 名前 → 終わった回数の累計。snapshot で空にならない（MemoryWatch が finished_since で差を取る）
+_tk_current = None          # いま Tk のスレッドで走っている関数の名前（無ければ None）。Tk のスレッドだけが書く
 
 
 def register_live(name: str):
@@ -53,6 +55,7 @@ def unregister_live(before=None):
         counted = _finished.setdefault(entry[0], [0, 0.0])
         counted[0] += 1
         counted[1] += max(0.0, cpu - entry[2])
+        _finished_total[entry[0]] = _finished_total.get(entry[0], 0) + 1
 
 
 def run(name: str, target, *args, **kwargs):
@@ -102,6 +105,56 @@ def tk_account(name: str, cpu_sec: float):
     counted[1] += max(0.0, cpu_sec)
 
 
+def tk_enter(name: str):
+    """Tk のスレッドで関数を走らせる前に呼ぶ。いま走っている関数の名前を name にして、前の名前（入れ子の外側。無ければ None）を返す。
+    終わりに tk_exit(その戻り値) で戻す。Tk のスレッドだけが呼ぶ（読むのは別のスレッドの current_tk）"""
+    global _tk_current
+    before = _tk_current
+    _tk_current = name
+    return before
+
+
+def tk_exit(before):
+    """tk_enter の戻り値を渡して、走っている関数の名前を外側のものに戻す"""
+    global _tk_current
+    _tk_current = before
+
+
+def current_tk():
+    """いま Tk のスレッドで走っている関数の名前。何も走っていなければ None（どのスレッドから読んでもよい。急増の行用）"""
+    return _tk_current
+
+
+def finished_since(mark):
+    """終わった仕事の、mark からの差と新しい mark を返す: ([(名前, 回数)] 回数の多い順, new_mark)。
+    mark は前回の戻り値（snapshot の _finished とは別の累計の写し）。None なら「いまを土台にする」ので差は空"""
+    with _lock:
+        now = dict(_finished_total)
+    if mark is None:
+        return [], now
+    diff = [(name, n - mark.get(name, 0)) for name, n in now.items() if n > mark.get(name, 0)]
+    diff.sort(key=lambda row: (-row[1], row[0]))
+    return diff, now
+
+
+def alive_names():
+    """いま生きているスレッドの名前: (名前付き [(名前, 本数)], ほかの Python のスレッド [(Thread.name, 本数)])。本数の多い順。
+    名前付きは register_live したもの、ほかは threading.enumerate() のうちそれ以外（メインスレッド＝画面は除く）。CPU は読まない"""
+    with _lock:
+        named, idents = {}, set(_live)
+        for entry in _live.values():
+            named[entry[0]] = named.get(entry[0], 0) + 1
+    others = {}
+    for t in threading.enumerate():
+        if t.ident is None or t.ident in idents or t is threading.main_thread():
+            continue
+        others[t.name] = others.get(t.name, 0) + 1
+
+    def ranked(counts):
+        return sorted(counts.items(), key=lambda row: (-row[1], row[0]))
+    return ranked(named), ranked(others)
+
+
 def tk_timed(func):
     """画面（Tk）のスレッドで走る関数に付ける。関数の先頭と末尾の time.thread_time() の差を tk_account へ（FO）。
     after で予約して Tk のスレッドが呼ぶ定期の関数用（UiInbox が取り出す関数は UiInbox 側で測る。両方に付けると二重になる）。
@@ -109,9 +162,11 @@ def tk_timed(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         start = time.thread_time()
+        before = tk_enter(func.__name__)
         try:
             return func(*args, **kwargs)
         finally:
+            tk_exit(before)
             tk_account(func.__name__, time.thread_time() - start)
     return wrapper
 
