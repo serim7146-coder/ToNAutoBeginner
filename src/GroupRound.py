@@ -39,6 +39,7 @@ MOONS = frozenset({"Mystic Moon", "Blood Moon", "Twilight", "Solstice"})
 
 SABOTAGE_STAR_KEY   = MatchTNL.LOG_TO_TNL["Sabotage star"]
 SABOTAGE_MURDER_KEY = MatchTNL.LOG_TO_TNL["Sabotage murder"]
+BLOODBATH_KEY       = MatchTNL.LOG_TO_TNL["Bloodbath"]
 
 # 焼き芋 Fog でオルタネイト枠とみなす、Killers 行の round_type
 FOG_ALTERNATE_ROUND_TYPE = "Fog (Alternate)"
@@ -76,6 +77,7 @@ def decide(
     sus_players=(),
     host_wishes: dict | None = None,
     follow_host: bool = False,
+    bloodthirsty_listed: bool = False,
 ) -> str:
     """CONTINUE / WANTED / SKIP / NORMAL のいずれかを返す。
 
@@ -91,6 +93,8 @@ def decide(
     `host_wishes` は `{vrc_name: {round_key: set(ids)}}`。
     `follow_host` が False のときは参加者別の情報が無いので Sabotage は
     従来どおり通常判定へ落とす。
+    `bloodthirsty_listed` はその窓の続行リストの Bloodbath の枠に Bloodthirsty があるか。
+    Bloodbath の 1 枠目が Bloodthirsty のときだけ見て、あれば WANTED・無ければ SKIP。
     """
     if instance_type not in GROUP_INSTANCES:
         # プラベ系の Sabotage だけは焼き芋と同じ判定を通す（依頼者の決定）。
@@ -104,6 +108,9 @@ def decide(
     if round_type == "Classic":
         # Variant確定を待たずに呼ぶと取り逃がす。呼び出し側で待つこと
         return NORMAL if is_variant(terror_ids) else SKIP
+
+    if round_type == "Bloodbath" and list(terror_ids)[:1] == [config.BLOODTHIRSTY_CREATURE_ID]:
+        return WANTED if bloodthirsty_listed else SKIP     # 1 枠目の Bloodthirsty だけ、続行リストの Bloodbath の枠で決める
 
     if round_type in ALWAYS_SKIP_ROUNDS:
         return SKIP

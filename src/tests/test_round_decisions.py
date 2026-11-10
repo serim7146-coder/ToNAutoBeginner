@@ -3596,9 +3596,9 @@ class TestLogMonitorGroupRules(unittest.TestCase):
         self.assertEqual(started, ["do_skip"])
 
     def test_rounds_whose_rule_ignores_the_terror_do_not_wait(self):
-        """Bloodbath は問答無用スキップ、8 Pages は全続行。置き換わっても同じ"""
+        """Bloodbath の 2 枠目以降は Bloodthirsty になっても自爆（1 枠目だけが続行リストで決まる）、8 Pages は全続行。置き換わっても同じ"""
         for round_type, ids, expected in (
-                ("Bloodbath", [config.CURIOUS_CREATURE_ID, 2, 3], ["do_skip"]),
+                ("Bloodbath", [2, config.CURIOUS_CREATURE_ID, 3], ["do_skip"]),
                 ("8 Pages", [config.CURIOUS_CREATURE_ID, 2], [])):
             monitor = self._monitor(
                 keep_on={"Bloodbath/ブラッドバス": {TerrorIds.BLOODTHIRSTY_CREATURE}})
