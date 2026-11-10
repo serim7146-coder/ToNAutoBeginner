@@ -302,7 +302,7 @@ class TestTerrorReplacementTable(unittest.TestCase):
                                                config.BLOODTHIRSTY_CREATURE_ID,
                                                None),
             "The Gigabytes": (None, config.GIGABYTES_ID, classic),
-            "Foxy": (config.SANIC_ID, config.FOXY_ID, None),
+            "Evil Purple Foxy": (config.SANIC_ID, config.FOXY_ID, None),
         }
         for name, (source, target, rounds) in cases.items():
             row = self._row(name)

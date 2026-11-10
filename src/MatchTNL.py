@@ -131,7 +131,7 @@ def listtool_has_slot(key: str, own: int) -> bool:
 def _moon_targets(source: str, own: int) -> tuple:
     """ListTool の Special/Moon（source）・Mystic Moon・Blood Moon の番号 1 つの行き先のキー。
     - Special/Moon: 4000 番台は置き場所のすべてのキーへ（Moon 4 体・Rift Monsters・Meatball Man は Special/Moon、
-      Gigabytes は Special/Moon と Classic、Neo Pilot・Foxy は Alternate・Fog・Midnight、Glorbo は Punished）。
+      Gigabytes は Special/Moon と Classic、Neo Pilot・Evil Purple Foxy は Alternate・Fog・Midnight、Glorbo は Punished）。
       Bloodthirsty（192）だけは Classic のみ（前の版が Special/Moon を見たのは Classic と Moon で、Moon に
       Bloodthirsty は出ない。各ラウンドの Bloodthirsty は各ラウンドのキー）
     - Mystic Moon・Blood Moon（と前の版の Twilight・Solstice）: Moon の中身なので Special/Moon だけ"""

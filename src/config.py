@@ -614,7 +614,7 @@ TERROR_VARIANT_WAIT_SEC = 0.3
 # 複数枠のラウンドの Bloodthirsty の合図は枠ごとに遅れて出る（依頼者 2026-11-10: 2 枠目 約 5 秒・3 枠目 約 10 秒後。誤差 1 秒を足す）
 BLOODTHIRSTY_SLOT_ROUNDS = frozenset({"Bloodbath", "Midnight", "Double Trouble"})
 BLOODTHIRSTY_SLOT_WAIT_SEC = (TERROR_VARIANT_WAIT_SEC, 6.0, 11.0)
-# Midnight の 3 枠目（Alternate）の Foxy / Neo Pilot の合図は約 10 秒後に出る（依頼者 2026-11-10。誤差 1 秒を足す）
+# Midnight の 3 枠目（Alternate）の Evil Purple Foxy / Neo Pilot の合図は約 10 秒後に出る（依頼者 2026-11-10。誤差 1 秒を足す）
 MIDNIGHT_ALTERNATE_WAIT_SEC = 11.0
 TERROR_VARIANT_POLL_SEC = 0.2
 # 置き換えの候補があるラウンドの統計を、Killers の行から最大これだけ待ってから送る（合図が来たらその場で送る）。
@@ -727,7 +727,7 @@ FOG_OBJECT_NAMES_PATH = SETTINGS_PATH.parent / "fog_object_names.json"
 # 名前が1つも当たらなければ DTM（50）と判断する（看破と同じ扱い: 許可なしなら DB にだけ送る）。
 # 手元の全ログ: DTM 以外の霧32回はすべて 0〜2秒後に名前が出た。DTM 1回は1つも出なかった
 # （確信度: 中。DTM の例が1回）。看破できない起動では DTM 以外でも出ないので使わない。
-# classic で objects が空なのは DTM だけ。alternate の Convict Squad・Joy・Foxy は別の行で分かる。
+# classic で objects が空なのは DTM だけ。alternate の Convict Squad・Joy・Evil Purple Foxy は別の行で分かる。
 # ⚠ Winterfest の期間は Neo Pilot（オブジェクト名が分からない）が霧に出る → DTM と取り違えうる。
 #   その期間は False にして止める
 FOG_NO_OBJECT_DTM_ENABLED = True
@@ -818,7 +818,7 @@ SELF_INSERTS_ID = 2083
 # Unbound のバリアントの段に置く。続行無効に入れると、Self Inserts の Bloodthirsty でも必ず続行はせず、
 # 普通のリストの判定（Self Inserts があるか）に任せる
 SELF_INSERTS_BLOODTHIRSTY_ID = 4013
-# alternate。Sanic は Foxy に置き換わることがある（表示名は Evil Purple Foxy）
+# alternate。Sanic は Evil Purple Foxy に置き換わることがある（表示名は Evil Purple Foxy）
 SANIC_ID = 1002
 FOXY_ID = 4011
 # alternate。Fusion Pilot は Neo Pilot に置き換わる（合図は `neo time`。Winterfest まで実物は未確認）

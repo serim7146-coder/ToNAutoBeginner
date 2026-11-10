@@ -45,7 +45,7 @@ BLOODBATH_KEY       = MatchTNL.LOG_TO_TNL["Bloodbath"]
 FOG_ALTERNATE_ROUND_TYPE = "Fog (Alternate)"
 
 # Killers 行の round_type は "Fog (Alternate)" のことがある（revealed、または
-# Enrage / Foxy の前倒しが引数で渡す）。両方を Fog 行として扱う
+# Enrage / Evil Purple Foxy の前倒しが引数で渡す）。両方を Fog 行として扱う
 FOG_ROUND_TYPES = frozenset({"Fog", FOG_ALTERNATE_ROUND_TYPE})
 
 GROUP_INSTANCES = frozenset({config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO})
