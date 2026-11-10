@@ -1290,8 +1290,25 @@ class LogMonitor:
         if changed or stat_only:
             self._send_round_statistics_once()
 
-    def _variant_wait_sec(self) -> float:
+    def _variant_wait_sec(self, round_type: str | None = None) -> float:
+        """置き換え待ちの上限（秒）。Curious がいる枠の Bloodthirsty の合図は枠ごとに遅れるので、
+        Bloodbath・Midnight・Double Trouble で Bloodthirsty が判定を変えるときだけ枠に応じて長くする"""
+        st = self.st
+        if (st.round_type in config.BLOODTHIRSTY_SLOT_ROUNDS and config.CURIOUS_CREATURE_ID in st.terror_ids
+                and self._bloodthirsty_changes_decision(round_type or st.round_type)):
+            slot = st.terror_ids.index(config.CURIOUS_CREATURE_ID)
+            return config.BLOODTHIRSTY_SLOT_WAIT_SEC[min(slot, len(config.BLOODTHIRSTY_SLOT_WAIT_SEC) - 1)]
         return config.TERROR_VARIANT_WAIT_SEC
+
+    def _bloodthirsty_changes_decision(self, round_type: str) -> bool:
+        """Curious が Bloodthirsty に置き換わると結論が変わるか（_replacement_changes_decision の Bloodthirsty だけ版）"""
+        st = self.st
+        if st.bloodthirsty_creature_variant:
+            return False
+        before = self._outcome(self._plan(round_type, st.terror_ids, False))
+        after_ids = [config.BLOODTHIRSTY_CREATURE_ID if tid == config.CURIOUS_CREATURE_ID else tid
+                     for tid in st.terror_ids]
+        return self._outcome(self._plan(round_type, after_ids, True)) != before
 
     def _stat_wait_sec(self) -> float:
         return config.TERROR_STAT_WAIT_SEC
@@ -1371,7 +1388,14 @@ class LogMonitor:
             sus_players=st.sus_players,
             host_wishes=self._group_wishes(),
             follow_host=bool(self._group_wishes()),
+            bloodthirsty_listed=self._bloodthirsty_listed(),
         )
+
+    def _bloodthirsty_listed(self) -> bool:
+        """干し芋・焼き芋の Bloodbath で、その窓の続行リストの Bloodbath の枠に Bloodthirsty があるか"""
+        st = self.st
+        return (st.instance_type in GroupRound.GROUP_INSTANCES and st.round_type == "Bloodbath"
+                and config.BLOODTHIRSTY_CREATURE_ID in self._keep_on().get(GroupRound.BLOODBATH_KEY, ()))
 
     def _defer_yakiimo_fog_skip(self) -> bool:
         """焼き芋の霧の自爆は、`Killers have been revealed` の行まで待つ（待つなら True）。
@@ -1588,12 +1612,12 @@ class LogMonitor:
         """
         deadline = time.time() + wait_sec
         while time.time() < deadline:
-            if not self._round_still_active(round_seq):
+            if not self._round_still_active(round_seq) or self.st.died_this_round:
                 return
             if not self._replacement_changes_decision(killers_round_type):
                 break
             time.sleep(config.TERROR_VARIANT_POLL_SEC)
-        if not self._round_still_active(round_seq):
+        if not self._round_still_active(round_seq) or self.st.died_this_round:
             return
         self._decide(killers_round_type)
 
@@ -2450,7 +2474,7 @@ class LogMonitor:
         # （続行リストに Glorbo の続行があれば、放置モードでも続行するため）
         if ((not self._hands_free() or self._glorbo_pending())
                 and self._replacement_changes_decision(round_type)):
-            wait = self._variant_wait_sec()
+            wait = self._variant_wait_sec(round_type)
             self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
             self._start_daemon(self._delayed_decision, round_type,
                                wait, st.round_seq)
