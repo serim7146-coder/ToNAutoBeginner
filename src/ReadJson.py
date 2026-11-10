@@ -96,7 +96,7 @@ def _name_index(data: dict) -> dict:
 def is_alternate_terror(tid, data: dict) -> bool:
     """そのIDが terrors.json の alternate カテゴリに属するか。
 
-    カテゴリ間でIDは重複しないので、これだけで枠を判定できる（Alternate は 1000〜、Foxy は 4011）。
+    カテゴリ間でIDは重複しないので、これだけで枠を判定できる（Alternate は 1000〜、Evil Purple Foxy は 4011）。
     `Killers is unknown` の行には `Fog (Alternate)` が出ないので、
     Enrage で判明したテラーからオルタネイト枠を決めるのに使う。
     """

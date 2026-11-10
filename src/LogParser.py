@@ -22,7 +22,7 @@ EVENT_USER_AUTH = "user_auth"
 EVENT_SUS_PLAYER = "sus_player"
 EVENT_RESPAWN = "respawn"
 EVENT_EVERYTHING_RECEIVED = "everything_received"
-# 置き換えテラーの合図（Atrached・Bloodthirsty・Foxy など）。どれかは LogEvent.flag。
+# 置き換えテラーの合図（Atrached・Bloodthirsty・Evil Purple Foxy など）。どれかは LogEvent.flag。
 # 行と flag の対応は TerrorReplacement.SIGNALS
 EVENT_REPLACEMENT = "replacement"
 EVENT_MASTER_SWITCHED = "master_switched"

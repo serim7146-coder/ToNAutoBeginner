@@ -1243,7 +1243,7 @@ class TestFogVariantsInNg(unittest.TestCase):
 
     # ── NG の霧・公開前 ─────────────────────────
     def test_ng_fog_signals_are_shown_on_the_spot(self):
-        expected = {"Foxy": "🦊 Foxyが出た！", "Bloodthirsty": "の合図"}   # 霧が対象の合図
+        expected = {"Foxy": "🦊 Evil Purple Foxyが出た！", "Bloodthirsty": "の合図"}   # 霧が対象の合図
         for source, mark in expected.items():
             monitor = self._monitor("public")
 

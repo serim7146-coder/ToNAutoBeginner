@@ -2422,7 +2422,7 @@ class App(tk.Tk):
                 ("Punish(速度検知)", self.v_voice_punish, "punish"),
                 ("アイテムロスト", self.v_voice_item_lost, "item_lost"),
                 ("Intermission", self.v_voice_intermission, "intermission"),
-                ("Foxy", self.v_voice_foxy, "foxy"),
+                ("Evil Purple Foxy", self.v_voice_foxy, "foxy"),
                 ("主催リスト喪失", self.v_voice_list_lost, "list_lost"),
                 ("待機列", self.v_voice_queue, "queue"),
                 ("Sabotage murder", self.v_voice_murder, "murder"),

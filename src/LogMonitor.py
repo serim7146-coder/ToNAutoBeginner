@@ -1294,7 +1294,7 @@ class LogMonitor:
         """置き換え待ちの上限（秒）。普通は TERROR_VARIANT_WAIT_SEC。次の 2 つは合図が遅れて出るので、判定が変わるときだけ長くする
         （両方当たるときは長いほう）。
         - Bloodbath・Midnight・Double Trouble で Curious がいる枠の Bloodthirsty（枠に応じた秒数）
-        - Midnight の 3 枠目（Alternate）の Sanic・Fusion Pilot の Foxy / Neo Pilot（MIDNIGHT_ALTERNATE_WAIT_SEC）"""
+        - Midnight の 3 枠目（Alternate）の Sanic・Fusion Pilot の Evil Purple Foxy / Neo Pilot（MIDNIGHT_ALTERNATE_WAIT_SEC）"""
         st = self.st
         rt = round_type or st.round_type
         wait = config.TERROR_VARIANT_WAIT_SEC
@@ -1307,7 +1307,7 @@ class LogMonitor:
         return wait
 
     def _midnight_alternate_changes_decision(self, round_type: str) -> bool:
-        """Midnight の 3 枠目が Foxy / Neo Pilot に置き換わると結論が変わるか"""
+        """Midnight の 3 枠目が Evil Purple Foxy / Neo Pilot に置き換わると結論が変わるか"""
         st = self.st
         if st.round_type != "Midnight" or len(st.terror_ids) < 3:
             return False
@@ -1690,7 +1690,7 @@ class LogMonitor:
 
     def _on_replacement_signal(self, event):
         """置き換えテラーの合図（TerrorReplacement.SIGNALS）。どれも 知らせる → 差し替える。
-        Foxy だけは音声と、霧でテラー不明なときの確定が付く"""
+        Evil Purple Foxy だけは音声と、霧でテラー不明なときの確定が付く"""
         flag = event.flag
         self._log(TerrorReplacement.signal(flag).announce)
         if flag == "foxy" and not self._hands_free():
@@ -1703,7 +1703,7 @@ class LogMonitor:
         st = self.st
         if (st.round_type in GroupRound.FOG_ROUND_TYPES and not st.terror_ids
                 and st.enrage_identified is None):
-            # 霧でテラー不明のまま Foxy が出た。Foxy で確定する。
+            # 霧でテラー不明のまま Evil Purple Foxy が出た。Evil Purple Foxy で確定する。
             # st.round_type は書き換えない（「Fog」の自爆指定が効かなくなる）。
             # オルタ枠であることは引数で伝える（焼き芋の判定が見る）
             st.fog_early_seq = st.round_seq     # 前倒し。焼き芋の霧の自爆は公開の行まで待つ
@@ -2737,7 +2737,7 @@ class LogMonitor:
     # ── ToN Utils の続行の判断に従う（EB）────────────────
     def _follow_utils(self, round_type: str, plan: tuple) -> bool:
         """Utils が判断する窓なら、その判断を待つ（True）。この窓はこのツールが判定するなら False。
-        起点（killers_set・killers_revealed）の前に分かったとき（看破・Enrage・Joy・スタン・Foxy）は、
+        起点（killers_set・killers_revealed）の前に分かったとき（看破・Enrage・Joy・スタン・Evil Purple Foxy）は、
         自爆も続行フリーズもせずに明かされるのを待つ"""
         if not SharedState.get_follow_utils():
             return False

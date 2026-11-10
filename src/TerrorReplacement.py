@@ -40,7 +40,7 @@ SIGNALS: tuple[Signal, ...] = (
            "🩸 Bloodthirsty 出現（Curious の Variant）"),
     # 行のどこかに出る。大文字小文字も問わない
     Signal("foxy", re.compile(r"foxy the pirate turned evil!", re.IGNORECASE),
-           "foxy the pirate turned evil!", "🦊 Foxyが出た！"),
+           "foxy the pirate turned evil!", "🦊 Evil Purple Foxyが出た！"),
     # この行はまだ実ログで観測できていない（低確率で、手元のログ22本には0件）。
     # 正確な大文字小文字と句点が分からないので緩く受ける。実物が取れたら締める
     Signal("glorbo", re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE),
@@ -154,7 +154,7 @@ TABLE: tuple[Replacement, ...] = (
                 "bloodthirsty_creature_variant"),
     # alternate のIDはほかのカテゴリと重ならないので、ラウンドを絞らなくても
     # オルタ枠でしか起きない
-    Replacement("Foxy", config.SANIC_ID, config.FOXY_ID, None, "foxy"),
+    Replacement("Evil Purple Foxy", config.SANIC_ID, config.FOXY_ID, None, "foxy"),
     Replacement("Neo Pilot", config.FUSION_PILOT_ID, config.NEO_PILOT_ID, None, "neo_pilot"),
     # Punished の Sewers で、Arkus が低確率で Glorbo になる。マップは条件に
     # 入れない（表に map の欄が無く、合図が来た時点で確定する）。ほかのマップの
