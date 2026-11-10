@@ -1291,14 +1291,34 @@ class LogMonitor:
             self._send_round_statistics_once()
 
     def _variant_wait_sec(self, round_type: str | None = None) -> float:
-        """置き換え待ちの上限（秒）。Curious がいる枠の Bloodthirsty の合図は枠ごとに遅れるので、
-        Bloodbath・Midnight・Double Trouble で Bloodthirsty が判定を変えるときだけ枠に応じて長くする"""
+        """置き換え待ちの上限（秒）。普通は TERROR_VARIANT_WAIT_SEC。次の 2 つは合図が遅れて出るので、判定が変わるときだけ長くする
+        （両方当たるときは長いほう）。
+        - Bloodbath・Midnight・Double Trouble で Curious がいる枠の Bloodthirsty（枠に応じた秒数）
+        - Midnight の 3 枠目（Alternate）の Sanic・Fusion Pilot の Foxy / Neo Pilot（MIDNIGHT_ALTERNATE_WAIT_SEC）"""
         st = self.st
+        rt = round_type or st.round_type
+        wait = config.TERROR_VARIANT_WAIT_SEC
         if (st.round_type in config.BLOODTHIRSTY_SLOT_ROUNDS and config.CURIOUS_CREATURE_ID in st.terror_ids
-                and self._bloodthirsty_changes_decision(round_type or st.round_type)):
+                and self._bloodthirsty_changes_decision(rt)):
             slot = st.terror_ids.index(config.CURIOUS_CREATURE_ID)
-            return config.BLOODTHIRSTY_SLOT_WAIT_SEC[min(slot, len(config.BLOODTHIRSTY_SLOT_WAIT_SEC) - 1)]
-        return config.TERROR_VARIANT_WAIT_SEC
+            wait = config.BLOODTHIRSTY_SLOT_WAIT_SEC[min(slot, len(config.BLOODTHIRSTY_SLOT_WAIT_SEC) - 1)]
+        if self._midnight_alternate_changes_decision(rt):
+            wait = max(wait, config.MIDNIGHT_ALTERNATE_WAIT_SEC)
+        return wait
+
+    def _midnight_alternate_changes_decision(self, round_type: str) -> bool:
+        """Midnight の 3 枠目が Foxy / Neo Pilot に置き換わると結論が変わるか"""
+        st = self.st
+        if st.round_type != "Midnight" or len(st.terror_ids) < 3:
+            return False
+        before = self._outcome(self._plan(round_type, st.terror_ids, st.bloodthirsty_creature_variant))
+        for row in self._pending_replacements():
+            if row.flag in ("foxy", "neo_pilot") and row.source == st.terror_ids[2]:
+                after = self._outcome(self._plan(round_type, row.apply(list(st.terror_ids)),
+                                                 st.bloodthirsty_creature_variant))
+                if after != before:
+                    return True
+        return False
 
     def _bloodthirsty_changes_decision(self, round_type: str) -> bool:
         """Curious が Bloodthirsty に置き換わると結論が変わるか（_replacement_changes_decision の Bloodthirsty だけ版）"""
