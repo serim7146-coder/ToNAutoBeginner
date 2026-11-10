@@ -188,7 +188,7 @@ get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WI
 def _note_freeze(st, kind: str, started: bool, count: int):
     """debug.log へ: どの窓がフリーズを張った／解いたか、いま何窓が張っているか"""
     DebugLog.write(f"[状態] 窓{getattr(st, 'window_idx', 0)} {kind}フリーズを"
-                   f"{'張った' if started else '解いた'}（張っている窓: {count}）")
+                   f"{'開始した' if started else '解いた'}（フリーズ中の窓: {count}）")
 
 
 # マクロの回（開始・停止のたびに進む）。止めた後もしばらく動いている前の回のスレッドが、

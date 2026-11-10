@@ -498,7 +498,7 @@ class StatisticsWindow(tk.Toplevel):
         body.pack(fill="both", expand=True)
         self.terror_tree = self._tree(body, (("id", "ID", 58, "e"),
                                              ("name", "テラー", 260, "w"),
-                                             ("count", "回数", 86, "e"), ("expected", "期待", 86, "e"),
+                                             ("count", "回数", 86, "e"), ("expected", "期待値", 86, "e"),
                                              ("p_value", "上側p値", 110, "e"), ("label", "判定", 130, "center")),
                                       style=LEGEND_STYLE)      # 統計画面の表はすべて暗い背景
         self.terror_tree.bind("<<TreeviewSelect>>", self._on_terror_selected)
@@ -514,7 +514,7 @@ class StatisticsWindow(tk.Toplevel):
         self.terror_rounds_tree = self._tree(
             rounds_tab, (("time", "日時", 140, "w"), ("round", "ラウンド", 110, "w"),
                          ("map", "マップ", 140, "w"), ("others", "一緒に出たテラー", 180, "w"),
-                         ("players", "見た人数", 70, "e"), ("mine", "自分", 48, "center")),
+                         ("players", "確認できた人数", 70, "e"), ("mine", "自分", 48, "center")),
             style=LEGEND_STYLE)         # ラウンドの色（白・白っぽい灰色もある）が読めるよう暗く
         kind_tab = ttk.Frame(self.terror_detail_tabs, padding=4)
         self.terror_detail_tabs.add(kind_tab, text="ラウンドタイプ")

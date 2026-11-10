@@ -103,7 +103,7 @@ class TestLiveLogCandidates(unittest.TestCase):
         kept = app._live_candidates([dead, away])
 
         self.assertEqual(kept, [dead, away])
-        self.assertTrue(any("生きているログがありません" in m for m in app.logs), app.logs)
+        self.assertTrue(any("更新中のログがありません" in m for m in app.logs), app.logs)
 
     def test_it_logs_only_when_the_dropped_set_changes(self):
         app = self._app()

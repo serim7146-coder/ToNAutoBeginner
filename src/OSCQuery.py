@@ -218,7 +218,7 @@ class Service:
             advert = _advertise(self.name, self.http_port, self.osc_port)
         except Exception:
             DebugLog.exception("OSCQuery.Service._advertise")
-            DebugLog.write("[OSCQuery] mDNS で広告できません（VRChat に見つけてもらえない）")
+            DebugLog.write("[OSCQuery] mDNS で公開できません（VRChat に見つけてもらえない）")
             return
         with self._lock:
             if not self._running:               # 広告の間に止められた
@@ -230,7 +230,7 @@ class Service:
             _withdraw(stale)
             return
         loopback = "（127.0.0.1 だけで待つ）" if config.OSCQUERY_MDNS_LOOPBACK_ONLY else ""
-        DebugLog.write(f"[OSCQuery] mDNS で広告した: {self.name}（_oscjson._tcp {self.http_port}・"
+        DebugLog.write(f"[OSCQuery] mDNS で公開しました: {self.name}（_oscjson._tcp {self.http_port}・"
                        f"_osc._udp {self.osc_port}・127.0.0.1）{loopback}")
 
     def stop(self):
@@ -243,7 +243,7 @@ class Service:
             except Exception:
                 DebugLog.exception("OSCQuery.Service.stop")
         self._close_sockets()
-        DebugLog.write(f"[OSCQuery] サービス {self.name} を止めた（広告を取り下げた）"
+        DebugLog.write(f"[OSCQuery] サービス {self.name} を止めました（公開をやめた）"
                        f"・窓の分からない送り元 {self.unknown} 件")
 
     def _close_sockets(self):

@@ -366,7 +366,7 @@ class LogMonitor:
         if not self._running or st.round_seq != round_seq:
             return
         if reborn_seq is not None and st.reborn_seq != reborn_seq:
-            self._debug("復活したので、死亡からの解除はしません")
+            self._debug("復活したので、死亡によるフリーズ解除はしません")
             return
         if st.is_continue_round:
             st.is_continue_round = False
@@ -488,7 +488,7 @@ class LogMonitor:
         if not self._running or st.round_seq != round_seq:
             return
         if reborn_seq is not None and st.reborn_seq != reborn_seq:
-            self._debug("復活したので、死亡からの解除はしません")
+            self._debug("復活したので、死亡によるフリーズ解除はしません")
             return
         if st.round_freeze_held:
             SharedState.round_freeze_end(st)
@@ -2914,8 +2914,9 @@ class LogMonitor:
         if not ContinueTable.rule_changes_table(ContinueTable.current(), self.window_idx, st.held_item_id):
             return ""
         held = st.held_item_id
-        name = ItemCatalog.label(held, config.ITEMS) if held else ContinueTable.ITEM_NONE_LABEL
-        return f"〔{name} の決まり〕"
+        if held:
+            return f"〔{ItemCatalog.label(held, config.ITEMS)} での続行設定〕"
+        return f"〔{ContinueTable.ITEM_NONE_LABEL}ときの続行設定〕"
 
     def _send_round_statistics_once(self):
         st = self.st

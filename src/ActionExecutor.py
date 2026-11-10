@@ -1297,7 +1297,7 @@ class ActionExecutor:
         MOTION_INTERVAL_SEC ごとに見て、cap_sec 秒たったら離す。止めた・private でなくなったらすぐ離す。
         (押した秒数, 動いた量) を返す"""
         if not self.can_operate():
-            self._trace("[操作] 距離を決めた後ろへの移動 しない（private でない）")
+            self._trace("[操作] 距離を指定した後ろへの移動をしません（private でない）")
             return 0.0, 0.0
         address = "/input/MoveBackward"
         osc = self._osc
@@ -2211,7 +2211,7 @@ class ActionExecutor:
             froze = st.waiting_for_equip and not self._hands_free()
             if froze:
                 SharedState.equip_freeze_start(st)
-                DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 店で押す間 装備待ちフリーズを張る")
+                DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 店で押す間 装備待ちフリーズを開始する")
             try:
                 return self._fetch_in_front_locked(fetcher, shop, item_id, plush)
             finally:
@@ -2333,7 +2333,7 @@ class ActionExecutor:
             deadline = time.time() + config.RUN_BACK_DELAY_SEC
             while time.time() < deadline:
                 if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
+                    DebugLog.write(f"{head} 停止された、またはラウンドが変わった → 移動をやめる")
                     return False
                 time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
             late = self._st.round_type in config.LATE_ROUND         # Punished 後は足が遅いので長く下がる
@@ -2341,7 +2341,7 @@ class ActionExecutor:
             for address, sec in (("/input/MoveBackward", back_sec),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
                 if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
+                    DebugLog.write(f"{head} 停止された、またはラウンドが変わった → 移動をやめる")
                     return False
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
                 # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
@@ -2502,13 +2502,13 @@ class ActionExecutor:
             if not self._run_after_respawn(round_seq):
                 break
             if moved is False:
-                DebugLog.write(f"{head}: 動き出さなかった → 遠のいた・近づいたを判断しない（戻さない）")
+                DebugLog.write(f"{head}: 動き出さなかった → 離れたか近づいたかを判断しません（戻しません）")
                 continue
             new_shot, new_mark = self._measure_face()
             new_f = RunFace.factor(new_mark, new_shot.shape[0]) if new_mark is not None else None
             if new_f is None or abs(new_f - 1.0) - abs(f - 1.0) >= config.RUN_DEPTH_WORSE - 1e-9:
                 back = "/input/MoveBackward" if forward else "/input/MoveForward"
-                why = "目印が消えた" if new_f is None else f"倍率が遠のいた（{new_f:.3f}）"
+                why = "目印が消えた" if new_f is None else f"目標の倍率から離れた（{new_f:.3f}）"
                 DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める")
                 self._depth_press(back, sec, round_seq, head)
                 RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "depth_reverted")
@@ -2647,16 +2647,16 @@ class ActionExecutor:
                     return "ほかの窓のフリーズ中に Run が終わった"
                 time.sleep(config.RUN_RESPAWN_POLL_SEC)
             if not self._run_still(round_seq):
-                return "止めた・ラウンドが変わった"
+                return "停止された、またはラウンドが変わった"
             result = self._respawn_in_front(round_seq)
             if result != "frozen":
                 return result
-            DebugLog.write(f"{head} ほかの窓がフリーズを張った → 前面を返して、解けたらやり直す")
+            DebugLog.write(f"{head} ほかの窓がフリーズを開始した → 前面を返して、解けたらやり直す")
 
     def _respawn_stop(self, round_seq: int) -> str | None:
         """前面を借りている間の見張り。"frozen"（ほかの窓のフリーズ）・理由（止めた等）・None（続けてよい）"""
         if not self._run_still(round_seq):
-            return "止めた・ラウンドが変わった"
+            return "停止された、またはラウンドが変わった"
         if not self._nobody_else_frozen():
             return "frozen"
         if WindowOperator.foreground_hwnd() != self._cfg.hwnd:
@@ -2839,7 +2839,7 @@ class ActionExecutor:
     def _respawn_stop_before_front(self, round_seq: int) -> str | None:
         """鍵を取った後、前面を借りる前の見張り（前面かどうかはまだ見ない）"""
         if not self._run_still(round_seq):
-            return "止めた・ラウンドが変わった"
+            return "停止された、またはラウンドが変わった"
         if not self._nobody_else_frozen():
             return "frozen"
         return None
@@ -2871,8 +2871,8 @@ class ActionExecutor:
         head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの始まり:"
         state = WindowOperator.window_state(hwnd)
         if state in (None, "minimized", "fullscreen"):
-            DebugLog.write(f"{head} 窓が{ {None: '無い', 'minimized': '最小化', 'fullscreen': 'フルスクリーン'}[state]}"
-                           "ので位置を覚えません（終わりでも戻しません）")
+            DebugLog.write(f"{head} 窓が{ {None: 'ないので', 'minimized': '最小化されているので', 'fullscreen': 'フルスクリーンなので'}[state]}"
+                           "位置を覚えません（終わりでも戻しません）")
             return
         rect = (WindowOperator.normal_rect(hwnd) if state == "maximized"
                 else WindowOperator.window_rect(hwnd))
@@ -2923,7 +2923,7 @@ class ActionExecutor:
         head = f"[操作] [窓{self._st.window_idx}] 続行ラウンドの終わり:"
         state = WindowOperator.window_state(hwnd)
         if state in (None, "minimized"):
-            DebugLog.write(f"{head} 窓が{'無い' if state is None else '最小化'}ので戻しません")
+            DebugLog.write(f"{head} 窓が{'ないので' if state is None else '最小化されているので'}戻しません")
             return
         if state == "fullscreen":
             if self._leave_fullscreen_and_move(rect):

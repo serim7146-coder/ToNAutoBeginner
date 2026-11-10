@@ -111,7 +111,7 @@ class TestContinueFreezeAfterReborn(_Case):
         self.assertEqual(SharedState.get_continue_round_count(), 1, "解除しない")
         self.assertTrue(monitor.st.is_continue_round)
         self.assertTrue(monitor.st.continue_freeze_held)
-        self.assertTrue(any("復活したので、死亡からの解除はしません" in m for m in self.debug), self.debug)
+        self.assertTrue(any("復活したので、死亡によるフリーズ解除はしません" in m for m in self.debug), self.debug)
 
     def test_a_death_without_a_reborn_still_releases(self):
         monitor = self._continuing()
@@ -176,7 +176,7 @@ class TestRoundFreezeAfterReborn(_Case):
 
         self.assertTrue(monitor.st.round_freeze_held)
         self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set(), "他窓は止まったまま")
-        self.assertTrue(any("復活したので、死亡からの解除はしません" in m for m in self.debug), self.debug)
+        self.assertTrue(any("復活したので、死亡によるフリーズ解除はしません" in m for m in self.debug), self.debug)
 
     def test_a_death_without_a_reborn_still_releases(self):
         monitor = self._round_frozen()
