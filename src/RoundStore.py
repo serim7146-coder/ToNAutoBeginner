@@ -106,11 +106,16 @@ def sources() -> tuple:
 @dataclass(frozen=True)
 class Filter:
     """集計の条件。時刻は DB と同じ（2026-01-01 UTC からの秒）。rounds は番号の集合
-    （None なら絞らない）。mine は「自分の分」（1人目が自分か、other_uids に自分がいる行）"""
+    （None なら絞らない）。mine は「自分の分」（1人目が自分か、other_uids に自分がいる行）。
+    players_min・players_max は人数（自分を含む。両端を含む。None なら片側を絞らない）。
+    include_null は人数不明（NULL）の行を入れるか（人数の範囲があるときは、範囲に入る行に足す）"""
     start: int | None = None
     end: int | None = None
     rounds: frozenset | None = None
     mine: bool = False
+    players_min: int | None = None
+    players_max: int | None = None
+    include_null: bool = True
 
 
 # テラーの3列をまとめて1列として数えるための部分問い合わせ
@@ -387,6 +392,19 @@ class RoundStore:
             ids = sorted(int(r) for r in flt.rounds)
             clauses.append(f"round in ({','.join('?' * len(ids))})" if ids else "0")
             params.extend(ids)
+        if flt.players_min is None and flt.players_max is None:
+            if not flt.include_null:
+                clauses.append("players is not null")
+        else:
+            bounds = []
+            if flt.players_min is not None:
+                bounds.append("players >= ?")
+                params.append(int(flt.players_min))
+            if flt.players_max is not None:
+                bounds.append("players <= ?")
+                params.append(int(flt.players_max))
+            cond = " and ".join(bounds)
+            clauses.append(f"(({cond}) or players is null)" if flt.include_null else f"({cond})")
         if flt.mine:
             mine = sorted(uids_list(self._meta(con, "my_uids")))
             if not mine:

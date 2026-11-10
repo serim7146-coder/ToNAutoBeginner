@@ -285,6 +285,9 @@ class TestStatisticsTerrorTab(unittest.TestCase):
         self.ids = classic + alternate
         for i, tid in enumerate(self.ids):
             self.store.add_own(100 + i, 6, 12, tid, None, None, self.MINE)    # Bloodbath（既定で選ばれる）
+        start = patch.object(config, "STATISTICS_DEFAULT_START", (2026, 1, 1, 0, 0))
+        start.start()
+        self.addCleanup(start.stop)
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -374,6 +377,9 @@ class TestStatisticsFixes(unittest.TestCase):
         self.store.add_own(200, 6, 12, 1001, None, None, -13)
         self.unbound = min(Statistics.candidate_ids_for_category("unbound"))
         self.store.add_own(201, 10, 12, self.unbound, None, None, -13)
+        start = patch.object(config, "STATISTICS_DEFAULT_START", (2026, 1, 1, 0, 0))
+        start.start()
+        self.addCleanup(start.stop)
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -1533,6 +1539,7 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window._render_terror_rounds = MagicMock()
         window._terror_categories = {}
         window._show_round_type_tab = MagicMock()       # Unbound ではラウンドタイプを隠す（別のテストで見る）
+        window._ensure_time_rows = MagicMock()          # 時間帯のタブは別のテストで見る
         window.store = MagicMock()
         window.store.map_counts_for_terror.return_value = [(12, 1, 1)]
 
@@ -1540,6 +1547,8 @@ class TestGuiRoundHelpers(unittest.TestCase):
         StatisticsGUI.StatisticsWindow._on_terror_selected(window)
 
         window.store.map_counts_for_terror.assert_called_once_with(None, frozenset({1, 3015}))
+        window.store.time_series.assert_not_called()            # 内訳では日ごと・時間帯を引かない
+        self.assertEqual(window._ensure_time_rows.call_count, 2)
         self.assertEqual(window._clear_tree.call_count, 2)
         self.assertEqual(len(window.map_tree.inserted), 2)
 
@@ -1557,10 +1566,10 @@ class TestGuiRoundHelpers(unittest.TestCase):
         window.store = MagicMock()
         window.store.round_summary.return_value = []
         window.store.terror_counts.return_value = {}
-        window.store.time_series.return_value = []
         for name in ("_picker_datetime", "_selected_rounds", "_make_filter", "_show_round_stats",
-                     "_render_terror_list", "_clear_terror_detail", "_show_time_rows"):
+                     "_render_terror_list", "_clear_terror_detail", "_players_range", "_ensure_time_rows"):
             setattr(window, name, MagicMock())
+        window._players_range.return_value = (1, None)
         window._picker_datetime.side_effect = lambda key: datetime(2026, 1, 1, 0 if key == "start" else 1)
         window._selected_rounds.return_value = {"Fog"}
         window._make_filter.side_effect = [RoundStore.Filter(start=0, end=10), RoundStore.Filter(start=0, end=20)]
@@ -1572,9 +1581,12 @@ class TestGuiRoundHelpers(unittest.TestCase):
         first_work, first_done = pending[0]
         first_done(first_work())                                 # 1 回目の結果が遅れて返った
         window._show_round_stats.assert_not_called()
+        window._ensure_time_rows.assert_not_called()
         second_work, second_done = pending[1]
         second_done(second_work())
         window._show_round_stats.assert_called_once()
+        window._ensure_time_rows.assert_called_once()           # 時間帯のタブは新しい結果のあとで 1 回
+        window.store.time_series.assert_not_called()            # 日ごと・時間帯はここでは引かない
 
     def test_load_rows_async_ignores_duplicate_request_while_loading(self):
         class FakeStatus:
@@ -1700,6 +1712,9 @@ class TestStatisticsWindowV1(unittest.TestCase):
         self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
         self.store.add_own(100, 6, 12, 5, 6, None, -13)
         self.store.add_own(200, 10, 12, 2001, None, None, -13)
+        start = patch.object(config, "STATISTICS_DEFAULT_START", (2026, 1, 1, 0, 0))
+        start.start()
+        self.addCleanup(start.stop)
         self.root = tk.Tk()
         self.root.withdraw()
         self.addCleanup(self.root.destroy)
@@ -1720,7 +1735,7 @@ class TestStatisticsWindowV1(unittest.TestCase):
         """「組み合わせ」・「マルチ」のタブは無くした"""
         window = self._open(lambda s, m: [])
         self.assertEqual([window.tabs.tab(t, "text") for t in window.tabs.tabs()],
-                         ["ラウンド", "テラー", "時間の流れ"])
+                         ["ラウンド", "テラー", "時間帯"])
         self.assertFalse(hasattr(window, "multi_tree"))
         self.assertFalse(hasattr(RoundStore.RoundStore, "player_counts"))
         self.assertFalse(hasattr(window, "pair_tree"))
@@ -1787,6 +1802,463 @@ class TestStatisticsWindowV1(unittest.TestCase):
 
         self.assertEqual(window._picker_datetime("end"), chosen)
 
+
+
+class TestPlayersWhere(unittest.TestCase):
+    """人数の条件（RoundStore.Filter の players_min・players_max・include_null）。実の SQLite（一時フォルダ）"""
+
+    MINE, OTHER = -13, 7
+    PLAYERS = (None, 1, 4, 5, 10, 22)           # add_own で入れる行（全部自分）
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        for i, players in enumerate(self.PLAYERS):
+            self.store.add_own(100 + i * 100, 6, 12, 5, None, None, self.MINE, players=players)
+        # ほかの人の行（人数 5）。「自分の分」では入らない
+        self.store.sync(lambda _since, _mine: [
+            {"time": 1000, "round": 6, "map_id": 12, "terror1": 5, "terror2": None, "terror3": None,
+             "transformed_uid": self.OTHER, "other_uids": None, "players": 5}])
+
+    def _players(self, **kw) -> list:
+        rows = self.store._query(RoundStore.Filter(**kw), "select players from f")
+        return sorted((r[0] for r in rows), key=lambda p: -1 if p is None else p)
+
+    def _where(self, **kw):
+        con = self.store._connect()
+        try:
+            return self.store._where(con, RoundStore.Filter(**kw))
+        finally:
+            con.close()
+
+    def test_the_four_cases_of_where(self):
+        self.assertEqual(self._where(), ("", []), "範囲なし・NULL を含める: 条件なし")
+        self.assertEqual(self._where(include_null=False), (" where players is not null", []))
+        self.assertEqual(self._where(players_min=5), (" where ((players >= ?) or players is null)", [5]))
+        self.assertEqual(self._where(players_min=5, include_null=False), (" where (players >= ?)", [5]))
+        self.assertEqual(self._where(players_max=5), (" where ((players <= ?) or players is null)", [5]))
+        self.assertEqual(self._where(players_min=4, players_max=5, include_null=False),
+                         (" where (players >= ? and players <= ?)", [4, 5]))
+        self.assertEqual(self._where(players_min=4, players_max=5),
+                         (" where ((players >= ? and players <= ?) or players is null)", [4, 5]))
+
+    def test_no_range_keeps_null_or_drops_it(self):
+        self.assertEqual(self._players(), [None, 1, 4, 5, 5, 10, 22])
+        self.assertEqual(self._players(include_null=False), [1, 4, 5, 5, 10, 22])
+
+    def test_at_least_includes_the_boundary(self):
+        self.assertEqual(self._players(players_min=5, include_null=False), [5, 5, 10, 22])
+        self.assertEqual(self._players(players_min=5), [None, 5, 5, 10, 22], "NULL は範囲に足される")
+        self.assertEqual(self._players(players_min=1, include_null=False), [1, 4, 5, 5, 10, 22])
+        self.assertEqual(self._players(players_min=22, include_null=False), [22])
+
+    def test_at_most_includes_the_boundary(self):
+        self.assertEqual(self._players(players_max=4, include_null=False), [1, 4])
+        self.assertEqual(self._players(players_max=4), [None, 1, 4])
+        self.assertEqual(self._players(players_max=1, include_null=False), [1])
+        self.assertEqual(self._players(players_max=22, include_null=False), [1, 4, 5, 5, 10, 22])
+
+    def test_exactly(self):
+        self.assertEqual(self._players(players_min=5, players_max=5, include_null=False), [5, 5])
+        self.assertEqual(self._players(players_min=5, players_max=5), [None, 5, 5])
+        self.assertEqual(self._players(players_min=6, players_max=6, include_null=False), [], "いない人数")
+        self.assertEqual(self._players(players_min=6, players_max=6), [None], "NULL だけ残る")
+
+    def test_it_is_anded_with_mine_period_and_rounds(self):
+        mine = dict(mine=True, players_min=5, include_null=False)
+        self.assertEqual(self._players(**mine), [5, 10, 22], "ほかの人の人数 5 の行は入らない")
+        self.assertEqual(self._players(players_min=5, include_null=False), [5, 5, 10, 22])
+        self.assertEqual(self._players(**mine, start=250, end=450), [5], "期間（time 200〜500 のうち人数 5 以上）")
+        self.assertEqual(self._players(**mine, rounds=frozenset({1})), [], "ラウンドも AND")
+        self.assertEqual(self._players(mine=True, players_max=4), [None, 1, 4])
+
+
+class _StatsWindowFixture:
+    """統計画面を本物の Tk で開く（通信は差し替え。手元は一時フォルダ）。time_series は呼び出しを数える"""
+
+    START = (2026, 1, 1, 0, 0)          # 開始の初期値（None なら本物の config を使う）
+
+    def _fill(self, store):
+        store.add_own(100, 6, 12, 5, 6, None, -13)                    # 人数 NULL
+        store.add_own(200, 10, 12, 2001, None, None, -13, players=4)
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.store = RoundStore.RoundStore(Path(self._dir.name) / "rounds.sqlite")
+        self._fill(self.store)
+        if self.START is not None:
+            start = patch.object(config, "STATISTICS_DEFAULT_START", self.START)
+            start.start()
+            self.addCleanup(start.stop)
+        self._real_series = RoundStore.RoundStore.time_series
+        spy = patch.object(RoundStore.RoundStore, "time_series", autospec=True, side_effect=self._real_series)
+        self.series = spy.start()
+        self.addCleanup(spy.stop)
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        self.window = self._open()
+
+    def _open(self, store=None):
+        with patch.object(ConnectDB, "fetch_rounds", side_effect=lambda s, m, **kw: []), \
+             patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            window = StatisticsGUI.StatisticsWindow(self.root, store=store or self.store)
+            for _ in range(400):
+                self.root.update()
+                if not window._rows_loading:
+                    break
+                time.sleep(0.005)
+        self.root.update()
+        return window
+
+    def _update(self, window):
+        with patch.object(ConnectDB, "fetch_rounds", return_value=[]), \
+             patch.object(StatisticsGUI.threading, "Thread", TestDbV1.RunNow):
+            window._load_rows_async()
+            for _ in range(400):
+                self.root.update()
+                if not window._rows_loading:
+                    break
+                time.sleep(0.005)
+        self.root.update()
+
+    def _pump(self, seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            self.root.update()
+            time.sleep(0.01)
+
+    def _select_tab(self, tab):
+        self.window.tabs.select(tab)
+        self.root.update()
+
+    def _queries(self) -> int:
+        return self.series.call_count
+
+
+class TestStatisticsPlayersGui(_StatsWindowFixture, unittest.TestCase):
+    """統計画面の人数の条件（選択欄・数の欄・NULL のチェック）"""
+
+    def _set(self, op, n, include_null):
+        self.window.v_players_op.set(op)
+        self.window.v_players_n.set(n)
+        self.window.v_players_null.set(include_null)
+
+    def _rounds(self) -> str:
+        return self.window.v_status.get().split("ラウンド")[0]
+
+    def test_the_initial_values_are_at_least_1_with_null(self):
+        w = self.window
+        self.assertEqual((w.v_players_op.get(), w.v_players_n.get(), w.v_players_null.get()), ("以上", 1, True))
+        self.assertEqual(list(w.players_op_box["values"]), ["ちょうど", "以上", "以下"], "指定なしは置かない")
+        self.assertEqual(str(w.players_op_box.cget("state")), "readonly")
+        self.assertEqual((float(w.players_spin.cget("from")), float(w.players_spin.cget("to"))), (1.0, 22.0))
+        self.assertIn("人数不明（NULL）を含める", str(w.players_null_check.cget("text")))
+        self.assertEqual((w._filter.players_min, w._filter.players_max, w._filter.include_null), (1, None, True))
+
+    def test_the_initial_values_count_every_row_including_null(self):
+        self.assertEqual(self._rounds(), "2", "人数 NULL の行も数える")
+
+    def test_players_range(self):
+        w = self.window
+        for op, expected in (("ちょうど", (7, 7)), ("以上", (7, None)), ("以下", (None, 7))):
+            self._set(op, 7, True)
+            self.assertEqual(w._players_range(), expected, op)
+        for n in (1, 22):
+            self._set("ちょうど", n, True)
+            self.assertEqual(w._players_range(), (n, n))
+
+    def test_players_range_rejects_bad_numbers(self):
+        w = self.window
+        self._set("以上", 1, True)
+        for text in ("abc", "", "1.5", "0", "23", "-1"):
+            w.setvar(str(w.v_players_n), text)
+            with self.assertRaises(ValueError, msg=repr(text)):
+                w._players_range()
+
+    def test_a_bad_number_shows_the_error_and_does_not_aggregate(self):
+        w = self.window
+        for text in ("abc", "0", "23"):
+            w.setvar(str(w.v_players_n), text)
+            with patch.object(StatisticsGUI.messagebox, "showerror") as error, \
+                 patch.object(w, "_off_gui") as off_gui:
+                w._analyze()
+            error.assert_called_once()
+            self.assertEqual(error.call_args.args[0], "人数エラー", repr(text))
+            off_gui.assert_not_called()
+
+    def test_each_condition_is_applied(self):
+        """行は 人数NULL（Bloodbath）と 人数4（Unbound）の 2 つ"""
+        w = self.window
+        for op, n, include_null, expected in (
+                ("以上", 5, True, "1"), ("以上", 5, False, "0"), ("以下", 4, False, "1"),
+                ("以下", 3, False, "0"), ("ちょうど", 4, True, "2"), ("ちょうど", 4, False, "1"),
+                ("ちょうど", 3, True, "1"), ("以上", 1, True, "2")):
+            self._set(op, n, include_null)
+            w._analyze()
+            self.assertEqual(self._rounds(), expected, (op, n, include_null))
+
+    def test_it_is_anded_with_the_scope(self):
+        w = self.window
+        self._set("以上", 4, False)
+        w.v_scope.set("mine")
+        w._analyze()
+        self.assertTrue(w._filter.mine)
+        self.assertEqual((w._filter.players_min, w._filter.players_max, w._filter.include_null), (4, None, False))
+        self.assertEqual(self._rounds(), "1")
+
+    def test_the_widgets_reanalyze_once_after_300ms(self):
+        w = self.window
+        actions = {
+            "選択欄": lambda: w.players_op_box.event_generate("<<ComboboxSelected>>"),
+            "数の矢印": lambda: self.root.tk.call("ttk::spinbox::Spin", str(w.players_spin), 1),
+            "NULL のチェック": w.players_null_check.invoke,
+        }
+        for name, action in actions.items():
+            with patch.object(w, "_analyze") as analyze:
+                action()
+                self._pump(0.45)
+                analyze.assert_called_once()
+        with patch.object(w, "_analyze") as analyze:
+            for action in actions.values():
+                action()
+            w._select_all_rounds()
+            self._pump(0.45)
+            analyze.assert_called_once()        # 続けて変えても 1 回（ラウンドの選択と同じ仕組み）
+
+    def test_enter_in_the_number_applies_at_once(self):
+        w = self.window
+        self.assertTrue(w.players_spin.bind("<Return>"), "Enter が bind されている")
+        # 窓を出さないテストでは、キーの出来事が届かない。bind した Tcl の式をそのまま回す
+        script = re.sub(r"%W", str(w.players_spin), w.players_spin.bind("<Return>"))
+        with patch.object(w, "_analyze") as analyze:
+            w.tk.eval(re.sub(r"%[#a-zA-Z]", "0", script))
+        analyze.assert_called_once()
+
+
+class TestStatisticsDefaultStart(_StatsWindowFixture, unittest.TestCase):
+    """開始の初期値は固定の 2026/10/01 00:00（PC のローカル時刻）"""
+
+    START = None
+
+    def _fill(self, store):
+        store.add_own(StatisticsGUI._db_time(datetime(2026, 9, 1, 12)), 6, 12, 5, None, None, -13)
+        store.add_own(StatisticsGUI._db_time(datetime(2026, 11, 1, 12)), 6, 12, 5, None, None, -13)
+
+    def test_the_constant(self):
+        self.assertEqual(config.STATISTICS_DEFAULT_START, (2026, 10, 1, 0, 0))
+
+    def test_the_start_is_october_first_not_the_first_row(self):
+        w = self.window
+        self.assertEqual(w._picker_datetime("start"), datetime(2026, 10, 1, 0, 0, 0))
+        self.assertEqual(w._filter.start, StatisticsGUI._db_time(datetime(2026, 10, 1)))
+        self.assertTrue(w.v_status.get().startswith("1ラウンド"), "9 月の行は入らない")
+
+    def test_a_start_the_user_changed_does_not_go_back_on_update(self):
+        w = self.window
+        w._set_picker_datetime("start", datetime(2026, 9, 1, 0))
+        self._update(w)
+        self.assertEqual(w._picker_datetime("start"), datetime(2026, 9, 1, 0, 0, 0))
+        self.assertTrue(w.v_status.get().startswith("2ラウンド"), w.v_status.get())
+
+    def test_without_rows_the_display_is_as_before(self):
+        empty = self._open(RoundStore.RoundStore(Path(self._dir.name) / "empty.sqlite"))
+        self.assertEqual(empty._picker_datetime("start"), datetime(2026, 1, 1, 0, 0, 0))
+        self.assertFalse(empty._range_set)
+
+
+class TestStatisticsTimeTab(_StatsWindowFixture, unittest.TestCase):
+    """「時間帯」のタブ（日ごと・時間帯の集計は、そのタブを開いているときだけ）"""
+
+    def _fill(self, store):
+        store.add_own(100, 6, 12, 5, 6, None, -13, players=3)
+        store.add_own(200, 10, 12, 2001, None, None, -13, players=4)
+        store.add_own(300, 6, 12, 6, None, None, -13, players=5)
+
+    def _units(self, start=0):
+        return [call.args[2] for call in self.series.call_args_list[start:]]
+
+    def test_the_tab_is_named_after_the_hours_and_keeps_both_charts(self):
+        w = self.window
+        self.assertEqual(w.tabs.tab(w.time_tab, "text"), "時間帯")
+        self._select_tab(w.time_tab)
+        titles = lambda canvas: [canvas.itemcget(i, "text") for i in canvas.find_all()
+                                 if canvas.type(i) == "text"]
+        self.assertIn("日ごと", titles(w.day_chart))
+        self.assertIn("時間帯（0〜23時）", titles(w.hour_chart))
+
+    def test_other_tabs_do_not_query(self):
+        w = self.window
+        self.assertEqual(self._queries(), 0, "開いた直後（ラウンドのタブ）")
+        self._select_tab(w.tabs.tabs()[1])              # テラー
+        w._set_terror_category("classic")
+        w._analyze()
+        w.terror_tree.selection_set("5")
+        w._on_terror_selected()
+        self.root.update()
+        self.assertEqual(self._queries(), 0)
+
+    def test_opening_the_tab_queries_once_and_reopening_does_not(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._units(), ["day", "hour"], "日ごと・時間帯の 2 本を 1 回だけ")
+        self.assertEqual(w._time_shown_key, (w._filter, None))
+        self.assertTrue(w._day_rows and w._hour_rows)
+        self._select_tab(w.tabs.tabs()[0])
+        self._select_tab(w.time_tab)
+        w._analyze()                                    # 条件は同じ
+        self.assertEqual(self._queries(), 2, "条件を変えずに開き直しても引かない")
+
+    def test_a_changed_condition_while_open_queries_again(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        w.v_scope.set("mine")
+        w._analyze()
+        self.assertEqual(self._queries(), 4)
+        self.assertEqual(w._time_shown_key, (w._filter, None))
+        w.v_players_n.set(4)
+        w._analyze()
+        self.assertEqual(self._queries(), 6, "人数の条件でも引き直す")
+
+    def test_an_old_result_is_dropped_and_the_new_key_is_fetched(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        shown = list(w._day_rows)
+        pending = []
+        w._off_gui = lambda work, done: pending.append((work, done))
+
+        def run(index):
+            work, done = pending.pop(index)
+            done(work())
+
+        w.v_scope.set("mine")
+        w._analyze()
+        run(0)                                          # 集計の結果 → 時間帯の要求 T1
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(w.v_time_note.get(), "集計中…")
+        stale_filter = w._filter
+        w.v_players_n.set(4)
+        w._analyze()                                    # 条件がまた変わった（集計の結果はまだ）
+        self.assertNotEqual(w._filter, stale_filter)
+        run(0)                                          # T1 が遅れて返る
+        self.assertEqual(w._day_rows, shown, "古い条件の結果は当てない")
+        self.assertEqual(len(pending), 2, "新しい鍵の集計 T2 を取りに行った（集計の結果と T2）")
+        self.assertEqual((w._time_loading_key), (w._filter, None))
+        run(1)                                          # T2
+        run(0)                                          # 集計の結果（ensure は鍵が同じなので何もしない）
+        self.assertEqual(w._time_shown_key, (w._filter, None))
+        self.assertEqual(w._day_rows, self._real_series(self.store, w._filter, "day", None))
+        self.assertEqual(w.v_time_note.get(), w._time_note_text)
+        self.assertIsNone(w._time_loading_key)
+
+    def test_a_slower_older_request_does_not_override_a_newer_one(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        pending = []
+        w._off_gui = lambda work, done: pending.append((work, done))
+
+        def run(index):
+            work, done = pending.pop(index)
+            done(work())
+
+        w.v_scope.set("mine")
+        w._analyze()
+        run(0)                                          # T1（mine）
+        w.v_players_n.set(4)
+        w._analyze()
+        run(1)                                          # 集計の結果 → T2（mine・4 人以上）
+        self.assertEqual(len(pending), 2)
+        run(1)                                          # T2 が先に返る
+        shown = list(w._day_rows)
+        self.assertEqual(w._time_shown_key, (w._filter, None))
+        run(0)                                          # T1 が後から返る
+        self.assertEqual(w._day_rows, shown, "古い T1 は捨てる")
+        self.assertEqual(w._time_shown_key, (w._filter, None))
+
+    def test_reselecting_a_terror_queries_again(self):
+        w = self.window
+        w._set_terror_category("classic")
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 2)
+        w.terror_tree.selection_set("5")
+        w._on_terror_selected()
+        self.assertEqual(self._queries(), 4, "選んだテラーの出現数を引き直す")
+        self.assertEqual(self.series.call_args_list[-1].args[3], TerrorIds.statistics_ids(5))
+        self.assertIn(Statistics.terror_name(5, config.TERRORS), w.v_time_note.get())
+        w._on_terror_selected()
+        self.assertEqual(self._queries(), 4, "同じテラーなら引かない")
+        w.terror_tree.selection_set("6")
+        w._on_terror_selected()
+        self.assertEqual(self._queries(), 6, "ほかのテラーを選び直した")
+
+    def test_a_terror_picked_on_another_tab_is_fetched_when_the_tab_opens(self):
+        w = self.window
+        w._set_terror_category("classic")
+        w.terror_tree.selection_set("5")
+        w._on_terror_selected()
+        self.assertEqual(self._queries(), 0)
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 2)
+        self.assertEqual(w._time_shown_key, (w._filter, 5))
+
+    def test_new_rows_requery_only_when_the_tab_is_open(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 2)
+        self.store.add_own(400, 6, 12, 7, None, None, -13, players=6)
+        self._update(w)
+        self.assertEqual(self._queries(), 4, "行が増えたので引き直す")
+        self.assertEqual(sum(n for _k, n, _h in w._hour_rows), 4)
+        self._select_tab(w.tabs.tabs()[0])
+        self.store.add_own(500, 6, 12, 7, None, None, -13, players=6)
+        self._update(w)
+        self.assertEqual(self._queries(), 4, "別のタブでは引かない")
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 6, "開いたときに引く")
+        self.assertEqual(sum(n for _k, n, _h in w._hour_rows), 5)
+
+    def test_after_deselecting_every_round_opening_the_tab_does_not_query(self):
+        w = self.window
+        for var in w.round_vars.values():
+            var.set(False)
+        w._analyze()
+        self.assertIsNone(w._filter)
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 0, "古い条件のグラフを引かない")
+        self.assertEqual(w.v_status.get(), "ラウンドを選択してください")
+
+    def test_deselecting_every_round_forgets_the_shown_key(self):
+        w = self.window
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 2)
+        for var in w.round_vars.values():
+            var.set(False)
+        w._analyze()
+        self.assertIsNone(w._time_shown_key)
+        self.assertIsNone(w._filter)
+        self._select_tab(w.tabs.tabs()[0])
+        self._select_tab(w.time_tab)
+        self.assertEqual(self._queries(), 2, "選び直すまで引かない")
+        for var in w.round_vars.values():
+            var.set(True)
+        w._analyze()
+        self.assertEqual(self._queries(), 4, "選び直したら引く")
+
+    def test_a_failed_query_is_cleaned_up(self):
+        w = self.window
+        self.series.side_effect = OSError("boom")
+        with patch.object(StatisticsGUI.DebugLog, "exception") as logged:
+            self._select_tab(w.time_tab)
+        logged.assert_called_once()
+        self.assertIsNone(w._time_loading_key, "集計中の覚えが残らない")
+        self.assertIsNone(w._time_shown_key)
+        self.assertEqual(w.v_time_note.get(), "", "見出しを元に戻す")
+        self.series.side_effect = self._real_series
+        self._select_tab(w.tabs.tabs()[0])
+        self._select_tab(w.time_tab)                    # 開き直すと引き直せる
+        self.assertEqual(w._time_shown_key, (w._filter, None))
 
 
 
