@@ -364,6 +364,7 @@ RESPAWN_LOG_WAIT_SEC  = 2.0       # 押してから「Player respawned」の行�
 # 押せなくなった。前の成功 51 回は押してから 0.26〜0.58 秒で行が来ていた）。来なければ返して残りは鍵の外で
 RESPAWN_HOLD_FRONT_SEC = 1.0
 RUN_RESPAWN_BACK_SEC  = 2.85      # リスポーンの後、後ろへ下がる長さ（赤い膜を後ろ向きに通る）
+RUN_RESPAWN_BACK_SEC_LATER = 3.85  # 同・Punished 後（足が遅い＝最高速度 4.0 ので長く下がる。実測 2.85 秒で 17.39、通常は約 21.4）
 RUN_RESPAWN_TURN_SEC  = 0.9       # その後、左へ回る長さ（真後ろ → 正面。0.8 は足りない・1.0 は回しすぎ）
 RUN_RESPAWN_POLL_SEC  = 0.1       # ほかの窓のフリーズが解けるのを待つ・行を待つ間隔
 # 左へ回した後、撮影で階段の上の構造の絵（RunFace）を探して真正面に直す（DO・DQ。依頼者 2026-10-11）
