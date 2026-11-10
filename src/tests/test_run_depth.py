@@ -288,6 +288,44 @@ class TestTheRespawnFlow(unittest.TestCase):
     def test_the_backward_and_left_values_stay(self):
         self.assertEqual((config.RUN_RESPAWN_BACK_SEC, config.RUN_RESPAWN_TURN_SEC), (2.85, 0.9))
 
+    def _presses(self, round_type, receiver):
+        """リスポーンして戻るときに押した (アドレス, 秒)。receiver があれば動き出しから数える経路（後ろへだけ）"""
+        ex = self._ex(receiver=receiver)
+        ex._st.round_type = round_type
+        ex._face_the_stairs = lambda seq: 0
+        ex._fix_depth = lambda seq: None
+        counted = []
+
+        def fake_counted(holds, stop, usual_start, extend_max, write):
+            counted.extend(holds)
+            return True, 0.0, "動き出し", 0
+        ex._press_counted_from_start = fake_counted
+        ex.do_run_respawn(1)
+        osc = [c.args[:2] for c in ex._osc.press.call_args_list]
+        return counted, osc
+
+    def test_after_punished_the_backward_move_is_longer(self):
+        """Punished の後は足が遅い（4.0）ので 3.85 秒下がる。左へ（回る時間）は変えない。
+        受信がある窓は動き出しから数える経路（後ろへ）・左へは osc.press"""
+        counted, osc = self._presses("Punished", receiver=True)
+        self.assertEqual(counted, [("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC_LATER)])
+        self.assertEqual(osc, [("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)])
+        counted, osc = self._presses("Punished", receiver=False)
+        self.assertEqual(counted, [])
+        self.assertEqual(osc, [("/input/MoveBackward", 3.85), ("/input/LookLeft", 0.9)])
+
+    def test_other_rounds_keep_the_usual_backward_move(self):
+        for round_type in ("Classic", "Run"):
+            counted, osc = self._presses(round_type, receiver=True)
+            self.assertEqual(counted, [("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC)], round_type)
+            self.assertEqual(osc, [("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)], round_type)
+            counted, osc = self._presses(round_type, receiver=False)
+            self.assertEqual(counted, [], round_type)
+            self.assertEqual(osc, [("/input/MoveBackward", 2.85), ("/input/LookLeft", 0.9)], round_type)
+
+    def test_the_later_backward_value(self):
+        self.assertEqual(config.RUN_RESPAWN_BACK_SEC_LATER, 3.85)
+
 
 class TestDepthIsOff(unittest.TestCase):
     """EJ: 目印の大きさは距離を表していなかった（13:53 窓1: 正しい位置で 1.12 → 後ろへ直して数 m ずれた）。

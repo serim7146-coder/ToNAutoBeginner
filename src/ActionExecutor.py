@@ -2336,7 +2336,9 @@ class ActionExecutor:
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
                     return False
                 time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
-            for address, sec in (("/input/MoveBackward", config.RUN_RESPAWN_BACK_SEC),
+            late = self._st.round_type in config.LATE_ROUND         # Punished 後は足が遅いので長く下がる
+            back_sec = config.RUN_RESPAWN_BACK_SEC_LATER if late else config.RUN_RESPAWN_BACK_SEC
+            for address, sec in (("/input/MoveBackward", back_sec),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
                 if not self._run_after_respawn(round_seq):
                     DebugLog.write(f"{head} 止めた・ラウンドが変わった → 移動をやめる")
