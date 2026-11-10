@@ -1,7 +1,8 @@
 """GS: 焼き芋の霧の自爆は `Killers have been revealed` の行で（依頼者 2026-10-25）。
 
-焼き芋の Fog で判定が SKIP（クラシックの霧）のとき、テラーが Enrage・スタン・看破・DTM 推定などの前倒しで
-分かっただけなら自爆しない。公開ログに 1 回だけ「霧: 公開の行で自爆します」と出し、公開の行で自爆する。
+焼き芋の Fog で判定が自爆になるとき（クラシックの霧の SKIP と、オルタネイトで続行リストに無いとき）、
+テラーが Enrage・スタン・Joy・Foxy・看破・DTM 推定などの前倒しで分かっただけなら自爆しない。
+公開ログに 1 回だけ「霧: 公開の行で自爆します」と出し、公開の行で自爆する。
 続行になる判定（オルタネイトで続行リストにある等）は、これまでどおり分かった時点で行う。
 """
 from tests.support import *  # noqa: F401,F403
@@ -178,6 +179,63 @@ class TestYakiimoFogSkipWaitsForTheRevealedLine(unittest.TestCase):
 
         self.assertEqual(self._skipped(), 0)
         self.assertTrue(monitor.st.is_continue_round)
+
+    # ── オルタネイトで続行リストに無いときも、自爆は公開の行まで待つ ──
+    CHOMPER = 1005         # alternate（Chomper）
+    STUN_CHOMPER = "2026.09.21 17:31:40 Debug      -  Chomper was stunned."
+    REVEAL_CHOMPER = ("2026.09.21 17:32:05 Debug      -  Killers have been revealed - "
+                      "5 0 0 // Round type is Fog (Alternate)")
+    FOXY_LINE = "2026.09.18 10:00:00 Debug      -  foxy the pirate turned evil!"
+    REVEAL_SANIC = ("2026.09.21 17:32:05 Debug      -  Killers have been revealed - "
+                    "2 0 0 // Round type is Fog (Alternate)")
+
+    def _skip_judgement_lines(self, monitor):
+        return [m for m in monitor.logs if "Fog (Alternate) 【スキップ】" in m]
+
+    def test_an_alternate_not_in_the_list_waits_for_the_reveal(self):
+        monitor = self._monitor(keep={self.FOG_KEY: {self.CHOMPER}})
+
+        monitor._process(self.STUN_WITCH)
+
+        self.assertEqual(self._skipped(), 0)
+        self.assertEqual(monitor.logs.count(self.WAIT_LOG), 1, monitor.logs)
+        self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(self._skip_judgement_lines(monitor), [], monitor.logs)
+
+    def test_the_reveal_then_skips_the_alternate_once(self):
+        monitor = self._monitor(keep={self.FOG_KEY: {self.CHOMPER}})
+        monitor._process(self.STUN_WITCH)
+
+        monitor._process(self.REVEAL_WITCH)
+
+        self.assertEqual(self._skipped(), 1)
+        self.assertEqual(monitor.logs.count(self.WAIT_LOG), 1, "公開の行で言い直さない")
+        self.assertEqual(len(self._skip_judgement_lines(monitor)), 1, monitor.logs)
+
+    def test_a_wrong_alternate_guess_then_a_listed_alternate_continues_at_the_reveal(self):
+        """前倒しはリストに無いオルタネイト（Chomper）、公開はリストにある Witch → 自爆せず続行"""
+        monitor = self._monitor(keep={self.FOG_KEY: {self.WITCH}})
+
+        monitor._process(self.STUN_CHOMPER)
+        self.assertEqual(self._skipped(), 0)
+        self.assertEqual(monitor.logs.count(self.WAIT_LOG), 1, monitor.logs)
+
+        monitor._process(self.REVEAL_WITCH)
+
+        self.assertEqual(self._skipped(), 0)
+        self.assertTrue(monitor.st.is_continue_round)
+
+    def test_foxy_not_in_the_list_waits_for_the_reveal(self):
+        monitor = self._monitor()
+
+        monitor._process(self.FOXY_LINE)
+        self.assertEqual(self._skipped(), 0)
+        self.assertEqual(monitor.logs.count(self.WAIT_LOG), 1, monitor.logs)
+
+        monitor._process(self.REVEAL_SANIC)
+
+        self.assertEqual(self._skipped(), 1)
+        self.assertEqual(monitor.logs.count(self.WAIT_LOG), 1, monitor.logs)
 
     # ── 公開の行から直接分かったときは今までどおり ────────
     def test_a_direct_reveal_skips_at_once_without_the_note(self):
