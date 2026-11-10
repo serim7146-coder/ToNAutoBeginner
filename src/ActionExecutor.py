@@ -3210,7 +3210,7 @@ class ActionExecutor:
             ever = receiver.ever_received
             last = receiver.last_received_at
         except Exception:
-            return "速度の受信の値を読めない"
+            return "受信した速度を読めない"
         since = f"{now - last:.1f} 秒" if last else "なし"
         moved = self._receiver_moved_at()
         return (f"最後に受けた速度 {speed if speed is None else f'{speed:.2f}'}・最後に受けてから {since}・"

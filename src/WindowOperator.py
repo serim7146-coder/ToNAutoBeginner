@@ -826,7 +826,7 @@ def restore_without_activating(hwnd: int) -> bool:
         return False
     DebugLog.write(f"[操作] 最大化を解除（前面にしない） hwnd={int(hwnd):#x} → {tuple(normal)}")
     if before and before != hwnd and foreground_hwnd() == hwnd:
-        DebugLog.write(f"[操作] 最大化を解除したら前面になりました → hwnd={int(before):#x} へ返します")
+        DebugLog.write(f"[操作] 最大化を解除したら前面になりました → hwnd={int(before):#x} へ戻します")
         focus_window(before)
     return True
 
