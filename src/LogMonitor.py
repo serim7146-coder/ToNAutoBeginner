@@ -2686,6 +2686,8 @@ class LogMonitor:
         if kind == "hands_free_keep":
             self._start_glorbo_continue(round_type, label=plan[1], tag="【プレイ(放置: 問答無用)】")
             return
+        if plan[0] == "list" and not plan[1] and self._defer_yakiimo_fog_skip():
+            return              # 焼き芋の霧の自爆は公開の行まで（オルタネイトでリストに無いとき）
         self._decide_with_keep_on_set(round_type, plan)
 
     # ── ToN Utils の続行の判断に従う（EB）────────────────
