@@ -267,8 +267,9 @@ class TestSlotWaitLength(_Base):
 
         self.assertEqual(monitor._variant_wait_sec(), 0.3)
 
-    def test_g_foxy_alone_keeps_the_short_wait(self):
-        """Midnight の Curious が 2 枠目でも、判定を変えるのが Foxy（Sanic の置き換え）だけなら 0.3 秒"""
+    def test_g_foxy_alone_waits_for_the_third_slot_signal(self):
+        """Midnight の Curious が 2 枠目でも、判定を変えるのが Foxy（3 枠目の Sanic の置き換え）だけなら、
+        Bloodthirsty の 6 秒ではなく Foxy の 11 秒"""
         monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID}}, "Midnight")
         monitor._running = True
 
@@ -277,14 +278,94 @@ class TestSlotWaitLength(_Base):
         self.assertTrue(monitor._replacement_changes_decision("Midnight"), "Foxy で結論が変わる前提")
         self.assertFalse(monitor._bloodthirsty_changes_decision("Midnight"))
         self.assertEqual(started, ["_delayed_decision"])
-        self.assertIn("0.3秒", waits[0])
-        self.assertEqual(monitor._variant_wait_sec("Midnight"), 0.3)
+        self.assertIn("11.0秒", waits[0])
+        self.assertEqual(monitor._variant_wait_sec("Midnight"), 11.0)
 
-    def test_g_both_changing_uses_the_slot_wait(self):
+    def test_g_both_changing_uses_the_longer_wait(self):
         monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID, BLOODTHIRSTY}}, "Midnight",
                                 ids=[2, CURIOUS, config.SANIC_ID])
 
+        self.assertEqual(monitor._variant_wait_sec("Midnight"), 11.0)
+
+    def test_g_bloodthirsty_alone_keeps_its_slot_wait_with_a_third_slot_terror(self):
+        monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {BLOODTHIRSTY}}, "Midnight",
+                                ids=[2, CURIOUS, config.SANIC_ID])
+
         self.assertEqual(monitor._variant_wait_sec("Midnight"), 6.0)
+
+    def test_m_midnight_third_slot_sanic_with_foxy_listed(self):
+        self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.FOXY_ID}}), 11.0)
+
+    def test_m_midnight_third_slot_fusion_pilot_with_neo_pilot_listed(self):
+        self.assertEqual(self._wait("Midnight", [2, 4, config.FUSION_PILOT_ID],
+                                    {MIDNIGHT_KEY: {config.NEO_PILOT_ID}}), 11.0)
+
+    def test_m_sanic_listed_but_foxy_not_listed_changes_to_a_skip(self):
+        """Sanic が続行で、Foxy に置き換わると自爆になるので待つ"""
+        self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.SANIC_ID}}), 11.0)
+
+    def test_m_no_wait_when_the_decision_does_not_change(self):
+        for keep_on in ({}, {MIDNIGHT_KEY: {2}}, {MIDNIGHT_KEY: {config.FOXY_ID, config.SANIC_ID}}):
+            monitor = self._monitor(self.PRIVATE, keep_on, "Midnight")
+            monitor._running = True
+
+            started, waits = self._killers(monitor, [2, 4, config.SANIC_ID], "Midnight")
+
+            self.assertEqual(monitor._variant_wait_sec("Midnight"), 0.3, keep_on)
+            self.assertNotIn("_delayed_decision", started, keep_on)
+            self.assertEqual(waits, [], keep_on)
+
+    def test_m_alternate_and_fog_stay_short(self):
+        for round_type, key in (("Alternate", "Alternate/オルタネイト"), ("Fog", "Fog/霧")):
+            for tid, listed in ((config.SANIC_ID, config.FOXY_ID), (config.FUSION_PILOT_ID, config.NEO_PILOT_ID)):
+                monitor = self._monitor(self.PRIVATE, {key: {listed}}, round_type, ids=[tid])
+                self.assertTrue(monitor._replacement_changes_decision(round_type), "Foxy / Neo で結論が変わる前提")
+                self.assertEqual(monitor._variant_wait_sec(round_type), 0.3, (round_type, tid))
+
+    def test_m_group_midnight_third_slot(self):
+        for itype in GROUPS:
+            self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID],
+                                        {MIDNIGHT_KEY: {config.FOXY_ID}}, itype), 11.0, itype)
+            self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {}, itype), 0.3, itype)
+
+    def test_m_hands_free_still_does_not_wait(self):
+        SharedState.set_hands_free(True)
+        monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID}}, "Midnight")
+        monitor._running = True
+
+        started, waits = self._killers(monitor, [2, 4, config.SANIC_ID], "Midnight")
+
+        self.assertNotIn("_delayed_decision", started)
+
+    def test_m_the_signal_ends_the_wait_with_a_decision(self):
+        """合図（Foxy）が来たら残り時間を待たずに判定して続行する。実時間では待たない"""
+        monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID}}, "Midnight",
+                                ids=[2, 4, config.SANIC_ID])
+        monitor._running = True
+        clock = [1000.0]
+
+        def fake_sleep(sec):
+            clock[0] += sec
+            monitor._mark_replacement("foxy")
+
+        fake_time = MagicMock()
+        fake_time.time.side_effect = lambda: clock[0]
+        fake_time.sleep.side_effect = fake_sleep
+        with patch.object(LogMonitor, "time", fake_time),              patch.object(LogMonitor.threading, "Thread") as mock_thread:
+            monitor._delayed_decision("Midnight", monitor._variant_wait_sec("Midnight"), monitor.st.round_seq)
+            started = _decision_threads(mock_thread)
+
+        self.assertEqual(fake_time.sleep.call_count, 1)
+        self.assertEqual(monitor.st.terror_ids[2], config.FOXY_ID)
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertNotIn("do_skip", started)
+
+    def test_m_without_the_signal_it_decides_with_the_original_terror(self):
+        monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID}}, "Midnight",
+                                ids=[2, 4, config.SANIC_ID])
+        started = self._run_delayed(monitor, "Midnight", 0.0)
+
+        self.assertEqual(started, ["do_skip"])
 
     def test_h_group_midnight_and_double_trouble_second_slot(self):
         for itype in GROUPS:
