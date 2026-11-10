@@ -113,7 +113,7 @@ class TestAdvertisedLog(unittest.TestCase):
                 patch.object(config, "OSCQUERY_MDNS_LOOPBACK_ONLY", flag), \
                 patch.object(DebugLog, "write") as write:
             service._do_advertise()
-        lines = [c.args[0] for c in write.call_args_list if "mDNS で広告した" in c.args[0]]
+        lines = [c.args[0] for c in write.call_args_list if "mDNS で公開しました" in c.args[0]]
         self.assertEqual(len(lines), 1)
         return lines[0]
 

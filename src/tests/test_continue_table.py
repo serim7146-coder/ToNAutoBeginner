@@ -1238,13 +1238,13 @@ class TestItemRuleJudgement(_MonitorCase):
     def test_the_judgement_line_ends_with_the_item_rule_label(self):
         plush = self._held(PLUSH)
         plush._decide_with_keep_on_set("Classic")
-        self.assertTrue(self._judgement_line(plush).endswith("【スキップ】（続行無効）〔Guidance Plush の決まり〕"),
+        self.assertTrue(self._judgement_line(plush).endswith("【スキップ】（続行無効）〔Guidance Plush での続行設定〕"),
                         plush.logs)
 
     def test_the_label_is_added_even_when_the_result_did_not_change(self):
         empty = self._held(0)
         empty._decide_with_keep_on_set("Classic")
-        self.assertTrue(self._judgement_line(empty).endswith("【プレイ】〔持っていない の決まり〕"), empty.logs)
+        self.assertTrue(self._judgement_line(empty).endswith("【プレイ】〔持っていないときの続行設定〕"), empty.logs)
 
     def test_no_label_when_no_rule_matches_or_it_changes_nothing(self):
         other = self._held(OTHER_ITEM)
@@ -1259,13 +1259,13 @@ class TestItemRuleJudgement(_MonitorCase):
         ContinueTable.set_current(_rule_store(Rule(9999, "無7")))
         monitor = self._held(9999)
         monitor._decide_with_keep_on_set("Classic")
-        self.assertTrue(self._judgement_line(monitor).endswith("〔#9999 の決まり〕"), monitor.logs)
+        self.assertTrue(self._judgement_line(monitor).endswith("〔#9999 での続行設定〕"), monitor.logs)
 
     def test_the_item_label_follows_the_table_label_in_the_same_line(self):
         ContinueTable.set_current(_rule_store(Rule(PLUSH, KEEP, "足9")))
         monitor = self._held(PLUSH, ids=(9,))
         monitor._decide_with_keep_on_set("Classic")
-        self.assertTrue(self._judgement_line(monitor).endswith("【プレイ】（デフォ続行）〔Guidance Plush の決まり〕"),
+        self.assertTrue(self._judgement_line(monitor).endswith("【プレイ】（デフォ続行）〔Guidance Plush での続行設定〕"),
                         monitor.logs)
 
     def test_group_instances_do_not_use_the_rules(self):
@@ -1276,7 +1276,7 @@ class TestItemRuleJudgement(_MonitorCase):
             self.assertIs(monitor._keep_on(), base, itype)
             monitor.logs.clear()
             monitor._decide_with_keep_on_set("Classic")
-            self.assertNotIn("の決まり", self._judgement_line(monitor), itype)
+            self.assertNotIn("続行設定", self._judgement_line(monitor), itype)
 
     def test_hands_free_after_three_wins_still_skips_whatever_the_rule_says(self):
         ContinueTable.set_current(_rule_store(Rule(PLUSH, KEEP, "足9")))

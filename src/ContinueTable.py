@@ -355,7 +355,7 @@ def with_rule_added(store: Store, item: int = ITEM_NONE, disabled=KEEP, default=
 def with_rule_changed(store: Store, index: int, item=_UNSET, disabled=_UNSET, default=_UNSET) -> Store:
     """index 番目の決まりの、渡した項目だけ変えた新しい Store（範囲外は IndexError・使えない名前は ValueError）"""
     if not 0 <= index < len(store.item_rules):
-        raise IndexError(f"{index} 番目の決まりはありません")
+        raise IndexError(f"{index} 番目の設定はありません")
     changes = {name: value for name, value in (("item", item), ("disabled", disabled), ("default", default))
                if value is not _UNSET}
     for which in (DISABLED, DEFAULT):
@@ -497,7 +497,7 @@ def _rules_from(raw, disabled_names: dict, default_names: dict) -> tuple:
         missing += lost_d + lost_f
         rules.append(ItemRule(item, disabled, default))
     if missing:
-        DebugLog.write(f"[続行表] アイテムの決まりが指すプリセットが無いので「{KEEP_LABEL}」にしました: {missing} 件")
+        DebugLog.write(f"[続行表] アイテムごとの設定が指すプリセットがないので「{KEEP_LABEL}」にしました: {missing} 件")
     return tuple(rules)
 
 
@@ -633,7 +633,7 @@ def load(path=None) -> Store:
         DebugLog.write(f"[続行表] 読めないので空で始めます: {type(e).__name__}")
         return Store()
     if not isinstance(raw, dict):
-        DebugLog.write("[続行表] 形が違うので空で始めます")
+        DebugLog.write("[続行表] 形式が違うので空で始めます")
         return Store()
     version = raw.get("version")
     is_int = isinstance(version, int) and not isinstance(version, bool)

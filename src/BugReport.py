@@ -187,7 +187,7 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
     add(SETTINGS, "設定", "settings.json",
         json.dumps(settings_for_report(settings), ensure_ascii=False, indent=2, sort_keys=True), "")
     # 続行表・続行リストの保存ファイル（独自の番号とプリセットの名前だけ）も「設定」のチェックで入れる
-    add(SETTINGS, "続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）", "continue_table.json",
+    add(SETTINGS, "続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）", "continue_table.json",
         read_file(ContinueTable.table_path()), "ファイルが無い")
     add(SETTINGS, "ツールの続行リスト", "continue_list.json", read_file(ContinueList.list_path()), "ファイルが無い")
 

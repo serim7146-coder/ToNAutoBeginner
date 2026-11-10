@@ -708,7 +708,7 @@ class TestRoundOverRightAfterTheRespawn(_Case):
         self.st.in_round = False
         self._run()
         self.assertEqual(self.w.events, [])
-        self.assertEqual(self.logs, ["Run: リスポーンできませんでした（止めた・ラウンドが変わった）"])
+        self.assertEqual(self.logs, ["Run: リスポーンできませんでした（停止された、またはラウンドが変わった）"])
 
     def test_a_round_over_while_the_menu_is_open_stops_before_the_respawn(self):
         """リスポーンする前（メニュー・ボタン）は今どおり in_round も見る"""

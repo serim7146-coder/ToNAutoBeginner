@@ -155,7 +155,7 @@ class VelocityReceiver:
         if self._stop_event.is_set():
             return                          # 止めた
         if advertised is False:
-            self.fall_back(why="mDNS の広告が無い（OSCQuery では届かない）")
+            self.fall_back(why="mDNS で公開されていない（OSCQuery では届かない）")
             return
         if self._stop_event.wait(max(0.0, deadline - time.time())):
             return                          # 止めた

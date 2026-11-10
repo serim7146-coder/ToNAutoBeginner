@@ -113,7 +113,7 @@ def load(path=None):
         DebugLog.write(f"[続行リスト] 読めないので空で始めます: {type(e).__name__}")
         return {}, _meta_of("")
     if not isinstance(raw, dict):
-        DebugLog.write("[続行リスト] 形が違うので空で始めます")
+        DebugLog.write("[続行リスト] 形式が違うので空で始めます")
         return {}, _meta_of("")
     data, meta = _data_of(raw.get("data")), _meta_of(raw.get("list_name"))
     version = raw.get("version")

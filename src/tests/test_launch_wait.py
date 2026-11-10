@@ -249,7 +249,7 @@ class TestFixedPortWithoutAdvert(_FirstCase):
             self.assertLess(time.time() - started, 1.0, "15 秒（ここでは 60 秒）待たない")
             self.assertEqual(self.ports.binds, [("127.0.0.1", 9011)])
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[速度受信] 窓1: mDNS の広告が無い（OSCQuery では届かない）→ 固定ポート 9011 で受信", lines)
+        self.assertIn("[速度受信] 窓1: mDNS で公開されていない（OSCQuery では届かない）→ 固定ポート 9011 で受信", lines)
 
     def test_a_successful_advert_still_waits(self):
         with patch.object(config, "OSCQUERY_CONNECT_WAIT_SEC", self.LONG):
@@ -269,7 +269,7 @@ class TestFixedPortWithoutAdvert(_FirstCase):
             self.assertEqual(self._wait_mode(r), OSCReceiver.MODE_PORT)
         lines = [c.args[0] for c in write.call_args_list]
         self.assertIn("[速度受信] 窓1: OSCQuery で 0秒届かない → 固定ポート 9011 で受信", lines)
-        self.assertFalse(any("mDNS の広告が無い" in l for l in lines))
+        self.assertFalse(any("mDNS で公開されていない" in l for l in lines))
 
     def test_the_advert_time_is_taken_off_the_wait(self):
         """広告を待った分は引いた残りだけ待つ（合計で OSCQUERY_CONNECT_WAIT_SEC）"""

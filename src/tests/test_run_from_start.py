@@ -269,7 +269,7 @@ class TestDepthFromStart(unittest.TestCase):
         w.ex._fix_depth(1)
         self.assertNotIn("depth_reverted", w.saved)
         self.assertFalse(any("戻して止める" in str(m) for m in w.written))
-        self.assertIn("[操作] [窓3] Run: 前後: 動き出さなかった → 遠のいた・近づいたを判断しない（戻さない）",
+        self.assertIn("[操作] [窓3] Run: 前後: 動き出さなかった → 離れたか近づいたかを判断しません（戻しません）",
                       w.written)
         backward = [x for x in w.sent if len(x) == 3 and x[1] == B]
         self.assertEqual(backward, [], "戻さない")

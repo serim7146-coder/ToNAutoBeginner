@@ -267,15 +267,15 @@ class TestDebugLogTraces(unittest.TestCase):
             SharedState.round_freeze_end(st)
         states = [m for m in self.written if m.startswith("[状態]")]
         self.assertEqual(states, [
-            "[状態] 窓2 装備待ちフリーズを張った（張っている窓: 1）",
-            "[状態] 窓4 装備待ちフリーズを張った（張っている窓: 2）",
-            "[状態] 窓2 装備待ちフリーズを解いた（張っている窓: 1）",
-            "[状態] 窓2 続行フリーズを張った（張っている窓: 1）",
-            "[状態] 窓2 速度検知フリーズを張った（張っている窓: 1）",
-            "[状態] 窓2 ラウンド突入フリーズを張った（張っている窓: 1）",
-            "[状態] 窓2 続行フリーズを解いた（張っている窓: 0）",
-            "[状態] 窓2 速度検知フリーズを解いた（張っている窓: 0）",
-            "[状態] 窓2 ラウンド突入フリーズを解いた（張っている窓: 0）",
+            "[状態] 窓2 装備待ちフリーズを開始した（フリーズ中の窓: 1）",
+            "[状態] 窓4 装備待ちフリーズを開始した（フリーズ中の窓: 2）",
+            "[状態] 窓2 装備待ちフリーズを解いた（フリーズ中の窓: 1）",
+            "[状態] 窓2 続行フリーズを開始した（フリーズ中の窓: 1）",
+            "[状態] 窓2 速度検知フリーズを開始した（フリーズ中の窓: 1）",
+            "[状態] 窓2 ラウンド突入フリーズを開始した（フリーズ中の窓: 1）",
+            "[状態] 窓2 続行フリーズを解いた（フリーズ中の窓: 0）",
+            "[状態] 窓2 速度検知フリーズを解いた（フリーズ中の窓: 0）",
+            "[状態] 窓2 ラウンド突入フリーズを解いた（フリーズ中の窓: 0）",
         ])
 
     def test_the_monitor_gives_its_number_to_the_state(self):
@@ -474,7 +474,7 @@ class TestBugReportContent(unittest.TestCase):
         _n, _d, files = self._zip(include=include)
         self.assertEqual(set(files), {"report.txt", "debug_log.txt"})
         self.assertEqual(files["report.txt"].count("（未選択）"), 6, "設定のチェックは続行表・続行リストの分も数える")
-        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: 入れていません（未選択）",
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）: 入れていません（未選択）",
                       files["report.txt"])
         self.assertIn("- ツールの続行リスト: 入れていません（未選択）", files["report.txt"])
 
@@ -496,7 +496,7 @@ class TestBugReportContent(unittest.TestCase):
         self.assertIn("%USERPROFILE%", table["path"], "settings.json と同じくユーザー名を伏せる")
         self.assertNotIn("alice", files["continue_table.json"].lower())
         report = files["report.txt"]
-        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: continue_table.json", report)
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）: continue_table.json", report)
         self.assertIn("- ツールの続行リスト: continue_list.json", report)
         self.assertIn("- 設定: settings.json", report)
 
@@ -504,7 +504,7 @@ class TestBugReportContent(unittest.TestCase):
         _n, _d, files = self._zip()
         self.assertNotIn("continue_table.json", files)
         self.assertNotIn("continue_list.json", files)
-        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムの決まり）: 入れていません（ファイルが無い）",
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）: 入れていません（ファイルが無い）",
                       files["report.txt"])
         self.assertIn("- ツールの続行リスト: 入れていません（ファイルが無い）", files["report.txt"])
         self.assertIn("settings.json", files)

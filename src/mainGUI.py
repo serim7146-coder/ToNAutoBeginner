@@ -3793,7 +3793,7 @@ class App(tk.Tk):
         if not kept and candidates:
             if self._dropped_logs != reasons:
                 self._dropped_logs = reasons
-                self._log("[割り当て] 生きているログがありません → 全部を候補にします")
+                self._log("[割り当て] 更新中のログがありません → 全部を候補にします")
             return candidates
         if reasons != self._dropped_logs:
             self._dropped_logs = reasons
@@ -3912,13 +3912,13 @@ class App(tk.Tk):
                     cfg.osc_out_port = tab.osc_out
                     self._log(f"[窓{tab.idx+1}] OSC利用可"
                               f"（受信{tab.osc_in}／送信{tab.osc_out}）"
-                              "→ 移動はOSC、排他はクリックと自爆のみ")
+                              "→ 移動はOSC、順番待ちはクリックと自爆だけ")
                 else:
                     cfg.osc_port = 0
                     cfg.osc_out_port = 0
                     self._log(f"[窓{tab.idx+1}] OSC利用不可"
-                              "（この窓が掴んでいるUDPポートとログの--oscが"
-                              "一致しません）→ 従来どおりキー操作（全体を排他）")
+                              "（この窓が使っているUDPポートとログの--oscが"
+                              "一致しません）→ 従来どおりキー操作（全操作を順番待ち）")
             if cfg is None:
                 if err:
                     self._log(f"[窓{tab.idx+1}] スキップ: {err}")
