@@ -29,6 +29,9 @@ ROUND_CHIP_WIDTH = 21
 ROUND_CHIP_MIN_WIDTH = 158
 # ラウンドのチップ・全選択・全解除の後、この時間たったら1回だけ集計し直す（続けて押したら取り直す）
 ROUND_REANALYZE_DELAY_MS = 300
+# 人数の条件。選択欄の並びと、数の欄の範囲（1〜22人）
+PLAYERS_OPS = ("ちょうど", "以上", "以下")
+PLAYERS_MIN, PLAYERS_MAX = 1, 22
 TERROR_CATEGORIES = (("Classic", "classic"), ("Alternate", "alternate"), ("Unbound", "unbound"))
 # 出現ラウンドのタブに出す行数（新しい順）。多すぎると重い
 TERROR_ROUNDS_LIMIT = 500
@@ -297,7 +300,7 @@ def _local(db_time: int) -> datetime:
 class StatisticsWindow(tk.Toplevel):
     """統計画面 v1。DB から差分だけ手元の SQLite（RoundStore）へ取り込み、集計は手元で行う。
 
-    タブ: ラウンド／テラー／時間の流れ。範囲は「全体」か「自分の分」
+    タブ: ラウンド／テラー／時間帯。範囲は「全体」か「自分の分」
     （1人目が自分か、other_uids に自分がいる行。ほかの人の uid は表示しない）
     """
 
@@ -324,6 +327,15 @@ class StatisticsWindow(tk.Toplevel):
         # 期間の終わりとしてツールが入れた値。利用者が変えていなければ、更新のたびに最新まで伸ばす
         self._auto_end: datetime | None = None
         self._filter: RoundStore.Filter | None = None
+        # 人数の条件（保存しない。開くたびに「以上・1・NULL を含める」）
+        self.v_players_op = tk.StringVar(value=PLAYERS_OPS[1])
+        self.v_players_n = tk.IntVar(value=1)
+        self.v_players_null = tk.BooleanVar(value=True)
+        # 時間帯のタブは開いているときだけ集計する。表示済み・集計中の鍵は (条件, 選んだテラー)
+        self._time_shown_key: tuple | None = None
+        self._time_loading_key: tuple | None = None
+        self._time_seq = 0
+        self._time_note_text = ""
         self._terror_stats_cache: dict[str, tuple[int, int, list[Statistics.TerrorStatistic]]] = {}
         self._map_counts_cache: dict[int, list[tuple[str, int]]] = {}
         self._round_kind_cache: dict[int, list[tuple[str, int, str]]] = {}
@@ -371,6 +383,21 @@ class StatisticsWindow(tk.Toplevel):
         for text, value in (("全体", "all"), ("自分の分", "mine")):
             ttk.Radiobutton(scope, text=text, value=value, variable=self.v_scope,
                             command=self._analyze).pack(side="left", padx=(0, 8))
+        ttk.Label(scope, text="人数").pack(side="left", padx=(12, 6))
+        # 選択・矢印・チェックはラウンドの選択と同じ 0.3 秒待ち。手で打った数は Enter か「集計」で反映
+        self.players_op_box = ttk.Combobox(scope, textvariable=self.v_players_op, values=PLAYERS_OPS,
+                                           state="readonly", width=6)
+        self.players_op_box.pack(side="left")
+        self.players_op_box.bind("<<ComboboxSelected>>", lambda _e: self._round_selection_changed())
+        self.players_spin = self._spin(scope, self.v_players_n, PLAYERS_MIN, PLAYERS_MAX, 3)
+        self.players_spin.configure(command=self._round_selection_changed)
+        self.players_spin.bind("<Return>", lambda _e: self._analyze())
+        self.players_spin.pack(side="left", padx=(6, 0))
+        ttk.Label(scope, text="人").pack(side="left", padx=(2, 6))
+        self.players_null_check = ttk.Checkbutton(scope, text="人数不明（NULL）を含める",
+                                                  variable=self.v_players_null,
+                                                  command=self._round_selection_changed)
+        self.players_null_check.pack(side="left")
         ttk.Label(scope, textvariable=self.v_info, foreground=SUB).pack(side="left", padx=(12, 0))
 
         period = ttk.Frame(controls)
@@ -401,6 +428,7 @@ class StatisticsWindow(tk.Toplevel):
         self._build_round_tab()
         self._build_terror_tab()
         self._build_time_tab()
+        self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self._ensure_time_rows())
 
         ttk.Label(
             self,
@@ -501,7 +529,8 @@ class StatisticsWindow(tk.Toplevel):
                                    style=LEGEND_STYLE)
 
     def _build_time_tab(self):
-        tab = self._tab("時間の流れ")
+        tab = self._tab("時間帯")
+        self.time_tab = tab
         self.v_time_note = tk.StringVar(value="")
         ttk.Label(tab, textvariable=self.v_time_note, foreground=YLW).pack(anchor="w")
         self.day_chart = tk.Canvas(tab, bg=BG, height=240, highlightthickness=0, bd=0)
@@ -580,13 +609,14 @@ class StatisticsWindow(tk.Toplevel):
         first, last = self.store.time_range()
         if first is not None:
             if not self._range_set:
-                self._set_picker_datetime("start", _local(first))
+                self._set_picker_datetime("start", datetime(*config.STATISTICS_DEFAULT_START))
                 self._range_set = True
                 self._set_auto_end(last)
             elif self._end_is_auto():
                 self._set_auto_end(last)    # 最初に開いた後のラウンドも期間に入れる
         # 行が増えたので、絞り込みが同じでも集計し直す（前は開き直すまで古い集計のままだった）
         self._filter = None
+        self._forget_time_rows()
         self._analyze()
         if not ok:
             self.v_status.set("更新できませんでした（手元の分を表示）")
@@ -712,11 +742,31 @@ class StatisticsWindow(tk.Toplevel):
                           relief="sunken" if selected else "raised")
 
     # ── 集計 ─────────────────────────────────
-    def _make_filter(self, start_at: datetime, end_at: datetime, rounds: set[str]) -> RoundStore.Filter:
+    def _players_range(self) -> tuple[int | None, int | None]:
+        """人数の条件 → (下限, 上限)。ちょうど n は (n, n)・以上は (n, None)・以下は (None, n)。
+        数が整数でない・範囲外なら ValueError"""
+        try:
+            n = int(str(self.getvar(str(self.v_players_n))).strip())    # IntVar.get() は 1.5 を 1 にしてしまう
+        except (tk.TclError, ValueError):
+            raise ValueError(f"人数は{PLAYERS_MIN}〜{PLAYERS_MAX}の整数で指定してください") from None
+        if not PLAYERS_MIN <= n <= PLAYERS_MAX:
+            raise ValueError(f"人数は{PLAYERS_MIN}〜{PLAYERS_MAX}の範囲で指定してください")
+        op = self.v_players_op.get()
+        if op == "ちょうど":
+            return n, n
+        if op == "以上":
+            return n, None
+        if op == "以下":
+            return None, n
+        raise ValueError("人数の条件（ちょうど・以上・以下）を選んでください")
+
+    def _make_filter(self, start_at: datetime, end_at: datetime, rounds: set[str],
+                     players: tuple[int | None, int | None]) -> RoundStore.Filter:
         return RoundStore.Filter(
             start=_db_time(start_at), end=_db_time(end_at),
             rounds=frozenset(self._round_ids[name] for name in rounds if name in self._round_ids),
-            mine=self.v_scope.get() == "mine")
+            mine=self.v_scope.get() == "mine",
+            players_min=players[0], players_max=players[1], include_null=bool(self.v_players_null.get()))
 
     def _analyze(self):
         try:
@@ -728,13 +778,19 @@ class StatisticsWindow(tk.Toplevel):
         if start_at > end_at:
             messagebox.showerror("日時エラー", "開始日時は終了日時以前にしてください。", parent=self)
             return
+        try:
+            players = self._players_range()
+        except (ValueError, tk.TclError) as e:
+            messagebox.showerror("人数エラー", f"人数を確認してください: {e}", parent=self)
+            return
         rounds = self._selected_rounds()
         if not rounds:
             self._clear_all()
+            self._filter = None         # 古い条件のまま、時間帯のタブが引かないように
             self.v_status.set("ラウンドを選択してください")
             return
 
-        flt = self._make_filter(start_at, end_at, rounds)
+        flt = self._make_filter(start_at, end_at, rounds, players)
         if flt != self._filter:     # 絞り込みが変わった・行が増えた（_on_rows_loaded が None にする）
             self._filter = flt
             self._terror_stats_cache.clear()
@@ -746,8 +802,6 @@ class StatisticsWindow(tk.Toplevel):
         self._analyze_seq += 1
         seq = self._analyze_seq
         active = self.v_terror_category.get()
-        tid = self._selected_terror
-        same = None if tid is None else TerrorIds.statistics_ids(tid)     # 8 Pages に出た同じテラーもまとめる
         store = self.store
         self.v_status.set("集計中…")
 
@@ -758,20 +812,20 @@ class StatisticsWindow(tk.Toplevel):
             stats = {value: Statistics.analyze_terror_counts(
                          counts, config.TERRORS, Statistics.candidate_ids_for_category(value, config.TERRORS))
                      for _label, value in TERROR_CATEGORIES}
-            return round_rows, stats, store.time_series(flt, "day", same), store.time_series(flt, "hour", same)
+            return round_rows, stats
 
         def done(result):
             if seq != self._analyze_seq or flt != self._filter:
                 return                  # その後に条件が変わった（新しい集計が来る）
-            round_rows, stats, day, hour = result
+            round_rows, stats = result
             self._terror_stats_cache.update(stats)
             self._show_round_stats(round_rows)
             self._render_terror_list()
             self._clear_terror_detail()
-            self._show_time_rows(day, hour)
             total_slots, candidate_count, _rows = stats[active]
             total_rounds = sum(count for _name, count, _slots in round_rows)
             self.v_status.set(f"{total_rounds}ラウンド / {total_slots}枠 / 候補{candidate_count}体")
+            self._ensure_time_rows()        # 時間帯のタブを開いているときだけ引く
 
         self._off_gui(work, done)
 
@@ -795,6 +849,7 @@ class StatisticsWindow(tk.Toplevel):
         self._clear_tree(self.terror_tree)
         self._clear_terror_detail()
         self._day_rows, self._hour_rows = [], []
+        self._forget_time_rows()
         self._draw_time_charts()
 
     # ── ラウンドのタブ ─────────────────────────────
@@ -949,7 +1004,7 @@ class StatisticsWindow(tk.Toplevel):
         self._selected_terror = terror_id
         # Unbound のテラーは Unbound のラウンドにしか出ないので、ラウンドタイプは出さない
         self._show_round_type_tab(self._terror_categories.get(terror_id) != "Unbound")
-        # 内訳（マップ・ラウンドタイプ・出現ラウンド・時間の流れ）は裏のスレッドで引く。
+        # 内訳（マップ・ラウンドタイプ・出現ラウンド）は裏のスレッドで引く。
         # 条件ごとの覚え（キャッシュ）にあるものは引き直さない
         flt = self._filter
         self._detail_seq += 1
@@ -970,14 +1025,12 @@ class StatisticsWindow(tk.Toplevel):
             if appeared is None:
                 total, rows = store.rounds_for_terror(flt, same, TERROR_ROUNDS_LIMIT)
                 appeared = (total, appearance_rows(rows, terror_id, store.my_uids(), config.TERRORS))
-            series = ((store.time_series(flt, "day", same), store.time_series(flt, "hour", same))
-                      if flt is not None else None)
-            return maps, kinds, appeared, series
+            return maps, kinds, appeared
 
         def done(result):
             if seq != self._detail_seq or flt != self._filter or self._selected_terror != terror_id:
                 return                  # その後に別のテラーを選んだ・条件が変わった
-            maps, kinds, appeared, series = result
+            maps, kinds, appeared = result
             self._map_counts_cache[terror_id] = maps
             self._round_kind_cache[terror_id] = kinds
             self._appearance_cache[terror_id] = appeared
@@ -985,8 +1038,7 @@ class StatisticsWindow(tk.Toplevel):
             for map_name, count in maps:
                 self.map_tree.insert("", "end", values=(map_name, count))
             self._render_terror_rounds(terror_id, kinds, appeared)
-            if series is not None:
-                self._show_time_rows(*series)
+            self._ensure_time_rows()        # 時間帯のタブを開いているときだけ引く
 
         self._off_gui(work, done)
 
@@ -1010,16 +1062,66 @@ class StatisticsWindow(tk.Toplevel):
         self.v_terror_rounds_note.set(
             f"新しい順に{TERROR_ROUNDS_LIMIT}件を表示（全{total}件）" if total > TERROR_ROUNDS_LIMIT else "")
 
-    # ── 時間の流れのタブ ───────────────────────────
+    # ── 時間帯のタブ ───────────────────────────
+    def _time_tab_open(self) -> bool:
+        return str(self.tabs.select()) == str(self.time_tab)
+
+    def _forget_time_rows(self):
+        """表示済み・集計中の覚えを捨てる（行が増えた・全部外した）。返ってくる前の結果も当てない"""
+        self._time_shown_key = None
+        self._time_loading_key = None
+        self._time_seq += 1
+
+    def _ensure_time_rows(self):
+        """時間帯のタブを開いているときだけ、日ごと・時間帯ごと（time_series）を引く。
+        今の鍵（条件, 選んだテラー）が表示済み・集計中なら引かない"""
+        flt = self._filter
+        if flt is None or not self._time_tab_open():
+            return
+        tid = self._selected_terror
+        key = (flt, tid)
+        if key == self._time_shown_key or key == self._time_loading_key:
+            return
+        self._time_seq += 1
+        seq = self._time_seq
+        self._time_loading_key = key
+        self.v_time_note.set("集計中…")
+        same = None if tid is None else TerrorIds.statistics_ids(tid)     # 8 Pages に出た同じテラーもまとめる
+        store = self.store
+
+        def work():
+            try:
+                return store.time_series(flt, "day", same), store.time_series(flt, "hour", same)
+            except Exception:
+                DebugLog.exception("StatisticsGUI._ensure_time_rows")
+                return None             # _off_gui は例外だと done を呼ばない。ここで受けて片付ける
+
+        def done(result):
+            if seq == self._time_seq:
+                self._time_loading_key = None
+            if (result is not None and seq == self._time_seq
+                    and flt == self._filter and tid == self._selected_terror):
+                self._show_time_rows(*result)
+                self._time_shown_key = key
+                return
+            # 失敗・その後に条件や選択が変わった: 捨てる。ほかに集計中が無ければ見出しを戻し、新しい鍵を取りに行く
+            if self._time_loading_key is None:
+                self.v_time_note.set(self._time_note_text)
+            if result is not None:
+                self._ensure_time_rows()
+
+        self._off_gui(work, done)
+
     def _show_time_rows(self, day_rows, hour_rows):
-        """時間の流れのタブに、引いてきた日ごと・時間帯ごとの行を出す（引くのは裏のスレッド）"""
+        """時間帯のタブに、引いてきた日ごと・時間帯ごとの行を出す（引くのは裏のスレッド）"""
         tid = self._selected_terror
         self._day_rows = day_rows
         self._hour_rows = hour_rows
         if tid is None:
-            self.v_time_note.set("ラウンド数（テラーのタブで選ぶと、そのテラーの出現数と割合）")
+            self._time_note_text = "ラウンド数（テラーのタブで選ぶと、そのテラーの出現数と割合）"
         else:
-            self.v_time_note.set(f"{Statistics.terror_name(tid, config.TERRORS)} の出現数（ラウンド数に対する割合）")
+            self._time_note_text = f"{Statistics.terror_name(tid, config.TERRORS)} の出現数（ラウンド数に対する割合）"
+        self.v_time_note.set(self._time_note_text)
         self._draw_time_charts()
 
     def _draw_time_charts(self):

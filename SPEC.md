@@ -277,6 +277,7 @@ LogMonitor._process(line)
 - 置き換えの候補（`TerrorReplacement`）があるラウンドの統計は、合図の行が来た時点で置き換えた番号で送る。来なければ Killers の行から最大 `config.TERROR_STAT_WAIT_SEC`（1 秒）待って元の番号で送る（`LogMonitor._send_statistics_after_wait`。待つ間にラウンドが終わったら送らず、RoundOver・Verified Round End の送信が取りこぼしの保険）。
 - transformed_uid: `rpc/get_transformed_uid` で VRChat uid から int2 の番号をもらう（無ければ DB が割り当てる）。`Users` の表は直接読まない（`supabase/get_transformed_uid.sql`）。表示名 `p_name` も添え、DB 側が `Users.name` に入れる（最新だけ。ツールはログに出さない）。
 - 統計画面: `RoundStore`（%APPDATA%\ToNAutoBeginner\rounds.sqlite）に DB の差分だけを取り込み、手元で集計する。取り込み元は `ToNRounds_v2`（独自の番号・人数あり）。元ごとに取り込んだ位置を別に覚える。自分が送った行は、DB が受け取ってから手元にも書く（送れなかった行は書かない）。8 Pages の行（3000 番台）は手元ではそのまま貯め、集計のときだけ通常の同じテラーに足す。Unbound の Pack of Wild Yet Curious（2065）が Bloodthirsty 化したときは、判定・画面・続行表では 4002（`TerrorReplacement` の行）で、DB と手元の統計には 4014 で記録する。Unbound の Self Inserts（2083）も、合図の行が来ていれば統計には 4013 で記録する（判定・画面は 2083＋フラグのまま）。どちらも `ConnectDB.stat_terror_ids` が `register_round` の入口で行う（LogMonitor は `bloodthirsty=` で合図を渡す）。過去の分はさかのぼらない）。
+- 統計画面の集計条件: 範囲（全体／自分の分）の行に人数の条件（ちょうど・以上・以下の選択欄・1〜22 の数・「人数不明（NULL）を含める」のチェック。開くたびに既定の「以上・1・NULL を含める」に戻り、保存しない）がある。期間・ラウンド・「自分の分」と AND で、変えると 0.3 秒待って集計し直す（`RoundStore.Filter` の `players_min`・`players_max`・`include_null`）。数が整数でない・1〜22 の外なら「人数エラー」を出して集計しない。開始の既定は固定の 2026/10/01 00:00（`config.STATISTICS_DEFAULT_START`。手で変えた開始は「更新」で戻らない）。タブはラウンド／テラー／時間帯で、時間帯の日ごと・時間帯（0〜23時）は、そのタブを開いているときだけ集計する（条件か選んだテラーが変わったら引き直し、同じなら開き直しても引かない）。
 
 ## 11. 置き場所
 

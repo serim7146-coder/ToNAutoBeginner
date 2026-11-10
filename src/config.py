@@ -167,6 +167,8 @@ for _name, _id in ROUND_TYPE_IDS.items():
 NULL_TERROR_ROUND_IDS = {100, 101, 102, 103, 104, 106}
 # DB v1 の時刻は 2026-01-01 00:00:00 UTC からの秒（4バイト）
 DB_TIME_EPOCH = 1767225600
+# 統計画面を開いたときの「開始」の初期値（年, 月, 日, 時, 分。PC のローカル時刻）
+STATISTICS_DEFAULT_START = (2026, 10, 1, 0, 0)
 
 SPECIAL_ROUND = {
     "Classic.exe",
