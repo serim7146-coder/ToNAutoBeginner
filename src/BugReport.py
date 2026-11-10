@@ -183,13 +183,13 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
     add(GUI_LOG, "画面のログ出力", "gui_log.txt", tail_text(gui_log or "", config.REPORT_GUI_LOG_MAX_BYTES),
         "ログが空です")
     add(DEBUG_LOG, "debug.log", "debug_log.txt",
-        debug_log_tail(debug_log_path, config.REPORT_DEBUG_LOG_MAX_BYTES), "ファイルが無い")
+        debug_log_tail(debug_log_path, config.REPORT_DEBUG_LOG_MAX_BYTES), "ファイルがない")
     add(SETTINGS, "設定", "settings.json",
         json.dumps(settings_for_report(settings), ensure_ascii=False, indent=2, sort_keys=True), "")
     # 続行表・続行リストの保存ファイル（独自の番号とプリセットの名前だけ）も「設定」のチェックで入れる
     add(SETTINGS, "続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）", "continue_table.json",
-        read_file(ContinueTable.table_path()), "ファイルが無い")
-    add(SETTINGS, "ツールの続行リスト", "continue_list.json", read_file(ContinueList.list_path()), "ファイルが無い")
+        read_file(ContinueTable.table_path()), "ファイルがない")
+    add(SETTINGS, "ツールの続行リスト", "continue_list.json", read_file(ContinueList.list_path()), "ファイルがない")
 
     # 撮影（Begin は窓を選べばその窓の2枚、Run の向きはその窓の分。窓なしなら全部の窓の分）。そのまま入れる
     images: dict[str, bytes] = {}
@@ -203,7 +203,7 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
             for n in windows or [0]:
                 images.update(files_for(n))
         if not images:
-            notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: 無し")
+            notes.append("- 撮影（Begin・Run の向きで見つからなかったとき）: なし")
     dropped: list[str] = []
 
     limit = config.REPORT_VRCHAT_LOG_START_BYTES // max(1, len(windows))
@@ -223,7 +223,7 @@ def build_report(requirement: str, window, include: dict, gui_log: str, vrchat_l
                 continue
             data = tail_bytes(path, limit)
             if data is None:
-                vr_notes.append(f"- {label}: 入れていません（ファイルが無い）")
+                vr_notes.append(f"- {label}: 入れていません（ファイルがない）")
             elif limit < config.REPORT_VRCHAT_LOG_MIN_BYTES:
                 vr_notes.append(f"- {label}: 入れていません（大きすぎて収まらない）")
             else:

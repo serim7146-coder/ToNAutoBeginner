@@ -82,7 +82,7 @@ class TestTheZip(unittest.TestCase):
 
     def test_a_missing_file_is_explained(self):
         _n, _d, files = self._zip([1, 2], {1: self._log(1), 2: str(self.dir / "none.txt")})
-        self.assertIn("- 窓2 の VRChat のログ: 入れていません（ファイルが無い）",
+        self.assertIn("- 窓2 の VRChat のログ: 入れていません（ファイルがない）",
                       files["report.txt"].decode("utf-8"))
 
     def test_no_window_is_as_before(self):

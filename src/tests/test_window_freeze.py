@@ -408,10 +408,10 @@ class TestCtrlBroadcastFreeze(_AppCase):
         _checkbutton(self.tabs[0], "Fog", 0).invoke()
         _checkbutton(self.tabs[0], "Fog", 0).invoke()
         self.assertEqual(self.logged, [
-            "[設定] Ctrl: 「速度検知 8 Pages」を ON にして全窓へ写しました",
-            "[設定] Ctrl: 「速度検知 Punished」を ON にして全窓へ写しました",
-            "[設定] Ctrl: 「ラウンド突入 Fog」を ON にして全窓へ写しました",
-            "[設定] Ctrl: 「ラウンド突入 Fog」を OFF にして全窓へ写しました",
+            "[設定] Ctrl: 「速度検知 8 Pages」を ON にして全窓に反映しました",
+            "[設定] Ctrl: 「速度検知 Punished」を ON にして全窓に反映しました",
+            "[設定] Ctrl: 「ラウンド突入 Fog」を ON にして全窓に反映しました",
+            "[設定] Ctrl: 「ラウンド突入 Fog」を OFF にして全窓に反映しました",
         ])
 
     def test_while_running_every_monitor_gets_it(self):

@@ -634,8 +634,8 @@ class TestRoundOverRightAfterTheRespawn(_Case):
         self.assertEqual(self.w.events[-4:], [("osc", "/input/MoveBackward", 2.85), "release",
                                               ("osc", "/input/LookLeft", 0.9), "release"])
         self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
-        notes = [c.args[0] for c in write.call_args_list if "RoundOver が来た" in c.args[0]]
-        self.assertEqual(notes, ["[操作] [窓2] Run: リスポーンの後に RoundOver が来た → 後ろへ・正面へは続ける"])
+        notes = [c.args[0] for c in write.call_args_list if "RoundOver が来ました" in c.args[0]]
+        self.assertEqual(notes, ["[操作] [窓2] Run: リスポーンの後に RoundOver が来ました → 後ろへ・正面へは続けます"])
 
     def test_a_small_facing_fix_uses_the_axis_after_the_turn(self):
         """GG: 左へ回した後のずれが幅の 3% 以下（1.5%）なら軸 +0.55 で直す（ボタンの LookLeft/LookRight は送らない）"""
@@ -779,7 +779,7 @@ class TestHoldTheFrontAfterThePress(_Case):
         self.assertTrue(locked and all(l == (True, True) for l in locked), "待つ間は鍵と前面を持ったまま")
         self.assertAlmostEqual(self.returned_at[0] - self.clicked_at[0], 0.4, delta=0.11)
         self.assertEqual(self.w.events.count(("click", 0.15)), 1)
-        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 0.40 秒・前面のまま）",
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けました（押してから 0.40 秒・前面のまま）",
                       self._written())
         self.assertEqual(self.logs, ["Run: リスポーンして正面を向きました"])
 
@@ -789,7 +789,7 @@ class TestHoldTheFrontAfterThePress(_Case):
         self.assertAlmostEqual(self.returned_at[0] - self.clicked_at[0], config.RESPAWN_HOLD_FRONT_SEC, delta=0.11)
         self.assertTrue(self.free_while_waiting and all(self.free_while_waiting), "ほかの窓が鍵を取れる")
         self.assertEqual(self.w.events.count(("click", 0.15)), 1, "2 秒の中で来たので押し直さない")
-        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 1.50 秒・前面を返した後）",
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けました（押してから 1.50 秒・前面を元の窓に戻した後）",
                       self._written())
 
     def test_the_whole_wait_is_still_2_seconds_from_the_press(self):
@@ -809,7 +809,7 @@ class TestHoldTheFrontAfterThePress(_Case):
     def test_the_second_press_line_in_front(self):
         self.line_at, self.line_click = 0.3, 2
         self._run()
-        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けた（押してから 0.30 秒・前面のまま）",
+        self.assertIn("[操作] [窓2] Run: 「Player respawned」を受けました（押してから 0.30 秒・前面のまま）",
                       self._written())
         self.assertEqual(len(self.clicked_at), 2)
         self.assertAlmostEqual(self.returned_at[1] - self.clicked_at[1], 0.3, delta=0.11)

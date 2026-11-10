@@ -199,27 +199,27 @@ class TestCtrlBroadcast(unittest.TestCase):
     def test_one_log_line_per_broadcast(self):
         self.ctrl.return_value = True
         _checkbutton(self.tabs[0], "自動自爆").invoke()                  # 既定は ON なので OFF になる
-        self.log.assert_called_once_with("[設定] Ctrl: 「自動自爆」を OFF にして全窓へ写しました")
+        self.log.assert_called_once_with("[設定] Ctrl: 「自動自爆」を OFF にして全窓に反映しました")
         self.log.reset_mock()
         _checkbutton(self.tabs[0], "自動自爆").invoke()
-        self.log.assert_called_once_with("[設定] Ctrl: 「自動自爆」を ON にして全窓へ写しました")
+        self.log.assert_called_once_with("[設定] Ctrl: 「自動自爆」を ON にして全窓に反映しました")
         self.log.reset_mock()
         _checkbutton(self.tabs[0], "DTM/Waldo続行 (2クラまで)").invoke()      # 既定は OFF なので ON になる
-        self.log.assert_called_once_with("[設定] Ctrl: 「DTM/Waldo続行 (2クラまで)」を ON にして全窓へ写しました")
+        self.log.assert_called_once_with("[設定] Ctrl: 「DTM/Waldo続行 (2クラまで)」を ON にして全窓に反映しました")
         self.log.reset_mock()
         self.tabs[0].chk_ct_switch.invoke()
-        self.log.assert_called_once_with("[設定] Ctrl: 「アイテムで切り替える」を ON にして全窓へ写しました")
+        self.log.assert_called_once_with("[設定] Ctrl: 「アイテムで切り替える」を ON にして全窓に反映しました")
         self.log.reset_mock()
         _checkbutton(self.tabs[0], ROUND, 1).invoke()
-        self.log.assert_called_once_with(f"[設定] Ctrl: 「全続行 {ROUND}」を ON にして全窓へ写しました")
+        self.log.assert_called_once_with(f"[設定] Ctrl: 「全続行 {ROUND}」を ON にして全窓に反映しました")
         self.log.reset_mock()
         self.tabs[0].v_ct_choice[F].set(PRESET)
         self.tabs[0]._on_continue_pick(F)
-        self.log.assert_called_once_with(f"[設定] Ctrl: 「デフォ続行」を「{PRESET}」に全窓へ写しました")
+        self.log.assert_called_once_with(f"[設定] Ctrl: 「デフォ続行」を「{PRESET}」に全窓に反映しました")
         self.log.reset_mock()
         self.tabs[0].v_ct_choice[D].set(ContinueTable.NONE_LABEL)
         self.tabs[0]._on_continue_pick(D)
-        self.log.assert_called_once_with("[設定] Ctrl: 「続行無効」を「なし」に全窓へ写しました")
+        self.log.assert_called_once_with("[設定] Ctrl: 「続行無効」を「なし」に全窓に反映しました")
 
     # ── 動作中 ─────────────────────────────────────────────
     def test_while_running_every_windows_monitor_gets_the_value(self):

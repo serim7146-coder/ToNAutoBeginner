@@ -371,7 +371,7 @@ class ActionExecutor:
         if seconds <= 0:
             return
         if not self.can_operate():
-            self._trace(f"[操作] 移動 {direction} しない（private でない）")
+            self._trace(f"[操作] 移動 {direction} しません（private でない）")
             return False
         self._trace(f"[操作] 移動 {direction} {seconds:.2f}秒（{'OSC' if self._osc is not None else 'キー'}）")
         if self._osc is not None:
@@ -406,7 +406,7 @@ class ActionExecutor:
         """
         since, self._move_since = getattr(self, "_move_since", None), None
         if not self.can_operate():
-            self._trace("[操作] 前進＋左 しない（private でない）")
+            self._trace("[操作] 前進＋左 しません（private でない）")
             return False
         delay = f"・「{since[0]}」の行から {time.time() - since[1]:.2f} 秒" if since is not None else ""
         self._trace(f"[操作] 前進 {forward_sec:.2f}秒＋左 {left_sec:.2f}秒"
@@ -488,7 +488,7 @@ class ActionExecutor:
                             pressed_at = time.time()
                             continue
                         extension, how = 0.0, "動き出さない"
-                        write(f"動き出さないので押し直した（{repressed} 回）・それでも動かない")
+                        write(f"動き出さないので押し直しました（{repressed} 回）・それでも動きません")
                 # 決まるまでは、速さを受け取れていれば「今 動き出した」とみなして押し続ける
                 pending = (min(cap, max(0.0, elapsed - usual_start))
                            if extension is None and speed is not None else 0.0)
@@ -578,9 +578,9 @@ class ActionExecutor:
             ok, loan = WindowOperator.borrow_front(self._cfg.hwnd)
             if ok:
                 SharedState.keep_front_loan(self._st, loan)
-                self._log("この窓を前面化しました（アイテム装備待ち）")
+                self._log("この窓を前面に出しました（アイテム装備待ち）")
             else:
-                self._log("⚠ 前面化に失敗（装備待ちは継続）")
+                self._log("⚠ 前面に出せませんでした（装備待ちは継続）")
         self.announce_item_lost_once()
 
     def _borrow_front(self) -> tuple:
@@ -654,7 +654,7 @@ class ActionExecutor:
         for sx, sy in ItemFetch.split_move(0, dy):
             mouse.move_rel(sx, sy)
             time.sleep(ItemFetch.STEP_SEC)
-        DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: 残っていた縦の視点を戻した（縦 {dy}）")
+        DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: 残っていた縦の視点を戻しました（縦 {dy}）")
 
     # ── 自爆 ──────────────────────────────────
 
@@ -889,7 +889,7 @@ class ActionExecutor:
                 return False
             self._begin_move()
         else:
-            self._log("Begin: リスポーンできなかった → その場から押します")
+            self._log("Begin: リスポーンできませんでした → その場から押します")
         return True
 
     def _accepted_after_press(self, round_seq: int) -> bool:
@@ -1075,8 +1075,8 @@ class ActionExecutor:
                 # 遅く見積もるほど長く押して行き過ぎるので、遅い側だけ切る（FU）
                 x_rate = max(measured, config.BEGIN_ADJUST_RATE_MIN)
                 DebugLog.write(
-                    f"[窓{self._st.window_idx}] Begin: 横の速さ 実測 {measured:.1f} 文字幅/秒"
-                    + (f" → 下限 {config.BEGIN_ADJUST_RATE_MIN:.1f} を使う"
+                    f"[窓{self._st.window_idx}] Begin: 横の速度 実測 {measured:.1f} 文字幅/秒"
+                    + (f" → 下限 {config.BEGIN_ADJUST_RATE_MIN:.1f} を使います"
                        if measured < config.BEGIN_ADJUST_RATE_MIN else ""))
             else:
                 new_ratio = _width_ratio(new_hit)
@@ -1131,7 +1131,7 @@ class ActionExecutor:
             if self._adjust_stopped(round_seq):
                 return hit
             if WindowOperator.foreground_hwnd() != hwnd:
-                self._log("Begin: 高さ合わせ: 前面でなくなった → やめる")
+                self._log("Begin: 高さ合わせ: 前面でなくなりました → やめます")
                 return hit
             if gy is None:
                 units = config.BEGIN_PITCH_PROBE_UNITS * (1 if dy > 0 else -1)
@@ -1152,29 +1152,29 @@ class ActionExecutor:
             new_dy = new_hit["cy"] - aim[1]
             moved = new_dy - dy
             if abs(moved) <= config.BEGIN_ADJUST_MIN_MOVE_PX:
-                self._log("Begin: 高さ合わせ: 動いていない → やめる")
+                self._log("Begin: 高さ合わせ: 動いていません → やめます")
                 return new_hit
             wrong_way = moved * dy > 0          # 照準から遠ざかる向きに動いた（向きが逆）
             if gy is None:
                 measured = abs(moved) / abs(units)
                 if not ItemFetch.GAIN_SANE[0] <= measured <= ItemFetch.GAIN_SANE[1]:
-                    self._log(f"Begin: 高さ合わせ: 感度が測れない（{measured:.2f}）→ やめる")
+                    self._log(f"Begin: 高さ合わせ: 感度が測れません（{measured:.2f}）→ やめます")
                     return new_hit
                 gy = measured
                 label = f"測定値 {gy:.2f}"
                 sign = -1 if wrong_way else 1
             elif wrong_way:
                 if flipped:
-                    self._log("Begin: 高さ合わせ: 向きが合わない → やめる")
+                    self._log("Begin: 高さ合わせ: 向きが合いません → やめます")
                     return new_hit
                 flipped = True
                 sign = -sign
-                self._log("Begin: 高さ合わせ: 向きが逆 → 反転して動かす")
+                self._log("Begin: 高さ合わせ: 向きが逆 → 反転して動かします")
             hit, dy = new_hit, new_dy
             if abs(dy) <= hit["w"] * config.BEGIN_PITCH_TOL:
                 self._log(f"Begin: 高さ合わせ済み（縦 {dy:+.0f}px）")
                 return hit
-        self._log(f"Begin: 高さ合わせ: {config.BEGIN_PITCH_MAX_STEPS}歩で収まらない（縦 {dy:+.0f}px）→ そのまま押す")
+        self._log(f"Begin: 高さ合わせ: {config.BEGIN_PITCH_MAX_STEPS}歩で収まらない（縦 {dy:+.0f}px）→ そのまま押します")
         return hit
 
     def _search_for_begin(self, round_seq: int):
@@ -1206,7 +1206,7 @@ class ActionExecutor:
                 wall = stats["wall_back"]
                 self._log(
                     f"Begin: 探す動きの実測: 前へ {stats['pushes']} 回・押した {stats['push_sec']:.2f}秒・"
-                    + ("動いた量は測れず（速さを受信していません）" if sampler is None
+                    + ("動いた量は測れず（速度を受信していません）" if sampler is None
                        else f"動いた {stats['moved']:.2f}")
                     + f"・動けなかった {stats['blocked']} 回"
                     + (f"・後ろへ戻した {returned[0]:.2f}秒で {returned[1]:.2f}" if returned is not None else "")
@@ -1261,7 +1261,7 @@ class ActionExecutor:
                 # 壁（台座など）か、途中で速さが届かなくなった（区別がつかない。押しても同じなので同じに扱う）
                 stats["blocked"] += 1
                 wall_sec = config.BEGIN_SEARCH_BLOCKED_BACK_SEC
-                self._log(f"Begin: 前へ動けない（{sec:.2f}秒押して {moved:.2f} しか動かない。壁か、速さが届いていない）"
+                self._log(f"Begin: 前へ動けません（{sec:.2f}秒押して {moved:.2f} しか動かない。壁か、速度が届いていない）"
                           f"→ 前へ探すのをやめて、後ろへ {wall_sec:.2f}秒動いて探します")
                 if stopped():
                     return "skip"
@@ -1347,7 +1347,7 @@ class ActionExecutor:
         if hit is not None:
             if hit.get("rule") == "features":
                 # 斜めから見た天板を特徴点で見つけた（ET。あとで見直せるように）
-                DebugLog.write(f"[窓{self._st.window_idx}] Begin: 斜めの BEGIN を特徴点で見つけた"
+                DebugLog.write(f"[窓{self._st.window_idx}] Begin: 斜めの BEGIN を特徴点で見つけました"
                                f"（{stage or '位置合わせ'}・中心 ({hit['cx']:.0f}, {hit['cy']:.0f})・"
                                f"幅 {hit['w']:.0f}・インライア {hit['inliers']}）")
             hit = {**hit, "H": h}           # 前後は文字の幅÷窓の高さで見る
@@ -1497,14 +1497,14 @@ class ActionExecutor:
                 # （前面の窓はマウスを掴んでいて、SetCursorPos でカメラが回る）
                 if self._vrchat_is_in_front():
                     return False
-                self._log(f"Begin: カーソルをもう一度合わせる{tail}")
+                self._log(f"Begin: カーソルをもう一度合わせます{tail}")
             with SharedState._GLOBAL_ACTION_LOCK:
                 with WindowOperator.cursor_over_window(
                         self._cfg.hwnd, self._log_cursor_reason) as over:
                     if over:
                         st.last_begin_press_at = time.time()   # 置けた瞬間に（dwell の間に届く）
                         if not attempt:
-                            self._log(f"Begin: カーソルを一瞬合わせる{tail}")
+                            self._log(f"Begin: カーソルを一瞬合わせます{tail}")
                         time.sleep(config.BEGIN_CURSOR_DWELL_SEC)
             if not over:
                 if WindowOperator.cursor_target(self._cfg.hwnd)[0] is None:
@@ -1537,7 +1537,7 @@ class ActionExecutor:
         if self._spam_paused_round == st.round_seq:
             return
         self._spam_paused_round = st.round_seq
-        self._log("Begin: 他窓のフリーズ中なので連打を止めています")
+        self._log("Begin: ほかの窓のフリーズ中なので連打を止めています")
 
     def _log_cursor_reason(self, reason: str):
         """カーソル方式を見送った理由を出す。同じラウンドで同じ理由は1回だけ"""
@@ -1592,13 +1592,13 @@ class ActionExecutor:
                         and st.round_seq == round_seq)
         if st.begin_done:
             # 差し込みで押せていた。ロック待ちにも入らない
-            self._log("Begin: 受理されたので前面化しません")
+            self._log("Begin: 受理されたので前面に出しません")
             return True
         with SharedState._GLOBAL_ACTION_LOCK:
             if st.begin_done:
                 # 6窓では他窓のクリックを待つ間に受理が届く。ここで気づかないと
                 # 受理済みの Begin をもう一度押して前面を奪う
-                self._log("Begin: 受理されたので前面化しません")
+                self._log("Begin: 受理されたので前面に出しません")
                 return True
             if not self._is_running() or st.in_round or not self.can_operate():
                 return False
@@ -1638,10 +1638,10 @@ class ActionExecutor:
             # 装備待ちも見る——以前は見ておらず、他窓のロスト中でも押しに行った
             eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
             if not eq_ok:
-                self._log("Begin キャンセル（他窓の装備待ちを検出）")
+                self._log("Begin キャンセル（ほかの窓の装備待ちを検出）")
                 return False
             if not con_ok:
-                self._log("Begin キャンセル（他窓のフリーズを検出）")
+                self._log("Begin キャンセル（ほかの窓のフリーズを検出）")
                 return False
             if not spd_ok:
                 self._log("Begin キャンセル（速度検知フリーズを検出）")
@@ -1702,13 +1702,13 @@ class ActionExecutor:
             if eq_ok and con_ok and spd_ok and rnd_ok:
                 return True
             if not eq_ok:
-                self._log("他窓の装備待ち中 → フリーズ")
+                self._log("ほかの窓の装備待ち中 → フリーズ")
             if not con_ok:
-                self._log("他窓の続行ラウンド中 → フリーズ")
+                self._log("ほかの窓の続行ラウンド中 → フリーズ")
             if not spd_ok:
-                self._log("他窓の速度検知フリーズ中 → フリーズ")
+                self._log("ほかの窓の速度検知フリーズ中 → フリーズ")
             if not rnd_ok:
-                self._log("他窓のラウンド突入フリーズ中 → フリーズ")
+                self._log("ほかの窓のラウンド突入フリーズ中 → フリーズ")
             # 待つのは通っていないものだけ。自分が張っているイベントは
             # clear のままなので、待つと無駄に1秒止まる
             for ok, event in ((eq_ok, SharedState.EQUIP_WAIT_EVENT),
@@ -1791,7 +1791,7 @@ class ActionExecutor:
         try:
             ok = self.move_forward_left(forward, left)
         except Exception as e:
-            DebugLog.write(f"{head}: 途中で止めた（{type(e).__name__}）")
+            DebugLog.write(f"{head}: 途中で止めました（{type(e).__name__}）")
             raise
         finally:
             self._move_since = None             # 使われなかった（止めた・偽物）ときも次へ持ち越さない
@@ -1800,9 +1800,9 @@ class ActionExecutor:
                 sampler.suffix = counted_note(*extension)
             sampler.release()
         if ok is False:
-            DebugLog.write(f"{head}: 途中で止めた（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
+            DebugLog.write(f"{head}: 途中で止めました（{'OSC を送れない' if self._osc is not None else '移動キーを送れない'}）")
         else:
-            DebugLog.write(f"{head}: 最後までやった")
+            DebugLog.write(f"{head}: 最後までやりました")
         st.begin_move_done = True
 
     def do_begin_again(self, round_seq: int):
@@ -2138,8 +2138,8 @@ class ActionExecutor:
         """入室時に Guidance Plush を取れなかった（ER）。次の普通のラウンドの後から、最大 PLUSH_RETRY_MAX 回
         ふだんの自動取得の道で取りに行く"""
         self._plush_retries = config.PLUSH_RETRY_MAX
-        DebugLog.write(f"[操作] [窓{self._st.window_idx}] Guidance Plush: 入室時に取れなかった（{why}）→ "
-                       f"次のラウンドの後に取りに行く（最大 {config.PLUSH_RETRY_MAX} 回）")
+        DebugLog.write(f"[操作] [窓{self._st.window_idx}] Guidance Plush: 入室時に取れませんでした（{why}）→ "
+                       f"次のラウンドの後に取りに行きます（最大 {config.PLUSH_RETRY_MAX} 回）")
 
     def _retry_plush(self, round_seq: int):
         """入室時に取れなかった Guidance Plush を取りに行く 1 回（ER）。別のアイテムを持っていればやめる。
@@ -2154,22 +2154,22 @@ class ActionExecutor:
         if held:
             self._plush_retries = 0
             DebugLog.write(f"{head} "
-                           + ("もう持っている" if held == plush else f"別のアイテム（{ItemCatalog.label(held, config.ITEMS)}）を持っている")
-                           + " → やり直さない")
+                           + ("もう持っています" if held == plush else f"別のアイテム（{ItemCatalog.label(held, config.ITEMS)}）を持っています")
+                           + " → やり直しません")
             return
         if (not plush or SharedState.get_item_begin_mode() or not SharedState.get_item_fetch()
                 or self._osc is None or not self._auto_begin_active() or not self.can_operate()
                 or self._receiver is None or not ItemFetch.available()):
-            DebugLog.write(f"{head} アイテム自動取得の条件がそろわないので、このラウンドは取りに行かない")
+            DebugLog.write(f"{head} アイテム自動取得の条件がそろわないので、このラウンドは取りに行きません")
             return
         self._plush_retries -= 1
-        DebugLog.write(f"{head} 入室時に取れなかった分を取りに行く（残り {self._plush_retries} 回）")
+        DebugLog.write(f"{head} 入室時に取れなかった分を取りに行きます（残り {self._plush_retries} 回）")
         outcome = self._fetch_item(round_seq, "Event", plush, plush=True)
         if outcome == "ok":
             self._plush_retries = 0
         elif outcome == "late":
             self._plush_retries += 1
-            DebugLog.write(f"{head} 見送ったので回数は戻す（残り {self._plush_retries} 回）")
+            DebugLog.write(f"{head} 見送ったので回数は戻します（残り {self._plush_retries} 回）")
 
     def fetch_guidance_plush(self, extra_stop=None) -> str:
         """入室の Begin が受理された後に Guidance Plush を取りに行く（DZ）。マクロの監視中で、この窓の
@@ -2179,7 +2179,7 @@ class ActionExecutor:
         why = ("Guidance Plush の番号が分からない" if not plush
                else "OSC が使えない窓" if self._osc is None
                else "プライベートのインスタンスでない" if not self.can_operate()
-               else "受信が無い" if self._receiver is None
+               else "受信がない" if self._receiver is None
                else "店の見本が使えない" if not ItemFetch.available() else None)
         if why:
             self._log(f"Guidance Plush を取りに行きません（{why}）")
@@ -2204,20 +2204,20 @@ class ActionExecutor:
                 since = time.time() - st.begin_accepted_at
                 if since > config.ITEM_FETCH_FRONT_LATEST_SEC:
                     DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: Connecting から {since:.1f} 秒"
-                                   f"（上限 {config.ITEM_FETCH_FRONT_LATEST_SEC:.1f} 秒）→ この回は店の操作を見送る")
+                                   f"（上限 {config.ITEM_FETCH_FRONT_LATEST_SEC:.1f} 秒）→ この回は店の操作を見送ります")
                     return "late"
             # ロストしたアイテムを取りに行くときだけ、店でボタンを押す間は装備待ちフリーズを張る（EV。
             # 柵越え・移動の間は張らない。Equip が済んだら解く）。入室時の Guidance Plush・放置モードは張らない
             froze = st.waiting_for_equip and not self._hands_free()
             if froze:
                 SharedState.equip_freeze_start(st)
-                DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 店で押す間 装備待ちフリーズを開始する")
+                DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 店で押す間 装備待ちフリーズを開始します")
             try:
                 return self._fetch_in_front_locked(fetcher, shop, item_id, plush)
             finally:
                 if froze:
                     SharedState.equip_freeze_end(st)
-                    DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 装備待ちフリーズを解いた（Equip の後）")
+                    DebugLog.write(f"[操作] [窓{st.window_idx}] アイテム取得: 装備待ちフリーズを解きました（Equip の後）")
 
     def _fetch_in_front_locked(self, fetcher, shop: str, item_id: int, plush: bool) -> str:
         """鍵の中: 前面を借りて店で押し、視点を戻して前面を返す"""
@@ -2244,7 +2244,7 @@ class ActionExecutor:
                     fetcher.restore_view()
                 elif fetcher.mouse.total != [0, 0]:
                     DebugLog.write(f"[操作] [窓{self._st.window_idx}] アイテム取得: "
-                                   f"窓が前に無いので視点を戻せません（{fetcher.mouse.total}）")
+                                   f"窓が前にないので視点を戻せません（{fetcher.mouse.total}）")
             except ItemFetch.Stopped:
                 pass                            # 戻す途中で前面でなくなった（残りは下で覚える）
             except Exception:
@@ -2267,7 +2267,7 @@ class ActionExecutor:
             DebugLog.write(f"{head} この窓がまだ前面なので、カーソルを{when}の位置 {cursor} へ戻しません")
             return
         if WindowOperator.set_cursor_position(cursor):
-            DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻した")
+            DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻しました")
         else:
             DebugLog.write(f"{head} カーソルを{when}の位置 {cursor} へ戻せません")
 
@@ -2304,7 +2304,7 @@ class ActionExecutor:
         st = self._st
         if self._is_running() and st.round_seq == round_seq and not st.in_round                 and not self._noted_round_over_after_respawn:
             self._noted_round_over_after_respawn = True
-            DebugLog.write(f"[操作] [窓{st.window_idx}] Run: リスポーンの後に RoundOver が来た → 後ろへ・正面へは続ける")
+            DebugLog.write(f"[操作] [窓{st.window_idx}] Run: リスポーンの後に RoundOver が来ました → 後ろへ・正面へは続けます")
         return self._is_running() and st.round_seq == round_seq and self.can_operate()
 
     def do_run_respawn(self, round_seq: int):
@@ -2333,7 +2333,7 @@ class ActionExecutor:
             deadline = time.time() + config.RUN_BACK_DELAY_SEC
             while time.time() < deadline:
                 if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 停止された、またはラウンドが変わった → 移動をやめる")
+                    DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
                     return False
                 time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
             late = self._st.round_type in config.LATE_ROUND         # Punished 後は足が遅いので長く下がる
@@ -2341,7 +2341,7 @@ class ActionExecutor:
             for address, sec in (("/input/MoveBackward", back_sec),
                                  ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
                 if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 停止された、またはラウンドが変わった → 移動をやめる")
+                    DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
                     return False
                 DebugLog.write(f"{head} {address} {sec:.2f}秒")
                 # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
@@ -2396,7 +2396,7 @@ class ActionExecutor:
         shot, mark = self._measure_face()
         self._last_face = (shot, mark)
         if mark is None:
-            DebugLog.write(f"{head}: 目印が見つからない → 今の向きのまま")
+            DebugLog.write(f"{head}: 目印が見つかりません → 今の向きのまま")
             wide = RunFace.best_anywhere(shot) if shot is not None else None
             if wide is not None:
                 # 次に起きたときの材料（記録だけ。範囲の外は目印でない所とも合うので動きには使わない。EE）
@@ -2414,7 +2414,7 @@ class ActionExecutor:
                 DebugLog.write(f"{head}: 正面（直した {fixed} 回）")
                 return fixed
             if fixed >= config.RUN_FACE_TRIES:
-                DebugLog.write(f"{head}: {fixed} 回直しても ずれ {dx:+.1f} → やめる")
+                DebugLog.write(f"{head}: {fixed} 回直しても ずれ {dx:+.1f} → やめます")
                 RunFace.save_shot(shot, idx, "tries")
                 return fixed
             if not self._run_after_respawn(round_seq):
@@ -2446,7 +2446,7 @@ class ActionExecutor:
                     back = f"/input/LookHorizontal {-value:+.2f}"
                 else:
                     back = "/input/LookRight" if address == "/input/LookLeft" else "/input/LookLeft"
-                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める（ずれ {dx:+.1f} の向き）")
+                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止めます（ずれ {dx:+.1f} の向き）")
                 if fine:
                     self._osc.press_axis("/input/LookHorizontal", -value, sec, stop=stop)
                 else:
@@ -2473,7 +2473,7 @@ class ActionExecutor:
         shot, mark = getattr(self, "_last_face", (None, None))
         self._last_face = (None, None)
         if mark is None or shot is None:
-            DebugLog.write(f"{head}: 目印が見つからない → 直さない")
+            DebugLog.write(f"{head}: 目印が見つかりません → 直しません")
             return None
         f = RunFace.factor(mark, shot.shape[0])
         if not config.RUN_DEPTH_ENABLED:
@@ -2488,7 +2488,7 @@ class ActionExecutor:
             if abs(f - 1.0) <= config.RUN_DEPTH_TOL:
                 break
             if tries >= config.RUN_DEPTH_TRIES:
-                DebugLog.write(f"{head}: {tries} 回動かしても倍率 {f:.3f} → やめる")
+                DebugLog.write(f"{head}: {tries} 回動かしても倍率 {f:.3f} → やめます")
                 break
             if not self._run_after_respawn(round_seq):
                 break
@@ -2509,7 +2509,7 @@ class ActionExecutor:
             if new_f is None or abs(new_f - 1.0) - abs(f - 1.0) >= config.RUN_DEPTH_WORSE - 1e-9:
                 back = "/input/MoveBackward" if forward else "/input/MoveForward"
                 why = "目印が消えた" if new_f is None else f"目標の倍率から離れた（{new_f:.3f}）"
-                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止める")
+                DebugLog.write(f"{head}: {why} → {back} {sec:.3f}秒で戻して止めます")
                 self._depth_press(back, sec, round_seq, head)
                 RunFace.save_shot(new_shot if new_shot is not None else shot, idx, "depth_reverted")
                 break
@@ -2564,15 +2564,15 @@ class ActionExecutor:
             if size == self._pos_ref_size:
                 return False                # 撮ってある（毎ラウンドは書かない）
             if why is None:
-                DebugLog.write(f"{head}: 窓の大きさが変わった（{self._pos_ref_size} → {size}）→ 撮り直す")
+                DebugLog.write(f"{head}: 窓の大きさが変わりました（{self._pos_ref_size} → {size}）→ 撮り直します")
         if why is None and self._pos_rounds < config.RUN_POS_AFTER_ROUNDS:
             why = f"普通に終わったラウンド {self._pos_rounds}/{config.RUN_POS_AFTER_ROUNDS}"
         if why is None and not self.can_operate():
             why = "private でない"
         if why is None and self._receiver is None:
-            why = "速さの受信が無い"
+            why = "速度の受信がない"
         if why:
-            DebugLog.write(f"{head}: 撮らない（{why}）")
+            DebugLog.write(f"{head}: 撮りません（{why}）")
             return False
         return True
 
@@ -2589,7 +2589,7 @@ class ActionExecutor:
                 return
             now = time.time()
             if now + config.RUN_POS_GAP_SEC >= deadline:
-                DebugLog.write(f"{head}: 撮らない（Begin 前の移動までに止まらなかった。最高の速さ {top:.2f}）")
+                DebugLog.write(f"{head}: 撮りません（Begin 前の移動までに止まらなかった。最高の速度 {top:.2f}）")
                 return
             speed = self._receiver_speed()
             if speed is not None:
@@ -2607,25 +2607,25 @@ class ActionExecutor:
         speed = self._receiver_speed()
         second = self._capture_bgr()
         if speed is None or speed >= config.RUN_POS_STILL_SPEED:
-            DebugLog.write(f"{head}: 撮らない（2 枚の間に動いた。速さ {speed}）")
+            DebugLog.write(f"{head}: 撮りません（2 枚の間に動いた。速度 {speed}）")
             return
         d = RunPos.diff(first, second)
         if d is None:
-            DebugLog.write(f"{head}: 撮らない（撮れない・2 枚の大きさが違う）")
+            DebugLog.write(f"{head}: 撮りません（撮れない・2 枚の大きさが違う）")
             return
         if d > config.RUN_POS_DIFF_MAX:
-            DebugLog.write(f"{head}: 撮らない（2 枚の差 {d:.2f} > {config.RUN_POS_DIFF_MAX}。向きを変えた？）")
+            DebugLog.write(f"{head}: 撮りません（2 枚の差 {d:.2f} > {config.RUN_POS_DIFF_MAX}。向きを変えた？）")
             return
         light = RunPos.brightness(second)
         if light is None or light < config.RUN_POS_DARK_MAX:
-            DebugLog.write(f"{head}: 撮らない（画面が暗い（死んだ画面など）。明るさ "
+            DebugLog.write(f"{head}: 撮りません（画面が暗い（死んだ画面など）。明るさ "
                            + ("測れない" if light is None else f"{light:.1f} < {config.RUN_POS_DARK_MAX}") + "）")
             return
         path = RunPos.save(second, st.window_idx, "ref", size)
         if path is None:
             return
         self._pos_ref_size = size
-        DebugLog.write(f"{head}: 撮った {path.name}（2 枚の差 {d:.2f}・明るさ {light:.1f}・窓 {size}）")
+        DebugLog.write(f"{head}: 撮りました {path.name}（2 枚の差 {d:.2f}・明るさ {light:.1f}・窓 {size}）")
 
     def _take_pos_run(self):
         """Run のリスポーン → 後ろへ → 左へ → 向きの直し、の後に 1 枚（背面のまま。等倍）"""
@@ -2633,7 +2633,7 @@ class ActionExecutor:
         size = WindowOperator.client_size(self._cfg.hwnd)
         path = RunPos.save(self._capture_bgr(), st.window_idx, "run", size)
         DebugLog.write(f"[操作] [窓{st.window_idx}] Run の位置: Run の後 "
-                       + (f"撮った {path.name}（窓 {size}）" if path else "撮れない"))
+                       + (f"撮りました {path.name}（窓 {size}）" if path else "撮れません"))
 
     def _respawn_when_free(self, round_seq: int) -> str | None:
         """ほかの窓のフリーズが無いときに、前面を借りてリスポーンする。できたら None、だめなら理由。
@@ -2643,7 +2643,7 @@ class ActionExecutor:
         while True:
             while not self._nobody_else_frozen():
                 if not self._run_still(round_seq):
-                    DebugLog.write(f"{head} ほかの窓のフリーズが解けないまま Run が終わった → やらない")
+                    DebugLog.write(f"{head} ほかの窓のフリーズが解けないまま Run が終わりました → やりません")
                     return "ほかの窓のフリーズ中に Run が終わった"
                 time.sleep(config.RUN_RESPAWN_POLL_SEC)
             if not self._run_still(round_seq):
@@ -2651,7 +2651,7 @@ class ActionExecutor:
             result = self._respawn_in_front(round_seq)
             if result != "frozen":
                 return result
-            DebugLog.write(f"{head} ほかの窓がフリーズを開始した → 前面を返して、解けたらやり直す")
+            DebugLog.write(f"{head} ほかの窓がフリーズを開始しました → 前面を元の窓に戻して、解けたらやり直します")
 
     def _respawn_stop(self, round_seq: int) -> str | None:
         """前面を借りている間の見張り。"frozen"（ほかの窓のフリーズ）・理由（止めた等）・None（続けてよい）"""
@@ -2707,13 +2707,13 @@ class ActionExecutor:
             if not came:
                 # 前面は返した。残りを鍵の外で待つ
                 came = self._wait_respawn_line(seen, round_seq, since=pressed_at)
-                where = "前面を返した後"
+                where = "前面を元の窓に戻した後"
             if came:
                 self._respawn_menu_open = False         # 押せた（メニューは閉じている）
-                DebugLog.write(f"{head} 「Player respawned」を受けた（押してから "
+                DebugLog.write(f"{head} 「Player respawned」を受けました（押してから "
                                f"{time.time() - pressed_at:.2f} 秒・{where}）")
                 return None
-            DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ない")
+            DebugLog.write(f"{head} {config.RESPAWN_LOG_WAIT_SEC:.0f}秒で「Player respawned」が来ません")
         self._respawn_close_menu(head)
         return "リスポーンの行が来ない"
 
@@ -2752,7 +2752,7 @@ class ActionExecutor:
                     shot = self._capture_bgr()
                     found = RespawnButton.find(shot) if shot is not None else None
                     DebugLog.write(f"{head} ボタンを探す {n} 回目: "
-                                   + ("見つからない" if found is None else
+                                   + ("見つかりません" if found is None else
                                       f"中心 ({found[0]:.1f}, {found[1]:.1f})・一致 {found[2]:.3f}・倍率 {found[3]:.2f}"))
                     if found is not None:
                         break
@@ -2765,19 +2765,19 @@ class ActionExecutor:
                         if shot is not None:
                             RunFace.save_shot(shot, st.window_idx, "respawn_notfound")     # HG: 報告の「撮影」に入る
                         return "リスポーンのボタンが見つからない"
-                    DebugLog.write(f"{head} ボタンがもう写っていない → 押し直さない")
+                    DebugLog.write(f"{head} ボタンがもう写っていません → 押し直しません")
                     self._respawn_menu_open = False     # 閉じている（Esc を送らない）
                     return "リスポーンの行が来ない"
                 origin = WindowOperator.window_origin(hwnd)
                 if origin is None:
-                    return "窓が無い"
+                    return "窓がない"
                 point = (int(round(found[0] + origin[0])), int(round(found[1] + origin[1])))
                 if not self._place_cursor(point, head):
                     return "カーソルを置けない"
                 stop = self._respawn_stop(round_seq)
                 if stop:
                     return stop
-                DebugLog.write(f"{head} リスポーンのボタンを押す {point}（{presses} 回目）")
+                DebugLog.write(f"{head} リスポーンのボタンを押します {point}（{presses} 回目）")
                 WindowOperator.mouse_click(config.RESPAWN_CLICK_SEC)
                 pressed = True
                 self._respawn_pressed_at = time.time()
@@ -2791,14 +2791,14 @@ class ActionExecutor:
                     try:
                         WindowOperator.return_front(loan)
                     finally:
-                        self._put_cursor_back(cursor, "Run", "前面を借りる前")
+                        self._put_cursor_back(cursor, "Run", "一時的に前面にする前")
 
     def _respawn_esc_if_open(self, head: str):
         """メニューが開いていて、この窓が前面なら Esc で閉じる（前面でなければ送らない）"""
         if self._respawn_menu_open and WindowOperator.foreground_hwnd() == self._cfg.hwnd:
             WindowOperator.send_keys("esc")
             self._respawn_menu_open = False
-            DebugLog.write(f"{head} メニューを閉じた（Esc）")
+            DebugLog.write(f"{head} メニューを閉じました（Esc）")
 
     def _wait_respawn_line(self, seen: int, round_seq: int, sec: float | None = None,
                            since: float | None = None) -> bool:
@@ -2834,7 +2834,7 @@ class ActionExecutor:
                 try:
                     WindowOperator.return_front(loan)
                 finally:
-                    self._put_cursor_back(cursor, "Run", "前面を借りる前")
+                    self._put_cursor_back(cursor, "Run", "一時的に前面にする前")
 
     def _respawn_stop_before_front(self, round_seq: int) -> str | None:
         """鍵を取った後、前面を借りる前の見張り（前面かどうかはまだ見ない）"""
@@ -2854,7 +2854,7 @@ class ActionExecutor:
             read = WindowOperator.cursor_position()
             placed = (read is not None and abs(read[0] - point[0]) <= tol and abs(read[1] - point[1]) <= tol)
             DebugLog.write(f"{head} カーソル: 置いた {point} → 読み直し {read}（置き直し {tries - 1} 回）"
-                           + ("" if placed else " ずれている"))
+                           + ("" if placed else " ずれています"))
             if placed:
                 return True
         return False
@@ -2879,7 +2879,7 @@ class ActionExecutor:
         if rect is None:
             return
         self._continue_rect = rect
-        DebugLog.write(f"{head} 窓の位置を覚えた {rect}"
+        DebugLog.write(f"{head} 窓の位置を覚えました {rect}"
                        + ("（最大化の元の矩形）" if state == "maximized" else ""))
 
     def after_continue_round(self):
@@ -2913,7 +2913,7 @@ class ActionExecutor:
             DebugLog.write(f"{head} アイテムを落としません（{'OSC が使えない窓' if self._osc is None else 'private でも干し芋・焼き芋でもない'}）")
             return
         self._osc.press("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC, stop=self._stopped)
-        DebugLog.write(f"{head} /input/DropRight を押して離した")
+        DebugLog.write(f"{head} /input/DropRight を押して離しました")
         self._log(message)
 
     def _restore_continue_window(self, rect):
@@ -2956,14 +2956,14 @@ class ActionExecutor:
                                        "窓に戻りません → 位置は動かしません")
                         return False
                     time.sleep(config.CONTINUE_WINDOWED_POLL_SEC)
-                DebugLog.write(f"{head} フルスクリーンを解除した（Alt+Enter）")
+                DebugLog.write(f"{head} フルスクリーンを解除しました（Alt+Enter）")
                 self._move_window_back(rect)
                 return True
             finally:
                 try:
                     WindowOperator.return_front(loan)
                 finally:
-                    self._put_cursor_back(cursor, "続行ラウンドの終わり", "前面を借りる前")
+                    self._put_cursor_back(cursor, "続行ラウンドの終わり", "一時的に前面にする前")
 
     def _move_window_back(self, rect) -> bool:
         """位置が rect の左上と違えば、位置だけ戻す（大きさは変えない）。動かしたら True"""
@@ -2977,8 +2977,8 @@ class ActionExecutor:
             return False
         size, was = (now[2] - now[0], now[3] - now[1]), (rect[2] - rect[0], rect[3] - rect[1])
         if size != was:
-            DebugLog.write(f"{head} 窓の大きさが始まりと違う（始まり {was[0]}x{was[1]}・今 {size[0]}x{size[1]}）"
-                           " → 大きさは変えずに位置だけ戻す")
+            DebugLog.write(f"{head} 窓の大きさが始まりと違います（始まり {was[0]}x{was[1]}・今 {size[0]}x{size[1]}）"
+                           " → 大きさは変えずに位置だけ戻します")
         return WindowOperator.move_window(hwnd, rect[0], rect[1])
 
     # ── 速度によるラウンド種別の検知 ────────────
@@ -3010,7 +3010,7 @@ class ActionExecutor:
         receiver = OSCReceiver.VelocityReceiver(self._cfg.hwnd, out_port, self._log,
                                                 window_label=f"窓{self._st.window_idx}")
         if not receiver.start():
-            self._log("速度受信を開始できないため種別検知を無効化します")
+            self._log("速度の受信を開始できないため種別検知を無効化します")
             self._speed_ready.set()
             return False
         self._receiver = receiver
@@ -3063,7 +3063,7 @@ class ActionExecutor:
             # 一度でも受信できていれば以後この警告は出ない。
             if not receiver.ever_received and not self._speed_recv_warned:
                 self._speed_recv_warned = True
-                self._log("速度を受信できないため種別検知を無効化します"
+                self._log("速度の受信ができないため種別検知を無効化します"
                           "（アバターに VelocityMagnitude がありません）")
 
     def do_speed_strafe(self):
@@ -3086,10 +3086,10 @@ class ActionExecutor:
             return
         # 受信の準備が済むまで待つ
         if not self._speed_ready.wait(timeout=config.SPEED_READY_TIMEOUT_SEC):
-            self._log("速度受信の準備を待てませんでした（移動は行います）")
+            self._log("速度の受信の準備を待てませんでした（移動は行います）")
         if not self.speed_receiving:
             # 速さが届いていない窓で動いても検知できない（DN。依頼者に届いた不具合の報告）
-            self._trace("[操作] 速度検知の横移動をしない（速さを受け取れていない）")
+            self._trace("[操作] 速度検知の横移動をしません（速度を受け取れていない）")
             return
         round_seq = st.round_seq
         for direction, sec in (("right", config.SPEED_PROBE_RIGHT_SEC),
@@ -3188,9 +3188,9 @@ class ActionExecutor:
             ok, loan = WindowOperator.borrow_front(self._cfg.hwnd)
             if ok:
                 SharedState.keep_front_loan(self._st, loan)   # 速度検知が解けたら返す
-                self._log("この窓を前面化しました（速度検知フリーズ）")
+                self._log("この窓を前面に出しました（速度検知フリーズ）")
             else:
-                self._log("⚠ 前面化に失敗（フリーズは継続）")
+                self._log("⚠ 前面に出せませんでした（フリーズは継続）")
 
     # ── AFK防止ループ ─────────────────────────
 
@@ -3205,15 +3205,15 @@ class ActionExecutor:
         """AFK 回避で動かす・鳴らすときの速さの記録（FG: 動いているのに鳴った件を追うため）"""
         receiver = self._receiver
         if receiver is None:
-            return "速さの受信器なし"
+            return "速度の受信なし"
         try:
             ever = receiver.ever_received
             last = receiver.last_received_at
         except Exception:
-            return "速さの受信器の値を読めない"
+            return "速度の受信の値を読めない"
         since = f"{now - last:.1f} 秒" if last else "なし"
         moved = self._receiver_moved_at()
-        return (f"最後に受けた速さ {speed if speed is None else f'{speed:.2f}'}・最後に受けてから {since}・"
+        return (f"最後に受けた速度 {speed if speed is None else f'{speed:.2f}'}・最後に受けてから {since}・"
                 f"受けたことが{'ある' if ever else 'ない'}・この {config.AFK_STILL_SEC:.0f} 秒の最大 "
                 f"{'なし' if peak is None else f'{peak:.2f}'}・最後に動いたと見てから "
                 f"{f'{now - moved:.1f} 秒' if moved else 'なし'}")
@@ -3257,14 +3257,14 @@ class ActionExecutor:
             if speed is None:
                 # 速さを一度も受けていない窓（受信器が無い・届かない）は、動いているか分からないので鳴らさない・
                 # 動かさない（FG: 依頼者の判断 A。0 が届いた後に何も来ないのは止まっているのと同じなので、そちらは鳴らす）
-                DebugLog.write(f"[操作] [窓{st.window_idx}] AFK 回避: 速さを受けていない → 鳴らさない・動かさない")
+                DebugLog.write(f"[操作] [窓{st.window_idx}] AFK 回避: 速度を受けていません → 鳴らしません・動かしません")
                 continue
             if self.can_operate():
                 self.move("forward", config.OPERATOR_WAIT_SEC)
-                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていない → 微移動")
+                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていません → 微移動")
             else:
                 PlaySound.play_sound(getattr(self._cfg, "voice_afk", ""), kind="afk")
-                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていない → 警告音")
+                self._log(f"AFK 回避: {config.AFK_STILL_SEC:.0f} 秒動いていません → 警告音")
 
     def do_open_special_round_loop(self, glorbo: bool = False):
         """
@@ -3335,7 +3335,7 @@ def summarize_motion(samples, released_at) -> str:
     debug.log の1行の「実測 …」を返す"""
     got = [(t, s, g) for t, s, g in samples if s is not None]
     if not got:
-        return "実測なし（速さを受信していません）"
+        return "実測なし（速度を受信していません）"
     distance = 0.0
     for (t0, s0, _), (t1, _s1, _) in zip(got, got[1:]):
         distance += s0 * (t1 - t0)
@@ -3374,7 +3374,7 @@ def summarize_motion(samples, released_at) -> str:
             f"動き出し {'なし' if start is None else f'{start:.2f}秒'}・"
             f"止まり {'、'.join(f'{a:.2f}〜{b:.2f}秒' for a, b in stalls) or 'なし'}・"
             f"接地 {'、'.join(changes) or 'なし'}・"
-            f"速さ {series}")
+            f"速度 {series}")
 
 
 def counted_note(extension: float, how: str, repressed: int = 0) -> str:
@@ -3532,11 +3532,11 @@ class _FrontOnlyMouse(_FetchMouse):
             placed = (read is not None and abs(read[0] - point[0]) <= tol
                       and abs(read[1] - point[1]) <= tol)
             DebugLog.write(f"[操作] カーソル: 置いた {point} → 読み直し {read}（置き直し {tries - 1} 回）"
-                           + ("" if placed else " ずれている"))
+                           + ("" if placed else " ずれています"))
             if placed:
                 break
         else:
-            DebugLog.write(f"[操作] クリックしない（カーソルを {point} へ {config.FETCH_CURSOR_TRIES} 回置けない）")
+            DebugLog.write(f"[操作] クリックしません（カーソルを {point} へ {config.FETCH_CURSOR_TRIES} 回置けない）")
             return False
         self._check_front()             # 待つ間に前面が変わったら押さない
         DebugLog.write(f"[操作] クリック（Tab を押したまま {point}）")

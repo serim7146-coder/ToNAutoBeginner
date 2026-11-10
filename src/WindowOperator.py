@@ -59,7 +59,7 @@ def _attach_and_raise(hwnd: int) -> None:
 def focus_window(hwnd: int) -> bool:
     """ウィンドウを前面化する。成功したら True（debug.log に成否を書く）"""
     ok = _focus_window(hwnd)
-    DebugLog.write(f"[操作] 前面化 hwnd={int(hwnd):#x} → {'成功' if ok else '失敗'}")
+    DebugLog.write(f"[操作] 前面に出す hwnd={int(hwnd):#x} → {'成功' if ok else '失敗'}")
     return ok
 
 
@@ -636,9 +636,9 @@ def return_front(loan) -> bool:
         DebugLog.exception("WindowOperator.return_front")
         return False
     if not can_bring_to_front(loan.previous):
-        DebugLog.write("[操作] 前面を返す → 相手が管理者権限のため返しません")
+        DebugLog.write("[操作] 前面を元の窓に戻す → 相手が管理者権限のため戻しません")
         return False
-    DebugLog.write(f"[操作] 前面を返す → hwnd={int(loan.previous):#x}")
+    DebugLog.write(f"[操作] 前面を元の窓に戻す → hwnd={int(loan.previous):#x}")
     if loan.cursor is not None:
         try:
             user32.SetCursorPos(*loan.cursor)
@@ -826,7 +826,7 @@ def restore_without_activating(hwnd: int) -> bool:
         return False
     DebugLog.write(f"[操作] 最大化を解除（前面にしない） hwnd={int(hwnd):#x} → {tuple(normal)}")
     if before and before != hwnd and foreground_hwnd() == hwnd:
-        DebugLog.write(f"[操作] 最大化を解除したら前面になった → hwnd={int(before):#x} へ返す")
+        DebugLog.write(f"[操作] 最大化を解除したら前面になりました → hwnd={int(before):#x} へ返します")
         focus_window(before)
     return True
 
@@ -956,7 +956,7 @@ def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> boo
         if config.CLICK_TAB_LEAD_SEC > 0:
             time.sleep(config.CLICK_TAB_LEAD_SEC)
         if still_front is not None and not still_front():
-            DebugLog.write("[操作] クリックしない（Tab の後に前面でなくなった）")
+            DebugLog.write("[操作] クリックしません（Tab の後に前面でなくなった）")
             return False
         DebugLog.write("[操作] クリック（Tab の後）")
         pydirectinput.mouseDown(_pause=pause)
@@ -969,12 +969,12 @@ def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> boo
 
 def press_tab():
     """Tab を押す（離すまで押したまま。アイテム取得の店の操作）。前面の窓へ届く"""
-    DebugLog.write("[操作] Tab を押した（離すまで押したまま）")
+    DebugLog.write("[操作] Tab を押しました（離すまで押したまま）")
     keyboard.press(config.CLICK_TAB_KEY)
 
 
 def release_tab():
-    DebugLog.write("[操作] Tab を離した")
+    DebugLog.write("[操作] Tab を離しました")
     keyboard.release(config.CLICK_TAB_KEY)
 
 

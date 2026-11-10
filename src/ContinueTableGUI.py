@@ -153,7 +153,7 @@ def item_choices(items: dict) -> list:
 
 def unknown_item_text(item_id: int) -> str:
     """item.json に無い id（保存した決まりに残っていたとき）の選択肢の文字"""
-    return f"#{item_id}（表に無い）"
+    return f"#{item_id}（表にない）"
 
 
 def pick_text(pick) -> str:
@@ -896,7 +896,7 @@ class ContinueTableWindow(tk.Toplevel):
         name = name.strip()
         if name in ContinueTable.presets_of(store, which):
             if not self._confirm(f"{KIND_TITLE[which]}のプリセット「{name}」を上書きします。よいですか？\n"
-                                 "このプリセットを写していたほかの窓の表示は「-」になります（窓の表は変わりません）。"):
+                                 "このプリセットを適用していたほかの窓の表示は「-」になります（窓の表は変わりません）。"):
                 return
         else:
             error = ContinueTable.name_error(store, which, name)

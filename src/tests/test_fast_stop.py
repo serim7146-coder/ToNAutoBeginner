@@ -79,7 +79,7 @@ class TestVolumeStop(unittest.TestCase):
             thread = ctl._thread
             ctl.stop()
             thread.join(2)
-        self.assertTrue(any("[音量] COM を片付けた（" in str(c) for c in write.call_args_list))
+        self.assertTrue(any("[音量] COM を片付けました（" in str(c) for c in write.call_args_list))
 
     def test_restoring_is_signalled_even_on_an_error(self):
         audio = _Audio()

@@ -54,13 +54,13 @@ class TestTheAfkWatch(_Afk):
         self.assertEqual([round(t) for t, *_ in moves], [70, 140])
         self.assertEqual(moves[0][1:], ("forward", config.OPERATOR_WAIT_SEC), "DTM/Waldo と同じ動かし方")
         self.assertEqual(sounds, [])
-        self.assertEqual(logs.count("AFK 回避: 70 秒動いていない → 微移動"), 2)
+        self.assertEqual(logs.count("AFK 回避: 70 秒動いていません → 微移動"), 2)
 
     def test_not_private_plays_the_warning(self):
         moves, sounds, logs = self._watch(private=False)
         self.assertEqual(moves, [])
         self.assertEqual([(round(t), p, k) for t, p, k in sounds], [(70, "afk.mp3", "afk"), (140, "afk.mp3", "afk")])
-        self.assertIn("AFK 回避: 70 秒動いていない → 警告音", logs)
+        self.assertIn("AFK 回避: 70 秒動いていません → 警告音", logs)
 
     def test_moving_starts_the_count_again(self):
         moves, _s, _l = self._watch(speed=lambda t: 3.0 if t < 30 else 0.0)

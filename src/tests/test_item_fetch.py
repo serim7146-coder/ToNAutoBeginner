@@ -456,7 +456,7 @@ class TestFetchYield(unittest.TestCase):
         self.assertEqual(first, [(0, 5)] * 4, "最初に縦だけ戻す（6px 以下の刻み）")
         self.assertEqual(self.sent, first, "2回目は戻さない（もう覚えていない）")
         self.assertEqual(ex._pending_view_dy, 0)
-        self.assertIn("[操作] [窓3] アイテム取得: 残っていた縦の視点を戻した（縦 20）",
+        self.assertIn("[操作] [窓3] アイテム取得: 残っていた縦の視点を戻しました（縦 20）",
                       [c.args[0] for c in write.call_args_list])
 
     def test_a_restored_view_leaves_nothing_behind(self):
@@ -1253,7 +1253,7 @@ class TestItemFetchViewRestore(unittest.TestCase):
         self.assertEqual((sum(dx for dx, _ in back), sum(dy for _, dy in back)), (0, -sent[1]), "縦だけ")
         self.assertTrue(all(dx == 0 and abs(dy) <= 6 for dx, dy in back), "6px 刻み・横は送らない")
         self.assertEqual(world["mouse"], [sent[0], 0], "縦は元の高さ・横はそのまま")
-        self.assertIn(f"アイテム取得: 視点を戻した（縦 {-sent[1]}）", self.logs)
+        self.assertIn(f"アイテム取得: 視点を戻しました（縦 {-sent[1]}）", self.logs)
 
     def test_the_steps_are_5ms_apart(self):
         self.assertEqual(ItemFetch.STEP_SEC, 0.005)
@@ -1396,7 +1396,7 @@ class TestItemFetchViewRestore(unittest.TestCase):
         with patch.object(DebugLog, "write") as write:
             self._run(lambda f: self._moves(f))
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[操作] [窓2] アイテム取得: 視点を戻した（縦 20）", lines)
+        self.assertIn("[操作] [窓2] アイテム取得: 視点を戻しました（縦 20）", lines)
         self.assertFalse(any("向きを戻した" in l for l in lines))
 
 

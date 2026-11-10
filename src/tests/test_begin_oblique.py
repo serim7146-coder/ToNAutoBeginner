@@ -128,7 +128,7 @@ class TestItGoesOnToTheAdjust(unittest.TestCase):
         self.assertEqual(hit["rule"], "features")
         self.assertEqual(hit["H"], 660)
         self.assertEqual(aim, (426, 330))
-        self.assertTrue(any("[窓6] Begin: 斜めの BEGIN を特徴点で見つけた（最初・中心 (" in m for m in self.written),
+        self.assertTrue(any("[窓6] Begin: 斜めの BEGIN を特徴点で見つけました（最初・中心 (" in m for m in self.written),
                         self.written)
 
     def test_the_adjust_moves_toward_it(self):

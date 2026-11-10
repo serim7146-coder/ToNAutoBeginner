@@ -2015,8 +2015,8 @@ class TestAnnounceFold(unittest.TestCase):
     """③ の音声ファイル12行は「アナウンス」（既定で閉じる）に畳む。音量の2つは外（下）"""
 
     LABELS = ["続行ラウンド", "Alternate", "Midnight", "Unbound", "Fog", "Ghost",
-              "8 Pages(速度検知)", "Punish(速度検知)", "アイテムロスト", "Intermission",
-              "Evil Purple Foxy", "主催リスト喪失", "待機列", "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
+              "8 Pages(速度検知)", "Punished(速度検知)", "アイテムロスト", "Intermission",
+              "Evil Purple Foxy", "主催リストが取れないとき", "待機列", "Sabotage murder", "Sabotage star", "Cracked", "Double Trouble",
               "AFK"]                         # FG: 見出しの「:」は外した（依頼者了承の案）
     VARS = ["v_voice_continue", "v_voice_alternate", "v_voice_midnight", "v_voice_unbound",
             "v_voice_fog", "v_voice_ghost", "v_voice_8pages", "v_voice_punish",

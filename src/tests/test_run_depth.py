@@ -347,7 +347,7 @@ class TestDepthIsOff(unittest.TestCase):
         w = _World(self, f=1.12)
         w.ex._last_face = (_IMG, None)
         self.assertIsNone(w.ex._fix_depth(1))
-        self.assertIn("[操作] [窓2] Run: 前後: 目印が見つからない → 直さない", w.written)
+        self.assertIn("[操作] [窓2] Run: 前後: 目印が見つかりません → 直しません", w.written)
 
     def test_the_switch_on_moves_like_before(self):
         w = _World(self, f=1.12)

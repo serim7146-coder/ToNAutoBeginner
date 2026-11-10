@@ -40,7 +40,7 @@ SIGNALS: tuple[Signal, ...] = (
            "🩸 Bloodthirsty 出現（Curious の Variant）"),
     # 行のどこかに出る。大文字小文字も問わない
     Signal("foxy", re.compile(r"foxy the pirate turned evil!", re.IGNORECASE),
-           "foxy the pirate turned evil!", "🦊 Evil Purple Foxyが出た！"),
+           "foxy the pirate turned evil!", "🦊 Evil Purple Foxy 出現"),
     # この行はまだ実ログで観測できていない（低確率で、手元のログ22本には0件）。
     # 正確な大文字小文字と句点が分からないので緩く受ける。実物が取れたら締める
     Signal("glorbo", re.compile(r"^the real g has appeared[.]?$", re.IGNORECASE),

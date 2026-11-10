@@ -109,7 +109,7 @@ class TestOSCQueryFirst(_FirstCase):
             r = self._receiver(11, 9031, "窓4")
             r.start()
             self.assertEqual(self._wait_mode(r), OSCReceiver.MODE_NONE)
-        self.assertEqual(self.logs, ["窓4: 速さを受け取れません（OSCQuery で届かず、ポート 9031 は ToNUtils.exe が使っています）"])
+        self.assertEqual(self.logs, ["窓4: 速度を受け取れません（OSCQuery で届かず、ポート 9031 は ToNUtils.exe が使っています）"])
         self.assertFalse(r.ever_received)
 
     def test_an_unknown_owner_is_said_too(self):
@@ -118,7 +118,7 @@ class TestOSCQueryFirst(_FirstCase):
             r = self._receiver(11, 9031, "窓4")
             r.start()
             self._wait_mode(r, OSCReceiver.MODE_NONE)
-        self.assertEqual(self.logs, ["窓4: 速さを受け取れません（OSCQuery で届かず、ポート 9031 は ほかのアプリ が使っています）"])
+        self.assertEqual(self.logs, ["窓4: 速度を受け取れません（OSCQuery で届かず、ポート 9031 は ほかのアプリ が使っています）"])
 
     def test_two_windows_received_in_different_ways_do_not_mix(self):
         a = self._receiver(11, 9011, "窓1")
@@ -176,8 +176,8 @@ class TestOSCQueryFirst(_FirstCase):
             b.start()
             self._wait_mode(b)
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[速度受信] 窓1: OSCQuery で受信（PID 100）。固定ポート 9011 は開かない", lines)
-        self.assertTrue(any(l.startswith("[速度受信] 窓2: OSCQuery で") and "固定ポート 9021 で受信" in l
+        self.assertIn("[速度の受信] 窓1: OSCQuery で受信（PID 100）。固定ポート 9011 は開きません", lines)
+        self.assertTrue(any(l.startswith("[速度の受信] 窓2: OSCQuery で") and "固定ポート 9021 で受信" in l
                             for l in lines), lines)
 
 

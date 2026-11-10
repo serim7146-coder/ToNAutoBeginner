@@ -178,7 +178,7 @@ class UtilsWatch:
             finally:
                 con.close()
         except sqlite3.Error as e:
-            DebugLog.write(f"[Utils] save-history を読めない（{type(e).__name__}）。少し後にもう一度")
+            DebugLog.write(f"[Utils] save-history を読めません（{type(e).__name__}）。少し後にもう一度")
             return {}
         return {normalize_started(started): str(source) for source, started in rows if source and started}
 

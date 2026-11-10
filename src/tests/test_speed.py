@@ -379,7 +379,7 @@ class TestSpeedDetect(unittest.TestCase):
         st, _logs, played = self._run(self.FakeReceiver(None, ever_received=False))
 
         self.assertEqual(st.speed_round_kind, "")
-        self.assertTrue(any("速度を受信できない" in m for m in _logs))
+        self.assertTrue(any("速度の受信ができない" in m for m in _logs))
 
     def test_detect_runs_in_any_instance(self):
         for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_PUBLIC):
@@ -498,7 +498,7 @@ class TestVelocityReceiverLifecycle(unittest.TestCase):
 
         self.assertIsNone(ex._receiver)
         self.assertTrue(ex._speed_ready.is_set())
-        self.assertEqual(len([m for m in logs if "速度受信を開始できない" in m]), 1)
+        self.assertEqual(len([m for m in logs if "速度の受信を開始できない" in m]), 1)
 
     def test_stop_without_start_is_safe(self):
         ex, _logs = self._executor()

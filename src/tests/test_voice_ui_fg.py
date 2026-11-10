@@ -67,7 +67,7 @@ class TestTheAfkNote(unittest.TestCase):
         receiver.ever_received = True
         receiver.last_received_at = 1000.0 - 12.5
         lines, _ = self._watch(receiver, [0.05, 0.0, 0.08, 0.0])
-        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 最後に受けた速さ 0.00・最後に受けてから 82.5 秒・"
+        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 最後に受けた速度 0.00・最後に受けてから 82.5 秒・"
                                  "受けたことがある・この 70 秒の最大 0.08・最後に動いたと見てから なし"])
 
     def test_never_received_and_no_receiver(self):
@@ -75,12 +75,12 @@ class TestTheAfkNote(unittest.TestCase):
         receiver.ever_received = False
         receiver.last_received_at = 0.0
         lines, _ = self._watch(receiver, [None])
-        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 最後に受けた速さ None・最後に受けてから なし・"
+        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 最後に受けた速度 None・最後に受けてから なし・"
                                  "受けたことがない・この 70 秒の最大 なし・最後に動いたと見てから なし",
-                                 "[操作] [窓1] AFK 回避: 速さを受けていない → 鳴らさない・動かさない"])
+                                 "[操作] [窓1] AFK 回避: 速度を受けていません → 鳴らしません・動かしません"])
         lines, _ = self._watch(None, [None])
-        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 速さの受信器なし",
-                                 "[操作] [窓1] AFK 回避: 速さを受けていない → 鳴らさない・動かさない"])
+        self.assertEqual(lines, ["[操作] [窓1] AFK 回避: 速度の受信なし",
+                                 "[操作] [窓1] AFK 回避: 速度を受けていません → 鳴らしません・動かしません"])
 
     def test_settings_load_the_voice_switches(self):
         self.assertIn("App._load_voice_enabled(self, data)", inspect.getsource(mainGUI.App._load_saved_settings))
@@ -152,7 +152,7 @@ class TestVoiceOnOff(unittest.TestCase):
         PlaySound.set_voice_enabled("afk", False)
         played, written = self._played(kind="afk")
         self.assertFalse(played)
-        self.assertIn("[音声] afk はオフ → 鳴らさない", written)
+        self.assertIn("[音声] afk はオフ → 鳴らしません", written)
         self.assertTrue(self._played(kind="afk", force=True)[0], "▶ はオフでも鳴る")
         self.assertTrue(self._played(kind="fog")[0], "ほかの声は鳴る")
         self.assertTrue(self._played()[0], "種類なしは今どおり")
@@ -221,7 +221,7 @@ class TestTheAnnounceRows(unittest.TestCase):
 
     def test_the_title_width_fits_the_longest(self):
         widths = {str(k[1].cget("width")) for k in self._rows()}
-        self.assertEqual(widths, {str(mainGUI.display_width("8 Pages(速度検知)"))})
+        self.assertEqual(widths, {str(mainGUI.display_width("主催リストが取れないとき"))})
         self.assertEqual(mainGUI.display_width("主催リスト喪失"), 14)
         self.assertEqual(mainGUI.display_width("8 Pages(速度検知)"), 17)
 

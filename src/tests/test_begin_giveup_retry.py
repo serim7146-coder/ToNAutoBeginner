@@ -73,7 +73,7 @@ class TestFirstRetryAfter30Seconds(_Retry):
         self.accept_on = 1
         ex._retry_after_giving_up(7)
         self.assertEqual([o[0] for o in self.order], ["respawn", "again"], "店の前（ここ）から動くと別の所へ行く。EY と同じ")
-        self.assertIn("Begin: リスポーンできなかった → その場から押します", self.logs)
+        self.assertIn("Begin: リスポーンできませんでした → その場から押します", self.logs)
 
     def test_a_window_without_osc_cannot_respawn_and_presses_from_there(self):
         ex, st = self._ex()

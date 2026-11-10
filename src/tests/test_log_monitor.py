@@ -326,14 +326,14 @@ class TestHeldItem(unittest.TestCase):
         lines = [m.split("] ", 1)[1] for m in monitor.logs if "アイテム" in m]
         self.assertIn("✅ アイテム装備: Emerald Coil", lines)
         self.assertIn("✅ アイテム装備: #77", lines)
-        self.assertIn("アイテムを外した", lines)
+        self.assertIn("アイテムを外しました", lines)
         self.assertFalse([m for m in lines if "id=" in m], lines)
 
     def test_equipping_holds_it_and_logs_the_name_once(self):
         monitor = self._monitor()
         self._feed(monitor, "Equipping 29.", "Equipping 29. Was using 29", "Equipping 77.")
         self.assertEqual(self._held_logs(monitor),
-                         ["所持アイテム: Emerald Coil", "所持アイテム: #77（表に無い）"])
+                         ["所持アイテム: Emerald Coil", "所持アイテム: #77（表にない）"])
         self.assertEqual(monitor.held_item(), (77, None))
         self._feed(monitor, "Equipping 36.")
         self.assertEqual(monitor.held_item(), (36, "Hamburger"))
@@ -436,7 +436,7 @@ class TestHeldItem(unittest.TestCase):
             monitor = self._monitor()
             self._feed(monitor, "Equipping 29.", self._start("8 Pages"), "Page Collected - 1/8")
             self.assertEqual(monitor.st.held_item_id, 29)
-            self.assertIn("所持アイテム: #29（表に無い）", self._held_logs(monitor))
+            self.assertIn("所持アイテム: #29（表にない）", self._held_logs(monitor))
 
     # ── インスタンス移動 ─────────────────────────
     def test_moving_to_another_instance_loses_it(self):
@@ -562,7 +562,7 @@ class TestHeldItemRestored(unittest.TestCase):
 
     def test_an_item_not_in_the_table(self):
         monitor, log = self._restore([self.JOIN, "Equipping 77."])
-        self.assertEqual(log, "所持アイテム（入室後のログから）: #77（表に無い）")
+        self.assertEqual(log, "所持アイテム（入室後のログから）: #77（表にない）")
 
     def test_the_same_rules_as_while_watching(self):
         cases = [

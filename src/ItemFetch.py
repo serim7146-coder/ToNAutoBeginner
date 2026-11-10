@@ -437,7 +437,7 @@ def _knob_text(band, est) -> str:
     """ログ「つまみ 実測（引く前）」の中身。band は knob_band の結果、est は見積もりの点"""
     where = f"（見積もり ({est[0]:.1f}, {est[1]:.1f})）"
     if band is None:
-        return f"見つからない{where}"
+        return f"見つかりません{where}"
     return f"x {band[0]:.1f}・y {band[1]}〜{band[2]}{where}"
 
 
@@ -550,7 +550,7 @@ class Fetcher:
             now = self.clock()
             if now >= deadline:
                 self.log(f"アイテム取得: 柵を越えられません（{FENCE_LIMIT_SEC:.1f}秒・跳んだ {jumps} 回・"
-                         f"着地 {lands} 回・" + ("歩き出した" if moved else "速さが出ない") + "）")
+                         f"着地 {lands} 回・" + ("歩き出した" if moved else "速度が出ない") + "）")
                 return False
             self._check()
             s = self._speed_now()
@@ -559,12 +559,12 @@ class Fetcher:
                 if s is not None and s >= FENCE_MOVE_SPEED:
                     moved = True
                 if moved and s is not None and s < FENCE_HIT_SPEED:
-                    self.log(f"アイテム取得: 柵に当たった {now - started:.2f}秒（速さ {s:.2f}）→ 跳ぶ")
+                    self.log(f"アイテム取得: 柵に当たった {now - started:.2f}秒（速度 {s:.2f}）→ 跳びます")
                     jumps, jumped_at, lands, air = 1, self.clock(), 0, False     # 着地は跳び始めから数える
                     self._jump()
                 elif not moved and now - pressed_at >= FENCE_START_WAIT_SEC and represses < FENCE_REPRESS_MAX:
                     represses += 1
-                    self.log(f"アイテム取得: 速さが出ない（{FENCE_START_WAIT_SEC:.1f}秒）→ 左を押し直す（{represses} 回目）")
+                    self.log(f"アイテム取得: 速度が出ません（{FENCE_START_WAIT_SEC:.1f}秒）→ 左を押し直します（{represses} 回目）")
                     self.osc.send("/input/MoveLeft", 0)
                     self.sleep(FENCE_REPRESS_GAP_SEC)
                     self.osc.send("/input/MoveLeft", 1)
@@ -585,8 +585,8 @@ class Fetcher:
                          and (lands >= 1 or now - jumped_at >= FENCE_REJUMP_SEC))
                 if stuck and jumps < FENCE_JUMPS:
                     jumps += 1
-                    self.log(f"アイテム取得: 越えられずに張り付いた {now - started:.2f}秒（速さ {s:.2f}・着地 {lands} 回）"
-                             f"→ 跳び直す（{jumps} 回目）")
+                    self.log(f"アイテム取得: 越えられずに張り付いた {now - started:.2f}秒（速度 {s:.2f}・着地 {lands} 回）"
+                             f"→ 跳び直します（{jumps} 回目）")
                     jumped_at, lands, air, land_times = self.clock(), 0, False, []
                     self._jump()
             self.sleep(LAND_POLL_SEC)
@@ -629,7 +629,7 @@ class Fetcher:
         for sx, sy in split_move(0, dy):
             self.mouse.move_rel(sx, sy)
             self.sleep(STEP_SEC)
-        self.log(f"アイテム取得: 視点を戻した（縦 {dy}）")
+        self.log(f"アイテム取得: 視点を戻しました（縦 {dy}）")
 
     # ── 3. 店の画面の全体を映す・店のボタン ──
     def frame_panel(self, shop: str, plush_row: bool = False):
@@ -647,7 +647,7 @@ class Fetcher:
             found = self.locate(shot[0], point) if shot is not None else None
             if found is None or len(found) < 6 or not callable(found[5]):
                 misses += 1
-                self.log(f"アイテム取得: 店の画面 {misses} 回目: 見つからない")
+                self.log(f"アイテム取得: 店の画面 {misses} 回目: 見つかりません")
                 if misses > MISS_TRIES:
                     self.log("アイテム取得: 店の画面が見つかりません")
                     self._miss("店の画面")
@@ -713,7 +713,7 @@ class Fetcher:
         if self.saved_gain:
             self.gain = tuple(self.saved_gain)
             self.gain_from_saved = True
-            self.log(f"アイテム取得: 感度 保存した値を使う（横 {self.gain[0]:.3f}・縦 {self.gain[1]:.3f}）")
+            self.log(f"アイテム取得: 感度 保存した値を使います（横 {self.gain[0]:.3f}・縦 {self.gain[1]:.3f}）")
             return True
         return self.calibrate(shop)
 
@@ -922,7 +922,7 @@ class Fetcher:
                 self.last_shot = shot[0]
             after = knob_band(shot[0], top, (ksx, ksy)) if shot is not None else None
             if before is None or after is None:
-                self.log("アイテム取得: つまみ 実測（引いた後）: 比べられない")
+                self.log("アイテム取得: つまみ 実測（引いた後）: 比べられません")
             else:
                 moved = abs(after[1] - before[1])
                 self.log(f"アイテム取得: つまみ 実測（引いた後）: y {after[1]}〜{after[2]}（"

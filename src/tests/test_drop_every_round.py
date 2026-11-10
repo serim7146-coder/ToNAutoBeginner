@@ -61,7 +61,7 @@ class TestDropOnDeathOrLife(_Case):
         monitor._process(DIED)
         self.assertEqual(self.osc.sent, [("/input/DropRight", config.CONTINUE_DROP_PRESS_SEC)])
         self.assertIn("死んだので、アイテムを落としました", monitor.logs)
-        self.assertTrue(any("[操作] [窓3] 死んだ: /input/DropRight を押して離した" in m for m in self.written))
+        self.assertTrue(any("[操作] [窓3] 死んだ: /input/DropRight を押して離しました" in m for m in self.written))
 
     def test_living_drops_once(self):
         monitor = self._monitor()

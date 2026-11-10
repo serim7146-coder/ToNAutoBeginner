@@ -412,7 +412,7 @@ class TestTurningToTheFront(unittest.TestCase):
         self.assertAlmostEqual(world.x, 327 + 13, delta=0.01, msg="押す前の向きに戻った")
         self.assertEqual(self.saved, [(1, "reverted")])
         self.assertEqual(world.stops, 2)
-        self.assertTrue(any("→ /input/LookHorizontal -0.55 0.221秒で戻して止める" in m for m in self._logs()), self._logs())
+        self.assertTrue(any("→ /input/LookHorizontal -0.55 0.221秒で戻して止めます" in m for m in self._logs()), self._logs())
 
     def test_worse_after_the_axis_on_the_left_turns_back_plus(self):
         world = _World(327 - 13, width=654, axis_gain=3.0)
@@ -433,7 +433,7 @@ class TestTurningToTheFront(unittest.TestCase):
         self.assertEqual(len(world.axis), 6)
         self.assertEqual(world.presses, [])
         self.assertEqual(self.saved, [(1, "tries")])
-        self.assertTrue(any("6 回直しても ずれ" in m and "やめる" in m for m in self._logs()), self._logs())
+        self.assertTrue(any("6 回直しても ずれ" in m and "やめます" in m for m in self._logs()), self._logs())
 
     def test_the_axis_turn_stops_with_the_round_or_the_stop(self):
         """軸に渡す stop は、ラウンドが進んだ・止めたで True（今のボタンと同じ）"""

@@ -564,7 +564,7 @@ class TestDv2Keys(_AppCase):
             self._clear("stop")
         ask.assert_called_once()
         self.assertEqual(ask.call_args.args[0], "停止のキーの解除")          # DV3:「停止」
-        self.assertIn("停止のキーが無くなります", ask.call_args.args[1])
+        self.assertIn("停止のキーがなくなります", ask.call_args.args[1])
         self.assertNotIn("緊急", ask.call_args.args[1])
         self.assertEqual(self.app.v_emergency_key.get(), config.EMERGENCY_STOP_KEY,
                          "いいえなら解除しない")
@@ -706,7 +706,7 @@ class TestLaunchDetailRows(_AppCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[0].pack_slaves()[0].cget("text"), "インスタンスタイプ:")
         self.assertEqual([w.cget("text") for w in rows[1].pack_slaves()],
-                         ["ToNへ自動Join", "入室後の選択画面を自動突破", "自動でBeginを押す",
+                         ["ToNへ自動Join", "入室後の選択画面を自動で進める", "自動でBeginを押す",
                           "Guidance Plushを自動取得"])
         self.assertIs(rows[1], self.app.chk_ton_entry_plush.master)
         self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "起動オプション:")

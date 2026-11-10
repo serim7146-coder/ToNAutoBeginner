@@ -186,12 +186,12 @@ class TestTheDarkReference(unittest.TestCase):
         for _ in range(3):
             w.round_over()
         self.assertEqual(w.files(), [], "死んだ画面（明るさ 13）は基準にしない")
-        self.assertIn("[操作] [窓2] Run の位置: 基準: 撮らない（画面が暗い（死んだ画面など）。明るさ 13.0 < 15.0）",
+        self.assertIn("[操作] [窓2] Run の位置: 基準: 撮りません（画面が暗い（死んだ画面など）。明るさ 13.0 < 15.0）",
                       w.written)
         w.ex._capture_bgr = w.capture               # 明るさ 40
         w.round_over()
         self.assertEqual(len(w.files("ref")), 1, "次のラウンドでまた試す")
-        self.assertTrue(any("基準: 撮った" in m and "明るさ 40.0" in m for m in w.written), w.written)
+        self.assertTrue(any("基準: 撮りました" in m and "明るさ 40.0" in m for m in w.written), w.written)
 
     def test_just_at_the_line_is_taken(self):
         w = _world(self)

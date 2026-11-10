@@ -1001,7 +1001,7 @@ class TestOptimization(unittest.TestCase):
             self.assertFalse(WindowOperator.return_front(loan))
         focus.assert_not_called()
         cursor.assert_not_called()
-        self.assertIn("[操作] 前面を返す → 相手が管理者権限のため返しません", written)
+        self.assertIn("[操作] 前面を元の窓に戻す → 相手が管理者権限のため戻しません", written)
 
     def test_can_bring_to_front(self):
         def run(me, target):
@@ -1561,7 +1561,7 @@ class TestRoundTypeObservation(unittest.TestCase):
         # 書いてよいのは定期 Verified の位相の1行だけ。ラウンドの行は書かない
         self.assertFalse(any("round type" in m for m in self.written), self.written)
         self.assertEqual(len(self.written), 1, self.written)
-        self.assertIn("定期 Verified の位相", self.written[0])
+        self.assertIn("定期 Verified のタイミング", self.written[0])
 
 
 class TestStopReleasesHolds(unittest.TestCase):

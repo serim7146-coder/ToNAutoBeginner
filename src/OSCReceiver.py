@@ -128,7 +128,7 @@ class VelocityReceiver:
             self._wait_thread = TaskStats.thread("OSCReceiver._wait_then_fall_back", self._wait_then_fall_back, daemon=True)
             self._wait_thread.start()
         else:
-            DebugLog.write(f"[速度受信] {self.window_label}: OSCQuery のサービスを立てられない → 固定ポートへ")
+            DebugLog.write(f"[速度の受信] {self.window_label}: OSCQuery のサービスを立てられません → 固定ポートへ")
             self.fall_back()
         return True
 
@@ -171,8 +171,8 @@ class VelocityReceiver:
                 first = False
             accept = self.mode == MODE_OSCQUERY
         if first:
-            DebugLog.write(f"[速度受信] {self.window_label}: OSCQuery で受信（PID {self.pid}）。固定ポート "
-                           f"{self._port} は開かない")
+            DebugLog.write(f"[速度の受信] {self.window_label}: OSCQuery で受信（PID {self.pid}）。固定ポート "
+                           f"{self._port} は開きません")
         return accept
 
     def fall_back(self, why=None):
@@ -190,19 +190,19 @@ class VelocityReceiver:
             sock.settimeout(0.2)
         except OSError as e:
             owner = port_owner(self._port)
-            DebugLog.write(f"[速度受信] {self.window_label}: 固定ポート {self._port} は {owner} が使用中"
-                           f"（{e}）→ 受け取れない")
+            DebugLog.write(f"[速度の受信] {self.window_label}: 固定ポート {self._port} は {owner} が使用中"
+                           f"（{e}）→ 受け取れません")
             self._give_up(f"ポート {self._port} は {owner} が使っています")
             return
         self._sock = sock
         reason = why or f"OSCQuery で {config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない "
-        DebugLog.write(f"[速度受信] {self.window_label}: {reason}→ 固定ポート {self._port} で受信")
+        DebugLog.write(f"[速度の受信] {self.window_label}: {reason}→ 固定ポート {self._port} で受信")
         TaskStats.thread("OSCReceiver._run", self._run, daemon=True).start()
 
     def _give_up(self, why: str):
         with self._lock:
             self.mode = MODE_NONE
-        self._log(f"{self.window_label}: 速さを受け取れません（OSCQuery で届かず、{why}）")
+        self._log(f"{self.window_label}: 速度を受け取れません（OSCQuery で届かず、{why}）")
 
     def _run(self):
         while self._running and self._sock is not None:

@@ -1272,7 +1272,7 @@ class TestGlorboContinue(unittest.TestCase):
         else:
             self.play.assert_called_once_with("continue.mp3", kind="continue")
             self.record.assert_called_once_with(1)
-        for line in ("判定: Glorbo / Punished 【プレイ(Glorbo)】", "⏸ 続行ラウンド中 → 他窓フリーズ開始",
+        for line in ("判定: Glorbo / Punished 【プレイ(Glorbo)】", "⏸ 続行ラウンド中 → ほかの窓のフリーズ開始",
                      "AFK解除ループ開始（Glorbo）"):
             self.assertTrue(any(line in m for m in monitor.logs), (line, monitor.logs))
 

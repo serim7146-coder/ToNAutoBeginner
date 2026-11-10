@@ -36,7 +36,7 @@ class TestTheGateInFront(unittest.TestCase):
         self.assertEqual(outcome, "late")
         locked.assert_not_called()
         borrow.assert_not_called()
-        self.assertIn("[操作] [窓5] アイテム取得: Connecting から 6.0 秒（上限 5.0 秒）→ この回は店の操作を見送る",
+        self.assertIn("[操作] [窓5] アイテム取得: Connecting から 6.0 秒（上限 5.0 秒）→ この回は店の操作を見送ります",
                       self.written)
 
     def test_within_the_limit_goes(self):
@@ -117,7 +117,7 @@ class TestTheRetryCount(unittest.TestCase):
     def test_late_does_not_use_a_try(self):
         ex, written = self._retry("late")
         self.assertEqual(ex._plush_retries, 3)
-        self.assertTrue(any("見送ったので回数は戻す（残り 3 回）" in m for m in written), written)
+        self.assertTrue(any("見送ったので回数は戻します（残り 3 回）" in m for m in written), written)
 
     def test_failed_uses_a_try(self):
         ex, written = self._retry("failed")

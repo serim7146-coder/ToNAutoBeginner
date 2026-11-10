@@ -801,15 +801,15 @@ class TestBeginAdjust(unittest.TestCase):
         written = self._run_logged([265, 187, 20])
 
         self.assertEqual(self.moves, [("right", 0.1), ("right", 0.1)])
-        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速さ 実測 5.0 文字幅/秒"
-                      " → 下限 8.0 を使う", written)
+        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速度 実測 5.0 文字幅/秒"
+                      " → 下限 8.0 を使います", written)
 
     def test_the_rate_floor_shortens_the_next_step(self):
         """実測 5.0 → 下限 8.0 で残り 0.6 文字幅は 0.075秒（下限が無いと 0.12 → 0.10秒になる）"""
         written = self._run_logged([110, 60, 0], wide=False)
 
         self.assertEqual(self.moves, [("right", 0.1), ("right", 0.075)])
-        self.assertTrue(any("実測 5.0 文字幅/秒 → 下限 8.0 を使う" in m for m in written), written)
+        self.assertTrue(any("実測 5.0 文字幅/秒 → 下限 8.0 を使います" in m for m in written), written)
 
     def test_fast_first_step_uses_the_measured_rate_without_the_floor(self):
         """1歩目で 160px（実測 10.3）→ 2歩目は |dx|/w/実測 秒・下限は効かない・「→ 下限」の行が無い"""
@@ -817,14 +817,14 @@ class TestBeginAdjust(unittest.TestCase):
 
         measured = (160 / 155) / 0.1
         self.assertEqual(self.moves, [("right", 0.1), ("right", round(105 / 155 / measured, 3))])
-        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速さ 実測 10.3 文字幅/秒", written)
+        self.assertIn(f"[窓{self.st.window_idx}] Begin: 横の速度 実測 10.3 文字幅/秒", written)
         self.assertFalse(any("下限" in m for m in written), written)
 
     def test_the_rate_line_goes_to_the_debug_log_only(self):
         """横の速さの行は debug.log だけ（画面のログには出さない）"""
         self._run_logged([265, 187, 20])
 
-        self.assertFalse(any("横の速さ" in m for m in self.logs), self.logs)
+        self.assertFalse(any("横の速度" in m for m in self.logs), self.logs)
 
     def test_no_horizontal_step_is_longer_than_the_first_step(self):
         """遅い・速いどちらでも、どの歩も BEGIN_ADJUST_MAX_SEC（0.10）以下"""
@@ -1497,7 +1497,7 @@ class TestVerifiedPhase(unittest.TestCase):
             self._feed(monitor, self.BASE + 25, self.START)
             self.assertEqual(monitor._verified.last_periodic, expected, name)
             self.assertTrue(any("無視した Verified の 12.0秒後にラウンド開始" in m for m in self.debug), name)
-            self.assertEqual(any("予定と重なった1回なので定期の位相はそのまま" in m for m in self.debug),
+            self.assertEqual(any("予定と重なった1回なので定期のタイミングはそのまま" in m for m in self.debug),
                              phase is not None, name)
 
     def test_no_round_start_keeps_it(self):
@@ -1859,7 +1859,7 @@ class TestWaitForTheAcceptance(unittest.TestCase):
         self.assertEqual(len(entered), 2, "差し込みとフォールバックで1回ずつ")
         focus.assert_not_called()
         click.assert_not_called()
-        self.assertTrue(any("受理されたので前面化しません" in m for m in logs), logs)
+        self.assertTrue(any("受理されたので前面に出しません" in m for m in logs), logs)
 
     def test_an_acceptance_before_the_lock_skips_it_entirely(self):
         """差し込みを見送った直後に受理が届いたら、ロック待ちに入らない。
@@ -2295,7 +2295,7 @@ class TestDipRetry(unittest.TestCase):
         self.assertEqual(user32.moves, [self.CENTRE, self.HOME] * 2, "2往復")
         self.assertEqual(waits, 2)
         self.assertEqual([m for m in logs if "もう一度" in m],
-                         ["Begin: カーソルをもう一度合わせる"], "やり直しのログは1行")
+                         ["Begin: カーソルをもう一度合わせます"], "やり直しのログは1行")
 
     def test_two_misses_fall_back_after_exactly_two_dips(self):
         ex, _st = self._executor()
@@ -3549,7 +3549,7 @@ class TestBeginMoveMeasure(unittest.TestCase):
         self.assertIn("動き出し 0.10秒", line)
         self.assertIn("止まり なし", line)
         self.assertIn("接地 なし", line)
-        self.assertIn("速さ [0.0, 3.3, 6.6, 6.6,", line)
+        self.assertIn("速度 [0.0, 3.3, 6.6, 6.6,", line)
         self.assertEqual(line.count(", ") + 1, 20, "0.1 秒ごと")
 
     def test_a_reset_like_drop_is_a_stall(self):
@@ -3575,12 +3575,12 @@ class TestBeginMoveMeasure(unittest.TestCase):
 
     def test_the_series_is_capped_at_40(self):
         line = ActionExecutor.summarize_motion(self._series([6.6] * 200), released_at=9.0)
-        self.assertEqual(line.split("速さ ")[1].count("6.6"), 40)
+        self.assertEqual(line.split("速度 ")[1].count("6.6"), 40)
 
     def test_no_speed_received(self):
-        self.assertEqual(ActionExecutor.summarize_motion([], 0.0), "実測なし（速さを受信していません）")
+        self.assertEqual(ActionExecutor.summarize_motion([], 0.0), "実測なし（速度を受信していません）")
         self.assertEqual(ActionExecutor.summarize_motion(self._series([None] * 5), 0.1),
-                         "実測なし（速さを受信していません）")
+                         "実測なし（速度を受信していません）")
 
     # ── 読み方 ──
     def test_it_reads_every_0_05s_until_0_6s_after_release(self):
@@ -3604,7 +3604,7 @@ class TestBeginMoveMeasure(unittest.TestCase):
         sampler.start()
         self.assertIsNone(sampler.thread)
         sampler.release()
-        self.assertEqual(lines, ["実測なし（速さを受信していません）"])
+        self.assertEqual(lines, ["実測なし（速度を受信していません）"])
 
     def _executor(self, receiver):
         st = WindowState(instance_type=config.INSTANCE_PRIVATE, round_seq=3, window_idx=1)
@@ -3642,7 +3642,7 @@ class TestBeginMoveMeasure(unittest.TestCase):
              patch.object(DebugLog, "write") as write:
             ex._begin_move()
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速さを受信していません）", lines)
+        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速度を受信していません）", lines)
 
     def test_a_failing_move_still_releases(self):
         ex, st = self._executor(None)
@@ -3650,7 +3650,7 @@ class TestBeginMoveMeasure(unittest.TestCase):
              patch.object(DebugLog, "write") as write:
             with self.assertRaises(RuntimeError):
                 ex._begin_move()
-        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速さを受信していません）",
+        self.assertIn("[操作] [窓1] Begin前の移動: 実測なし（速度を受信していません）",
                       [c.args[0] for c in write.call_args_list])
 
     def test_the_move_of_the_second_press_logs_too(self):
@@ -3926,7 +3926,7 @@ class TestBeginMiss(unittest.TestCase):
     def test_none_says_none(self):
         self._save(1, 1)
         files = self._report(4)
-        self.assertIn("- 撮影（Begin・Run の向きで見つからなかったとき）: 無し", files["report.txt"].decode("utf-8"))
+        self.assertIn("- 撮影（Begin・Run の向きで見つからなかったとき）: なし", files["report.txt"].decode("utf-8"))
 
     def test_too_big_drops_pictures_with_a_note(self):
         import numpy as np
@@ -4160,8 +4160,8 @@ class TestVerifiedInTheMonitor(unittest.TestCase):
             monitor._detect_instance_from_log()
 
         self.assertEqual(monitor._verified.last_periodic, base + 401)
-        self.assertTrue(any("定期 Verified の位相を復元" in m for m in written), written)
-        self.assertFalse(any("位相" in m for m in monitor.logs), "公開ログには出さない")
+        self.assertTrue(any("定期 Verified のタイミングを復元" in m for m in written), written)
+        self.assertFalse(any("タイミング" in m for m in monitor.logs), "公開ログには出さない")
         started = self._feed(monitor, base + 701, "Verified")      # その300秒後
         self.assertNotIn("do_speed_strafe", started)
         self.assertFalse(monitor.st.begin_done)

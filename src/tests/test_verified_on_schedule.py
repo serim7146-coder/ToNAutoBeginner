@@ -49,7 +49,7 @@ class TestWindow5At0938(unittest.TestCase):
         self.assertFalse(st.begin_done, "受理にしない（アイテム取得に行かない）")
         self.assertNotIn("do_speed_strafe", started)
         self.assertEqual(self.monitor._verified.last_periodic, self.phase + 300, "位相は今どおり進める")
-        self.assertIn("[窓5] Verified: 予定（09:38:17）と重なった → 定期（ツールが直前に押していた）", self.written)
+        self.assertIn("[窓5] Verified: 予定（09:38:17）と重なりました → 定期（ツールが直前に押していた）", self.written)
         self.assertIn("[窓5] Verified を無視（定期シグナル）", self.monitor.logs)
 
     def test_off_by_the_tolerance_is_still_periodic(self):
@@ -65,7 +65,7 @@ class TestWindow5At0938(unittest.TestCase):
         """本物の受理が予定と重なった → 12 秒後にラウンド開始 → 本物だったと分かる。位相はそのまま"""
         self._to_0938()
         self._feed(self.phase + 312, "This round is taking place at Facility (12) and the round type is Classic")
-        self.assertTrue(any("本物の Begin だった。予定と重なった1回なので定期の位相はそのまま" in m
+        self.assertTrue(any("本物の Begin でした。予定と重なった1回なので定期のタイミングはそのまま" in m
                             for m in self.written), self.written)
         self.assertEqual(self.monitor._verified.last_periodic, self.phase + 300,
                          "次の予定（09:43:17）を見失わない")
@@ -79,7 +79,7 @@ class TestWindow5At0938(unittest.TestCase):
         self._feed(self.phase + 270, "Verified", clock=60_000.0)
         self._feed(self.phase + 282, "This round is taking place at Facility (12) and the round type is Classic")
         self.assertIsNone(self.monitor._verified.last_periodic)
-        self.assertTrue(any("定期の位相を戻す" in m for m in self.written), self.written)
+        self.assertTrue(any("定期のタイミングを戻します" in m for m in self.written), self.written)
 
 
 class TestRunWaitsAfterTheRespawn(_respawn_tests._Case):
@@ -141,14 +141,14 @@ class TestTwoLinesInTheSameSecond(TestWindow5At0938):
         self.assertNotIn("do_speed_strafe", first)
         self.assertTrue(self.monitor.st.begin_done, "2 行目は受理")
         self.assertIn("do_speed_strafe", second)
-        self.assertIn("[窓5] Verified: 予定（09:38:17）と重なった → 定期（ツールが直前に押していた）", self.written)
+        self.assertIn("[窓5] Verified: 予定（09:38:17）と重なりました → 定期（ツールが直前に押していた）", self.written)
         self.assertIn("[窓5] [事象] verified → 受理", self.written)
 
     def test_the_round_start_keeps_the_phase(self):
         """2 行のとき、1 行目は本当に定期だった。ラウンドが始まっても位相（09:38:17）はそのまま"""
         self._two_lines()
         self.assertEqual(self.monitor._verified.last_periodic, self.phase + 300)
-        self.assertFalse(any("定期の位相を戻す" in m for m in self.written), self.written)
+        self.assertFalse(any("定期のタイミングを戻します" in m for m in self.written), self.written)
 
     def test_the_next_periodic_is_on_schedule(self):
         """位相を見失わない: 300 秒後（09:43:17）の定期は予定どおり定期"""
@@ -159,7 +159,7 @@ class TestTwoLinesInTheSameSecond(TestWindow5At0938):
         st.last_begin_press_at = 0.0
         self._feed(self.phase + 600, "Verified", clock=70_000.0)
         self.assertFalse(st.begin_done)
-        self.assertIn("[窓5] Verified: 予定（09:43:17）と重なった → 定期", self.written)
+        self.assertIn("[窓5] Verified: 予定（09:43:17）と重なりました → 定期", self.written)
 
 
 class TestTheReasonAndThePhase(unittest.TestCase):
@@ -186,7 +186,7 @@ class TestALatePeriodicIsStillRolledBack(TestWindow5At0938):
         self.assertFalse(any("予定（" in m for m in self.written))
         self._feed(self.phase + 262, "This round is taking place at Facility (12) and the round type is Classic")
         self.assertEqual(self.monitor._verified.last_periodic, self.phase - 100)
-        self.assertTrue(any("定期の位相を戻す" in m for m in self.written), self.written)
+        self.assertTrue(any("定期のタイミングを戻します" in m for m in self.written), self.written)
 
 
 class TestRunStopsWaitingAtOnce(TestRunWaitsAfterTheRespawn):
