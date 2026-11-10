@@ -299,7 +299,7 @@ class Service:
         if idle:
             if not self._idle_logged:
                 self._idle_logged = True
-                DebugLog.write("[OSCQuery] 受け取る窓が無い（監視していない）→ 届いたものは数えずに捨てる")
+                DebugLog.write("[OSCQuery] 受け取る窓がありません（監視していない）→ 届いたものは数えずに捨てます")
             return False
         receiver = self._receiver_for(src_port)
         wait = PORTS_RECHECK_SEC if src_port in self._port_pid else PORTS_REFRESH_SEC
@@ -316,7 +316,7 @@ class Service:
                 example = f"{port}（PID {pid}）" + (f"など {len(self._unknown_ports)} つ"
                                                   if len(self._unknown_ports) > 1 else "")
                 DebugLog.write(f"[OSCQuery] 窓の分からない送り元: この {UNKNOWN_LOG_SEC:.0f} 秒で "
-                               f"{self._unknown_since_log:,} 件（{example}）→ 捨てた（累計 {self.unknown:,} 件）")
+                               f"{self._unknown_since_log:,} 件（{example}）→ 捨てました（累計 {self.unknown:,} 件）")
                 self._unknown_logged_at = now
                 self._unknown_since_log = 0
                 self._unknown_ports = {}

@@ -97,7 +97,7 @@ def note_migration(label: str, name: str, saved: bool, dropped: list, summary: s
     if dropped:
         shown = ", ".join(f"{key.split('/')[0]}:{number}" for key, number in dropped[:20])
         more = f" ほか {len(dropped) - 20} 件" if len(dropped) > 20 else ""
-        DebugLog.write(f"[{label}] 表に無い番号を落としました: {len(dropped)} 件（{shown}{more}）")
+        DebugLog.write(f"[{label}] 表にない番号を落としました: {len(dropped)} 件（{shown}{more}）")
 
 
 def load(path=None):

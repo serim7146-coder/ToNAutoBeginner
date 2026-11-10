@@ -359,7 +359,7 @@ class VolumeController:
                 started = time.monotonic()
                 release()
                 # 片付け（CoUninitialize）で止まっていないかを確かめられるように（EG）
-                DebugLog.write(f"[音量] COM を片付けた（{time.monotonic() - started:.2f} 秒）")
+                DebugLog.write(f"[音量] COM を片付けました（{time.monotonic() - started:.2f} 秒）")
 
     def _tick_safely(self):
         try:

@@ -10,7 +10,7 @@ import OSCQuery
 import OSCReceiver
 
 _UNKNOWN = "窓の分からない送り元"
-_IDLE = "受け取る窓が無い"
+_IDLE = "受け取る窓がありません"
 
 
 def _pad(raw: bytes) -> bytes:
@@ -67,7 +67,7 @@ class TestNobodyToReceive(_ServiceCase):
         for _ in range(300):
             self.service.route(5009, OSCReceiver.VELOCITY_MAGNITUDE, 6.5)
         self.assertEqual(self.lines(_IDLE),
-                         ["[OSCQuery] 受け取る窓が無い（監視していない）→ 届いたものは数えずに捨てる"])
+                         ["[OSCQuery] 受け取る窓がありません（監視していない）→ 届いたものは数えずに捨てます"])
 
     def test_it_is_said_again_each_time_it_becomes_zero(self):
         self.service.route(5009, OSCReceiver.VELOCITY_MAGNITUDE, 6.5)
@@ -111,8 +111,8 @@ class TestUnknownSendersAreLoggedEverySixtySeconds(_ServiceCase):
         self._send(100)
         lines = self.lines(_UNKNOWN)
         self.assertEqual(lines, [
-            "[OSCQuery] 窓の分からない送り元: この 60 秒で 1 件（5009（PID 300））→ 捨てた（累計 1 件）",
-            "[OSCQuery] 窓の分からない送り元: この 60 秒で 150 件（5009（PID 300）など 3 つ）→ 捨てた（累計 151 件）"])
+            "[OSCQuery] 窓の分からない送り元: この 60 秒で 1 件（5009（PID 300））→ 捨てました（累計 1 件）",
+            "[OSCQuery] 窓の分からない送り元: この 60 秒で 150 件（5009（PID 300）など 3 つ）→ 捨てました（累計 151 件）"])
         self.assertEqual(self.service.unknown, 250)
 
     def test_the_count_starts_over_after_each_line(self):
@@ -125,7 +125,7 @@ class TestUnknownSendersAreLoggedEverySixtySeconds(_ServiceCase):
         self._send(1)
         self.assertEqual(self.lines(_UNKNOWN)[-1],
                          "[OSCQuery] 窓の分からない送り元: この 60 秒で 8 件（5009（PID 300）など 3 つ）"
-                         "→ 捨てた（累計 10 件）")
+                         "→ 捨てました（累計 10 件）")
         self.assertEqual(len(self.lines(_UNKNOWN)), 3)
 
     def test_thousands_have_commas(self):

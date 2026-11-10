@@ -276,7 +276,7 @@ def play_sound(path: str, kind: str | None = None, force: bool = False):
     if not path:
         return
     if kind and not force and not get_voice_enabled(kind):
-        DebugLog.write(f"[音声] {kind} はオフ → 鳴らさない")
+        DebugLog.write(f"[音声] {kind} はオフ → 鳴らしません")
         return
     p = Path(path)
     if not p.exists():

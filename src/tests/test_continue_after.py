@@ -111,7 +111,7 @@ class TestRememberAtTheStart(_Case):
         ex = self._executor(world)
         ex.remember_continue_window()
         self.assertEqual(ex._continue_rect, START)
-        self.assertIn(f"[操作] [窓3] 続行ラウンドの始まり: 窓の位置を覚えた {START}", world.written)
+        self.assertIn(f"[操作] [窓3] 続行ラウンドの始まり: 窓の位置を覚えました {START}", world.written)
 
     def test_a_maximized_window_remembers_its_normal_rect(self):
         world = _World(self, state="maximized", rect=(-8, -8, 2568, 1400))
@@ -206,7 +206,7 @@ class TestAtTheEnd(_Case):
         self._end(world)
         self.assertEqual(world.events[-1], ("move", 1699, 0))
         self.assertEqual(world.rect, (1699, 0, 2699, 700), "大きさはそのまま")
-        self.assertTrue(any("大きさは変えずに位置だけ戻す" in m for m in world.written))
+        self.assertTrue(any("大きさは変えずに位置だけ戻します" in m for m in world.written))
 
     def test_a_closed_or_minimized_window_is_left(self):
         for state in (None, "minimized"):

@@ -266,7 +266,7 @@ def read_clipboard() -> str:
             win32clipboard.CloseClipboard()
         return text.strip() if isinstance(text, str) else ""
     except Exception as e:
-        DebugLog.write(f"[コードの読み込み] クリップボードを読めない（{type(e).__name__}）")
+        DebugLog.write(f"[コードの読み込み] クリップボードを読めません（{type(e).__name__}）")
         return ""
 
 
@@ -283,7 +283,7 @@ def write_clipboard(text: str) -> bool:
             win32clipboard.CloseClipboard()
         return True
     except Exception as e:
-        DebugLog.write(f"[コードの読み込み] クリップボードに入れ直せない（{type(e).__name__}）")
+        DebugLog.write(f"[コードの読み込み] クリップボードに入れ直せません（{type(e).__name__}）")
         return False
 
 

@@ -457,7 +457,7 @@ class TestTheFlowAndTheLog(unittest.TestCase):
         import numpy as np
         shot = np.zeros((703, 867, 3), np.uint8)
         self.assertEqual(self._face(shot, [None]), 0)
-        self.assertIn("[操作] [窓1] Run: 向き: 目印が見つからない → 今の向きのまま", self.written)
+        self.assertIn("[操作] [窓1] Run: 向き: 目印が見つかりません → 今の向きのまま", self.written)
         self.assertEqual(self.saved, [(1, "notfound")], "見つからなかったときの撮影は今どおり残す")
         self.assertEqual(self.ex._osc.presses, [])
 

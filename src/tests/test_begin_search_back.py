@@ -218,7 +218,7 @@ class TestBeginSearchBack(unittest.TestCase):
                                       ("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC)])
         self.assertEqual(self.pressed, [], "さらに戻さない")
         self.assertEqual(self.osc.sent, [])
-        self.assertTrue(any("前へ動けない" in m and "後ろへ 0.30秒動いて探します" in m for m in self.logs), self.logs)
+        self.assertTrue(any("前へ動けません" in m and "後ろへ 0.30秒動いて探します" in m for m in self.logs), self.logs)
         self.assertTrue(any("あきらめます（さらに戻しません）" in m for m in self.logs), self.logs)
         line = self._measure_log()
         self.assertIn("前へ 1 回", line)
@@ -266,7 +266,7 @@ class TestBeginSearchBack(unittest.TestCase):
         self.pushes = [1.5, 0.0]
         self._search()
         self.assertEqual(self.moves[-1], ("back", config.BEGIN_SEARCH_BLOCKED_BACK_SEC))
-        self.assertTrue(any("壁か、速さが届いていない" in m for m in self.logs), self.logs)
+        self.assertTrue(any("壁か、速度が届いていない" in m for m in self.logs), self.logs)
 
     # ── 戻さない下限 ───────────────────────────────────────────
     def test_it_does_not_return_when_it_barely_moved_forward(self):
@@ -350,7 +350,7 @@ class TestBeginSearchBack(unittest.TestCase):
 
         def log(message):
             write(message)
-            if "前へ動けない" in message:
+            if "前へ動けません" in message:
                 self.st.begin_done = True
         self.ex._log = log
         self.assertEqual(self._search(), "skip")

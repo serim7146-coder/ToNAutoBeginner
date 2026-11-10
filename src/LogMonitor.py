@@ -327,13 +327,13 @@ class LogMonitor:
             # やっているときだけ（装備待ち・速度検知・突入のフリーズでは止めない。ほかの窓のアイテム取得は
             # 続行のフリーズを見て手を引く）。数える前に呼ぶので自分の分は入っていない
             if SharedState.get_continue_round_count() > 0:
-                self._log("ほかの窓が続行ラウンド中なので前面化しません")
+                self._log("ほかの窓が続行ラウンド中なので前面に出しません")
                 return
         elif not SharedState.nothing_frozen():
             # フリーズを張った窓を操作している最中に前面を奪わない。種別は
             # 問わない（依頼者の指摘。続行フリーズだけ見ると 8 Pages の最中に奪う）。
             # 自分が張っているときも、自分の分で False になる
-            self._log("ほかの窓がフリーズ中なので前面化しません")
+            self._log("ほかの窓がフリーズ中なので前面に出しません")
             return
         self._start_daemon(self._focus_this_window_for, label)
 
@@ -342,9 +342,9 @@ class LogMonitor:
             ok, loan = WindowOperator.borrow_front(self.cfg.hwnd)
             if ok:
                 SharedState.keep_front_loan(self.st, loan)    # フリーズが解けたら返す
-                self._log(f"この窓を前面化しました（{label}）")
+                self._log(f"この窓を前面に出しました（{label}）")
             else:
-                self._log(f"⚠ 前面化に失敗（{label}は継続）")
+                self._log(f"⚠ 前面に出せませんでした（{label}は継続）")
 
     def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None, label: str = "死亡"):
         """死亡から一定時間後に続行ラウンドのフリーズを解除する。
@@ -372,7 +372,7 @@ class LogMonitor:
             st.is_continue_round = False
             st.open_special_continue = False
             SharedState.continue_round_end(st)
-            self._log(f"続行ラウンド終了 → 他窓フリーズ解除（{label}から{delay}秒）")
+            self._log(f"続行ラウンド終了 → ほかの窓のフリーズ解除（{label}から{delay}秒）")
 
     def _start_speed_probe(self):
         """次のラウンドの種別を速度で見始める（Verified Round End から）。
@@ -446,8 +446,8 @@ class LogMonitor:
             kept = phase_before == at           # 予定と重なった1回（定期も出ていた。EP）
             self._verified.last_periodic = phase_before
             self._debug(f"[状態] 無視した Verified の {self.st.log_now - at:.1f}秒後にラウンド開始"
-                        f" → 本物の Begin だった。"
-                        + ("予定と重なった1回なので定期の位相はそのまま" if kept else "定期の位相を戻す"))
+                        f" → 本物の Begin でした。"
+                        + ("予定と重なった1回なので定期のタイミングはそのまま" if kept else "定期のタイミングを戻します"))
 
     def _check_pending_verified(self):
         """採用したVerifiedにラウンド開始が続かなければ、定期シグナルだった。
@@ -524,7 +524,7 @@ class LogMonitor:
         if SharedState.get_equip_freeze_count() == 0:
             self._log("✅ 全窓フリーズ解除")
         else:
-            self._log("✅ この窓の装備待ち解除（他窓の装備待ちが残っています）")
+            self._log("✅ この窓の装備待ち解除（ほかの窓の装備待ちが残っています）")
 
     @staticmethod
     def _iter_log_lines_reversed(path, chunk_size: int, end: Optional[int] = None):
@@ -752,10 +752,10 @@ class LogMonitor:
                 and last - pending > config.VERIFIED_ROUND_START_WAIT_SEC):
             tracker.on_begin_not_followed(pending)
         if tracker.last_periodic is None:
-            self._debug("定期 Verified の位相: 過去のログに見つかりません")
+            self._debug("定期 Verified のタイミング: 過去のログに見つかりません")
         else:
             stamp = datetime.fromtimestamp(tracker.last_periodic).strftime("%H:%M:%S")
-            self._debug(f"定期 Verified の位相を復元: 最後 {stamp}")
+            self._debug(f"定期 Verified のタイミングを復元: 最後 {stamp}")
 
     def _restore_running_round(self, running_round, player_events: list):
         """監視開始の遡り: 途中から始めたときの今のラウンドの開始の時刻と、開始の行の時点の人数を
@@ -1036,7 +1036,7 @@ class LogMonitor:
         if not held:
             return "なし"
         name = ItemCatalog.item_name(held, config.ITEMS)
-        return name if name else f"#{held}（表に無い）"
+        return name if name else f"#{held}（表にない）"
 
     def _hold_item(self, item_id: int):
         """装備した。同じアイテムの装備が続いたときはログを出さない"""
@@ -1459,7 +1459,7 @@ class LogMonitor:
                 self._notify_phone(PhoneNotify.KIND_CONTINUE)
                 if not self._hands_free():          # 放置中は録らない
                     Recorder.on_continue_start(self.window_idx)
-                self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
+                self._log("⏸ 続行ラウンド中 → ほかの窓のフリーズ開始")
             return True
         if decision == GroupRound.CONTINUE:
             # 「全続行」は自爆しないだけ。続行アナウンスも他窓フリーズもしない。
@@ -1777,7 +1777,7 @@ class LogMonitor:
             # 本物と分かっても、位相は戻さない（戻すと次の予定を見失う。EP）
             self._ignored_verified = (now, now if due is not None else phase_before)
             if due is not None:
-                self._debug(f"Verified: 予定（{datetime.fromtimestamp(due).strftime('%H:%M:%S')}）と重なった → 定期"
+                self._debug(f"Verified: 予定（{datetime.fromtimestamp(due).strftime('%H:%M:%S')}）と重なりました → 定期"
                             + ("（ツールが直前に押していた）" if pressed else ""))
             self._debug_verified("無視（定期）")
             self._log("Verified を無視（定期シグナル）")
@@ -2139,7 +2139,7 @@ class LogMonitor:
             st.is_continue_round = False
             st.open_special_continue = False
             SharedState.continue_round_end(st)
-            self._log("続行ラウンド終了 → 他窓フリーズ解除（保険）")
+            self._log("続行ラウンド終了 → ほかの窓のフリーズ解除（保険）")
         round_lost_item = self._round_lost_item()
         round_item_warning = self._round_item_warning()
         if not self._hands_free():
@@ -2305,7 +2305,7 @@ class LogMonitor:
             st.item_equipped_after_death = True
         if not st.item_id:
             # 「Equipping 0」は外しただけ。装備待ちは続ける
-            self._log("アイテムを外した")
+            self._log("アイテムを外しました")
             return
         self._log(f"✅ アイテム装備: {ItemCatalog.label(st.item_id, config.ITEMS)}")
         if (not self._auto_begin_active() and st.equip_freeze_held):
@@ -2381,7 +2381,7 @@ class LogMonitor:
             return
         tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
-            self._log(f"Enrage: {name}（テラー表に無し→revealed待ち）")
+            self._log(f"Enrage: {name}（テラー表になし→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Enrage", name)
         
@@ -2396,7 +2396,7 @@ class LogMonitor:
             return
         tid = ReadJson.fog_terror_id_by_name(name, config.TERRORS)
         if tid is None:
-            self._log(f"Stunned: {name}（テラー表に無し→revealed待ち）")
+            self._log(f"Stunned: {name}（テラー表になし→revealed待ち）")
             return
         self._identify_fog_terror(tid, "Stunned", name)
 
@@ -2790,7 +2790,7 @@ class LogMonitor:
             return
         DebugLog.write(f"[Utils] 窓{self.window_idx} Utils: "
                        + (f"{action} {at - anchor:.1f} 秒" if action
-                          else f"無し（{config.UTILS_WAIT_SEC:.0f} 秒）"))
+                          else f"なし（{config.UTILS_WAIT_SEC:.0f} 秒）"))
         if action == "press":
             self._clear_stale_continue_round()
             self._log("Utils: 自爆（スキップ）")
@@ -2827,7 +2827,7 @@ class LogMonitor:
             self._notify_phone(PhoneNotify.KIND_CONTINUE)
             if not self._hands_free():          # 放置中は録らない
                 Recorder.on_continue_start(self.window_idx)
-            self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
+            self._log("⏸ 続行ラウンド中 → ほかの窓のフリーズ開始")
         if not st.glorbo_afk and st.instance_type != config.INSTANCE_ACHIEVEMENT:   # 実績・アイテム集会は移動しない（GT）
             st.glorbo_afk = True
             self._log("AFK解除ループ開始（Glorbo）")
@@ -2874,7 +2874,7 @@ class LogMonitor:
                 # ここへ流れ込むので、判明の経路ごとには足さない。放置中は録らない
                 if not self._hands_free():
                     Recorder.on_continue_start(self.window_idx)
-                self._log("⏸ 続行ラウンド中 → 他窓フリーズ開始")
+                self._log("⏸ 続行ラウンド中 → ほかの窓のフリーズ開始")
             if (is_open_special_round_target and is_private
                     and RoundDecision.open_special_active(st.open_special_round_wins,
                                                           self._after_unlock(), self._unlock_target())):

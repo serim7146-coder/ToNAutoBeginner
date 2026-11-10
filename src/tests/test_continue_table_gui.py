@@ -1032,7 +1032,7 @@ class TestPresetControls(_WindowCase):
 
     def test_a_name_that_cannot_be_used_is_refused_and_cancel_does_nothing(self):
         before = self._store()
-        self.names = ["  ", "なし", "窓のまま", "-", None]
+        self.names = ["  ", "なし", "窓の設定のまま", "-", None]
         for _ in self.names[:]:
             self._press("プリセットとして保存…")
         self.assertEqual(len(self.errors), 4, "空・「なし」・「窓のまま」・「-」はそれぞれ理由を出す")
@@ -1423,7 +1423,7 @@ class TestItemRuleData(unittest.TestCase):
 
     def test_pick_text_round_trip(self):
         keep, none = ContinueTable.KEEP, None
-        self.assertEqual(ContinueTableGUI.pick_text(keep), "窓のまま")
+        self.assertEqual(ContinueTableGUI.pick_text(keep), "窓の設定のまま")
         self.assertEqual(ContinueTableGUI.pick_text(none), "なし")
         self.assertEqual(ContinueTableGUI.pick_text(BASE), BASE)
         for pick in (keep, none, BASE):
@@ -1492,8 +1492,8 @@ class TestItemRules(_WindowCase):
         self.assertEqual(self._rules(), (ContinueTable.ItemRule(0),))
         row = self._rows()[0]
         self.assertEqual(row["v_item"].get(), "持っていない")
-        self.assertEqual(row[ContinueTable.DISABLED].get(), "窓のまま")
-        self.assertEqual(row[ContinueTable.DEFAULT].get(), "窓のまま")
+        self.assertEqual(row[ContinueTable.DISABLED].get(), "窓の設定のまま")
+        self.assertEqual(row[ContinueTable.DEFAULT].get(), "窓の設定のまま")
         self.assertTrue(self.changed, "メイン画面へ知らせる")
         self.assertEqual(self._saved_rules(), (ContinueTable.ItemRule(0),))
 
@@ -1506,8 +1506,8 @@ class TestItemRules(_WindowCase):
         self.win.add_rule()
         self._add_preset(ContinueTable.DEFAULT, "足す")
         row = self._rows()[0]
-        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓のまま", "なし", BASE])
-        self.assertEqual(list(row["cb_default"]["values"]), ["窓のまま", "なし", BASE, "足す"],
+        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓の設定のまま", "なし", BASE])
+        self.assertEqual(list(row["cb_default"]["values"]), ["窓の設定のまま", "なし", BASE, "足す"],
                          "プリセットを作ったら選択肢を作り直す")
 
     def test_changing_a_row_changes_the_rule_at_once_and_saves_later(self):
@@ -1524,7 +1524,7 @@ class TestItemRules(_WindowCase):
         self.win.add_rule()
         self._pick(0, disabled="なし")
         self.assertEqual(self._rules()[0].disabled, None)
-        self._pick(0, disabled="窓のまま")
+        self._pick(0, disabled="窓の設定のまま")
         self.assertIs(self._rules()[0].disabled, ContinueTable.KEEP)
 
     def test_move_up_and_down_reorder_and_the_ends_do_nothing(self):
@@ -1578,8 +1578,8 @@ class TestItemRules(_WindowCase):
         ContinueTable.set_current(ContinueTable.with_rule_added(ContinueTable.current(), 4321))
         self.win._show_rules()
         row = self._rows()[0]
-        self.assertEqual(row["v_item"].get(), "#4321（表に無い）")
-        self.assertIn("#4321（表に無い）", row["cb_item"]["values"])
+        self.assertEqual(row["v_item"].get(), "#4321（表にない）")
+        self.assertIn("#4321（表にない）", row["cb_item"]["values"])
         self._pick(0, disabled="なし")
         self.assertEqual(self._rules(), (ContinueTable.ItemRule(4321, None, ContinueTable.KEEP),),
                          "表に無い id のまま残る")
@@ -1594,7 +1594,7 @@ class TestItemRules(_WindowCase):
         self.assertEqual(self._rules()[0].disabled, "Q")
         row = self._rows()[0]
         self.assertEqual(row["cb_disabled"].get(), "Q")
-        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓のまま", "なし", BASE, "Q"])
+        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓の設定のまま", "なし", BASE, "Q"])
         self.assertEqual(self._saved_rules()[0].disabled, "Q")
 
     def test_deleting_a_preset_makes_the_rule_keep_the_window_choice(self):
@@ -1604,7 +1604,7 @@ class TestItemRules(_WindowCase):
         self.win.v_preset.set("P")
         self.win.delete_preset()
         self.assertIs(self._rules()[0].disabled, ContinueTable.KEEP)
-        self.assertEqual(self._rows()[0]["cb_disabled"].get(), "窓のまま")
+        self.assertEqual(self._rows()[0]["cb_disabled"].get(), "窓の設定のまま")
         self.assertNotIn("P", self._rows()[0]["cb_disabled"]["values"])
 
     def test_a_window_opened_with_saved_rules_shows_them(self):
@@ -1614,7 +1614,7 @@ class TestItemRules(_WindowCase):
         self.addCleanup(win.destroy)
         row = win._rule_rows[0]
         self.assertEqual((row["v_item"].get(), row["disabled"].get(), row["default"].get()),
-                         ("Event / Guidance Plush", "なし", "窓のまま"))
+                         ("Event / Guidance Plush", "なし", "窓の設定のまま"))
 
     def test_the_rules_affect_the_decision_without_any_real_input(self):
         self._add_preset(ContinueTable.DISABLED, "外す")
@@ -1662,7 +1662,7 @@ class TestRuleSectionWithoutPresets(_WindowCase):
         self.assertEqual((rule.item, rule.disabled, rule.default),
                          (ContinueTable.ITEM_NONE, ContinueTable.KEEP, ContinueTable.KEEP), "初めの値は「窓のまま」")
         row = self.win._rule_rows[0]
-        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓のまま", "なし"])
+        self.assertEqual(list(row["cb_disabled"]["values"]), ["窓の設定のまま", "なし"])
 
     def test_the_rule_section_is_the_same_from_every_window(self):
         other = ContinueTableGUI.ContinueTableWindow(self.root, window_idx=3, kind=ContinueTable.DEFAULT)

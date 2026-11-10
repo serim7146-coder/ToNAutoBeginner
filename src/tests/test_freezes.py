@@ -75,7 +75,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
 
         self._enter(monitor)
 
-        self.assertTrue(any("この窓を前面化しました（ラウンド突入フリーズ）" in m
+        self.assertTrue(any("この窓を前面に出しました（ラウンド突入フリーズ）" in m
                             for m in logs), logs)
 
     # ── 2. ほかの窓がフリーズ中なら前面化しない ────────────
@@ -128,7 +128,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
 
         self.assertTrue(monitor.st.round_freeze_held)
         self.assertFalse(SharedState.ROUND_FREEZE_EVENT.is_set())
-        self.assertTrue(any("⚠ 前面化に失敗（ラウンド突入フリーズは継続）" in m
+        self.assertTrue(any("⚠ 前面に出せませんでした（ラウンド突入フリーズは継続）" in m
                             for m in logs), logs)
 
     # ── 6. 数えるのは張る前 ────────────────────
@@ -166,7 +166,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
         self.assertEqual(src.count('_focus_for_freeze("続行ラウンド")'), 3,
                          "続行判定の3か所（Glorbo の続行）")
         self.assertEqual(src.count('_focus_for_freeze("ラウンド突入フリーズ")'), 1)
-        self.assertIn('self._log(f"この窓を前面化しました（{label}）")', src)
+        self.assertIn('self._log(f"この窓を前面に出しました（{label}）")', src)
 
     def test_the_continue_label_is_unchanged(self):
         monitor = self._monitor()
@@ -176,7 +176,7 @@ class TestRoundFreezeFocus(unittest.TestCase):
         with patch.object(WindowOperator, "focus_window", return_value=True):
             monitor._focus_this_window_for("続行ラウンド")
 
-        self.assertTrue(any("この窓を前面化しました（続行ラウンド）" in m
+        self.assertTrue(any("この窓を前面に出しました（続行ラウンド）" in m
                             for m in logs), logs)   # 窓番号の接頭辞が付く
 
 
@@ -711,7 +711,7 @@ class TestOnlyOwnFreezeIsExempt(unittest.TestCase):
         SharedState.equip_freeze_start(self._other_window())
 
         self.assertFalse(ex._begin_precheck())
-        self.assertTrue(any("他窓の装備待ち" in m for m in logs), logs)
+        self.assertTrue(any("ほかの窓の装備待ち" in m for m in logs), logs)
 
     def test_the_precheck_stops_for_another_windows_continue(self):
         logs = []
@@ -720,7 +720,7 @@ class TestOnlyOwnFreezeIsExempt(unittest.TestCase):
         SharedState.continue_round_start(self._other_window())
 
         self.assertFalse(ex._begin_precheck())
-        self.assertTrue(any("他窓のフリーズ" in m for m in logs), logs)
+        self.assertTrue(any("ほかの窓のフリーズ" in m for m in logs), logs)
 
     def test_the_precheck_passes_when_only_this_window_holds(self):
         ex, st = self._executor()
@@ -911,7 +911,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         focus = self._judge(monitor)
 
         focus.assert_not_called()
-        self.assertTrue(any("ほかの窓が続行ラウンド中なので前面化しません" in m for m in monitor.logs))
+        self.assertTrue(any("ほかの窓が続行ラウンド中なので前面に出しません" in m for m in monitor.logs))
 
     def test_the_round_freeze_focus_still_waits_for_other_freezes(self):
         """続行ラウンドでない前面化（ラウンド突入フリーズ）は今どおり、ほかの窓のフリーズ中は奪わない"""
@@ -959,7 +959,7 @@ class TestContinueRoundFocus(unittest.TestCase):
         self.assertEqual(SharedState.get_continue_round_count(), 1)
         play.assert_called_once_with("continue.mp3", kind="continue")
         record.assert_called_once_with(2)
-        self.assertTrue(any("前面化に失敗" in m for m in logs), logs)
+        self.assertTrue(any("前面に出せませんでした" in m for m in logs), logs)
 
     def test_the_focus_runs_off_the_log_thread(self):
         """ログの読み込みを止めないよう別スレッドで前面化する"""
@@ -1057,7 +1057,7 @@ class TestAttendToItemLoss(unittest.TestCase):
 
         self._attend(ex)
 
-        self.assertEqual(logs, ["この窓を前面化しました（アイテム装備待ち）"])
+        self.assertEqual(logs, ["この窓を前面に出しました（アイテム装備待ち）"])
 
     # ── 2. ほかの窓が止まっていれば、どちらも出ない ────────────
     def test_nothing_shows_while_another_window_is_frozen(self):
@@ -1224,7 +1224,7 @@ class TestAttendToItemLoss(unittest.TestCase):
             ex._attend_to_item_loss()
 
         self.assertEqual(played, ["lost.mp3"])
-        self.assertTrue(any("前面化に失敗" in m for m in logs), logs)
+        self.assertTrue(any("前面に出せませんでした" in m for m in logs), logs)
 
     # ── 13. 音声はここからしか鳴らない ──────────────────
     def test_the_voice_comes_only_from_here(self):

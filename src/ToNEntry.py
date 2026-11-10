@@ -212,7 +212,7 @@ class ToNEntry:
             time.sleep(config.TON_ENTRY_STEP_WAIT_SEC)
 
         self._osc.stop_all()
-        self._log("✅ 入室時の選択画面を突破しました")
+        self._log("✅ 入室時の選択画面を進めました")
         return True
 
     def press_begin(self) -> bool:
@@ -346,7 +346,7 @@ class ToNEntry:
                 if not self._still_ours():
                     return "open"
                 WindowOperator.send_keys("enter")
-                DebugLog.write("[コードの読み込み] 入力欄が開いたまま → Enter を押し直した")
+                DebugLog.write("[コードの読み込み] 入力欄が開いたまま → Enter を押し直しました")
                 return "pressed"
             finally:
                 try:
@@ -430,7 +430,7 @@ class ToNEntry:
                 if not self._still_ours():
                     return "中止" if not self._is_running() else "前面でなくなった"
                 WindowOperator.send_keys("enter")
-                DebugLog.write("[コードの読み込み] 貼って Enter を押した")
+                DebugLog.write("[コードの読み込み] 貼って Enter を押しました")
                 return "pasted"
             finally:
                 try:
@@ -454,7 +454,7 @@ class ToNEntry:
             read = WindowOperator.cursor_position()
             if read is not None and abs(read[0] - point[0]) <= tol and abs(read[1] - point[1]) <= tol:
                 return True
-        DebugLog.write(f"[コードの読み込み] カーソルを {point} へ置けない")
+        DebugLog.write(f"[コードの読み込み] カーソルを {point} へ置けません")
         return False
 
     def _wait_input_box(self) -> bool:
@@ -464,10 +464,10 @@ class ToNEntry:
             bgr = self._capture_bgr()
             width, height = WindowOperator.client_size(self._hwnd) or (0, 0)
             if bgr is not None and SaveLoad.input_box_shown(bgr, width, height):
-                DebugLog.write("[コードの読み込み] 入力欄が出た")
+                DebugLog.write("[コードの読み込み] 入力欄が出ました")
                 return True
             if time.time() >= deadline:
-                DebugLog.write(f"[コードの読み込み] {config.SAVELOAD_BOX_WAIT_SEC:.0f}秒で入力欄が出ない")
+                DebugLog.write(f"[コードの読み込み] {config.SAVELOAD_BOX_WAIT_SEC:.0f}秒で入力欄が出ません")
                 return False
             time.sleep(config.SAVELOAD_BOX_POLL_SEC)
         return False

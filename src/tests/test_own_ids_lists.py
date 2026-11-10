@@ -512,7 +512,7 @@ class TestListMigration(unittest.TestCase):
             data, _meta = ContinueList.load(self.path)
         self.assertEqual({k: set(v) for k, v in data.items()}, {CLASSIC: {3}})
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertEqual(len([l for l in lines if "表に無い番号を落としました: 2 件" in l]), 1, lines)
+        self.assertEqual(len([l for l in lines if "表にない番号を落としました: 2 件" in l]), 1, lines)
 
     def test_the_number_of_eight_pages_rows_is_the_62_that_appear(self):
         every = [e["list_id"] for e in _frozen("terrors.json")["8pages"]]
@@ -605,7 +605,7 @@ class TestTableMigration(unittest.TestCase):
         with patch.object(DebugLog, "write") as write:
             store = ContinueTable.load(self.path)
         self.assertEqual(store.disabled_presets["デフォルト"], {CLASSIC: frozenset({5})})
-        self.assertEqual(len([c for c in write.call_args_list if "表に無い番号を落としました" in c.args[0]]), 1)
+        self.assertEqual(len([c for c in write.call_args_list if "表にない番号を落としました" in c.args[0]]), 1)
 
 
 class TestTnlRoundTrip(unittest.TestCase):

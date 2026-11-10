@@ -195,7 +195,7 @@ class TestRepress(unittest.TestCase):
         self.assertEqual(w.events(B)[:-1], [(0.0, 0), (0.0, 1), (0.6, 0), (0.7, 1), (1.3, 0), (1.4, 1)])
         self.assertAlmostEqual(w.released(B), 2.85, delta=0.011, msg="押し始めから数えた時間で離す")
         self.assertEqual((extension, how, repressed), (0.0, "動き出さない", 2))
-        self.assertIn("動き出さないので押し直した（2 回）・それでも動かない", w.written)
+        self.assertIn("動き出さないので押し直しました（2 回）・それでも動きません", w.written)
 
     def test_begin_move(self):
         w = _World(self, lag=None)
@@ -203,7 +203,7 @@ class TestRepress(unittest.TestCase):
         self.assertEqual(w.pressed_times(F), [0.0, 0.7, 1.4])
         self.assertEqual(w.pressed_times(L), [0.0, 0.7, 1.4], "左も一緒に押し直す")
         self.assertIn((0.6, F, 0), w.sent)
-        self.assertIn("[操作] [窓3] Begin前の移動: 動き出さないので押し直した（2 回）・それでも動かない", w.written)
+        self.assertIn("[操作] [窓3] Begin前の移動: 動き出さないので押し直しました（2 回）・それでも動きません", w.written)
 
     def test_begin_move_moving_after_represses_keeps_the_left(self):
         """2 回押し直して 1.5 秒で動き出した → 左も動き出しから 0.07 秒、前は 2.0 秒"""
@@ -216,7 +216,7 @@ class TestRepress(unittest.TestCase):
         w = _World(self, lag=None, f=0.91)
         w.ex._depth_press(F, 0.2, 1, "[操作] [窓3] Run: 前後")
         self.assertEqual(w.pressed_times(F), [0.0, 0.7, 1.4])
-        self.assertIn("[操作] [窓3] Run: 前後: 動き出さないので押し直した（2 回）・それでも動かない", w.written)
+        self.assertIn("[操作] [窓3] Run: 前後: 動き出さないので押し直しました（2 回）・それでも動きません", w.written)
 
     def test_moving_after_one_repress_stops_repressing(self):
         w = _World(self, lag=0.9)

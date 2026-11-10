@@ -1243,7 +1243,7 @@ class TestFogVariantsInNg(unittest.TestCase):
 
     # ── NG の霧・公開前 ─────────────────────────
     def test_ng_fog_signals_are_shown_on_the_spot(self):
-        expected = {"Foxy": "🦊 Evil Purple Foxyが出た！", "Bloodthirsty": "の合図"}   # 霧が対象の合図
+        expected = {"Foxy": "🦊 Evil Purple Foxy 出現", "Bloodthirsty": "の合図"}   # 霧が対象の合図
         for source, mark in expected.items():
             monitor = self._monitor("public")
 
@@ -1747,7 +1747,7 @@ class TestEnrageIdentify(unittest.TestCase):
         self.assertEqual(monitor.st.terror_ids, [])
         self.assertIsNone(monitor.st.enrage_identified)
         self.assertEqual(started, [])
-        self.assertTrue(any("テラー表に無し" in m for m in monitor.logs),
+        self.assertTrue(any("テラー表になし" in m for m in monitor.logs),
                         monitor.logs)
 
     def test_only_the_first_enrage_counts(self):

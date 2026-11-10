@@ -88,7 +88,7 @@ class TestBuildLaunchArgs(unittest.TestCase):
 
 # ── plan_launch_ports ────────────────────────
 FIXED = "[起動] 空いているポートを調べられないので、窓ごとの決まったポートで起動します"
-NO_FREE = "[起動] 空いているポートが無いので、窓ごとの決まったポートで起動します"
+NO_FREE = "[起動] 空いているポートがないので、窓ごとの決まったポートで起動します"
 
 
 class TestPlanLaunchPorts(unittest.TestCase):

@@ -240,7 +240,7 @@ class TestFetchGuidancePlush(unittest.TestCase):
         fetch.assert_called_once_with(0, "Event", PLUSH, plush=True, extra_stop=stop)
 
     def test_skips(self):
-        for kwargs, why in (({"receiver": False}, "受信が無い"), ({"osc": False}, "OSC が使えない窓"),
+        for kwargs, why in (({"receiver": False}, "受信がない"), ({"osc": False}, "OSC が使えない窓"),
                             ({"itype": config.INSTANCE_PUBLIC}, "プライベートのインスタンスでない")):
             ex = self._ex(**kwargs)
             with patch.object(RoundDecision, "guidance_plush_id", return_value=PLUSH), \

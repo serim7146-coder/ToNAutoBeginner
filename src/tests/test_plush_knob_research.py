@@ -158,12 +158,12 @@ class TestKnobLogs(unittest.TestCase):
         est = f"（見積もり ({top[0]:.1f}, {top[1]:.1f})）"
         shop = _KnobShop(self, hide=("before",))
         shop.fetcher().buy_plush(PLUSH)
-        self.assertIn(BEFORE_LOG + "見つからない" + est, shop.logs)
-        self.assertIn(AFTER_LOG + "比べられない", shop.logs)
+        self.assertIn(BEFORE_LOG + "見つかりません" + est, shop.logs)
+        self.assertIn(AFTER_LOG + "比べられません", shop.logs)
         shop = _KnobShop(self, hide=("after",))
         shop.fetcher().buy_plush(PLUSH)
         self.assertIn(BEFORE_LOG + _band_text(top[1]) + est, shop.logs)
-        self.assertIn(AFTER_LOG + "比べられない", shop.logs)
+        self.assertIn(AFTER_LOG + "比べられません", shop.logs)
 
     def test_a_missing_capture_measures_nothing_and_does_not_stop(self):
         shop = _KnobShop(self)
@@ -171,8 +171,8 @@ class TestKnobLogs(unittest.TestCase):
         f.capture = lambda: None
         f.knob_at = None
         self.assertIsNone(f._show_plush_row(lambda pt: (*at(pt), 2.0, 2.0)))
-        self.assertTrue([m for m in shop.logs if m.startswith(BEFORE_LOG + "見つからない")])
-        self.assertIn(AFTER_LOG + "比べられない", shop.logs)
+        self.assertTrue([m for m in shop.logs if m.startswith(BEFORE_LOG + "見つかりません")])
+        self.assertIn(AFTER_LOG + "比べられません", shop.logs)
         self.assertIsNone(f.before_shot)
 
     def test_the_moves_are_unchanged_by_the_record(self):
@@ -246,8 +246,8 @@ class TestKnobShots(unittest.TestCase):
         f.on_miss = lambda bgr, why: kept.append(why)
         self.assertFalse(f.buy_plush(PLUSH))
         self.assertEqual(kept, ["Have Plush の行", "Plush_引く前"], "途中は撮らない（残すのは引く前だけ）")
-        self.assertTrue([m for m in shop.logs if m.startswith(BEFORE_LOG + "見つからない")])
-        self.assertIn(AFTER_LOG + "比べられない", shop.logs)
+        self.assertTrue([m for m in shop.logs if m.startswith(BEFORE_LOG + "見つかりません")])
+        self.assertIn(AFTER_LOG + "比べられません", shop.logs)
         shop = _Shop(self)
         self.assertTrue(shop.fetcher().buy_plush(PLUSH))
 

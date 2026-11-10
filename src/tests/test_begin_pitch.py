@@ -118,7 +118,7 @@ class TestBeginPitch(unittest.TestCase):
         with patch.object(WindowOperator, "foreground_hwnd", side_effect=lambda: next(seq)):
             self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(sum(dy for _dx, dy in self.sent), 136, "1 歩目だけ動いた")
-        self.assertIn("Begin: 高さ合わせ: 前面でなくなった → やめる", self.logs)
+        self.assertIn("Begin: 高さ合わせ: 前面でなくなりました → やめます", self.logs)
 
     # ── 前面でない・許容内 ──
     def test_not_in_front_does_not_move(self):
@@ -183,7 +183,7 @@ class TestBeginPitch(unittest.TestCase):
         self.ex._adjust_to_begin(1)
         self.assertEqual(len(self.steps), 1)
         self.assertEqual(sum(d for _x, d in self.sent), 24, "やめる")
-        self.assertTrue(any("感度が測れない" in m for m in self.logs), self.logs)
+        self.assertTrue(any("感度が測れません" in m for m in self.logs), self.logs)
 
     def test_a_saved_gain_with_the_wrong_direction_flips_once(self):
         """保存の感度 0.5 で向きが逆（k = -0.5）: 1 歩目で |dy| が増える → 2 歩目から符号を反転して合う"""
@@ -204,7 +204,7 @@ class TestBeginPitch(unittest.TestCase):
         self.script = [self._hit(60), self._hit(90), self._hit(120)]     # 動かすたびに遠ざかる
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(len(self.steps), 2, "2 歩で諦める")
-        self.assertTrue(any("向きが合わない → やめる" in m for m in self.logs), self.logs)
+        self.assertTrue(any("向きが合いません → やめます" in m for m in self.logs), self.logs)
         self.assertEqual(self.script, [], "撮ったのは 3 枚（最初・1 歩目・2 歩目）")
 
     # ── 動いていない・見失った ──
@@ -212,7 +212,7 @@ class TestBeginPitch(unittest.TestCase):
         self.world = _World(120, 0.0)
         self.assertEqual(self.ex._adjust_to_begin(1), "aimed")
         self.assertEqual(len(self.steps), 1)
-        self.assertIn("Begin: 高さ合わせ: 動いていない → やめる", self.logs)
+        self.assertIn("Begin: 高さ合わせ: 動いていません → やめます", self.logs)
 
     def test_losing_it_goes_to_the_existing_retake(self):
         """高さ合わせの後に見失った → 撮り直し（見つかれば続ける）。高さ合わせはもう一度できる"""

@@ -171,7 +171,7 @@ class TestShowTheWholePanel(_FetchCase):
         with patch.object(f, "calibrate", side_effect=self._measure_fixes_it(panel, f)) as calibrate:
             self.assertTrue(f.buy("Survival", 29))
         calibrate.assert_called_once_with("Survival")
-        self.assertIn("アイテム取得: 感度 保存した値を使う（横 0.900・縦 0.550）", self.logs)
+        self.assertIn("アイテム取得: 感度 保存した値を使います（横 0.900・縦 0.550）", self.logs)
         self.assertIn("アイテム取得: 感度 測り直し（保存した値で店の画面が入りきらない）", self.logs)
         self.assertIsNone(f.saved_gain)
         self.assertTrue(panel.inside())
@@ -508,7 +508,7 @@ class TestCursorClickInTheWindow(unittest.TestCase):
         self.assertFalse(self.mouse.click_at(1035.6, 505.2))
         self.assertNotIn(("down",), self.calls)
         self.assertEqual(len([c for c in self.calls if c[0] == "cursor"]), 3)
-        self.assertIn("[操作] クリックしない（カーソルを (1136, 555) へ 3 回置けない）", self.written)
+        self.assertIn("[操作] クリックしません（カーソルを (1136, 555) へ 3 回置けない）", self.written)
 
     def test_an_unreadable_cursor_is_not_placed(self):
         self.reads = [None] * 3
@@ -535,7 +535,7 @@ class TestCursorClickInTheWindow(unittest.TestCase):
         with self.assertRaises(ItemFetch.Stopped):
             self.mouse.tab_down()
         self.assertEqual(self.calls, [])
-        self.assertIn("[操作] Tab を押した（離すまで押したまま）", self.written)
+        self.assertIn("[操作] Tab を押しました（離すまで押したまま）", self.written)
 
     def test_not_in_front_or_not_private_sends_nothing(self):
         self.front["hwnd"] = 0x66

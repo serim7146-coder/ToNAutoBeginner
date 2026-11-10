@@ -406,7 +406,7 @@ def plan_launch_ports(count: int, plan_indices: list, tab_ports: list, used) -> 
     if len(pairs) < count:
         pairs = pairs + [OSCClient.ports_for_window(plan_indices[i])
                          for i in range(len(pairs), count)]
-        message = "[起動] 空いているポートが無いので、窓ごとの決まったポートで起動します"
+        message = "[起動] 空いているポートがないので、窓ごとの決まったポートで起動します"
     return pairs, message, wrapped
 
 
@@ -1991,7 +1991,7 @@ class App(tk.Tk):
             # 止める手段がボタンだけになる。確かめてから
             if not messagebox.askyesno(
                     "停止のキーの解除",
-                    "停止のキーが無くなります。止めるのは「■ 停止」のボタンだけになります。"
+                    "停止のキーがなくなります。止めるのは「■ 停止」のボタンだけになります。"
                     "よろしいですか？",
                     parent=getattr(self, "_keybind_dialog", None) or self):
                 return
@@ -2307,7 +2307,7 @@ class App(tk.Tk):
         ttk.Checkbutton(lf2, text="ToNへ自動Join", variable=self.v_join_world,
                         command=self._refresh_launch_chain).pack(side="left")
         self.v_ton_entry = tk.BooleanVar(value=config.TON_ENTRY_ENABLED)
-        self.chk_ton_entry = ttk.Checkbutton(lf2, text="入室後の選択画面を自動突破",
+        self.chk_ton_entry = ttk.Checkbutton(lf2, text="入室後の選択画面を自動で進める",
                                              variable=self.v_ton_entry,
                                              command=self._refresh_launch_chain)
         self.chk_ton_entry.pack(side="left", padx=(12, 0))
@@ -2419,11 +2419,11 @@ class App(tk.Tk):
                 ("Fog", self.v_voice_fog, "fog"),
                 ("Ghost", self.v_voice_ghost, "ghost"),
                 ("8 Pages(速度検知)", self.v_voice_8pages, "8pages"),
-                ("Punish(速度検知)", self.v_voice_punish, "punish"),
+                ("Punished(速度検知)", self.v_voice_punish, "punish"),
                 ("アイテムロスト", self.v_voice_item_lost, "item_lost"),
                 ("Intermission", self.v_voice_intermission, "intermission"),
                 ("Evil Purple Foxy", self.v_voice_foxy, "foxy"),
-                ("主催リスト喪失", self.v_voice_list_lost, "list_lost"),
+                ("主催リストが取れないとき", self.v_voice_list_lost, "list_lost"),
                 ("待機列", self.v_voice_queue, "queue"),
                 ("Sabotage murder", self.v_voice_murder, "murder"),
                 ("Sabotage star", self.v_voice_sabotage, "sabotage"),
@@ -2768,7 +2768,7 @@ class App(tk.Tk):
                                        "窓に戻りません")
                         return False
                     time.sleep(config.CONTINUE_WINDOWED_POLL_SEC)
-                DebugLog.write(f"{head} フルスクリーンを解除した（Alt+Enter）")
+                DebugLog.write(f"{head} フルスクリーンを解除しました（Alt+Enter）")
                 return True
             finally:
                 try:
@@ -3688,7 +3688,7 @@ class App(tk.Tk):
             what = f"「{BROADCAST_CHOICE_LABELS.get(key, key)}」を「{shown}」に"
         else:
             return
-        self._log(f"[設定] Ctrl: {what}全窓へ写しました")
+        self._log(f"[設定] Ctrl: {what}全窓に反映しました")
 
     def _clear_tab_round_settings(self, window_idx: int):
         """監視スレッドから呼ばれる。Tk変数はメインスレッドでしか触れない"""
@@ -4497,7 +4497,7 @@ class App(tk.Tk):
                     if note:
                         self._log(note)
                     if wrapped:
-                        DebugLog.write("[起動] 既存の窓より上に空きが無いので、小さいポートから探し直しました")
+                        DebugLog.write("[起動] 既存の窓より上に空きがないので、小さいポートから探し直しました")
                 # まとめて投げると取りこぼす窓が出るので、1窓ずつ出現を待ってから次へ。
                 # 待ち切れなくても次に進む（残りの窓まで巻き添えにしない）。
                 for i, (window_no, profile_id, osc_index) in enumerate(launch_plan):
@@ -4797,7 +4797,7 @@ class App(tk.Tk):
             if action is None or getattr(action, "_receiver", None) is None:
                 log("マクロが動いていないため Guidance Plush を取りに行きません")
                 if action is not None:
-                    action.request_plush_retry("受信が無い")
+                    action.request_plush_retry("受信がない")
                 return
             outcome = action.fetch_guidance_plush(extra_stop=self._entry_stop.is_set)
             if outcome not in ("ok", "stopped"):

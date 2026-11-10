@@ -78,13 +78,13 @@ class TestTheReferenceShot(unittest.TestCase):
         w.round_over()
         w.round_over()
         self.assertEqual(w.files(), [], "2 回目まではまだ")
-        self.assertIn("[操作] [窓2] Run の位置: 基準: 撮らない（普通に終わったラウンド 2/3）", w.written)
+        self.assertIn("[操作] [窓2] Run の位置: 基準: 撮りません（普通に終わったラウンド 2/3）", w.written)
         w.round_over()
         refs = w.files("ref")
         self.assertEqual(len(refs), 1, "3 回目の後に撮る")
         self.assertIn("_窓2_ref_867x663.png", refs[0])
         self.assertEqual(w.shots, 2, "0.5 秒あけた 2 枚")
-        self.assertTrue(any("基準: 撮った" in m and "2 枚の差 0.00" in m for m in w.written), w.written)
+        self.assertTrue(any("基準: 撮りました" in m and "2 枚の差 0.00" in m for m in w.written), w.written)
         before = len(w.written)
         w.round_over()
         w.round_over()
@@ -101,17 +101,17 @@ class TestTheReferenceShot(unittest.TestCase):
             w.round_over()
             last(w)
             self.assertEqual(w.files(), [], why)
-            self.assertIn(f"[操作] [窓2] Run の位置: 基準: 撮らない（{why}）", w.written)
+            self.assertIn(f"[操作] [窓2] Run の位置: 基準: 撮りません（{why}）", w.written)
             w.round_over()
             self.assertEqual(len(w.files("ref")), 1, f"{why} は数えない（次の普通のラウンドで 3 回目）")
         for why, spoil in (("private でない", lambda w: setattr(w.st, "instance_type", config.INSTANCE_PUBLIC)),
-                           ("速さの受信が無い", lambda w: setattr(w.ex, "_receiver", None))):
+                           ("速度の受信がない", lambda w: setattr(w.ex, "_receiver", None))):
             w = _world(self)
             spoil(w)
             for _ in range(4):
                 w.round_over()
             self.assertEqual(w.files(), [], why)
-            self.assertIn(f"[操作] [窓2] Run の位置: 基準: 撮らない（{why}）", w.written)
+            self.assertIn(f"[操作] [窓2] Run の位置: 基準: 撮りません（{why}）", w.written)
             self.assertEqual(w.shots, 0)
 
     def test_moving_does_not_shoot_and_tries_next_round(self):
@@ -120,7 +120,7 @@ class TestTheReferenceShot(unittest.TestCase):
             w.round_over()
         self.assertEqual(w.files(), [])
         self.assertEqual(w.shots, 0)
-        self.assertTrue(any("撮らない（Begin 前の移動までに止まらなかった。最高の速さ 0.10）" in m
+        self.assertTrue(any("撮りません（Begin 前の移動までに止まらなかった。最高の速度 0.10）" in m
                             for m in w.written), w.written)
         w.speed = 0.09
         w.round_over()
@@ -156,7 +156,7 @@ class TestTheReferenceShot(unittest.TestCase):
         for _ in range(3):
             w.round_over()
         self.assertEqual(w.files(), [])
-        self.assertTrue(any("撮らない（2 枚の差 30.00 > 3.0" in m for m in w.written), w.written)
+        self.assertTrue(any("撮りません（2 枚の差 30.00 > 3.0" in m for m in w.written), w.written)
         w.change = 2                                # 2.00 は小さい
         w.round_over()
         self.assertEqual(len(w.files("ref")), 1)
@@ -174,7 +174,7 @@ class TestTheReferenceShot(unittest.TestCase):
         for _ in range(3):
             w.round_over()
         self.assertEqual(w.files(), [])
-        self.assertTrue(any("撮らない（2 枚の間に動いた" in m for m in w.written), w.written)
+        self.assertTrue(any("撮りません（2 枚の間に動いた" in m for m in w.written), w.written)
 
     def test_a_new_window_size_shoots_again(self):
         w = _world(self)
@@ -186,7 +186,7 @@ class TestTheReferenceShot(unittest.TestCase):
         self.assertEqual(len(refs), 2)
         # 名前の並びでは見ない（テストの中の 2 枚は同じ時刻の名前になりうる。そのとき 1280 < 867 と並ぶ）
         self.assertEqual(sorted(n.rsplit("_", 1)[1] for n in refs), ["1280x720.png", "867x663.png"])
-        self.assertIn("[操作] [窓2] Run の位置: 基準: 窓の大きさが変わった（(867, 663) → (1280, 720)）→ 撮り直す",
+        self.assertIn("[操作] [窓2] Run の位置: 基準: 窓の大きさが変わりました（(867, 663) → (1280, 720)）→ 撮り直します",
                       w.written)
         w.round_over()
         self.assertEqual(len(w.files("ref")), 2, "同じ大きさならもう撮らない")
@@ -242,7 +242,7 @@ class TestAfterTheRun(unittest.TestCase):
         runs = w.files("run")
         self.assertEqual(len(runs), 1)
         self.assertIn("_窓2_run_867x663.png", runs[0])
-        self.assertTrue(any("Run の位置: Run の後 撮った" in m for m in w.written), w.written)
+        self.assertTrue(any("Run の位置: Run の後 撮りました" in m for m in w.written), w.written)
 
     def test_it_is_taken_at_the_end_of_the_respawn(self):
         # 中身は _respawn_and_face（EY: 店に行った後の押し直しでも使う。そのときは撮らない）

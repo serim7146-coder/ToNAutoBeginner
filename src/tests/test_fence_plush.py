@@ -86,7 +86,7 @@ class TestTheFence(unittest.TestCase):
         self.assertEqual(len(w.jumps), 1)
         self.assertAlmostEqual(w.jumps[0], 1.2, delta=0.02, msg="柵に当たってから跳ぶ")
         self.assertAlmostEqual(w.crossed_at(), 1.2 + 0.9, delta=0.03)
-        self.assertTrue(any(l.startswith("アイテム取得: 柵に当たった 1.2") and "（速さ 0.21）→ 跳ぶ" in l
+        self.assertTrue(any(l.startswith("アイテム取得: 柵に当たった 1.2") and "（速度 0.21）→ 跳びます" in l
                             for l in w.logs), w.logs)
         self.assertTrue(any(l.startswith("アイテム取得: 着地 0.2") and "跳んだ 1 回" in l for l in w.logs), w.logs)
         after = [a for _t, a, v in w.sent if v == 1]
@@ -107,7 +107,7 @@ class TestTheFence(unittest.TestCase):
         w = _Fence(self, clears=(False, True))
         self.assertTrue(w.fetcher.move_to_shop())
         self.assertEqual(len(w.jumps), 2)
-        self.assertTrue(any("越えられずに張り付いた" in l and "跳び直す（2 回目）" in l for l in w.logs), w.logs)
+        self.assertTrue(any("越えられずに張り付いた" in l and "跳び直します（2 回目）" in l for l in w.logs), w.logs)
         self.assertAlmostEqual(w.crossed_at(), w.jumps[1] + 0.9, delta=0.03, msg="跳び直した後から数え直す")
 
     def test_at_most_three_jumps_then_fail_at_3_seconds(self):
@@ -126,7 +126,7 @@ class TestTheFence(unittest.TestCase):
         presses = w.left_presses()
         self.assertEqual(len(presses), 3, "最初＋押し直し 2 回")
         self.assertAlmostEqual(presses[1], 0.7, delta=0.03)
-        self.assertTrue(any("柵を越えられません" in l and "速さが出ない" in l for l in w.logs), w.logs)
+        self.assertTrue(any("柵を越えられません" in l and "速度が出ない" in l for l in w.logs), w.logs)
 
     def test_a_late_start_after_a_repress_still_crosses(self):
         w = _Fence(self, walk_at=0.9, hit_at=1.8)
@@ -266,7 +266,7 @@ class TestThePlushRetry(unittest.TestCase):
         for _ in range(5):
             self.ex._retry_plush(9)
         self.assertEqual(self.calls, [(9, "Event", self.PLUSH, True)] * 3)
-        self.assertTrue(any("入室時に取れなかった（店の画面が見つからない）" in m for m in self.written), self.written)
+        self.assertTrue(any("入室時に取れませんでした（店の画面が見つからない）" in m for m in self.written), self.written)
 
     def test_success_stops_retrying(self):
         self.ex.request_plush_retry("x")
@@ -283,7 +283,7 @@ class TestThePlushRetry(unittest.TestCase):
         self.st.held_item_id = 0
         self.ex._retry_plush(9)
         self.assertEqual(self.calls, [])
-        self.assertTrue(any("別のアイテム（Emerald Coil）を持っている → やり直さない" in m for m in self.written), self.written)
+        self.assertTrue(any("別のアイテム（Emerald Coil）を持っています → やり直しません" in m for m in self.written), self.written)
 
     def test_conditions_not_met_skip_without_using_a_try(self):
         self.ex.request_plush_retry("x")
@@ -335,7 +335,7 @@ class TestTheEntryAsksForARetry(unittest.TestCase):
     def test_no_verified_or_no_receiver_asks(self):
         self._app("timeout").request_plush_retry.assert_called_once_with("Begin の受理を確認できない")
         self._app("round").request_plush_retry.assert_called_once_with("ラウンドが始まった")
-        self._app("verified", receiver=False).request_plush_retry.assert_called_once_with("受信が無い")
+        self._app("verified", receiver=False).request_plush_retry.assert_called_once_with("受信がない")
 
     def test_a_stopped_macro_cannot_ask(self):
         action = self._app("timeout", running=False)

@@ -156,14 +156,14 @@ class TestReleasesAfterRespawn(_Case):
         self.assertEqual(slept, config.CONTINUE_FREEZE_RELEASE_DELAY_SEC, "死亡と同じ遅れ")
         self.assertEqual(SharedState.get_continue_round_count(), 0)
         self.assertFalse(monitor.st.is_continue_round)
-        self.assertIn(f"続行ラウンド終了 → 他窓フリーズ解除（リスポーンから{slept}秒）", self._lines(monitor))
+        self.assertIn(f"続行ラウンド終了 → ほかの窓のフリーズ解除（リスポーンから{slept}秒）", self._lines(monitor))
 
     def test_a_death_keeps_its_wording(self):
         monitor = self._continuing()
         monitor._process(DIED)
         self.assertEqual(monitor.booked[0][1], (4, 0), "死亡の予約の引数は今までどおり")
         slept = self._run(monitor, 0)
-        self.assertIn(f"続行ラウンド終了 → 他窓フリーズ解除（死亡から{slept}秒）", self._lines(monitor))
+        self.assertIn(f"続行ラウンド終了 → ほかの窓のフリーズ解除（死亡から{slept}秒）", self._lines(monitor))
 
     def test_the_old_call_without_a_label_still_says_death(self):
         monitor = self._continuing()

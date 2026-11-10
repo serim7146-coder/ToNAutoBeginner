@@ -168,7 +168,7 @@ class TestDebugLogRich(unittest.TestCase):
         text = self._text()
         self.assertIn("[例外] WindowOperator.focus_window", text)
         self.assertIn("OSError: gone", text)
-        self.assertIn("[操作] 前面化 hwnd=0x123 → 失敗", text)
+        self.assertIn("[操作] 前面に出す hwnd=0x123 → 失敗", text)
 
     def test_a_swallowed_osc_failure_is_written(self):
         client = OSCClient.OSCClient(9)
@@ -288,7 +288,7 @@ class TestDebugLogTraces(unittest.TestCase):
             WindowOperator.focus_window(0x10)
             WindowOperator.click()
             WindowOperator.hold_key_background(0x10, "w", 0.5)
-        self.assertIn("[操作] 前面化 hwnd=0x10 → 成功", self.written)
+        self.assertIn("[操作] 前面に出す hwnd=0x10 → 成功", self.written)
         self.assertIn("[操作] クリック（Tab の後）", self.written)
         self.assertIn("[操作] 背面キー w 0.50秒 hwnd=0x10", self.written)
 
@@ -322,7 +322,7 @@ class TestDebugLogTraces(unittest.TestCase):
                                                      ("/input/MoveLeft", left)], stop=ex._move_stopped)
             self.assertIn(f"[操作] [窓1] Begin前の移動: {kind} 前進{fwd}秒・左{left}秒"
                           f"（round_type={round_type}）", self.written)
-            self.assertIn("[操作] [窓1] Begin前の移動: 最後までやった", self.written)
+            self.assertIn("[操作] [窓1] Begin前の移動: 最後までやりました", self.written)
             self.assertTrue(st.begin_move_done)
 
     def test_a_begin_move_that_could_not_send(self):
@@ -332,16 +332,16 @@ class TestDebugLogTraces(unittest.TestCase):
         ex._osc = MagicMock()
         ex._osc.press_multi.return_value = False
         ex._begin_move()
-        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（OSC を送れない）", self.written)
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めました（OSC を送れない）", self.written)
         ex._osc = None
         with patch.object(WindowOperator, "hold_key_background", return_value=False):
             ex._begin_move()
-        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（移動キーを送れない）", self.written)
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めました（移動キーを送れない）", self.written)
         ex._osc = MagicMock()
         ex._osc.press_multi.side_effect = OSError("x")
         with self.assertRaises(OSError):
             ex._begin_move()
-        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めた（OSError）", self.written)
+        self.assertIn("[操作] [窓2] Begin前の移動: 途中で止めました（OSError）", self.written)
 
     def test_a_sound(self):
         with tempfile.TemporaryDirectory() as d:
@@ -504,9 +504,9 @@ class TestBugReportContent(unittest.TestCase):
         _n, _d, files = self._zip()
         self.assertNotIn("continue_table.json", files)
         self.assertNotIn("continue_list.json", files)
-        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）: 入れていません（ファイルが無い）",
+        self.assertIn("- 続行表（続行無効・デフォ続行・プリセット・アイテムごとの設定）: 入れていません（ファイルがない）",
                       files["report.txt"])
-        self.assertIn("- ツールの続行リスト: 入れていません（ファイルが無い）", files["report.txt"])
+        self.assertIn("- ツールの続行リスト: 入れていません（ファイルがない）", files["report.txt"])
         self.assertIn("settings.json", files)
 
     def test_one_missing_continue_file_does_not_hide_the_other(self):
@@ -515,7 +515,7 @@ class TestBugReportContent(unittest.TestCase):
         _n, _d, files = self._zip()
         self.assertIn("continue_table.json", files)
         self.assertNotIn("continue_list.json", files)
-        self.assertIn("- ツールの続行リスト: 入れていません（ファイルが無い）", files["report.txt"])
+        self.assertIn("- ツールの続行リスト: 入れていません（ファイルがない）", files["report.txt"])
 
     def test_unchecked_settings_leaves_the_continue_files_out(self):
         self._write_tables()
@@ -527,13 +527,13 @@ class TestBugReportContent(unittest.TestCase):
 
     def test_vrchat_log_reasons(self):
         for window, path, reason in ((0, None, "窓を選んでいない"), (3, "", "窓に未割り当て"),
-                                     (3, str(self.dir / "none.txt"), "ファイルが無い")):
+                                     (3, str(self.dir / "none.txt"), "ファイルがない")):
             _n, _d, files = self._zip(window=window, vrchat=path if path is not None else str(self.vrchat))
             self.assertNotIn("vrchat_log_window3.txt", files)
             self.assertIn(f"選んだ窓の VRChat のログ: 入れていません（{reason}）", files["report.txt"])
         self.debug.unlink()
         _n, _d, files = self._zip()
-        self.assertIn("debug.log: 入れていません（ファイルが無い）", files["report.txt"])
+        self.assertIn("debug.log: 入れていません（ファイルがない）", files["report.txt"])
 
     def test_the_user_name_is_masked_everywhere(self):
         _n, _d, files = self._zip()
