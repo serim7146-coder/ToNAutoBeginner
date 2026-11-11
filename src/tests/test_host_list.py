@@ -1078,6 +1078,11 @@ class TestHostListGrace(unittest.TestCase):
         self.addCleanup(grace.stop)
         SharedState.set_list_source(None)
         self.addCleanup(SharedState.set_list_source, None)
+        # debug.log への行を貯める（本物のファイルへは書かない）
+        self.debug = []
+        debug = patch.object(DebugLog, "write", side_effect=self.debug.append)
+        debug.start()
+        self.addCleanup(debug.stop)
         self._dir = tempfile.TemporaryDirectory()
         self.addCleanup(self._dir.cleanup)
         self.path = str(Path(self._dir.name) / "host_save.json.gz")
@@ -1097,7 +1102,6 @@ class TestHostListGrace(unittest.TestCase):
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._user_save_cache = None
-        app._host_save_warned = False
         app._host_loss_since = None
         app._process_cache = FakeProcessCache()
         app.logs = []
@@ -1105,7 +1109,7 @@ class TestHostListGrace(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_apply_own_list",
+                     "_host_read_failed", "_host_loss_cleared", "_fall_back_to_tnl", "_apply_own_list",
                      "_read_host_source", "_apply_host_source"):
             method = getattr(mainGUI.App, name)
             setattr(app, name, (lambda m: lambda *a, **kw: m(app, *a, **kw))(method))
@@ -1141,7 +1145,17 @@ class TestHostListGrace(unittest.TestCase):
         self.host_list = dict(self.app.keepOn_set)
 
     def _grace_logs(self):
-        return [m for m in self.app.logs if "猶予中" in m]
+        """猶予の行は画面に出さず debug.log にだけ書く"""
+        self.assertEqual([m for m in self.app.logs if "猶予中" in m], [], "画面には出さない")
+        return [m for m in self.debug if "猶予中" in m]
+
+    def _host_debug(self):
+        """debug.log の「[主催リスト]」の行（例外のトレースバックは別）"""
+        return [m for m in self.debug if m.startswith("[主催リスト]")]
+
+    def _break(self):
+        """ListTool が書いている最中を掴んだ（読み込みが失敗する）"""
+        Path(self.db).write_bytes(b"half written garbage")
 
     # ── 一瞬では切り替えない ─────────────────────
     def test_a_briefly_missing_sqlite_file_is_forgiven(self):
@@ -1230,6 +1244,134 @@ class TestHostListGrace(unittest.TestCase):
         self._tick(3, stat_fails=True)                # また取れない
 
         self.assertEqual(len(self._grace_logs()), 2, self.app.logs)
+
+    # ── 読み込みの失敗（error）も同じ猶予で扱う ───────────
+    def test_a_brief_read_failure_is_silent_on_screen(self):
+        """猶予より短く読めたら、画面には何も出さない。debug.log に始まりと戻りの 2 行"""
+        self._on_host_list()
+        shown = len(self.app.logs)
+        self._break()
+
+        self._tick(3)
+        self.assertEqual(SharedState.get_list_source(), "host", "猶予の内")
+        self._write(2)
+        self._tick(3)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(self.app.logs[shown:], [], "画面のログは増えない")
+        lines = self._host_debug()
+        self.assertEqual(len(lines), 2, self.debug)
+        self.assertTrue(lines[0].startswith("[主催リスト] 読み込み失敗（猶予中）: "), lines)
+        self.assertEqual(lines[1], "[主催リスト] 読み込みが戻りました（3 秒）")
+
+    def test_a_repeated_read_failure_writes_the_start_once(self):
+        self._on_host_list()
+        self._break()
+
+        for _ in range(3):
+            self._tick(2)
+
+        starts = [m for m in self._host_debug() if "読み込み失敗" in m]
+        self.assertEqual(len(starts), 1, self.debug)
+        self.assertEqual([m for m in self.app.logs if "読み込み失敗" in m], [])
+
+    def test_a_lasting_read_failure_switches_to_the_own_list(self):
+        self._on_host_list()
+        self._break()
+        shown = len(self.app.logs)
+
+        self._tick(0)
+        self._tick(self.GRACE + 1)
+        self._tick(3)            # 切り替えた後に失敗が続いても、行は増えない
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertEqual(self.app.keepOn_set, {self.CLASSIC: {1}}, "ツールの続行リスト")
+        switched = [m for m in self.app.logs[shown:] if "ツールの続行リストへ切替" in m]
+        self.assertEqual(len(switched), 1, self.app.logs)
+        self.assertIn(f"（主催リストを {int(self.GRACE)} 秒読めません: ", switched[0])
+        self.assertEqual(len(self.app.logs) - shown, 1, "画面に出るのはその 1 行だけ")
+        self.assertNotIn("tnlへ切替", "".join(self.app.logs))
+        starts = [m for m in self._host_debug() if "読み込み失敗" in m]
+        self.assertEqual(len(starts), 1, self.debug)
+
+    def test_after_a_lasting_read_failure_a_window_with_others_is_stopped(self):
+        """ほかの人がいる窓（自動自爆 ON）は、主催リストが無いので止まる（LogMonitor の判定は変えない）"""
+        self._on_host_list()
+        monitor = LogMonitor.LogMonitor(
+            WindowConfig(do_skip=True), {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.local_user_id = "usr_me00"
+        monitor.st.players = {"usr_me00", "usr_other"}
+        monitor.st.players_known = True
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        self._break()
+
+        self._tick(0)
+        self.assertFalse(monitor._host_list_missing(), "猶予の内は主催リストのまま")
+        self._tick(self.GRACE + 1)
+
+        self.assertTrue(monitor._host_list_missing())
+
+    def test_the_host_list_returns_after_the_own_list(self):
+        self._on_host_list()
+        self._break()
+        self._tick(0)
+        self._tick(self.GRACE + 1)
+        self.assertEqual(SharedState.get_list_source(), "tnl", "前提")
+        shown = len(self.app.logs)
+
+        self._write(2)
+        self._tick(3)
+
+        self.assertEqual(SharedState.get_list_source(), "host")
+        self.assertEqual(self.app.keepOn_set, self.host_list)
+        returned = self.app.logs[shown:]
+        self.assertEqual(len(returned), 2, returned)
+        self.assertEqual(returned[0], "[続行リスト] 主催リストへ切替（参加者2人）")
+        self.assertTrue(returned[1].startswith("[主催リスト] 参加者2人"), returned)
+
+    def test_a_read_failure_is_silent_while_not_on_the_host_list(self):
+        """主催リストを使っていない（ツールの続行リストの）ときは、画面にも debug.log にも出さない"""
+        self._tick(running=False)
+        self.assertEqual(SharedState.get_list_source(), "tnl", "前提")
+        self._break()
+        shown, written = len(self.app.logs), len(self.debug)
+        error = patch.object(mainGUI.DebugLog, "exception")        # 60 秒に 1 回の例外の行はこの外
+        error.start()
+        self.addCleanup(error.stop)
+
+        for _ in range(3):
+            self._tick(3, running=True)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+        self.assertEqual(self.app.logs[shown:], [])
+        self.assertEqual(self.debug[written:], [])
+
+    def test_a_loss_after_a_read_failure_keeps_one_grace(self):
+        """失敗と取れない状態は同じ猶予を数える（失敗から 10 秒で切り替わる）"""
+        self._on_host_list()
+        self._break()
+        self._tick(0)
+
+        self._tick(self.GRACE / 2, running=False)
+        self.assertEqual(SharedState.get_list_source(), "host", "まだ半分")
+        self._tick(self.GRACE / 2 + 1, running=False)
+
+        self.assertEqual(SharedState.get_list_source(), "tnl")
+
+    def test_the_lost_grace_is_only_in_debug_log(self):
+        """ListTool が見えない等の猶予中は、画面に出さず debug.log に 1 行"""
+        self._on_host_list()
+        shown = len(self.app.logs)
+
+        self._tick(3, running=False)
+        self._tick(3, running=False)
+
+        self.assertEqual(self.app.logs[shown:], [])
+        lines = [m for m in self._host_debug() if "猶予中" in m]
+        self.assertEqual(len(lines), 1, self.debug)
+        self.assertIn("ToN ListTool が起動していません", lines[0])
 
     # ── 戻るのはすぐ／守るものが無ければすぐ ─────────────
     def test_returning_from_the_tnl_is_immediate(self):
@@ -1628,7 +1770,6 @@ class TestHostListSource(unittest.TestCase):
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._user_save_cache = None
-        app._host_save_warned = False
         app._host_loss_since = None
         app._process_cache = FakeProcessCache()
         app.logs = []
@@ -1636,7 +1777,7 @@ class TestHostListSource(unittest.TestCase):
         app.lbl_tnl = MagicMock()
         app.v_tnl = TestHostListSource.FakeVar(str(self.tnl))
         for name in ("_apply_keep_on", "_apply_host_wishes", "_apply_host_tabs", "_host_list_lost",
-                     "_warn_host_save_once", "_fall_back_to_tnl", "_apply_own_list",
+                     "_host_read_failed", "_host_loss_cleared", "_fall_back_to_tnl", "_apply_own_list",
                      "_read_host_source", "_apply_host_source"):
             setattr(app, name, self._bind(app, name))
         # ツールの続行リスト（GN）。主催リストをやめると、これに戻る
@@ -1863,28 +2004,17 @@ class TestHostListSource(unittest.TestCase):
 
     # ── 一時的な失敗は供給元を変えない ──────────
     def test_a_decode_failure_keeps_the_current_source(self):
-        """書き込み中を掴みうる。ここで tnl へ倒すと3秒ごとに往復する"""
+        """書き込み中を掴みうる。ここで tnl へ倒すと3秒ごとに往復する（猶予の間）"""
         self._write(3)
         app = self._app()
         self._refresh(app)
 
         Path(self.db).write_bytes(b"half written garbage")
-        self._refresh(app)
+        with patch.object(config, "HOST_LIST_LOSS_GRACE_SEC", 10.0):
+            self._refresh(app)
 
         self.assertEqual(SharedState.get_list_source(), "host", "供給元を変えないこと")
         self.assertEqual(app.keepOn_set, {self.CLASSIC: {5, 6, 7}}, "前の値を保持")
-
-    def test_a_repeated_failure_warns_once(self):
-        self._write(3)
-        app = self._app()
-        self._refresh(app)
-        Path(self.db).write_bytes(b"half written garbage")
-
-        for _ in range(3):
-            self._refresh(app)
-
-        hits = [m for m in app.logs if "読み込み失敗" in m]
-        self.assertEqual(len(hits), 1, app.logs)
 
     def test_a_user_save_change_is_picked_up(self):
         """自分のリストだけ更新したときも読み直すこと"""
@@ -1969,23 +2099,6 @@ class TestHostListSource(unittest.TestCase):
                                         {})) as mock_load:
             self._refresh(app)
         mock_load.assert_called_once()
-
-    def test_recovery_after_a_failure_is_logged_again(self):
-        """失敗中は1回だけ。成功で復帰して、また失敗したらまた1回出る"""
-        self._write(3)
-        app = self._app()
-        self._refresh(app)
-
-        Path(self.db).write_bytes(b"half written garbage")
-        self._refresh(app)
-        self._refresh(app)
-        self._write(4)
-        self._refresh(app)                      # 復帰
-        Path(self.db).write_bytes(b"broken again")
-        self._refresh(app)
-
-        hits = [m for m in app.logs if "読み込み失敗" in m]
-        self.assertEqual(len(hits), 2, app.logs)
 
     @staticmethod
     def _tick(app):
@@ -2220,7 +2333,6 @@ class TestListSourceShared(unittest.TestCase):
         app.host_tabs = {"version": 0, "tabs": {}}
         app._host_save_stamp = None
         app._user_save_cache = None
-        app._host_save_warned = False
         app.logs = []
         app._log = app.logs.append
         app.lbl_tnl = MagicMock()

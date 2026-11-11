@@ -1267,8 +1267,9 @@ class App(tk.Tk):
         self._user_save_cache: tuple | None = None   # _read_user_save の前回の結果（裏スレッドだけが触る）
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
-        self._host_save_warned = False               # 一時的な失敗の警告は1回だけ
         self._host_loss_since: float | None = None   # 主催リストが取れなくなった時刻
+        self._host_loss_is_error = False             # その始まりが「読み込み失敗」だったか（戻ったときに debug.log へ）
+        self._host_last_error = ""                   # 読み込み失敗の最後の文言
         self.monitors: list[LogMonitor.LogMonitor] = []
         self._window_table_windows: dict = {}      # (窓の番号, 種類) → 開いている窓の表の画面（GR）
         # 窓ごとの全窓フリーズの設定（窓の番号 → freeze_values()）。タブが無い窓の分もここに残す（窓数を減らして戻しても残る）
@@ -3345,20 +3346,13 @@ class App(tk.Tk):
         except (tk.TclError, RuntimeError):
             pass
 
-    def _warn_host_save_once(self, msg: str):
-        """3秒ごとに同じ行が流れるので、失敗が続く間は最初の1回だけ出す"""
-        if not self._host_save_warned:
-            self._host_save_warned = True
-            self._log(msg)
-
     def _fall_back_to_tnl(self, reason: str):
-        """続行リストの供給元を .tnl に戻す。切り替わったときだけログを出す"""
+        """続行リストの供給元をツールの続行リストに戻す（関数名は昔の .tnl のまま）。切り替わったときだけログを出す"""
         if SharedState.get_list_source() == "tnl":
             return
         SharedState.set_list_source("tnl")
         self._host_save_stamp = None
-        self._host_save_warned = False
-        self._log(f"[続行リスト] tnlへ切替（{reason}）")
+        self._log(f"[続行リスト] ツールの続行リストへ切替（{reason}）")
         # 参加者別の希望を残すと Sabotage の判定に古い希望が効いてしまう
         self._apply_host_wishes({})
         self._apply_host_tabs({})
@@ -3367,12 +3361,13 @@ class App(tk.Tk):
         self._apply_own_list()
 
     def _host_list_lost(self, reason: str):
-        """主催リストが取れない。続いたときだけ tnl へ切り替える。
+        """主催リストが取れない。続いたときだけツールの続行リストへ切り替える。
 
         取れない理由（プロセスが見えない・host_save を stat できない・参加者0人）は
         どれも一瞬だけ起きうる。1回で切り替えると、他の人がいる窓でだけ
         「主催リストが取れません」が鳴る。猶予の間は前の主催リストを使い続ける。
         まだ主催リストを使っていなければ、守るものが無いのですぐ切り替える。
+        猶予の間は画面に出さない（利用者が不安になる）。debug.log に 1 行だけ残す。
         """
         if SharedState.get_list_source() != "host":
             self._fall_back_to_tnl(reason)
@@ -3380,12 +3375,45 @@ class App(tk.Tk):
         now = time.monotonic()
         if getattr(self, "_host_loss_since", None) is None:
             self._host_loss_since = now
+            self._host_loss_is_error = False
             if config.HOST_LIST_LOSS_GRACE_SEC > 0:
-                self._log(f"[主催リスト] 一時的に取れません（猶予中）: {reason}")
+                DebugLog.write(f"[主催リスト] 一時的に取れません（猶予中）: {reason}")
         if now - self._host_loss_since < config.HOST_LIST_LOSS_GRACE_SEC:
             return
         self._host_loss_since = None
+        self._host_loss_is_error = False
         self._fall_back_to_tnl(reason)
+
+    def _host_read_failed(self, error: str):
+        """主催リストの読み込みが失敗した（ListTool が書いている最中など）。
+
+        猶予（_host_list_lost と同じ）の間は前の主催リストを使い続け、画面には出さない。
+        猶予を過ぎたらツールの続行リストへ切り替える（古い主催リストを使い続けない）。
+        主催リストを使っていないときは、守るものが無く、前のリストも無いので何もしない
+        （3秒ごとに同じ行が増えないよう debug.log にも書かない）。
+        """
+        if SharedState.get_list_source() != "host":
+            return
+        now = time.monotonic()
+        self._host_last_error = error
+        if getattr(self, "_host_loss_since", None) is None:
+            self._host_loss_since = now
+            self._host_loss_is_error = True
+            DebugLog.write(f"[主催リスト] 読み込み失敗（猶予中）: {error}")
+        if now - self._host_loss_since < config.HOST_LIST_LOSS_GRACE_SEC:
+            return
+        self._host_loss_since = None
+        self._host_loss_is_error = False
+        self._fall_back_to_tnl(
+            f"主催リストを {int(config.HOST_LIST_LOSS_GRACE_SEC)} 秒読めません: {error}")
+
+    def _host_loss_cleared(self):
+        """主催リストが読めた（同じ中身・読み直した）。猶予を戻す。失敗から戻ったときは debug.log に 1 行"""
+        since = getattr(self, "_host_loss_since", None)
+        if since is not None and getattr(self, "_host_loss_is_error", False):
+            DebugLog.write(f"[主催リスト] 読み込みが戻りました（{time.monotonic() - since:.0f} 秒）")
+        self._host_loss_since = None
+        self._host_loss_is_error = False
 
     def _refresh_host_source(self):
         """続行リストの供給元を状況から決める。
@@ -3438,7 +3466,7 @@ class App(tk.Tk):
             DebugLog.exception("mainGUI._read_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する
-            return "error", f"[主催リスト] ⚠ 読み込み失敗（前のリストを使います）: {e}"
+            return "error", str(e)
 
         if not meta["listed"]:
             # 参加者にも待機にも続行リストを持つ人がいない＝周回そのものが無い。
@@ -3454,15 +3482,14 @@ class App(tk.Tk):
             self._host_list_lost(value)
             return
         if kind == "same":
-            self._host_loss_since = None        # 取れている
+            self._host_loss_cleared()           # 取れている
             return
         if kind == "error":
-            self._warn_host_save_once(value)
+            self._host_read_failed(value)
             return
         keep_on, meta, wishes, stamp = value
-        self._host_loss_since = None
+        self._host_loss_cleared()
         self._host_save_stamp = stamp
-        self._host_save_warned = False
         switched = SharedState.get_list_source() != "host"
         SharedState.set_list_source("host")
         changed = keep_on != self.keepOn_set
