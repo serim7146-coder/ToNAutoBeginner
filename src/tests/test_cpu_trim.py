@@ -707,5 +707,5 @@ class TestTheTimedPeriodicFunctions(unittest.TestCase):
     def test_only_the_tk_thread_functions_are_decorated(self):
         """裏のスレッドで走る work（_off_gui に渡すもの）には付けない（別のスレッドの CPU を画面に足さない）"""
         source = Path("mainGUI.py").read_text(encoding="utf-8")
-        self.assertEqual(source.count("@TaskStats.tk_timed"), 4)
+        self.assertEqual(source.count("@TaskStats.tk_timed"), 5)     # 窓の上のアイテム表示の更新（_tick_item_overlays）を含む
         self.assertEqual(Path("StatisticsGUI.py").read_text(encoding="utf-8").count("@TaskStats.tk_timed"), 1)
