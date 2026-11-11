@@ -95,6 +95,9 @@ class LogMonitor:
         self._running = False
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # アイテムの自動クリックのスレッドを立てたラウンド（round_seq）。ラウンドに 1 本だけ立てる
+        self._auto_click_seq = -1
+        self._auto_click_lock = threading.Lock()
         # 定期の Verified を見分ける（窓ごと。起動時の遡りで位相を取り戻す）
         self._verified = VerifiedTracker.VerifiedTracker()
         # 定期として無視した Verified（ログの時刻, 覚える前の定期の時刻）。すぐラウンドが始まったら
@@ -167,6 +170,23 @@ class LogMonitor:
         """
         return SharedState.get_item_begin_mode() and self._auto_begin_active()
 
+    # ── アイテムの自動クリック ───────────────────────
+    def _ensure_item_auto_click(self):
+        """ラウンド中で、窓の設定が ON・OSC の窓なら、そのラウンドの自動クリックのスレッドを 1 本立てる（立て済みなら何もしない）。
+        立てたら、ラウンドが終わるまで残る（OFF にした・持っていない間は中で待つだけ）"""
+        st = self.st
+        with self._auto_click_lock:
+            if not (self._running and self.cfg.item_auto_click and self._action.uses_osc
+                    and st.in_round and not st.died_this_round and self._auto_click_seq != st.round_seq):
+                return
+            self._auto_click_seq = st.round_seq
+            self._start_daemon(self._action.do_item_auto_click, st.round_seq)
+
+    def on_item_auto_click_changed(self):
+        """窓の「アイテム自動クリック」を変えた（画面のスレッドから）。待っているスレッドを起こし、ラウンド中に ON になったなら立てる"""
+        self._action.kick_item_auto_click()
+        self._ensure_item_auto_click()
+
     def start(self):
         self.st.run_id = SharedState.current_run()      # この回の窓（止めた後に張るフリーズは数えない）
         self.st.continue_hook = self._on_continue_freeze
@@ -189,6 +209,7 @@ class LogMonitor:
         self._action.move_keys_release_all()     # 移動のキーも離す（画面のログは出さない。debug.log だけ）
         self._running = False
         self._stop_event.set()
+        self._action.kick_item_auto_click()      # 待っている自動クリックを起こして終わらせる
         self._action.stop_velocity_receiver()
         ItemUse.unregister(self.cfg.hwnd, self.st.item_use)
         self.st.item_use.reset("監視の停止")
@@ -1071,6 +1092,7 @@ class LogMonitor:
 
     def _lose_held_item(self, reason: str):
         self.st.item_use.reset("アイテムロスト")      # 手に持っている記録（ItemUse）も外す。ツール側の所持が 0 でも
+        self._action.kick_item_auto_click()
         held = self.st.held_item_id
         if not held:
             return
@@ -1187,6 +1209,7 @@ class LogMonitor:
         もともと持っていなかった（前のロストから未回収）ときは、ロストとは書かず、そう書く"""
         st = self.st
         st.item_use.reset("アイテムロスト")
+        self._action.kick_item_auto_click()
         already_lost = st.item_lost_this_round and st.item_id == 0
         had_item = bool(st.item_id)
         st.item_lost_this_round = True
@@ -1952,6 +1975,8 @@ class LogMonitor:
         self._enter_round_freeze(self._round_freeze_name())
         # ツールが自爆しないラウンドの AFK 回避（EZ）。自爆するかはまだ分からないので、見張りの中で見る
         self._start_daemon(self._action.do_afk_watch, st.round_seq)
+        # アイテムの自動クリック（窓の設定が ON のときだけ。OFF なら何も立てない）
+        self._ensure_item_auto_click()
 
         if st.round_type == "Run":
             st.is_continue_round = False
@@ -2037,6 +2062,7 @@ class LogMonitor:
         続行フリーズとラウンド突入フリーズの解除を予約する。label は何から数えたか（"死亡" か "リスポーン"）"""
         st = self.st
         st.died_this_round = True
+        self._action.kick_item_auto_click()     # 自動クリックはもう終わり（見張りを起こして抜けさせる）
         st.item_equipped_after_death = False
         st.is_open_special_round_round = False
         st.glorbo_afk = False
@@ -2088,6 +2114,7 @@ class LogMonitor:
         """RoundOver"""
         st = self.st
         st.in_round = False
+        self._action.kick_item_auto_click()     # 自動クリックはもう終わり（見張りを起こして抜けさせる）
         st.begin_move_done = False      # 次の Begin 前の移動はこれから
         # 音量の分類は RoundOver で今の決まりに戻す（FH）。全続行も Verified Round End まで待たない
         st.all_continue_round = False
@@ -2294,6 +2321,7 @@ class LogMonitor:
         st.unmatched_logged = set()
         st.players_known = True
         st.instance_seq += 1
+        self._action.kick_item_auto_click()     # 前のインスタンスの自動クリックはここで終わり
         # 自爆設定の持ち越しは危ない。インスタンスが変わったら毎回外す
         if self.cfg.skip_rounds or self.cfg.continue_rounds:
             self.cfg.skip_rounds = set()
@@ -2309,10 +2337,12 @@ class LogMonitor:
     def _on_pickup(self, event):
         """アイテムを手に持った（Pickup object）。店の Equipping とは別。使用の判定の「持っている」"""
         self.st.item_use.pickup(event.pickup_name)
+        self._action.kick_item_auto_click()
 
     def _on_drop(self, event):
         """アイテムを手から離した（Drop object）"""
         self.st.item_use.drop(event.pickup_name)
+        self._action.kick_item_auto_click()
 
     def _on_item_equip(self, event):
         """アイテム装備"""

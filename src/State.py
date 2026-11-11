@@ -45,6 +45,8 @@ class WindowConfig:
     voice_cracked: str = ""
     voice_double_trouble: str = ""
     voice_afk: str = ""               # AFK 回避の警告音（EZ）
+    # 手に持ったアイテムを自動でクリック（OSC の /input/UseRight）する窓か。ラウンド中だけ・表で間隔が決まっているアイテムだけ
+    item_auto_click: bool = False
 
 
 @dataclass
