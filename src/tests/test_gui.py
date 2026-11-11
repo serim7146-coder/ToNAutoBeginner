@@ -3258,6 +3258,7 @@ class TestSettingsArePersisted(unittest.TestCase):
         self.assertEqual(set(saved), {
             "desktop_mode", "use_osc", "ton_entry", "ton_begin", "join_world",
             "ton_instance_access", "profiles", "window_freezes",
+            "item_auto_click",                                   # アイテム自動クリック（窓ごと）で足した
             "emergency_stop_key", "start_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",

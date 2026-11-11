@@ -468,6 +468,55 @@ def window_cursor_point(hwnd: int) -> tuple | None:
     return cursor_target(hwnd)[0]
 
 
+def client_rect_on_screen(hwnd: int) -> tuple | None:
+    """窓のクライアント領域の画面上の (左, 上, 右, 下)。窓が無い・見えない・最小化・大きさが 0 なら None。
+    読むだけの呼び出し（IsWindow・IsWindowVisible・IsIconic・GetClientRect・ClientToScreen）で、窓へメッセージは送らない
+    （窓の上の表示が 0.1 秒ごとに呼ぶ）"""
+    if not hwnd:
+        return None
+    try:
+        if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+            return None
+        _l, _t, width, height = win32gui.GetClientRect(hwnd)
+        if width <= 0 or height <= 0:
+            return None
+        left, top = win32gui.ClientToScreen(hwnd, (0, 0))
+    except Exception:
+        DebugLog.exception("WindowOperator.client_rect_on_screen")
+        return None
+    return int(left), int(top), int(left) + int(width), int(top) + int(height)
+
+
+def virtual_screen_rect() -> tuple:
+    """全モニタをつないだ画面の (左, 上, 右, 下)（cursor_target と同じ GetSystemMetrics）"""
+    left = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+    top = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+    return left, top, left + user32.GetSystemMetrics(SM_CXVIRTUALSCREEN), top + user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
+
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020      # クリックを下の窓へ通す
+WS_EX_TOOLWINDOW = 0x00000080       # タスクバー・Alt+Tab に出さない
+WS_EX_LAYERED = 0x00080000          # 透明度（-alpha）が効く
+WS_EX_NOACTIVATE = 0x08000000       # 前面・フォーカスを取らない
+OVERLAY_EXSTYLE = WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW
+
+
+def set_overlay_style(hwnd: int) -> bool:
+    """当ツールの窓の拡張スタイルに、クリックを通す・前面を取らない・タスクバーに出さない・透明度を足す
+    （今のスタイルは残す）。窓の上の手持ちアイテムの表示に使う。失敗したら debug.log に書いて False"""
+    if not hwnd:
+        return False
+    try:
+        handle = wintypes.HWND(int(hwnd))
+        current = user32.GetWindowLongW(handle, GWL_EXSTYLE)
+        user32.SetWindowLongW(handle, GWL_EXSTYLE, current | OVERLAY_EXSTYLE)
+        return True
+    except Exception:
+        DebugLog.exception("WindowOperator.set_overlay_style")
+        return False
+
+
 GA_ROOT = 2                    # GetAncestor: 親の鎖をたどった一番上（持ち主はたどらない）
 WDA_NONE = 0x00000000
 WDA_EXCLUDEFROMCAPTURE = 0x00000011

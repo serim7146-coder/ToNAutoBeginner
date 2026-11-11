@@ -11,6 +11,7 @@ import FetchMiss
 import ItemCatalog
 import ItemFetch
 import ItemUse
+import LogParser
 import ScreenCapture
 import SharedState
 import TaskStats
@@ -85,6 +86,22 @@ def can_operate_in(instance_type: str) -> bool:
     return instance_type in config.PRIVATE_LIKE_INSTANCES
 
 
+# アイテムの自動クリックだけ、private 相当に加えて「グループ（メンバーのみ）」のインスタンスでも送る。
+# None はどの種類のグループでも（公開範囲がメンバーのみなら）。種類を絞るときは種類の集合を入れる。
+# can_operate_in・ほかの操作はこれを見ない
+ITEM_AUTO_CLICK_GROUP_TYPES = None
+
+
+def item_auto_click_allowed_in(instance_type: str, instance_access: str) -> bool:
+    """このインスタンスでアイテムの自動クリック（OSC の /input/UseRight）を送ってよいか。
+    private 相当（can_operate_in）か、公開範囲がグループのメンバーのみ"""
+    if can_operate_in(instance_type):
+        return True
+    if instance_access != LogParser.ACCESS_GROUP_MEMBERS:
+        return False
+    return ITEM_AUTO_CLICK_GROUP_TYPES is None or instance_type in ITEM_AUTO_CLICK_GROUP_TYPES
+
+
 class ActionExecutor:
     # 検出器が使えないことは、アプリ起動中に1回だけ告げる
     _detector_unavailable_logged = False
@@ -108,6 +125,8 @@ class ActionExecutor:
         self._view_restore_thread = None    # それを裏で戻しに行くスレッド（_restore_view_soon）
         # アイテムロストの前面化＋音声を見張っているラウンド（二重に立てない）
         self._item_loss_watch_seq = -1
+        # アイテムの自動クリックの待ちを起こす（持った・離した・ラウンドの終わり・停止で LogMonitor が鳴らす）
+        self._auto_click_wake = threading.Event()
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port, on_send=self._on_osc_sent) if cfg.osc_port else None
@@ -166,6 +185,92 @@ class ActionExecutor:
     def can_operate(self) -> bool:
         """この窓で OSC 操作・クリック操作をしてよいか（can_operate_in）。送る入口は全部これを見る"""
         return can_operate_in(self._st.instance_type)
+
+    # ── アイテムの自動クリック ──────────────────────
+    def item_auto_click_allowed(self) -> bool:
+        """この窓のいまのインスタンスで、アイテムの自動クリックを送ってよいか（item_auto_click_allowed_in）"""
+        return item_auto_click_allowed_in(self._st.instance_type, self._st.instance_access)
+
+    def kick_item_auto_click(self):
+        """自動クリックの待ちを起こして、状態を見直させる（どのスレッドから呼んでもよい）"""
+        self._auto_click_wake.set()
+
+    def _auto_click_round_alive(self, round_seq: int, instance_seq: int) -> bool:
+        """自動クリックを続ける間か（動作中・そのラウンドの生きている間・同じインスタンス）"""
+        st = self._st
+        return bool(self._is_running() and st.in_round and st.round_seq == round_seq
+                    and not st.died_this_round and st.instance_seq == instance_seq)
+
+    def _auto_click_target(self):
+        """いま自動クリックする手持ちのアイテム（表の行）。対象が無ければ None。窓の設定が ON・OSC の窓・
+        送ってよいインスタンス・間隔（auto_click_sec）が決まっているアイテムを持っているとき"""
+        if not (self._cfg.item_auto_click and self.uses_osc and self.item_auto_click_allowed()):
+            return None
+        tracker = self._st.item_use
+        row = tracker.held_row() if tracker is not None else None
+        return row if row is not None and row.auto_click_sec > 0 else None
+
+    def _auto_click_blocked_by_instance(self) -> bool:
+        """ON・OSC の窓で対象のアイテムを持っているのに、このインスタンスでは送れない（debug.log に 1 回告げる用）"""
+        if not (self._cfg.item_auto_click and self.uses_osc) or self.item_auto_click_allowed():
+            return False
+        tracker = self._st.item_use
+        row = tracker.held_row() if tracker is not None else None
+        return row is not None and row.auto_click_sec > 0
+
+    def _auto_click_step(self, round_seq: int, instance_seq: int, last, now: float):
+        """自動クリックの次の一手（時計と待ちを持たない判定）。戻りは (動き, 秒数):
+        ("end", 0) 終わる / ("idle", 見直しまでの秒数) 送る対象が無い（このあと last は None に戻す）/
+        ("press", 0) いま押す / ("wait", 秒数) その秒数だけ待ってからまた見る。
+        次に押す時刻は、前に押した時刻（last）+ 間隔 と、トラッカーの CT が明ける時刻の遅い方（手で押した分も数える）"""
+        if not self._auto_click_round_alive(round_seq, instance_seq):
+            return "end", 0.0
+        row = self._auto_click_target()
+        if row is None:
+            return "idle", config.ITEM_AUTO_CLICK_IDLE_SEC
+        wait = 0.0
+        if last is not None:
+            wait = max(wait, last + row.auto_click_sec - now)
+        status = self._st.item_use.status(now)
+        if status is not None:
+            wait = max(wait, status[3])         # CT の残り
+        if wait > 0:
+            return "wait", wait
+        return "press", 0.0
+
+    def do_item_auto_click(self, round_seq: int):
+        """アイテムの自動クリック（ラウンドごとに 1 本。LogMonitor が立てる）。ラウンドが終わる（RoundOver・死亡・
+        リスポーン・インスタンス移動・停止）まで、手に持った対象のアイテムを表の間隔で OSC の UseRight で押す。
+        途中で OFF になった・持たなくなった間は待つだけで、ラウンドが終わるまでスレッドは残る（立て直しの競合を避ける）。
+        前面化・フリーズ・放置モードは見ない（OSC は前面を奪わない）。使用の記録（debug.log の「使用: …（OSC）」）は ItemUse が書く"""
+        st = self._st
+        instance_seq = st.instance_seq
+        head = f"[窓{st.window_idx}] [アイテム] 自動クリック"
+        DebugLog.write(f"{head}: ラウンド開始から見張ります")
+        last = None
+        told_blocked = False
+        try:
+            while True:
+                now = time.monotonic()
+                action, seconds = self._auto_click_step(round_seq, instance_seq, last, now)
+                if action == "end":
+                    return
+                if action == "press":
+                    self._osc.press(
+                        ItemUse.USE_ADDRESS, config.ITEM_AUTO_CLICK_PULSE_SEC,
+                        stop=lambda: (not self._auto_click_round_alive(round_seq, instance_seq)
+                                      or self._auto_click_target() is None))
+                    last = now
+                    continue
+                if action == "idle":
+                    last = None
+                    if not told_blocked and self._auto_click_blocked_by_instance():
+                        told_blocked = True
+                        DebugLog.write(f"{head}: このインスタンスでは送りません（種類・公開範囲）")
+                self._auto_click_wake.wait(max(seconds, 0.001))
+                self._auto_click_wake.clear()
+        finally:
+            DebugLog.write(f"{head}: 終わりました")
 
     # ── チェイス（押し続けて回る）──────────────────
     # 向き → (OSC のアドレス2つ, OSC が使えない窓のキー2つ)。Shift なし
