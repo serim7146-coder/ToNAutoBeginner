@@ -32,6 +32,8 @@ EVENT_PLAYER_JOINED = "player_joined"
 EVENT_JOY = "joy"
 EVENT_PLAYER_LEFT = "player_left"
 EVENT_PAGE_COLLECTED = "page_collected"
+EVENT_PICKUP = "pickup"          # アイテムを手に持った（Pickup object。ItemUse が使う）
+EVENT_DROP = "drop"              # アイテムを手から離した（Drop object）
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -109,6 +111,11 @@ SUS_PLAYER_MARK = "Sus player"
 #   2026.11.06 02:51:22 Debug      -  2026.11.06 02:51:25 Debug      -  Verified Round End
 # 先頭の「時刻 種類 -」を 1 回以上外して、最後の中身を普通の 1 行として読む（種類は \w+ のまま）
 RE_LOG_PREFIX = re.compile(r"^(?:\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s+-\s+)+")
+# 手に持った・離した（店の Equipping とは別）。equipped = False の行は持った・離したに数えない。例:
+#   [Behaviour] Pickup object: 'BloodKatCharm' equipped = True, is AutoEquipType Pickup = True, last input method = Mouse, ...
+#   [Behaviour] Drop object: 'BloodKatCharm, was equipped = True' Throw on release, last input method = Mouse
+RE_PICKUP = re.compile(r"^\[Behaviour\] Pickup object: '(.+?)' equipped = True\b")
+RE_DROP = re.compile(r"^\[Behaviour\] Drop object: '(.+?), was equipped = True'")
 RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
 JOINING_MARK = "Joining wrld_"
 RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
@@ -135,6 +142,7 @@ class LogEvent:
     instance: str = ""      # 入室の行の wrld_… から後ろ全部（同じインスタンスなら誰でも同じ）
     page: int = 0           # Page Collected の n（今は使わない）
     flag: str = ""          # 置き換えの合図の WindowState の属性（EVENT_REPLACEMENT）
+    pickup_name: str = ""   # Pickup・Drop したアイテムのログの名前
 
 
 # つながった行（RE_LOG_PREFIX のコメント参照）では最後の時刻を取る。普通の行は今まで通り先頭の時刻
@@ -302,6 +310,14 @@ def parse(line: str) -> LogEvent | None:
             round_type=round_type,
             terror_ids=MatchTNL.parse_terror_ids(m.group(1), m.group(2), m.group(3), round_type),
         )
+
+    m = RE_PICKUP.match(line)
+    if m:
+        return LogEvent(EVENT_PICKUP, pickup_name=m.group(1))
+
+    m = RE_DROP.match(line)
+    if m:
+        return LogEvent(EVENT_DROP, pickup_name=m.group(1))
 
     m = RE_JOINING.search(line)
     if m:

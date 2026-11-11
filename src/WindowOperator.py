@@ -12,6 +12,7 @@ import pydirectinput
 
 import config
 import DebugLog
+import ItemUse
 import SharedState
 
 
@@ -960,6 +961,7 @@ def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> boo
             return False
         DebugLog.write("[操作] クリック（Tab の後）")
         pydirectinput.mouseDown(_pause=pause)
+        _notify_tool_click()
         time.sleep(hold_sec)
         pydirectinput.mouseUp(_pause=pause)
     finally:
@@ -981,6 +983,7 @@ def release_tab():
 def mouse_down(pause: bool = False):
     """前面の窓で左ボタンを押す（離すまで押したまま。店の一覧のスクロールバーのドラッグ。DZ）"""
     pydirectinput.mouseDown(_pause=pause)
+    _notify_tool_click()
 
 
 def mouse_up(pause: bool = False):
@@ -990,8 +993,18 @@ def mouse_up(pause: bool = False):
 def mouse_click(hold_sec: float, pause: bool = False):
     """前面の窓の今のカーソルの位置を左クリックする（Tab は呼び出し側が押している）"""
     pydirectinput.mouseDown(_pause=pause)
+    _notify_tool_click()
     time.sleep(hold_sec)
     pydirectinput.mouseUp(_pause=pause)
+
+
+def _notify_tool_click():
+    """ツールが左ボタンを押した（前面の窓へ届く）ことを、手に持ったアイテムの使用の判定（ItemUse）へ知らせる。
+    押す直後に 1 回。失敗してもクリックと Tab の離しは続ける。sleep・キー・debug.log はしない"""
+    try:
+        ItemUse.on_click(foreground_hwnd(), ItemUse.SOURCE_TOOL)
+    except Exception:
+        DebugLog.exception("WindowOperator._notify_tool_click")
 
 
 def _click():

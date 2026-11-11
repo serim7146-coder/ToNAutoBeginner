@@ -111,6 +111,7 @@ GUI_YLW = "#f9e2af"
 GUI_ORG = "#fab387"
 GUI_LOG_MAX_LINES = 1000
 GUI_OVERLAY_LOG_MAX_LINES = 20
+GUI_OVERLAY_ITEM_REFRESH_MS = 100      # オーバーレイ上部の手持ちアイテムの表示の更新（CT・効果の残り秒）
 
 
 def resource_path(filename: str) -> Path:

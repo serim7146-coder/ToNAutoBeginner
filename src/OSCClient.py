@@ -28,9 +28,11 @@ import DebugLog
 class OSCClient:
     """1つのVRChatウィンドウに対応するOSC送信クライアント"""
 
-    def __init__(self, port: int, host: str = "127.0.0.1"):
+    def __init__(self, port: int, host: str = "127.0.0.1", on_send=None):
         self.port = port
         self.host = host
+        # 送れたあとに (アドレス, 値) で呼ぶ（ItemUse が /input/UseRight を見る）。渡さなければ何もしない
+        self._on_send = on_send
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     # ── OSCメッセージ生成 ──────────────────────
@@ -60,10 +62,15 @@ class OSCClient:
     def send(self, address: str, value) -> bool:
         try:
             self._sock.sendto(self.build_message(address, value), (self.host, self.port))
-            return True
         except Exception:
             DebugLog.exception("OSCClient.send")
             return False
+        if self._on_send is not None:
+            try:
+                self._on_send(address, value)
+            except Exception:
+                DebugLog.exception("OSCClient.send.on_send")
+        return True
 
     # ── 入力 ──────────────────────────────────
 

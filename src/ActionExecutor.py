@@ -10,6 +10,7 @@ import DebugLog
 import FetchMiss
 import ItemCatalog
 import ItemFetch
+import ItemUse
 import ScreenCapture
 import SharedState
 import TaskStats
@@ -109,7 +110,7 @@ class ActionExecutor:
         self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
-        self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
+        self._osc = OSCClient.OSCClient(cfg.osc_port, on_send=self._on_osc_sent) if cfg.osc_port else None
         self._chase_lock = threading.Lock()
         self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
         self._chase_stop = None           # 送り直しのスレッドを止める合図
@@ -152,6 +153,15 @@ class ActionExecutor:
     @property
     def uses_osc(self) -> bool:
         return self._osc is not None
+
+    def _on_osc_sent(self, address, value):
+        """OSC を送れたあとに呼ばれる（送ったスレッドから）。/input/UseRight は、この窓の手に持ったアイテムの使用の合図
+        （ItemUse）。押し始め（0→1）だけが使用で、判定は Tracker が持つ。ほかのアドレスは見ない"""
+        if address != ItemUse.USE_ADDRESS:
+            return
+        tracker = self._st.item_use
+        if tracker is not None:
+            tracker.osc_use_input(bool(value))
 
     def can_operate(self) -> bool:
         """この窓で OSC 操作・クリック操作をしてよいか（can_operate_in）。送る入口は全部これを見る"""

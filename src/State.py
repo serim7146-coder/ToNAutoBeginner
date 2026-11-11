@@ -173,6 +173,8 @@ class WindowState:
     # フリーズの理由で前面を借りたときの札（WindowOperator.FrontLoan）。最初の1枚だけ
     # 持ち、この窓のフリーズが全部解けたら返す（SharedState.keep_front_loan）
     front_loan: object = field(default=None, compare=False, repr=False)
+    # 手に持ったアイテムの使用の判定（ItemUse.UseTracker。LogMonitor が作る）。持っているかを書き換えるのは LogMonitor だけ
+    item_use: object = field(default=None, compare=False, repr=False)
     # アイテム取得→Begin モードの装備待ちなら、この窓の hwnd（0 = 前面を引き継がない）。
     # 列の先頭にいるあいだ、ほかの窓が返そうとした札を引き継ぐ（SharedState）
     equip_front_hwnd: int = 0
