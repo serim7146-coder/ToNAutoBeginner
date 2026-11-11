@@ -146,6 +146,8 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._on_tab_section_toggled = lambda _key, _collapsed: None
         app._schedule_settings_save = lambda: None
         app._window_freezes = {}
+        app._update_ctrl_hint = lambda: None
+        app.after_idle = lambda func: None     # 作り直しの後の案内の判定（Ctrl＋クリック）は見ない
         app.tabs = [OldTab(0), OldTab(1)]
         old_tabs = list(app.tabs)
 

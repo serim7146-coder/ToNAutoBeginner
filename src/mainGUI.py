@@ -121,6 +121,11 @@ def exclusive_check(checked, other):
         other.set(False)
 
 
+def ctrl_hint_fits(tabs_right: int, hint_width: int, notebook_width: int, gap: int) -> bool:
+    """窓のタブの右の空きに案内の文字が収まるか。タブの右端＋余白＋文字の幅が、枠の幅以下なら収まる"""
+    return tabs_right + gap + hint_width <= notebook_width
+
+
 def ctrl_held() -> bool:
     """いま Ctrl が押されているか（GetKeyState(VK_CONTROL) の上位ビット）。Windows 以外・失敗は False。テストは差し替える"""
     if sys.platform != "win32":
@@ -419,6 +424,13 @@ def entry_osc_port(osc_in: int, log_path: str):
     ports = VRChatDiscovery.read_log_osc_ports(log_path)
     return ports[0] if ports else None
 
+
+CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
+CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
+CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（px）
+CTRL_HINT_MARGIN_Y = 4  # 案内の上端と窓のタブの枠の上端の間（px）
+CTRL_HINT_PROBE_Y = 8   # タブの右端を調べるときの高さ（タブの帯の中。px）
+CTRL_HINT_PROBE_STEP = 4  # タブの右端を調べる間隔（px）
 
 STYLE_CT_DIM = "CtDim.TCombobox"   # アイテムの決まりが代わりに使われている間のドロップダウン（灰色。触れない）
 COLOR_CT_DIM = "#7f849c"
@@ -2336,6 +2348,11 @@ class App(tk.Tk):
         self.nb = ttk.Notebook(self)
         self.nb.pack(fill="x", expand=False, padx=12, pady=4)
         self.tabs: list[WindowTab] = []
+        # タブの並びの右の空きに出す案内。1 つだけ作る（タブを作り直しても増やさない）。
+        # 色は窓タブの灰色（COLOR_CT_DIM）、文字はタブより少し小さい 9
+        self.lbl_ctrl_hint = ttk.Label(self, text=CTRL_HINT_TEXT, foreground=COLOR_CT_DIM,
+                                       font=(UIFont.UI, 9))
+        self.nb.bind("<Configure>", lambda e: self._update_ctrl_hint(), add="+")
         # 窓タブの折りたたみの開閉（True = 閉じている）。全タブで共通。保存しない
         self._tab_sections = {key: True for key in WindowTab.SECTIONS}
         self._rebuild_tabs(self.v_win_count.get())
@@ -2603,6 +2620,36 @@ class App(tk.Tk):
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
 
+    def _tabs_right_edge(self) -> int:
+        """窓のタブの並びの右端（px。self.nb の左端から）。タブが無い・調べられないときは 0"""
+        try:
+            width = self.nb.winfo_width()
+            for x in range(width - 1, -1, -CTRL_HINT_PROBE_STEP):
+                try:
+                    self.nb.index(f"@{x},{CTRL_HINT_PROBE_Y}")
+                except tk.TclError:
+                    continue            # この x にタブは無い
+                return x + 1
+        except tk.TclError:
+            pass
+        return 0
+
+    def _update_ctrl_hint(self):
+        """案内の文字が窓のタブにかぶらなければ出し、かぶるなら隠す（幅が変わったとき・タブを作り直したとき）"""
+        try:
+            label = self.lbl_ctrl_hint
+            fits = ctrl_hint_fits(self._tabs_right_edge(),
+                                  label.winfo_reqwidth() + CTRL_HINT_MARGIN_X,
+                                  self.nb.winfo_width(), CTRL_HINT_GAP)
+            if not fits:
+                if label.winfo_manager():
+                    label.place_forget()
+            elif not label.winfo_manager():
+                label.place(in_=self.nb, relx=1.0, x=-CTRL_HINT_MARGIN_X,
+                            y=CTRL_HINT_MARGIN_Y, anchor="ne")
+        except (tk.TclError, AttributeError):
+            pass                        # 閉じる途中・まだ作っていない
+
     def _rebuild_tabs(self, count: int):
         # 窓数を変えても、窓ごとの設定（自動Begin・自動自爆・ラウンド指定・割り当てなど）は
         # そのまま。減らした窓の分も覚えておき、また増やしたら戻す（このツールを閉じるまで）
@@ -2636,6 +2683,10 @@ class App(tk.Tk):
         for tab in self.tabs:
             if tab.idx in memory:
                 tab.restore(memory[tab.idx])
+        try:
+            self.after_idle(self._update_ctrl_hint)
+        except tk.TclError:
+            pass
 
     def _on_tab_section_toggled(self, key: str, collapsed: bool):
         """窓タブの折りたたみを1つ開閉したら、全タブの同じ枠をそろえる（保存はしない）"""
