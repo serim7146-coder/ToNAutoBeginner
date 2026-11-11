@@ -14,6 +14,7 @@ import PlaySound
 import ConnectDB
 import DebugLog
 import ItemCatalog
+import ItemUse
 import Recorder
 import TaskStats
 import FogEarlyRead
@@ -88,6 +89,8 @@ class LogMonitor:
         self.early_read_capable = False
         self.st = WindowState()
         self.st.window_idx = window_idx
+        # 手に持ったアイテムの使用の判定（ItemUse）。持っているかを書き換えるのはこの LogMonitor だけ
+        self.st.item_use = ItemUse.UseTracker(window_idx, players=self._player_count)
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
         self._stop_event = threading.Event()
@@ -174,6 +177,7 @@ class LogMonitor:
             and FogEarlyRead.launched_for_early_read(self.cfg.log_path))
         # 速度受信は監視中ずっと生かす（プローブごとに開き直すと取りこぼす）
         self._action.start_velocity_receiver()
+        ItemUse.register(self.cfg.hwnd, self.st.item_use)
         self._thread = self._start_daemon(self._run)
 
     def stop(self):
@@ -186,6 +190,9 @@ class LogMonitor:
         self._running = False
         self._stop_event.set()
         self._action.stop_velocity_receiver()
+        ItemUse.unregister(self.cfg.hwnd, self.st.item_use)
+        self.st.item_use.reset("監視の停止")
+        self._flush_item_use_log()
 
     def on_chase_key(self, direction: str, key_label: str):
         """チェイスのキー（この窓が前面のときに押された）。private のラウンド中だけ"""
@@ -231,6 +238,8 @@ class LogMonitor:
         入退室の名前・URL も書かない（必要な情報だけ）"""
         if event.kind == LogParser.EVENT_VERIFIED:
             return          # 受理か無視かが決まってから1行（_debug_verified）
+        if event.kind in (LogParser.EVENT_PICKUP, LogParser.EVENT_DROP):
+            return          # 持った・離した・使用は ItemUse が溜め、_flush_item_use_log がまとめて書く
         parts = []
         if event.round_type:
             parts.append(f"種類={event.round_type}")
@@ -258,6 +267,14 @@ class LogMonitor:
     def _debug(self, msg: str):
         """デバッグログへ（公開ログ＝logger には出さない）"""
         DebugLog.write(f"[窓{self.window_idx}] {msg}")
+
+    def _flush_item_use_log(self):
+        """ItemUse が溜めた持った・離した・使用の行を debug.log へ（フックの中では書かないため、ここでまとめて）"""
+        try:
+            for line in self.st.item_use.take_debug_lines():
+                self._debug(f"[アイテム] {line}")
+        except Exception:
+            DebugLog.exception("LogMonitor._flush_item_use_log")
 
     @staticmethod
     def _parse_instance_type(suffix: str) -> str:
@@ -1005,6 +1022,7 @@ class LogMonitor:
                         DebugLog.exception("LogMonitor._run")
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
+                    self._flush_item_use_log()
                     try:
                         self._check_group_list_state()
                     except Exception as e:
@@ -1052,6 +1070,7 @@ class LogMonitor:
             self._on_held_item_changed()
 
     def _lose_held_item(self, reason: str):
+        self.st.item_use.reset("アイテムロスト")      # 手に持っている記録（ItemUse）も外す。ツール側の所持が 0 でも
         held = self.st.held_item_id
         if not held:
             return
@@ -1167,6 +1186,7 @@ class LogMonitor:
         """アイテムロストとして扱う。message は「<理由>: アイテムロスト」の形。
         もともと持っていなかった（前のロストから未回収）ときは、ロストとは書かず、そう書く"""
         st = self.st
+        st.item_use.reset("アイテムロスト")
         already_lost = st.item_lost_this_round and st.item_id == 0
         had_item = bool(st.item_id)
         st.item_lost_this_round = True
@@ -1667,6 +1687,8 @@ class LogMonitor:
         LogParser.EVENT_JOINING: "_on_joining",
         LogParser.EVENT_ITEM_EQUIP: "_on_item_equip",
         LogParser.EVENT_LIVED: "_on_lived",
+        LogParser.EVENT_PICKUP: "_on_pickup",
+        LogParser.EVENT_DROP: "_on_drop",
     }
 
     def _process(self, line: str):
@@ -2242,6 +2264,7 @@ class LogMonitor:
     def _on_joining(self, event):
         """インスタンスに入った"""
         st = self.st
+        st.item_use.reset("インスタンス移動")
         # インスタンスを移動するとアイテムは消える（依頼者）
         self._lose_held_item(HELD_LOST_INSTANCE)
         st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない
@@ -2282,6 +2305,14 @@ class LogMonitor:
             self._on_round_settings_cleared(self.window_idx)
         self._log(f"インスタンスタイプ: {self._instance_label(st.instance_type, event.suffix)}")
         self._notify_held_item_changed()        # 干し芋・焼き芋かどうかで、窓の表示が変わる
+
+    def _on_pickup(self, event):
+        """アイテムを手に持った（Pickup object）。店の Equipping とは別。使用の判定の「持っている」"""
+        self.st.item_use.pickup(event.pickup_name)
+
+    def _on_drop(self, event):
+        """アイテムを手から離した（Drop object）"""
+        self.st.item_use.drop(event.pickup_name)
 
     def _on_item_equip(self, event):
         """アイテム装備"""

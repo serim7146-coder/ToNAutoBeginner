@@ -170,6 +170,7 @@ import ToNEntry
 import SaveLoad
 import mainGUI
 import MouseButtons
+import ItemUse
 import UIFont
 import AutoUpdate
 import Migration
@@ -326,6 +327,7 @@ _real_paths = {}
 
 def setUpModule():
     global _sandbox
+    ItemUse.reset_for_tests()
     MouseButtons.reset_for_tests()          # 前のモジュールの App が残した購読・押下の記録を持ち込まない（GW）
     _sandbox = tempfile.TemporaryDirectory()
     root = Path(_sandbox.name) / "ToNAutoBeginner"
@@ -381,6 +383,7 @@ def _refuse_network(*_args, **_kwargs):
 
 
 def tearDownModule():
+    ItemUse.reset_for_tests()
     MouseButtons.reset_for_tests()
     MemoryWatch._thread = _real_paths["memory_watch_thread"]
     urllib.request.urlopen = _real_paths["urlopen"]

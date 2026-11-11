@@ -452,7 +452,7 @@ class TestTheSettings(unittest.TestCase):
 
 
 class TestTheDropIsNotALoss(unittest.TestCase):
-    """DropRight で落としたことはツールのアイテムロストの判定に入らない（Drop object の行は読まない）"""
+    """DropRight で落としたことはツールのアイテムロストの判定に入らない（Drop object の行は、手に持ったアイテムの「離した」にだけ使う）"""
 
     def test_a_drop_line_changes_nothing(self):
         monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=1), {}, lambda _m: None, window_idx=1)
@@ -464,7 +464,7 @@ class TestTheDropIsNotALoss(unittest.TestCase):
         monitor._process(LINE_DROP)
         self.assertEqual((st.item_id, st.held_item_id, st.last_lost_item_id, st.waiting_for_equip,
                           st.item_lost_this_round, st.equip_freeze_held), before)
-        self.assertIsNone(LogParser.parse(LINE_DROP))
+        self.assertEqual(LogParser.parse(LINE_DROP).kind, LogParser.EVENT_DROP)
 
 
 LINE_DROP = ("2026.10.10 08:05:12 Debug      -  [Behaviour] Drop object: 'GuidancePlush, was equipped = True' "

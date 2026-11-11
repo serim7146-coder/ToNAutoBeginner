@@ -5,7 +5,9 @@
 WM_QUIT を送って外す。Windows 以外・張れなかったときは何もしない（キーは今まで通り）。
 
 - 対象はサイドボタンの 2 つだけ。保存する名前は `mouse:x1` / `mouse:x2`、画面とログの表記は「マウス4」「マウス5」。
-  左・右・中・ホイールは扱わない。キーとの組み合わせ（Ctrl+マウス4）も作らない
+  右・中・ホイールは扱わない。キーとの組み合わせ（Ctrl+マウス4）も作らない
+- 左ボタンは「押した」だけを、専用の購読（hook_left）へ配る（手に持ったアイテムの使用の判定。ItemUse）。注入された
+  クリック（ツール自身のクリック）は捨てる。座標は読まない。hook()・hook_key() の購読には流さない（キー入力の捕捉に混ぜない）
 - suppress しない。フックの中では必ず CallNextHookEx を返す（VRChat や他のアプリにもそのまま届く）
 - フックの中は記録と通知だけ（Windows は遅いフックを外す）。重い処理は呼び先が Tk のスレッドへ回す
 - 購読は keyboard と同じ形（hook・hook_key・unhook・is_pressed）。通知の Event は keyboard の event と同じ属性名
@@ -22,11 +24,14 @@ import TaskStats
 
 X1 = "mouse:x1"
 X2 = "mouse:x2"
+LEFT = "mouse:left"             # 左ボタンの通知の名前（保存・表示には使わない。NAMES には入れない）
 NAMES = {X1: "マウス4", X2: "マウス5"}
 
 WH_MOUSE_LL = 14
 WM_XBUTTONDOWN = 0x020B
 WM_XBUTTONUP = 0x020C
+WM_LBUTTONDOWN = 0x0201
+LLMHF_INJECTED = 0x00000001     # MSLLHOOKSTRUCT.flags。SendInput などで注入されたクリック
 WM_QUIT = 0x0012
 XBUTTON1 = 1
 XBUTTON2 = 2
@@ -63,6 +68,7 @@ class _Hook:
 
 _lock = threading.Lock()
 _hooks: list = []               # _Hook。購読の一覧（通知は list の写しを回す）
+_left_hooks: list = []          # _Hook。左ボタンを押した通知だけの購読（hook() には混ぜない）
 _pressed: set = set()           # いま押されているボタンの名前
 _start_lock = threading.Lock()  # start・stop を 1 つずつにする
 _thread = None
@@ -96,6 +102,23 @@ def unhook(handle):
             pass
 
 
+def hook_left(callback) -> _Hook:
+    """左ボタンを押した（手で押した分だけ。注入されたクリックは除く）通知を受ける。hook() の購読には流れない"""
+    handle = _Hook(LEFT, callback)
+    with _lock:
+        _left_hooks.append(handle)
+    return handle
+
+
+def unhook_left(handle):
+    """左ボタンの購読を外す。無ければ何もしない"""
+    with _lock:
+        try:
+            _left_hooks.remove(handle)
+        except ValueError:
+            pass
+
+
 def is_pressed(name) -> bool:
     with _lock:
         return name in _pressed
@@ -109,6 +132,7 @@ def _clear():
     """購読と押下の記録を空にする（フックそのものは触らない）"""
     with _lock:
         _hooks.clear()
+        _left_hooks.clear()
         _pressed.clear()
 
 
@@ -135,6 +159,20 @@ def _on_hook_event(wParam, mouse_data):
         else:
             _pressed.discard(name)
     _dispatch(Event(name, kind))
+
+
+def _on_left_down(flags):
+    """左ボタンを押した。注入されたもの（ツール自身のクリックなど）は捨てて、左の購読へ配る。座標は読まない"""
+    if flags & LLMHF_INJECTED:
+        return
+    with _lock:
+        handles = list(_left_hooks)
+    event = Event(LEFT, "down")
+    for handle in handles:
+        try:
+            handle.callback(event)
+        except Exception:
+            DebugLog.exception("MouseButtons._on_left_down")
 
 
 def _dispatch(event):
@@ -187,6 +225,9 @@ if sys.platform == "win32":
             if nCode >= 0 and wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
                 data = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
                 _on_hook_event(wParam, data.mouseData)
+            elif nCode >= 0 and wParam == WM_LBUTTONDOWN:
+                data = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                _on_left_down(data.flags)
         except Exception:
             DebugLog.exception("MouseButtons._proc")
         return _user32.CallNextHookEx(None, nCode, wParam, lParam)
