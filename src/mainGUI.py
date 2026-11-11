@@ -425,6 +425,14 @@ def entry_osc_port(osc_in: int, log_path: str):
     return ports[0] if ports else None
 
 
+# 説明の文。Tk は半角スペースの位置で折り返すので、スペースは入れず文の区切りで改行する（1 行 35 文字以内）
+PHONE_NOTIFY_NOTE = ("続行ラウンド・全続行・待機列に入れるようになったときに、\n"
+                     "スマホへ通知します。スマホにntfyのアプリを入れて、\n"
+                     "下の宛先を購読してください。\n"
+                     "宛先を知っている人は、この通知を読めます（人に見せないでください）。")
+WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。\n"
+                      "マクロを停止すると元の音量に戻ります。")
+
 CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
 CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
 CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（px）
@@ -1071,9 +1079,10 @@ class CollapsibleFrame(tk.Frame):
 class ReportDialog(tk.Toplevel):
     """不具合の報告。要件・窓・添付を選んで Discord の Webhook へ送る"""
 
-    REPORT_NOTE = ("VRChat のログには、一緒にいた人の名前やユーザー ID、あなたの表示名が"
-                   "含まれます。画面の撮影には一緒にいた人の名前が写ることがあります。"
-                   "送り先は開発者の Discord です")
+    REPORT_NOTE = ("VRChatのログには、一緒にいた人の名前やユーザーID、\n"
+                   "あなたの表示名が含まれます。\n"
+                   "画面の撮影には一緒にいた人の名前が写ることがあります。\n"
+                   "送り先は開発者のDiscordです。")
 
     def __init__(self, app):
         super().__init__(app)
@@ -2928,9 +2937,7 @@ class App(tk.Tk):
         ttk.Checkbutton(box, text="窓の状態で VRChat の音量を変える",
                         variable=self.v_wvol_enabled,
                         command=self._on_window_volume_changed).pack(anchor="w")
-        ttk.Label(box, text="続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。"
-                            "マクロを停止すると元の音量に戻ります。",
-                  wraplength=420).pack(anchor="w")
+        ttk.Label(box, text=WINDOW_VOLUME_NOTE, wraplength=420).pack(anchor="w")
         self.v_wvol = {}
         for key, label, default in (
                 (WindowVolume.CONTINUE, "続行", config.DEFAULT_WINDOW_VOLUME_CONTINUE),
@@ -2958,10 +2965,7 @@ class App(tk.Tk):
         self.v_phone_notify = tk.BooleanVar(value=False)
         ttk.Checkbutton(box, text="通知する", variable=self.v_phone_notify,
                         command=self._on_phone_notify_changed).pack(anchor="w")
-        ttk.Label(box, text="続行ラウンド・全続行・待機列に入れるようになったときに、スマホへ通知します。"
-                            "スマホに ntfy のアプリを入れて、下の宛先を購読してください。"
-                            "宛先を知っている人は、この通知を読めます（人に見せないでください）。",
-                  wraplength=420).pack(anchor="w")
+        ttk.Label(box, text=PHONE_NOTIFY_NOTE, wraplength=420).pack(anchor="w")
         row = ttk.Frame(box)
         row.pack(fill="x")
         ttk.Label(row, text="宛先:", width=6).pack(side="left")
