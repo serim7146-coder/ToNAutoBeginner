@@ -1393,6 +1393,125 @@ class TestHostListGrace(unittest.TestCase):
 
 
 
+class TestHostSelfInTabs(unittest.TestCase):
+    """主催者自身（このPCのアカウント）は ListTool の保存ファイルのタブの参加者に入らない。
+    読み込み側で全タブの参加者に足し、主催者の窓の「一致 N/M人」を全員分にする。
+    人数（meta["participants"]）と、窓に対応づけるタブの選び方は変えない"""
+
+    CLASSIC = "Classic/クラシック"
+    HOST = "ぬし"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.db = Path(self._dir.name) / "host_state.sqlite3"
+        self.user_save = Path(self._dir.name) / "user_save.json"
+        self.user_save.write_text(json.dumps({
+            "last_active": self.HOST,
+            "accounts": {self.HOST: {"data": {self.CLASSIC: {"42": 1}}}}}),
+            encoding="utf-8")
+        self.addCleanup(SharedState.set_list_source, None)
+
+    def _load(self, tabs, with_host=True):
+        """tabs は [[(section, 名前), ...], ...]。名前は全員 Classic の 5 を持つ"""
+        write_host_state(self.db, [[(section, name, {self.CLASSIC: {5}})
+                                    for section, name in tab] for tab in tabs])
+        return MatchTNL.load_host_state(
+            str(self.db), str(self.user_save) if with_host else None)
+
+    def _monitor(self, tabs_data, others, me=None):
+        monitor = LogMonitor.LogMonitor(
+            WindowConfig(), {"共有": {999}}, lambda _m: None, window_idx=1,
+            host_wishes={name: {} for name in others},
+            host_tabs={"version": 1, "tabs": tabs_data})
+        monitor.st.local_player_name = me or self.HOST
+        monitor.st.players_known = True
+        monitor.st.players = set(range(len(others)))
+        monitor.st.player_names = dict(zip(monitor.st.players, others))
+        monitor.logs = []
+        monitor.logger = monitor.logs.append
+        SharedState.set_list_source("host")
+        return monitor
+
+    # ── 一致の人数 ─────────────────────────
+    def test_the_host_window_counts_everyone_as_matched(self):
+        _k, meta, _w = self._load([[(0, "あ"), (0, "い")], [(0, "う"), (0, "え")]])
+        monitor = self._monitor(meta["tabs_data"], ["あ", "い"])
+
+        monitor._window_tab()
+
+        self.assertTrue(any("タブ1 に対応（一致 3/3人）" in m for m in monitor.logs), monitor.logs)
+
+    def test_a_window_without_the_host_is_unchanged(self):
+        """主催者がいない窓（サブ垢の窓）は、いない人は数えない"""
+        _k, meta, _w = self._load([[(0, "あ"), (0, "い")], [(0, "う"), (0, "え")]])
+        monitor = self._monitor(meta["tabs_data"], ["あ"], me="い")
+
+        monitor._window_tab()
+
+        self.assertTrue(any("タブ1 に対応（一致 2/2人）" in m for m in monitor.logs), monitor.logs)
+
+    def test_the_host_is_added_to_every_tab_only_when_it_is_known(self):
+        _k, meta, _w = self._load([[(0, "あ")], [(0, "う")]])
+        self.assertEqual({tab: data["participants"] for tab, data in meta["tabs_data"].items()},
+                         {0: {"あ", self.HOST}, 1: {"う", self.HOST}})
+
+        _k, meta, _w = self._load([[(0, "あ")], [(0, "う")]], with_host=False)
+        self.assertEqual({tab: data["participants"] for tab, data in meta["tabs_data"].items()},
+                         {0: {"あ"}, 1: {"う"}}, "主催者のファイルが無ければ足さない")
+
+    def test_waiting_is_not_touched(self):
+        _k, meta, _w = self._load([[(0, "あ"), (1, "たいき")]])
+
+        self.assertEqual(meta["tabs_data"][0]["waiting"], {"たいき"})
+
+    # ── 選ばれるタブは変わらない ─────────────────
+    def test_a_host_alone_is_not_matched(self):
+        """ソロの窓（主催者だけ）は対応なしのまま。タブが 1 つでも、2 つでも"""
+        for tabs in ([[(0, "あ")]], [[(0, "あ")], [(0, "う")]]):
+            _k, meta, _w = self._load(tabs)
+
+            self.assertIsNone(MatchTNL.tab_for_window(meta["tabs_data"], {self.HOST}), tabs)
+            self.assertIsNone(self._monitor(meta["tabs_data"], [])._window_tab(), tabs)
+
+    def test_a_stranger_with_the_host_is_not_matched_even_with_one_tab(self):
+        """どのタブにもいない人とだけ一緒の窓は対応なし。主催者が全タブに入っていても、
+        重なりとして数えない（タブが 1 つのとき、数えると対応づいてしまう）"""
+        for tabs in ([[(0, "あ")]], [[(0, "あ")], [(0, "う")]]):
+            _k, meta, _w = self._load(tabs)
+
+            self.assertIsNone(
+                MatchTNL.tab_for_window(meta["tabs_data"], {self.HOST, "知らない人"}), tabs)
+            monitor = self._monitor(meta["tabs_data"], ["知らない人"])
+            self.assertIsNone(monitor._window_tab(), tabs)
+            self.assertTrue(any("見つかりません" in m for m in monitor.logs), monitor.logs)
+
+    def test_the_same_tab_is_chosen_as_without_the_host(self):
+        tabs = [[(0, "あ"), (0, "い"), (0, "う")], [(0, "え"), (0, "お")]]
+        with_host = self._load(tabs)[1]["tabs_data"]
+        without = self._load(tabs, with_host=False)[1]["tabs_data"]
+
+        for present in ({"あ"}, {"あ", "い"}, {"え", "お"}, {"あ", "え", "お"}, {"か"}):
+            self.assertEqual(MatchTNL.tab_for_window(with_host, present | {self.HOST}),
+                             MatchTNL.tab_for_window(without, present), present)
+
+    def test_a_tie_is_still_not_matched(self):
+        _k, meta, _w = self._load([[(0, "あ")], [(0, "う")]])
+
+        self.assertIsNone(MatchTNL.tab_for_window(meta["tabs_data"], {self.HOST, "あ", "う"}))
+
+    # ── 人数 ────────────────────────────────
+    def test_the_participant_count_does_not_include_the_host(self):
+        _k, meta, _w = self._load([[(0, "あ"), (0, "い"), (1, "たいき")], [(0, "う")]])
+
+        self.assertEqual(meta["participants"], 3)
+        self.assertEqual(meta["host_self"], self.HOST)
+        self.assertEqual(meta["participant_names"], {"あ", "い", "う", self.HOST})
+        self.assertEqual(meta["listed"], 4)
+
+
+
+
 class TestHostStateSqlite(unittest.TestCase):
     """ToN ListTool の新しい保存形式（host_state.sqlite3）を読む"""
 

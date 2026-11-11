@@ -363,9 +363,14 @@ def load_host_state(path: str,
     if host_self:
         participant_names.add(host_self)
         # 主催者はどのタブの窓にいても自分のリストで判定する。タブごとの
-        # 内訳にも足しておく（参加者の人数には数えない）
+        # 内訳にも足しておく（meta["participants"] の人数には数えない。
+        # ListTool の保存ファイルのタブの参加者には主催者が入らないので、窓の
+        # 「一致 N/M人」が 1 人少なく出ていた。数え終えたあとに足す）。
+        # 全タブに足すので、tab_for_window は host_self を数えない
         own = wishes.get(host_self) or {}
         for data in tabs_data.values():
+            data["participants"].add(host_self)
+            data["host_self"] = host_self
             data["wishes"].setdefault(host_self, {})
             for round_key, ids in own.items():
                 data["keepOn"].setdefault(round_key, set()).update(ids)
@@ -391,14 +396,15 @@ def tab_for_window(tabs_data: dict, present_names) -> int | None:
     決める。重なりが最大のタブ。1人も重ならない・同点が複数あるときは None
     （対応づけできない＝呼び出し側は全タブを畳んだ共有リストへ落とす）。
     待機の名前では選ばない——待機はその場にいない人なので、別の窓の人が
-    混ざっている
+    混ざっている。主催者自身（`data["host_self"]`）は全タブに足してあるので
+    数えない（どのタブとも重なるだけで、選び方を変えてしまう）
     """
     present = set(present_names or ())
     if not present or not tabs_data:
         return None
     best, best_overlap, tied = None, 0, False
     for tab, data in sorted(tabs_data.items(), key=lambda kv: str(kv[0])):
-        overlap = len(present & set(data.get("participants") or ()))
+        overlap = len(present & (set(data.get("participants") or ()) - {data.get("host_self")}))
         if overlap > best_overlap:
             best, best_overlap, tied = tab, overlap, False
         elif overlap == best_overlap and overlap > 0:
