@@ -416,8 +416,24 @@ class TestJump(unittest.TestCase):
             ex.jump()
             self.assertTrue(_wait_until(lambda: hold.called))
         args, kwargs = hold.call_args
-        self.assertEqual(args, (0x100, "space", config.JUMP_PRESS_SEC))
+        self.assertEqual(args, (0x100, " ", config.JUMP_PRESS_SEC))
         self.assertEqual(kwargs["stop"], ex._stopped)
+
+    def test_a_space_passes_the_one_char_check_and_resolves_to_vk_space(self):
+        """背面送信の入口は 1 文字だけ受ける。空白 1 文字は弾かれず VK_SPACE（Shift なし）になる。
+        user32 は偽物（本物の窓・送信は使わない）"""
+        u = MagicMock()
+        u.GetWindowThreadProcessId.return_value = 4321
+        u.GetKeyboardLayout.return_value = 0x04110411
+        u.VkKeyScanExW.return_value = 0x20          # VK_SPACE・シフト状態 0
+        u.MapVirtualKeyExW.return_value = 0x39
+        with patch.object(WindowOperator, "user32", u):
+            params = WindowOperator._background_key(0x100, " ")
+            self.assertIsNone(WindowOperator._background_key(0x100, "space"), "複数文字は今までどおり弾く")
+        self.assertIsNotNone(params)
+        self.assertEqual(params[0], 4321)
+        self.assertEqual(params[1], 0x20)
+        self.assertEqual(u.VkKeyScanExW.call_args.args[0].value, " ")
 
     def test_it_jumps_in_every_instance_type(self):
         for itype in NOT_PRIVATE:
