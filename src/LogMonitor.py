@@ -749,6 +749,7 @@ class LogMonitor:
                     # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
                     self._restore_players(reversed(player_events))
                     self._restore_three_wins(lived, list(reversed(round_types)))
+                    self.sequence.mark_moons_seen(round_types)      # すでに出た moon は 2 回目から自爆の対象
 
                 if found_user and found_instance and past_learn:
                     break           # 要るものはそろった（これより前は位相にも使わない）
@@ -756,6 +757,9 @@ class LogMonitor:
             if found_instance:
                 # 名前（Sabotage マーダーの判定）は入室より前の行で分かるので、最後に流す
                 self.st.held_item_id = self._replay_held_item(reversed(item_events))
+                # 遡りで所持が分かったら、判定に使う item_id も合わせる（初期値 1 のままだと
+                # 「持っている」ことになり、未回収の通知・放置モード・アイテム自動取得が誤って進む）
+                self.st.item_id = self.st.item_id_at_round_start = self.st.held_item_id
                 self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
                 self._notify_held_item_changed()
                 self._restore_running_round(running_round, list(reversed(player_events)))
@@ -1153,9 +1157,13 @@ class LogMonitor:
                     try:
                         current_size = cfg.log_path.stat().st_size
                         if current_size < self.st.log_pos:
-                            f.seek(0)
-                            self.st.log_pos = 0
+                            # 縮んだぶんを「今起きたこと」として読み直すと、過去のラウンドを
+                            # 全部やり直してしまう。末尾へ飛び、状態（インスタンス・人数・所持アイテム）
+                            # だけ遡って取り戻す
+                            self._log("ログが短くなりました → 読み直します")
+                            self.st.log_pos = current_size
                             rest = b""
+                            self._detect_instance_from_log(end=current_size)
 
                         f.seek(self.st.log_pos)
                         chunk = f.read()

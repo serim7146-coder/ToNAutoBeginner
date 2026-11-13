@@ -702,7 +702,7 @@ class TestTnnl(unittest.TestCase):
             got = ContinueTable.from_tnnl(path)
         self.assertEqual({k: set(v) for k, v in got.items()},
                          {CLASSIC: {5, 4002, 4009}, ALT: {1001}, EIGHT: {3014}, SPECIAL: {4009},
-                          PUNISHED: {4012}, GHOST: {86}})
+                          PUNISHED: {4012}, GHOST: {86}, "Fog/霧": {3}})
 
     def test_the_tnl_importer_for_the_table_is_converted_too(self):
         with tempfile.TemporaryDirectory() as tmp:

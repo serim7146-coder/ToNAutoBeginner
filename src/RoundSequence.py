@@ -116,6 +116,14 @@ class RoundSequence:
             self.moon_done[round_type] = True
         return current.label
 
+    def mark_moons_seen(self, round_types):
+        """監視開始の遡り用: すでに出た moon の印だけを立てる。
+        並びの推定（仮説）には混ぜない——遡りでは OnMasterClientSwitched の行を拾っていないので、
+        流し直すと仮説が狂い、Alternate を N と誤って確定して 4 種すべて解放扱いになりうる"""
+        for name in round_types or ():
+            if name in self.moon_done:
+                self.moon_done[name] = True
+
     def unlock_all_moons(self):
         for name in self.moon_done:
             self.moon_done[name] = True

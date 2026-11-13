@@ -157,7 +157,7 @@ def _write_json(path: Path, body: dict, label: str) -> bool:
 # ── .tnl との行き来 ─────────────────────────────
 def from_tnl(path) -> tuple:
     """.tnl → (data, meta)。読み方は判定のための読み込み（MatchTNL.load_tnl）と同じ
-    （値が 0 でない番号だけ・HOST_SAVE_IGNORED_KEYS は除く。番号は独自の番号に直し、Special/Moon などは
+    （値が 0 でない番号だけ・霧 (Alternate)・ゴースト (Alternate) の枠は通常の霧・ゴーストへ畳む。番号は独自の番号に直し、Special/Moon などは
     置き場所へ配り、そのラウンドに出ないテラーは外す）。読めなければ例外"""
     keep_on, meta = MatchTNL.load_tnl(str(path))
     data = {key: frozenset(ids) for key, ids in keep_on.items() if ids}

@@ -206,7 +206,8 @@ class TestFiles(unittest.TestCase):
         path = self._tnl(data={CLASSIC: {"3": 1, "4": 0, "7": 1}, "Fog (Alternate)/霧 (Alternate)": {"1": 1},
                               FOG: {"2": 0}})
         data, meta = ContinueList.from_tnl(path)
-        self.assertEqual(data, {CLASSIC: frozenset({3, 7})})
+        self.assertEqual(data, {CLASSIC: frozenset({3, 7}), "Fog/霧": frozenset({1})},
+                         "Fog (Alternate) の枠は通常の Fog へ畳む")
         self.assertEqual(data, {key: frozenset(ids) for key, ids in MatchTNL.load_tnl(str(path))[0].items()})
         self.assertEqual(meta, {"list_name": "リストA"})
 
