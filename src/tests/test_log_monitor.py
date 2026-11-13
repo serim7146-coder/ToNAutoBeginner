@@ -1,5 +1,6 @@
 """LogMonitor のそのほか（インスタンス・所持アイテムなど）"""
 from tests.support import *  # noqa: F401,F403
+import inspect
 
 
 
@@ -1004,3 +1005,63 @@ class TestHeldItemChangedNotice(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(WindowConfig(), {}, lambda _m: None, window_idx=1)
         monitor._process(self.P + "Equipping 29.")
         self.assertEqual(monitor.st.held_item_id, 29)
+
+
+class TestOneBadLineDoesNotDropTheRest(unittest.TestCase):
+    """1 行の処理で例外が出ても、同じ読みの残りの行は処理する。画面のログは 1 回の読みにつき 1 行だけ。
+    飛ばした行の中身は画面にも debug.log にも出さない（他人の名前が入りうる）"""
+
+    SECRET = "SomeoneElsesName"
+
+    def setUp(self):
+        self.logs = []
+        self.monitor = LogMonitor.LogMonitor(WindowConfig(), {}, self.logs.append, window_idx=1)
+        self.seen = []
+        self.bad = set()
+
+        def process(line):
+            self.seen.append(line)
+            if line in self.bad:
+                raise ValueError("boom")
+        self.monitor._process = process
+        patcher = patch.object(LogMonitor.DebugLog, "exception")
+        self.exception = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_lines_after_a_failed_one_are_still_processed(self):
+        self.bad = {"second " + self.SECRET}
+        self.monitor._process_lines([b"first", ("second " + self.SECRET).encode(), b"third\r"])
+
+        self.assertEqual(self.seen, ["first", "second " + self.SECRET, "third"], "1・3 行目は処理される")
+        self.assertEqual(self.logs, ["[窓1] 読み取りエラー: boom"], "画面のログは 1 行だけ")
+        self.exception.assert_called_once_with("LogMonitor._run")
+
+    def test_the_log_carries_the_count_when_several_lines_fail(self):
+        self.bad = {"a", "c"}
+        self.monitor._process_lines([b"a", b"b", b"c", b"d"])
+
+        self.assertEqual(self.seen, ["a", "b", "c", "d"])
+        self.assertEqual(self.logs, ["[窓1] 読み取りエラー: boom（この読みで 2 行）"], "1 回の読みにつき 1 行")
+        self.assertEqual(self.exception.call_count, 2, "例外のたびに debug.log へ")
+
+    def test_the_skipped_line_never_reaches_the_screen_log_or_debug_log(self):
+        self.bad = {"second " + self.SECRET}
+        written = []
+        with patch.object(LogMonitor.DebugLog, "write", side_effect=written.append):
+            self.monitor._process_lines([b"first", ("second " + self.SECRET).encode()])
+
+        self.assertFalse(any(self.SECRET in m for m in self.logs))
+        self.assertFalse(any(self.SECRET in str(m) for m in written))
+        self.assertFalse(any(self.SECRET in str(c) for c in self.exception.call_args_list))
+
+    def test_no_failure_means_no_log(self):
+        self.monitor._process_lines([b"a", b"b"])
+
+        self.assertEqual(self.seen, ["a", "b"])
+        self.assertEqual(self.logs, [])
+        self.exception.assert_not_called()
+
+    def test_the_loop_hands_the_chunk_to_the_per_line_method(self):
+        src = inspect.getsource(LogMonitor.LogMonitor._run)
+        self.assertIn("self._process_lines(lines)", src)
+        self.assertNotIn("self._process(", src, "1 行ずつの例外処理は _process_lines の中")
