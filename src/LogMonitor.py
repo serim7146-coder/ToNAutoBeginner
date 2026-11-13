@@ -653,8 +653,9 @@ class LogMonitor:
         try:
             # ログインの行はログの先頭にある。末尾から遡って探すと全部読むことになる（26 MB・27 万行で
             # 0.8 秒。6 窓同時だと起動時にその分の CPU）。先頭を読めば 1 ms。遡りの途中でもっと後の
-            # ログインの行（入り直し）が見つかれば、そちらで上書きする
+            # ログインの行（入り直し）が見つかれば、そちらで上書きする（遡りで最初に見えた 1 行だけ）
             found_user     = self._user_from_log_head()
+            auth_scanned   = False      # 遡りでログインの行を 1 つ見た（これより古いログインの行は使わない）
             found_instance = False
             past_learn     = False      # 定期の Verified の位相に使う範囲（VERIFIED_LEARN_BACK_SEC）より前まで遡った
             # 最後の Joining より後の、所持アイテムに関わる行（新しい順に溜まる）
@@ -707,11 +708,13 @@ class LogMonitor:
                     if event.kind == LogParser.EVENT_ROUND_START:
                         running_round = (at, len(player_events))
 
-                if event.kind == LogParser.EVENT_USER_AUTH and (
-                        not found_user or event.user_id != self.st.local_user_id):
-                    # 遡りで最初に見えたログインが最新（先頭から読んだものと違えば入り直している）
-                    self._apply_user_auth(event)
-                    found_user = True
+                if event.kind == LogParser.EVENT_USER_AUTH and not auth_scanned:
+                    # 遡りで最初に見えたログインの行だけを使う（それが最新。先頭から読んだものと違えば入り直している）。
+                    # より古いログインの行（先頭の行に当たるなど）で、新しい方を上書きしない
+                    auth_scanned = True
+                    if not found_user or event.user_id != self.st.local_user_id:
+                        self._apply_user_auth(event)
+                        found_user = True
 
                 if not found_instance and event.kind == LogParser.EVENT_JOINING:
                     found_instance = True
