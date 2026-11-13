@@ -107,6 +107,7 @@ class TestRoundPlayers(_Case):
         monitor = self._monitor()
         monitor.st.round_type = "Fog"
         monitor.st.in_round = True
+        monitor.st.statistics_sent = False      # 入室で「送らない」にしてある。ラウンドが始まった状態を作る
         monitor.st.round_players = 4
         monitor._send_early_statistics(5)
         self.assertEqual(self._players(), 4)

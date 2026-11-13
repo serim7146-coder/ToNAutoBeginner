@@ -100,7 +100,7 @@ class TestChaseOnlyInPrivate(unittest.TestCase):
 
     def test_joining_another_private_instance_keeps_it(self):
         self._start_in_private()
-        self.monitor._process(LINE + "[Behaviour] Joining wrld_x:2~private(usr_me)~region(jp)")
+        self.monitor._process(LINE + f"[Behaviour] Joining {TON_WORLD}:2~private(usr_me)~region(jp)")
         self.assertEqual(self.monitor._action.chase_direction, "cw")
 
     def test_the_resend_loop_notices_by_itself(self):

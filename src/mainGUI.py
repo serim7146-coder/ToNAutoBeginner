@@ -4082,7 +4082,8 @@ class App(tk.Tk):
                 lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings,
                 on_list_changed=self._on_own_list_changed,
-                on_held_item_changed=self._on_held_item_changed)
+                on_held_item_changed=self._on_held_item_changed,
+                window_alive=lambda h=cfg.hwnd: WindowOperator.window_exists(h))
             self.monitors.append(mon)
             mon.start()
 

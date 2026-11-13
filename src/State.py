@@ -50,6 +50,8 @@ class WindowConfig:
 @dataclass
 class WindowState:
     instance_type: str = "public"
+    # 今いるワールドが ToN か。入室の行を見るまでは True（今までの動き）。False の間はこの窓を操作しない（can_operate）
+    in_ton_world: bool = True
     # Joining 行の公開範囲（LogParser.ACCESS_*）。空＝判定できない（看破は NG 扱い）
     instance_access: str = ""
     # ── 霧の看破（ラウンドごと） ──
