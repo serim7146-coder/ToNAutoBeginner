@@ -52,6 +52,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | `HotKey.py` | キー名の検証・表記・捕捉。 |
 | `UIFont.py` | 日本語を持つフォントを PC にあるものから選ぶ。 |
 | `SecretStore.py` | OBS のパスワードを DPAPI で暗号化して保存する。 |
+| `AccessCheck.py` | 動かしてよいかをサーバー（Supabase の `rpc/check_access`。`supabase/check_access.sql`）に聞く。送るのは自分の UID（読めなければ null）と版だけ。答えは `allowed`・`min_version`・`require_uid`。聞くのは、起動時（`enforce_startup`。画面を出す前・待ちは `ACCESS_STARTUP_TIMEOUT_SEC`）、マクロを始めた各窓（`LogMonitor._verify_access`）、動作中のログインの行（`enforce`）、以後 `ACCESS_MEMORY_SEC`（1 時間）ごと（`recheck_async`）。締め出し（`allowed` が偽）なら何も出さずにプロセスを終える（`_TERMINATE`＝`os._exit`）。サーバーに聞けないときは、手元の記録（`%APPDATA%\ToNAutoBeginner\access.dat`。UID の SHA-256 ごとの最後の OK の時刻と締め出しの印・サーバーの設定。DPAPI で包む）で決める: 締め出しの印があれば締め出し、最後の OK から `ACCESS_GRACE_SEC`（3 日）未満なら動かす、それ以外は動かさない（窓は画面のログに 1 行出して待ち、`ACCESS_RETRY_SEC` ごとに聞き直す）。UID が読めない窓も、`require_uid` が真なら動かさない（ログインの行を待つ）。聞く先（URL と鍵）は exe に同梱した `.env` だけ（環境変数・exe の隣の `.env` では変えられない）。`min_version` が `APP_VERSION` より大きければ、`mainGUI` がマクロの開始を断る（`too_old`）。 |
 | `ToolLauncher.py` / `ProcessCheck.py` | 外部ツールの起動、プロセスの生死（ToolHelp スナップショット）。一覧は `RunningNamesCache`（App が 1 つ持ち、主催リストの元とツールのボタンで共有。FO）で取る: `names()` は前回から `PROCESS_LIST_MIN_SEC`（10 秒）以内なら前回の一覧、`watch(名前)` は前回の一覧で見つけた PID の生死だけを `is_pid_alive` （PID を開いて終了コードと exe 名を見る。数 µs）で見て、消えた・未発見のときだけ（10 秒に 1 回まで）一覧を取り直す。 |
 | `WindowArrange.py` | 窓の整列の升の割り方と矩形の計算だけ（Win32 は呼ばない。動かすのは `WindowOperator`）。 |
 
