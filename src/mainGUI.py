@@ -23,7 +23,6 @@ import MemoryWatch
 from config import resource_path
 import ActionExecutor
 import AutoUpdate
-import ItemOverlay
 import ItemUse
 import LogMonitor
 import SharedState
@@ -149,10 +148,7 @@ BROADCAST_CHECK_LABELS = {
     "announce_intermission": "Intermissionアナウンス",
     "freeze_8pages": "速度検知 8 Pages",
     "freeze_punish": "速度検知 Punished",
-    "item_auto_click": "アイテム自動クリック",
 }
-# 窓の上の表示の隅の、画面に出す名前（設定に保存するのは config.ITEM_OVERLAY_CORNERS の英語のほう）
-ITEM_OVERLAY_CORNER_LABELS = {"top_left": "左上", "top_right": "右上", "bottom_left": "左下", "bottom_right": "右下"}
 BROADCAST_ROUND_LABELS = {"skip": "全自爆", "continue": "全続行"}
 BROADCAST_CHOICE_LABELS = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
 
@@ -282,32 +278,6 @@ def _as_window_freezes(data) -> dict:
     old = one({key: data.get(key) for key in ("freeze_8pages", "freeze_punish", "freeze_rounds")})
     return {number: {**old, "freeze_rounds": list(old["freeze_rounds"])}
             for number in range(1, config.MAX_WINDOWS + 1)}
-
-
-def _as_window_flags(value) -> dict:
-    """保存した窓ごとのON/OFF（{"1": true, ...}）を {1: True, ...} に。窓は 1〜MAX_WINDOWS だけ。
-    ONになるのは値が true のときだけ（壊れた値・文字列・数は OFF）"""
-    flags = {}
-    for key, flag in (value.items() if isinstance(value, dict) else ()):
-        if not (isinstance(key, str) and key.isascii() and key.isdigit()):
-            continue
-        number = int(key)
-        if 1 <= number <= config.MAX_WINDOWS:
-            flags[number] = flag is True
-    return flags
-
-
-def _valid_overlay_corner(value) -> str:
-    """窓の上の表示の隅（settings.json の item_overlay_corner）。使えない値は既定"""
-    return value if isinstance(value, str) and value in config.ITEM_OVERLAY_CORNERS else config.ITEM_OVERLAY_CORNER_DEFAULT
-
-
-def _valid_overlay_offset(value, default: int) -> int:
-    """窓の上の表示のずらし（px）。整数だけ（真偽値・小数・文字列は既定）。±ITEM_OVERLAY_OFFSET_MAX に収める"""
-    if isinstance(value, bool) or not isinstance(value, int):
-        return default
-    limit = config.ITEM_OVERLAY_OFFSET_MAX
-    return max(-limit, min(limit, value))
 
 
 def load_settings() -> dict:
@@ -482,11 +452,9 @@ class WindowTab(ttk.Frame):
     def __init__(self, parent, idx: int, on_log_selected=None, on_settings_changed=None,
                  section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
                  on_open_window_table=None, on_item_switch=None, on_broadcast=None,
-                 on_freeze_changed=None, on_item_auto_click_changed=None):
+                 on_freeze_changed=None):
         super().__init__(parent)
         self.idx = idx
-        self._on_item_auto_click_changed = on_item_auto_click_changed   # (): アイテム自動クリックが変わった（App が保存を予約する）
-        self._item_auto_click_loading = False                   # 読み込み・戻す書き込みの間は True（保存を予約しない）
         self._on_freeze_changed = on_freeze_changed             # (): 全窓フリーズの設定が変わった（App が保存を予約する）
         self._freeze_loading = False                            # 読み込み・戻す書き込みの間は True（保存を予約しない）
         self._on_broadcast = on_broadcast                       # (タブ, 種類, キー, 値): Ctrl を押して変えた設定を全窓へ写す
@@ -527,12 +495,9 @@ class WindowTab(ttk.Frame):
         if self._on_settings_changed is not None:
             for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk_two, self.v_cancel_afk,
                         self.v_cancel_afk_after_unlock, self.v_announce_intermission,
-                        self.v_item_auto_click,
                         *self.v_skip_rounds.values(), *self.v_continue_rounds.values(),
                         *self._freeze_vars()):
                 var.trace_add("write", lambda *_a: self._on_settings_changed(self))
-        if self._on_item_auto_click_changed is not None:
-            self.v_item_auto_click.trace_add("write", lambda *_a: self._notify_item_auto_click_changed())
         if self._on_freeze_changed is not None:
             for var in self._freeze_vars():
                 var.trace_add("write", lambda *_a: self._notify_freeze_changed())
@@ -541,19 +506,6 @@ class WindowTab(ttk.Frame):
         """手で変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
         if not self._freeze_loading:
             self._on_freeze_changed()
-
-    def _notify_item_auto_click_changed(self):
-        """手で変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込みでは頼まない"""
-        if not self._item_auto_click_loading:
-            self._on_item_auto_click_changed()
-
-    def set_item_auto_click(self, value: bool):
-        """保存から読んだ値を書く（読み込み用。保存を予約しない）"""
-        self._item_auto_click_loading = True
-        try:
-            self.v_item_auto_click.set(bool(value))
-        finally:
-            self._item_auto_click_loading = False
 
     def _freeze_vars(self) -> list:
         """全窓フリーズの変数（速度検知 2 つ・ラウンド突入）"""
@@ -575,7 +527,6 @@ class WindowTab(ttk.Frame):
                 "cancel_afk_two": self.v_cancel_afk_two,
                 "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
                 "announce_intermission": self.v_announce_intermission,
-                "item_auto_click": self.v_item_auto_click,
                 "freeze_8pages": self.v_freeze_8pages, "freeze_punish": self.v_freeze_punish}
 
     def set_check(self, key: str, value: bool):
@@ -638,7 +589,6 @@ class WindowTab(ttk.Frame):
             "cancel_afk": self.v_cancel_afk.get(),
             "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
             "announce_intermission": self.v_announce_intermission.get(),
-            "item_auto_click": bool(self.v_item_auto_click.get()),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
             "freeze_8pages": bool(self.v_freeze_8pages.get()),
@@ -676,8 +626,6 @@ class WindowTab(ttk.Frame):
                     var.set(name in saved[key])
         finally:
             self._freeze_loading = False
-        # 古い控えにはこのキーが無い（OFF として戻す）。保存は予約しない
-        self.set_item_auto_click(saved.get("item_auto_click", False))
         self.v_profile.set(saved["profile"])
         self.v_log.set(saved["log"])
         self._hwnd_map = dict(saved["hwnd_choices"])
@@ -775,14 +723,6 @@ class WindowTab(ttk.Frame):
             box.bind("<<ComboboxSelected>>", lambda _e, w=which: self._on_continue_pick(w))
             self.cb_ct_choice[which] = box
         self.refresh_continue_choices()
-
-        # ── アイテム自動クリック: 手に持ったアイテム（表で間隔が決まっているもの）を、ラウンド中だけ OSC で自動で使う。既定は OFF ──
-        af = ttk.Frame(p)
-        af.pack(fill="x", padx=10, pady=(2, 0))
-        self.v_item_auto_click = tk.BooleanVar(value=False)
-        ttk.Checkbutton(af, text="アイテム自動クリック", variable=self.v_item_auto_click,
-                        command=lambda k="item_auto_click", v=self.v_item_auto_click: self._changed(k, v)
-                        ).pack(side="left")
 
         # ── ラウンドごとの自爆設定（privateのみ） ──
         rounds = self._section(
@@ -1407,10 +1347,6 @@ class App(tk.Tk):
         self._window_table_windows: dict = {}      # (窓の番号, 種類) → 開いている窓の表の画面（GR）
         # 窓ごとの全窓フリーズの設定（窓の番号 → freeze_values()）。タブが無い窓の分もここに残す（窓数を減らして戻しても残る）
         self._window_freezes: dict[int, dict] = {}
-        # 窓ごとの「アイテム自動クリック」（窓の番号 → ON か）。同じく、タブが無い窓の分もここに残す
-        self._window_item_auto_click: dict[int, bool] = {}
-        self._item_overlays = None          # 窓の上の手持ちアイテムの表示（ItemOverlay.ItemOverlays。動作中に作る）
-        self._item_overlay_job = None       # その更新の予約（after の id）
         self._running = False
         self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
@@ -2638,11 +2574,6 @@ class App(tk.Tk):
         ttk.Button(of2, text="接続テスト",
                    command=self._test_obs_connection).pack(side="left")
 
-        # ⑥ アイテムの表示（各 VRChat 窓の上に出す、手に持ったアイテムの効果・CT の残り。位置は全窓共通）
-        f6_wrap = CollapsibleFrame(self, text="⑥ アイテムの表示", collapsed=True)
-        f6_wrap.pack(fill="x", padx=12, pady=4)
-        self._build_item_overlay_settings(f6_wrap.content)
-
         # AFK解除設定（DTM / Waldo）
         # コントロール
         fc = ttk.Frame(self)
@@ -2793,7 +2724,6 @@ class App(tk.Tk):
         for tab in self.tabs:
             memory[tab.idx] = tab.snapshot()
             self._window_freezes[tab.idx + 1] = tab.freeze_values()     # 消すタブの分も残す
-            self._window_item_auto_click[tab.idx + 1] = bool(tab.v_item_auto_click.get())
         for tab in self.tabs:
             try:
                 self.nb.forget(tab)
@@ -2809,11 +2739,9 @@ class App(tk.Tk):
                             on_item_switch=self._on_item_switch,
                             on_broadcast=self._broadcast_tab_setting,
                             on_freeze_changed=lambda: self._schedule_settings_save(),
-                            on_item_auto_click_changed=lambda: self._schedule_settings_save(),
                             section_collapsed=self._tab_sections,
                             on_section_toggled=self._on_tab_section_toggled)
             tab.set_freeze_values(self._window_freezes.get(i + 1, {}))
-            tab.set_item_auto_click(self._window_item_auto_click.get(i + 1, False))
             self.nb.add(tab, text=f"窓{i + 1}")
             self.tabs.append(tab)
         self._apply_saved_window_settings()
@@ -3813,11 +3741,6 @@ class App(tk.Tk):
         self._window_freezes = _as_window_freezes(data)
         for tab in self.tabs:
             tab.set_freeze_values(self._window_freezes.get(tab.idx + 1, {}))
-        # アイテム自動クリックも窓ごと。無い・壊れた値は OFF
-        self._window_item_auto_click = _as_window_flags(data.get("item_auto_click"))
-        for tab in self.tabs:
-            tab.set_item_auto_click(self._window_item_auto_click.get(tab.idx + 1, False))
-        App._load_item_overlay_settings(self, data)
         self.v_obs_enabled.set(_as_flag(data.get("obs_record")))
         self.v_obs_freeze.set(data.get("obs_record_freeze") is True)
         self.v_obs_host.set(str(data.get("obs_host") or config.OBS_DEFAULT_HOST))
@@ -3874,7 +3797,6 @@ class App(tk.Tk):
             if monitor.window_idx == tab.idx + 1:
                 for key, value in settings.items():
                     setattr(monitor.cfg, key, value)
-                monitor.on_item_auto_click_changed()    # 自動クリックの待ちを起こす・ラウンド中に ON になったなら立てる
 
     def _broadcast_tab_setting(self, tab, kind: str, key, value):
         """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
@@ -4161,8 +4083,6 @@ class App(tk.Tk):
             cfg.voice_double_trouble = self.v_voice_double_trouble.get().strip()
             cfg.voice_afk           = self.v_voice_afk.get().strip()
             self._log(f"[窓{tab.idx+1}] HWND={cfg.hwnd:#010x}  ログ={cfg.log_path.name}")
-            if cfg.item_auto_click and not cfg.osc_port:
-                self._log(f"[窓{tab.idx+1}] アイテム自動クリック: OSC利用不可のため送りません")
             # 前面が VRChat の窓かを見るために覚えておく（Begin のカーソル判定）
             SharedState.register_window_hwnd(cfg.hwnd)
             mon = LogMonitor.LogMonitor(
@@ -4184,7 +4104,6 @@ class App(tk.Tk):
 
         self._start_window_volume()
         self._running = True
-        App._start_item_overlays(self)              # 窓の上の手持ちアイテムの表示
         self._refresh_continue_choices()            # 動作中は、アイテムの決まりが当てはまる窓の表示を変える
         self._refresh_start_stop_button()
         self.lbl_win_warn.config(
@@ -4348,7 +4267,6 @@ class App(tk.Tk):
         # このツールが始めた録画だけ止める（手動の録画には触らない）。
         # 終了時はワーカーごと消えるので、送り終えるまで少しだけ待つ
         Recorder.stop_all(wait_sec=config.OBS_TIMEOUT_SEC * 2)
-        App._stop_item_overlays(self)            # 窓の上の表示を片づける（監視を空にする前に）
         self.monitors.clear()
         self._show_own_windows_again()
         self._running = False
@@ -5103,15 +5021,6 @@ class App(tk.Tk):
             self._window_freezes[tab.idx + 1] = tab.freeze_values()
         return {str(number): dict(values) for number, values in sorted(self._window_freezes.items())}
 
-    def _window_item_auto_click_setting(self) -> dict:
-        """保存する窓ごとのアイテム自動クリック {"1": true, ...}。今のタブの値で上書きする（タブに無い窓の分は残す）"""
-        flags = getattr(self, "_window_item_auto_click", None)
-        if flags is None:
-            flags = self._window_item_auto_click = {}
-        for tab in self.tabs:
-            flags[tab.idx + 1] = bool(tab.v_item_auto_click.get())
-        return {str(number): bool(flag) for number, flag in sorted(flags.items())}
-
     def _save_launch_settings(self):
         data = {
             **load_settings(),
@@ -5136,8 +5045,6 @@ class App(tk.Tk):
             "item_fetch_gain": (list(SharedState.get_item_fetch_gain())
                                 if SharedState.get_item_fetch_gain() else None),
             "window_freezes": self._window_freeze_setting(),
-            "item_auto_click": App._window_item_auto_click_setting(self),
-            **App._item_overlay_setting(self),
             "obs_record":    self.v_obs_enabled.get(),
             "obs_record_freeze": self.v_obs_freeze.get(),
             "obs_host":      self.v_obs_host.get().strip(),
@@ -5226,117 +5133,6 @@ class App(tk.Tk):
             self._overlay = None
         else:
             self._overlay = LogOverlay(self, item_lines=self._item_use_lines)
-
-    # ── 窓の上の手持ちアイテムの表示（ItemOverlay）─────────────────────
-    def _build_item_overlay_settings(self, parent):
-        """⑥ の中身: 窓の隅（左上・右上・左下・右下）と、そこからのずらし（横・縦。px。正で内側）。変えたら保存を予約する"""
-        self._item_overlay_loading = False      # 読み込みの書き込みでは保存を予約しない
-        corner = config.ITEM_OVERLAY_CORNER_DEFAULT
-        dx, dy = config.ITEM_OVERLAY_OFFSET_DEFAULT
-        self._item_overlay_last = (corner, dx, dy)          # 最後に使えた値（欄が壊れた文字のときはこれ）
-        self.v_item_overlay_corner = tk.StringVar(value=ITEM_OVERLAY_CORNER_LABELS[corner])
-        self.v_item_overlay_x = tk.StringVar(value=str(dx))
-        self.v_item_overlay_y = tk.StringVar(value=str(dy))
-        row = ttk.Frame(parent)
-        row.pack(fill="x", pady=2)
-        ttk.Label(row, text="窓の上の表示:").pack(side="left")
-        self.cb_item_overlay_corner = ttk.Combobox(
-            row, textvariable=self.v_item_overlay_corner, state="readonly", width=6,
-            values=[ITEM_OVERLAY_CORNER_LABELS[name] for name in config.ITEM_OVERLAY_CORNERS])
-        self.cb_item_overlay_corner.pack(side="left", padx=(4, 10))
-        limit = config.ITEM_OVERLAY_OFFSET_MAX
-        ttk.Label(row, text="横").pack(side="left")
-        self.sp_item_overlay_x = ttk.Spinbox(row, from_=-limit, to=limit, textvariable=self.v_item_overlay_x, width=6)
-        self.sp_item_overlay_x.pack(side="left", padx=(4, 0))
-        ttk.Label(row, text="px").pack(side="left", padx=(2, 10))
-        ttk.Label(row, text="縦").pack(side="left")
-        self.sp_item_overlay_y = ttk.Spinbox(row, from_=-limit, to=limit, textvariable=self.v_item_overlay_y, width=6)
-        self.sp_item_overlay_y.pack(side="left", padx=(4, 0))
-        ttk.Label(row, text="px").pack(side="left", padx=(2, 0))
-        for var in (self.v_item_overlay_corner, self.v_item_overlay_x, self.v_item_overlay_y):
-            var.trace_add("write", lambda *_a: self._on_item_overlay_setting_changed())
-
-    def _on_item_overlay_setting_changed(self):
-        if not self._item_overlay_loading:
-            self._schedule_settings_save()
-
-    def _item_overlay_placement(self) -> tuple:
-        """いまの (隅, 横, 縦)。欄が使えない値（空・文字）のときは、最後に使えた値を使う。Tk のスレッドで呼ぶ"""
-        corner, dx, dy = self._item_overlay_last
-        try:
-            label = self.v_item_overlay_corner.get()
-            for name, text in ITEM_OVERLAY_CORNER_LABELS.items():
-                if text == label:
-                    corner = name
-            dx = _valid_overlay_offset(int(str(self.v_item_overlay_x.get()).strip()), dx)
-            dy = _valid_overlay_offset(int(str(self.v_item_overlay_y.get()).strip()), dy)
-        except (ValueError, tk.TclError):
-            pass
-        self._item_overlay_last = (corner, dx, dy)
-        return self._item_overlay_last
-
-    def _load_item_overlay_settings(self, data):
-        """settings.json の窓の上の表示（隅・横・縦）を欄へ。無い・壊れた値は既定。保存は予約しない"""
-        if not hasattr(self, "v_item_overlay_corner"):
-            return                          # 画面の欄を作る前（部品だけのテスト）
-        corner = _valid_overlay_corner(data.get("item_overlay_corner"))
-        dx = _valid_overlay_offset(data.get("item_overlay_x"), config.ITEM_OVERLAY_OFFSET_DEFAULT[0])
-        dy = _valid_overlay_offset(data.get("item_overlay_y"), config.ITEM_OVERLAY_OFFSET_DEFAULT[1])
-        self._item_overlay_loading = True
-        try:
-            self.v_item_overlay_corner.set(ITEM_OVERLAY_CORNER_LABELS[corner])
-            self.v_item_overlay_x.set(str(dx))
-            self.v_item_overlay_y.set(str(dy))
-        finally:
-            self._item_overlay_loading = False
-        self._item_overlay_last = (corner, dx, dy)
-
-    def _item_overlay_setting(self) -> dict:
-        """保存する窓の上の表示の位置（settings.json の item_overlay_corner・item_overlay_x・item_overlay_y）"""
-        if not hasattr(self, "v_item_overlay_corner"):
-            return {}                       # 画面の欄を作る前（部品だけのテスト）
-        corner, dx, dy = App._item_overlay_placement(self)
-        return {"item_overlay_corner": corner, "item_overlay_x": dx, "item_overlay_y": dy}
-
-    def _start_item_overlays(self):
-        """動作の開始: 窓の上の表示の更新（0.1 秒ごと）を始める"""
-        if self._item_overlay_job is None:
-            self._item_overlay_job = self.after(config.GUI_OVERLAY_ITEM_REFRESH_MS, self._tick_item_overlays)
-
-    def _stop_item_overlays(self):
-        """動作の停止: 更新を止めて、出している表示を全部壊す"""
-        job, self._item_overlay_job = getattr(self, "_item_overlay_job", None), None
-        if job is not None:
-            try:
-                self.after_cancel(job)
-            except tk.TclError:
-                pass
-        overlays, self._item_overlays = getattr(self, "_item_overlays", None), None
-        if overlays is not None:
-            overlays.close_all()
-
-    @TaskStats.tk_timed
-    def _tick_item_overlays(self):
-        """0.1 秒ごと（Tk のスレッド）: 窓ごとの手持ちアイテムの表示を更新する。持っている窓だけ出す。
-        動作中の監視の状態を読むだけ（Tk の呼び出しはここだけ。ほかのスレッドは触らない）"""
-        self._item_overlay_job = None
-        if not self._running:
-            return
-        entries = []
-        for monitor in list(self.monitors):
-            tracker = getattr(monitor.st, "item_use", None)
-            text = ItemUse.status_line(tracker.status()) if tracker is not None else ""
-            entries.append((monitor.window_idx, monitor.cfg.hwnd, text))
-        try:
-            if self._item_overlays is None:
-                self._item_overlays = ItemOverlay.ItemOverlays(self, _remember_own_window)
-            self._item_overlays.refresh(entries, self._item_overlay_placement())
-        except Exception:
-            DebugLog.exception("mainGUI.App._tick_item_overlays")
-        try:
-            self._item_overlay_job = self.after(config.GUI_OVERLAY_ITEM_REFRESH_MS, self._tick_item_overlays)
-        except tk.TclError:
-            self._item_overlay_job = None
 
     def _item_use_lines(self) -> list:
         """オーバーレイの上の部分の行。対応アイテムを手に持っている窓ごとに 1 行（窓の番号順）。Tk のスレッドで呼ぶ"""

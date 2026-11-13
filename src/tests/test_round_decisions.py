@@ -2892,8 +2892,6 @@ class TestSkipRoundsSettings(unittest.TestCase):
     def _tab(self, names=(), exempt=False, keep=()):
         tab = type("FakeTab", (), {})()
         tab.v_profile = TestSkipRoundsSettings.FakeVar(0)
-        tab.idx = 0
-        tab.v_item_auto_click = TestSkipRoundsSettings.FakeVar(False)
         tab.v_skip_rounds = {n: TestSkipRoundsSettings.FakeVar(n in names)
                              for n in config.SKIP_ROUND_SELECTABLE}
         tab.v_continue_rounds = {n: TestSkipRoundsSettings.FakeVar(n in keep)
@@ -3027,7 +3025,6 @@ class TestRoundSettingsAreNotLoaded(unittest.TestCase):
         tab.idx = idx
         tab.freeze_loaded = None            # 全窓フリーズは窓ごと: タブへ渡された値
         tab.set_freeze_values = lambda values, tab=tab: setattr(tab, "freeze_loaded", values)
-        tab.set_item_auto_click = lambda value: None
         tab.v_profile = TestRoundSettingsAreNotLoaded.FakeVar(0)
         tab.v_skip_rounds = {n: TestRoundSettingsAreNotLoaded.FakeVar(False)
                              for n in config.SKIP_ROUND_SELECTABLE}

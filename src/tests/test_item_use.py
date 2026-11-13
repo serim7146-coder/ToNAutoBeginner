@@ -71,7 +71,6 @@ class TestParsePickupDrop(unittest.TestCase):
 # ── B UseTracker ───────────────────────────────
 class TestUseTracker(unittest.TestCase):
     def setUp(self):
-        ItemUse.reset_for_tests()               # 表にないアイテムの名前の記録を空に
         self.t = [0.0]
         self.tr = _tracker(self.t)
 
@@ -132,11 +131,9 @@ class TestUseTracker(unittest.TestCase):
         self.assertIsNotNone(self.tr.status())
         self.assertEqual(self.tr.take_debug_lines(), ["持った: BloodKatCharm"])
 
-    def test_an_unknown_item_is_not_held_and_is_written_once(self):
+    def test_an_unknown_item_is_not_held_and_writes_nothing(self):
         self.tr.pickup("Some Player's Thing")
         self.assertIsNone(self.tr.status())
-        self.assertEqual(self.tr.take_debug_lines(), ["表にないアイテム: Some Player's Thing"])
-        self.tr.pickup("Some Player's Thing")
         self.assertEqual(self.tr.take_debug_lines(), [])
 
     def test_picking_up_an_unknown_item_replaces_the_charm(self):
@@ -144,7 +141,7 @@ class TestUseTracker(unittest.TestCase):
         self.tr.take_debug_lines()
         self.tr.pickup("Other")
         self.assertIsNone(self.tr.status())
-        self.assertEqual(self.tr.take_debug_lines(), ["離した: BloodKatCharm", "表にないアイテム: Other"])
+        self.assertEqual(self.tr.take_debug_lines(), ["離した: BloodKatCharm"])
 
     def test_a_pickup_without_a_drop_replaces(self):
         table = ItemUse.TABLE + (ItemUse.UseItem(ItemUse.KIND_CLICK_CD, "Second", "Second Item", 5.0, 0.0, 1.0),)
@@ -340,303 +337,6 @@ class TestStatusText(unittest.TestCase):
 
     def test_nothing_held_is_empty(self):
         self.assertEqual(ItemUse.status_text(1, None), "")
-
-
-# ── 武器の表・ログの名前の照合・CT の式・表にない名前・表示の文字（段階 2）──────
-# 表の期待値（アイテムのページの値。CD 早見表より優先）:
-# (ログの名前, 表示, 基礎 CT, 1 人増えるごと, 満員の CT, 人数の上限, 効果, 別名, 自動クリックの間隔)
-EXPECTED_ROWS = (
-    ("BloodKatCharm", "Bloody Kat Charm", 1.0, 0.0, 0.0, 16, 2.0, (), 2.0),
-    ("MetalBat", "Metal Bat", 15.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("BloodstainedBat", "Bloody Bat", 20.0, 1.0, 0.0, 16, 0.0, ("BloodyBat",), 0.0),
-    ("MetalPipe", "Metal Pipe", 16.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("Justitia", "Justitia", 22.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("ColorableBat", "Color Bat", 15.0, 1.0, 0.0, 16, 0.0, ("ColorBat",), 0.0),
-    ("GhostBat", "Ghost Bat", 15.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("CorkscrewCoil", "Corkscrew Coil", 30.0, 0.0, 35.0, 16, 3.0, (), 0.0),
-    ("DestroyerCoil", "Destroyer Coil", 20.0, 0.5, 0.0, 16, 15.0, (), 0.0),
-    ("AntiqueRevolver", "Rusty Pistol", 25.0, 1.0, 0.0, 16, 0.0, ("RustyPistol",), 0.0),
-    ("BloodyRevolver", "Bloody Pistol", 3.5, 0.0, 7.0, 16, 0.0, ("BloodyPistol",), 0.0),
-    ("PalePistol", "Pale Pistol", 27.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("RubberMallet", "Rubber Hammer", 15.0, 1.0, 0.0, 16, 0.0, ("RubberHammer",), 0.0),
-    ("Taser", "Taser", 28.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("GranFaust", "Gran Faust", 12.5, 0.0, 17.0, 16, 5.0, (), 0.0),
-    ("Illumina", "Illumina", 8.0, 1.0, 0.0, 10, 0.0, (), 0.0),
-    ("ParadiseLost", "Paradise Lost", 27.0, 1.0, 0.0, 16, 0.0, (), 0.0),
-    ("TorchofObsession", "Torch of Obsession", 26.0, 1.0, 0.0, 16, 19.0, (), 0.0),
-    ("Dropkick", "Dropkick", 25.0, 0.0, 0.0, 16, 0.0, (), 0.0),
-    ("TBH", "TBH", 22.0, 0.0, 27.0, 16, 0.0, (), 0.0),
-    ("RedBull", "Redbull", 40.0, 0.0, 0.0, 16, 14.0, (), 0.0),
-)
-
-
-class TestWeaponTable(unittest.TestCase):
-    def test_every_row_matches_the_table_field_by_field(self):
-        self.assertEqual(len(ItemUse.TABLE), len(EXPECTED_ROWS))
-        for row, want in zip(ItemUse.TABLE, EXPECTED_ROWS):
-            with self.subTest(row=want[0]):
-                self.assertEqual((row.log_name, row.display_name, row.cooldown_sec, row.cooldown_per_player,
-                                  row.cooldown_full_sec, row.cooldown_players_cap, row.effect_sec,
-                                  tuple(row.aliases), row.auto_click_sec), want)
-                self.assertEqual(row.kind, ItemUse.KIND_CLICK_CD)
-
-    def test_tbh_and_redbull_are_in_the_table_but_not_auto_click_targets(self):
-        for name in ("TBH", "RedBull"):
-            row = ItemUse.item(name)
-            self.assertIsNotNone(row, name)
-            self.assertEqual(row.auto_click_sec, 0.0, name)
-
-    def test_only_the_charm_is_an_auto_click_target(self):
-        targets = [row.log_name for row in ItemUse.TABLE if row.auto_click_sec > 0]
-        self.assertEqual(targets, ["BloodKatCharm"])
-        self.assertEqual(ItemUse.item("BloodKatCharm").auto_click_sec, 2.0)
-
-    def test_the_items_left_out_are_absent(self):
-        for name in ("SealedSword", "Sealed Sword", "DivineAvenger", "Divine Avenger", "Jailbird"):
-            self.assertIsNone(ItemUse.item(name), name)
-
-    def test_normalized_names_and_aliases_are_unique(self):
-        seen = {}
-        for row in ItemUse.TABLE:
-            for name in (row.log_name, *row.aliases):
-                key = ItemUse._norm(name)
-                self.assertNotIn(key, seen, f"{name} は {seen.get(key)} と重なる")
-                seen[key] = row.log_name
-
-    def test_log_names_have_no_spaces_and_new_fields_have_their_defaults(self):
-        for row in ItemUse.TABLE:
-            self.assertNotIn(" ", row.log_name)
-        plain = ItemUse.UseItem(ItemUse.KIND_CLICK_CD, "X", "X", 5.0)
-        self.assertEqual((plain.cooldown_full_sec, plain.cooldown_players_cap, plain.auto_click_sec, plain.aliases),
-                         (0.0, 16, 0.0, ()))
-        self.assertEqual(ItemUse.FULL_INSTANCE_PLAYERS, 16)
-
-
-class TestLogNameMatch(unittest.TestCase):
-    def setUp(self):
-        ItemUse.reset_for_tests()
-        self.addCleanup(ItemUse.reset_for_tests)
-        self.t = [0.0]
-        self.tr = _tracker(self.t)
-
-    def test_spaces_and_case_are_ignored(self):
-        row = ItemUse.item("MetalBat")
-        for name in ("Metal Bat", "metalbat", "METAL BAT", "mEtAlBaT"):
-            self.assertIs(ItemUse.item(name), row, name)
-
-    def test_aliases_match(self):
-        self.assertEqual(ItemUse.item("BloodyBat").log_name, "BloodstainedBat")
-        self.assertEqual(ItemUse.item("Bloody Bat").log_name, "BloodstainedBat")
-        self.assertEqual(ItemUse.item("ColorBat").log_name, "ColorableBat")
-        self.assertEqual(ItemUse.item("RustyPistol").log_name, "AntiqueRevolver")
-        self.assertEqual(ItemUse.item("BloodyPistol").log_name, "BloodyRevolver")
-        self.assertEqual(ItemUse.item("RubberHammer").log_name, "RubberMallet")
-
-    def test_the_charm_and_taser_match_by_their_real_names(self):
-        self.assertEqual(ItemUse.item("BloodKatCharm").display_name, "Bloody Kat Charm")
-        self.assertEqual(ItemUse.item("Taser").display_name, "Taser")
-        self.assertIsNone(ItemUse.item(""))
-        self.assertIsNone(ItemUse.item("Nothing"))
-
-    def test_a_pickup_by_an_alias_holds_the_row_and_the_debug_line_shows_the_log_name(self):
-        self.tr.pickup("BloodyBat")
-        self.assertEqual(self.tr.status()[0], "BloodstainedBat")
-        self.assertEqual(self.tr.held_row().display_name, "Bloody Bat")
-        self.assertEqual(self.tr.take_debug_lines(), ["持った: BloodstainedBat（ログの名前 BloodyBat）"])
-
-    def test_a_pickup_by_the_table_name_has_no_note(self):
-        self.tr.pickup("BloodstainedBat")
-        self.assertEqual(self.tr.take_debug_lines(), ["持った: BloodstainedBat"])
-
-    def test_the_same_item_by_another_name_is_not_picked_up_twice(self):
-        self.tr.pickup("BloodstainedBat")
-        self.tr.take_debug_lines()
-        self.tr.pickup("BloodyBat")
-        self.tr.pickup("Bloody Bat")
-        self.assertEqual(self.tr.take_debug_lines(), [])
-
-    def test_a_drop_by_an_alias_releases_it(self):
-        self.tr.pickup("BloodstainedBat")
-        self.tr.drop("BloodyBat")
-        self.assertIsNone(self.tr.status())
-        self.assertIsNone(self.tr.held_row())
-        self.assertEqual(self.tr.take_debug_lines(), ["持った: BloodstainedBat", "離した: BloodstainedBat"])
-
-    def test_a_drop_of_something_else_does_not_release_the_held_row(self):
-        self.tr.pickup("MetalBat")
-        self.tr.drop("MetalPipe")
-        self.tr.drop("Unknown")
-        self.assertEqual(self.tr.held_row().log_name, "MetalBat")
-
-    def test_held_row(self):
-        self.assertIsNone(self.tr.held_row())
-        self.tr.pickup(CHARM)
-        self.assertEqual(self.tr.held_row().auto_click_sec, 2.0)
-
-    def test_a_weapon_is_used_and_its_ct_counted(self):
-        self.tr.pickup("Taser")
-        self.assertEqual(self.tr.use(ItemUse.SOURCE_HAND), "used")
-        self.assertEqual(self.tr.status(0.0), ("Taser", "Taser", 0.0, 28.0))
-
-
-class TestCooldownFormulas(unittest.TestCase):
-    def _ct(self, name, players):
-        return ItemUse.cooldown_for(ItemUse.item(name), players)
-
-    def test_the_linear_per_player_weapons(self):
-        self.assertEqual(self._ct("Taser", 4), 31.0)
-        self.assertEqual(self._ct("Taser", 1), 28.0)
-        self.assertEqual(self._ct("MetalBat", 16), 30.0)
-        self.assertEqual(self._ct("DestroyerCoil", 1), 20.0)
-        self.assertEqual(self._ct("DestroyerCoil", 5), 22.0)
-
-    def test_gran_faust_interpolates_to_the_full_instance_value(self):
-        self.assertEqual(self._ct("GranFaust", 1), 12.5)
-        self.assertAlmostEqual(self._ct("GranFaust", 6), 14.0)
-        self.assertEqual(self._ct("GranFaust", 16), 17.0)
-        self.assertEqual(self._ct("GranFaust", 20), 17.0)
-
-    def test_illumina_is_capped_at_ten_players(self):
-        self.assertEqual(self._ct("Illumina", 9), 16.0)
-        self.assertEqual(self._ct("Illumina", 10), 17.0)
-        self.assertEqual(self._ct("Illumina", 16), 17.0)
-        self.assertEqual(self._ct("Illumina", 40), 17.0)
-
-    def test_corkscrew_tbh_and_bloody_revolver_interpolate(self):
-        self.assertEqual(self._ct("CorkscrewCoil", 1), 30.0)
-        self.assertAlmostEqual(self._ct("CorkscrewCoil", 6), 30.0 + 5 * 5 / 15)
-        self.assertEqual(self._ct("CorkscrewCoil", 16), 35.0)
-        self.assertEqual(self._ct("TBH", 1), 22.0)
-        self.assertAlmostEqual(self._ct("TBH", 9), 22.0 + 5 * 8 / 15)
-        self.assertEqual(self._ct("TBH", 16), 27.0)
-        self.assertEqual(self._ct("BloodyRevolver", 1), 3.5)
-        self.assertAlmostEqual(self._ct("BloodyRevolver", 6), 3.5 + 3.5 * 5 / 15)
-        self.assertEqual(self._ct("BloodyRevolver", 16), 7.0)
-        self.assertEqual(self._ct("BloodyRevolver", 20), 7.0)
-
-    def test_dropkick_and_redbull_do_not_change_with_the_count(self):
-        for players in (None, 1, 2, 16, 30):
-            self.assertEqual(self._ct("Dropkick", players), 25.0)
-            self.assertEqual(self._ct("RedBull", players), 40.0)
-
-    def test_an_unknown_count_is_one_player_and_zero_or_less_too(self):
-        self.assertEqual(self._ct("Taser", None), 28.0)
-        self.assertEqual(self._ct("GranFaust", None), 12.5)
-        self.assertEqual(self._ct("Taser", 0), 28.0)
-        self.assertEqual(self._ct("Taser", -3), 28.0)
-
-    def test_the_default_cap_is_sixteen(self):
-        row = ItemUse.UseItem(ItemUse.KIND_CLICK_CD, "Capless", "Capless", 10.0, 1.0)
-        self.assertEqual(ItemUse.cooldown_for(row, 16), 25.0)
-        self.assertEqual(ItemUse.cooldown_for(row, 40), 25.0)
-
-    def _tracker_ct(self, name, players):
-        tr = _tracker([0.0], players=players)
-        tr.pickup(name)
-        with patch.object(DebugLog, "exception"):
-            tr.use(ItemUse.SOURCE_HAND)
-        return tr.status(0.0)[3]
-
-    def test_the_tracker_uses_the_formula_with_the_count(self):
-        self.assertEqual(self._tracker_ct("Taser", lambda: 4), 31.0)
-        self.assertEqual(self._tracker_ct("GranFaust", lambda: 16), 17.0)
-        self.assertEqual(self._tracker_ct("Illumina", lambda: 12), 17.0)
-
-    def test_an_error_while_reading_the_count_falls_back_to_the_base(self):
-        def boom():
-            raise RuntimeError("x")
-        self.assertEqual(self._tracker_ct("Taser", boom), 28.0)
-        self.assertEqual(self._tracker_ct("GranFaust", boom), 12.5)
-
-    def test_items_that_do_not_scale_do_not_ask_for_the_count(self):
-        asked = []
-        for name in ("Dropkick", "RedBull", CHARM):
-            self._tracker_ct(name, lambda: asked.append(1) or 9)
-        self.assertEqual(asked, [])
-        self._tracker_ct("BloodyRevolver", lambda: asked.append(1) or 9)     # 満員の CT があれば人数を見る
-        self.assertEqual(asked, [1])
-
-
-class TestUnknownPickup(unittest.TestCase):
-    def setUp(self):
-        ItemUse.reset_for_tests()
-        self.addCleanup(ItemUse.reset_for_tests)
-        self.tr = _tracker([0.0])
-
-    def test_written_once_per_name(self):
-        self.tr.pickup("Mystery")
-        self.tr.pickup("Mystery")
-        self.tr.pickup("Other")
-        self.tr.pickup("Mystery")
-        self.assertEqual(self.tr.take_debug_lines(), ["表にないアイテム: Mystery", "表にないアイテム: Other"])
-
-    def test_shared_across_windows(self):
-        other = _tracker([0.0])
-        self.tr.pickup("Mystery")
-        other.pickup("Mystery")
-        self.assertEqual(self.tr.take_debug_lines(), ["表にないアイテム: Mystery"])
-        self.assertEqual(other.take_debug_lines(), [])
-
-    def test_a_long_name_is_truncated(self):
-        self.tr.pickup("N" * 200)
-        self.assertEqual(self.tr.take_debug_lines(), ["表にないアイテム: " + "N" * 64])
-        self.tr.pickup("N" * 64 + "different tail")       # 切った先頭が同じなら同じ名前として数える
-        self.assertEqual(self.tr.take_debug_lines(), [])
-
-    def test_at_most_two_hundred_names_are_remembered(self):
-        for i in range(250):
-            self.tr.pickup(f"Thing{i}")
-        lines = self.tr.take_debug_lines()
-        self.assertEqual(len(lines), 100, "tracker の溜める行の上限は 100（古い順に捨てる）")
-        self.assertEqual(len(ItemUse._unknown_names), 200)
-        self.tr.pickup("Thing300")                          # 上限のあとの新しい名前は書かない
-        self.assertEqual(self.tr.take_debug_lines(), [])
-        self.assertEqual(len(ItemUse._unknown_names), 200)
-
-    def test_reset_for_tests_forgets_the_names(self):
-        self.tr.pickup("Mystery")
-        self.tr.take_debug_lines()
-        ItemUse.reset_for_tests()
-        self.tr.pickup("Mystery")
-        self.assertEqual(self.tr.take_debug_lines(), ["表にないアイテム: Mystery"])
-
-    def test_a_name_with_a_user_id_is_never_written(self):
-        self.tr.pickup("Thing usr_00000000-0000-0000-0000-000000000001")
-        self.assertEqual(self.tr.take_debug_lines(), [])
-        self.assertEqual(ItemUse._unknown_names, set())
-
-    def test_a_known_item_is_not_noted_as_unknown(self):
-        self.tr.pickup("Taser")
-        self.assertEqual(self.tr.take_debug_lines(), ["持った: Taser"])
-
-
-class TestStatusLine(unittest.TestCase):
-    def test_effect_zero_shows_only_the_ct_or_ready(self):
-        self.assertEqual(ItemUse.status_line(("Taser", "Taser", 0.0, 12.34)), "Taser  CT 12.4秒")
-        self.assertEqual(ItemUse.status_line(("Taser", "Taser", 0.0, 0.0)), "Taser  使用可")
-
-    def test_effect_and_ct(self):
-        self.assertEqual(ItemUse.status_line((CHARM, "Bloody Kat Charm", 1.2, 0.3)),
-                         "Bloody Kat Charm  効果 1.2秒・CT 0.3秒")
-        self.assertEqual(ItemUse.status_line((CHARM, "Bloody Kat Charm", 0.8, 0.0)),
-                         "Bloody Kat Charm  効果 0.8秒・使用可")
-
-    def test_nothing_held_is_empty(self):
-        self.assertEqual(ItemUse.status_line(None), "")
-
-    def test_status_text_is_the_window_number_plus_the_line_and_unchanged_from_stage_one(self):
-        for status in ((CHARM, "Bloody Kat Charm", 1.2, 0.3), (CHARM, "Bloody Kat Charm", 0.0, 0.0),
-                       (CHARM, "Bloody Kat Charm", 0.04, 0.0), ("n", "Name", 0.0, 1.6000000000000001),
-                       ("n", "Name", 1e-7, 1e-7)):
-            for idx in (1, 3):
-                self.assertEqual(ItemUse.status_text(idx, status), f"窓{idx} " + ItemUse.status_line(status))
-        self.assertEqual(ItemUse.status_text(2, (CHARM, "Bloody Kat Charm", 1.2, 0.3)),
-                         "窓2 Bloody Kat Charm  効果 1.2秒・CT 0.3秒")
-        self.assertEqual(ItemUse.status_text(1, ("n", "Name", 0.04, 0.0)), "窓1 Name  効果 0.1秒・使用可")
-        self.assertEqual(ItemUse.status_text(1, None), "")
-
-    def test_the_line_has_no_window_number(self):
-        self.assertNotIn("窓", ItemUse.status_line((CHARM, "Bloody Kat Charm", 1.2, 0.3)))
 
 
 # ── C 登録表 ───────────────────────────────────
@@ -1047,15 +747,13 @@ class TestLogMonitorItemUse(unittest.TestCase):
         self.monitor._process(RESPAWN)
         self.assertTrue(self._held())
 
-    def test_an_item_not_in_the_table_is_not_held_and_is_written_once_to_the_debug_log(self):
+    def test_an_item_not_in_the_table_is_not_held_and_writes_nothing(self):
         other = PICK.replace("BloodKatCharm", "SomethingElse")
         with patch.object(DebugLog, "write") as written:
             self.monitor._process(other)
-            self.monitor._process(other)
             self.monitor._flush_item_use_log()
         self.assertFalse(self._held())
-        self.assertEqual([c.args[0] for c in written.call_args_list], ["[窓1] [アイテム] 表にないアイテム: SomethingElse"])
-        self.assertEqual([m for m in self.logs if "SomethingElse" in m], [], "画面のログには出さない")
+        self.assertFalse(any("SomethingElse" in c.args[0] for c in written.call_args_list))
 
     def test_pickup_and_drop_are_not_written_as_events(self):
         with patch.object(DebugLog, "write") as written:

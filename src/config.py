@@ -112,15 +112,6 @@ GUI_ORG = "#fab387"
 GUI_LOG_MAX_LINES = 1000
 GUI_OVERLAY_LOG_MAX_LINES = 20
 GUI_OVERLAY_ITEM_REFRESH_MS = 100      # オーバーレイ上部の手持ちアイテムの表示の更新（CT・効果の残り秒）
-# 窓ごとの手持ちアイテムの表示（各 VRChat 窓の上に重ねる。クリックを通す）。位置は全窓共通の 隅＋ずらし（px。正で内側）
-ITEM_OVERLAY_ALPHA = 0.75
-ITEM_OVERLAY_CORNERS = ("top_left", "top_right", "bottom_left", "bottom_right")
-ITEM_OVERLAY_CORNER_DEFAULT = "bottom_left"
-ITEM_OVERLAY_OFFSET_DEFAULT = (10, 10)
-ITEM_OVERLAY_OFFSET_MAX = 4000
-# アイテムの自動クリック（OSC の /input/UseRight）。押している秒数・使えるアイテムを持っていない間の見直しの間隔
-ITEM_AUTO_CLICK_PULSE_SEC = 0.1
-ITEM_AUTO_CLICK_IDLE_SEC = 1.0
 
 
 def resource_path(filename: str) -> Path:
