@@ -1905,11 +1905,21 @@ class LogMonitor:
 
     def _on_user_auth(self, event):
         """ログイン（自分の名前と usr_ID）。締め出しなら何も出さずに終わる（確認できないだけなら、
-        動いている窓は止めない）"""
-        AccessCheck.enforce(event.user_id)
+        動いている窓は止めない）。
+
+        UID が前と違うとき（同じ VRChat のままアカウントを替えた。前が空で今回読めたときも含む）は、
+        統計用の番号を前のアカウントのものから取り直す。サーバーの確認が通った（ALLOWED）ときだけ取りに行く
+        （確認が通らない UID で番号を取らない・UID を画面のログに出さない）。通らなければ None のまま。
+        同じ UID なら何もしない"""
+        result = AccessCheck.enforce(event.user_id)
         st = self.st
+        changed = event.user_id != st.local_user_id
         st.local_player_name = event.player_name
         st.local_user_id = event.user_id
+        if changed:
+            st.transformed_uid = None
+            if result == AccessCheck.ALLOWED:
+                self._start_transformed_uid_fetch()
 
     def _on_sus_player(self, event):
         """Sabotage の選出者"""

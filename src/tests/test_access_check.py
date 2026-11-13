@@ -891,8 +891,17 @@ class TestLoginLineWhileRunning(_MonitorCase):
         self.assertEqual(monitor.st.local_user_id, UID)
         self.assertEqual(monitor.logs, [], "動いている窓には何も出さない")
 
-    def test_the_login_line_while_running_does_not_start_the_statistics_fetch(self):
+    def test_a_new_uid_in_the_login_line_while_running_starts_the_statistics_fetch(self):
+        """動作中のログインで UID が前と違えば（前が空も含む）、確認が通ったあとに番号を取りに行く
+        （取り直しの細かい場合分けは test_user_switch_uid）"""
         monitor = self._real_monitor()
+        with patch.object(monitor, "_start_daemon") as daemon:
+            monitor._process(PREFIX + self.LOGIN.format(UID))
+        daemon.assert_called_once_with(monitor._fetch_transformed_uid, UID, "tester")
+
+    def test_the_same_uid_in_the_login_line_while_running_does_not_fetch_again(self):
+        monitor = self._real_monitor()
+        monitor.st.local_user_id = UID
         with patch.object(monitor, "_start_daemon") as daemon:
             monitor._process(PREFIX + self.LOGIN.format(UID))
         daemon.assert_not_called()
