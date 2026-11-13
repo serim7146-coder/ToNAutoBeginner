@@ -501,10 +501,19 @@ class LogMonitor:
         ツールが Begin を押す窓なら押し直す（戻さないと誰も押さずに止まる）
         """
         st = self.st
-        if not st.pending_verified_time or not st.log_now:
+        if not st.pending_verified_time:
             return
-        if (st.log_now - st.pending_verified_time) <= config.VERIFIED_ROUND_START_WAIT_SEC:
+        wait = config.VERIFIED_ROUND_START_WAIT_SEC
+        log_over = bool(st.log_now) and st.log_now - st.pending_verified_time > wait
+        # ログの時刻は、その窓のログに次の行が来ないと進まない（定期を受理と取り違えた窓は、次の行が来る
+        # まで最長 300 秒 Begin を押し直さなかった）。受理した時点の壁時計（begin_accepted_at。pending を
+        # 立てるのと同じ所で立つ）でも測る。ここに来る前に、その回に読めた行は処理済み（_run の順）なので、
+        # 読み取りが遅れているだけで定期と決めることはない
+        wall_over = bool(st.begin_accepted_at) and time.time() - st.begin_accepted_at > wait
+        if not (log_over or wall_over):
             return
+        if not log_over:
+            self._debug(f"[状態] ログの時刻は進んでいませんが、受理から {wait:.0f} 秒たちました（壁時計）")
         self._verified.on_begin_not_followed(st.pending_verified_time)   # 保険
         st.pending_verified_time = 0.0
         self._log("直前の Verified は定期シグナルでした（ラウンド開始が来ない）")

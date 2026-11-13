@@ -4554,13 +4554,15 @@ class TestLogMonitorBeginDone(unittest.TestCase):
         monitor = self._monitor()
         self._at(monitor, base)
 
-        # 待ち時間ちょうどではまだ待つ
-        monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC
-        monitor._check_pending_verified()
-        self.assertIsNone(monitor._verified.last_periodic)
+        # 待ち時間ちょうどではまだ待つ。ログの時刻の道だけを見るので、壁時計は受理したときのまま止めておく
+        # （壁時計でも測るようになった。_at が使った時計と同じ値）
+        with patch.object(LogMonitor.time, "time", return_value=base + 12345.0):
+            monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC
+            monitor._check_pending_verified()
+            self.assertIsNone(monitor._verified.last_periodic)
 
-        monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC + 1
-        monitor._check_pending_verified()
+            monitor.st.log_now = base + config.VERIFIED_ROUND_START_WAIT_SEC + 1
+            monitor._check_pending_verified()
 
         self.assertEqual(monitor._verified.last_periodic, base, "Verified の時刻で位相を取る")
         self.assertEqual(monitor.st.pending_verified_time, 0.0)
