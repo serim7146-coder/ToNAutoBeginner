@@ -655,6 +655,133 @@ class TestNotifyReady(unittest.TestCase):
         self.assertEqual(len(self.logs), 1)
 
 
+class TestQueuedNotice(_Env):
+    """待機列に入れた行（POST）を読んだとき、ツールのログに 1 行出す。声・スマホへの送信はしない"""
+
+    QUEUED = "[スマホ通知] 待機列に入りました"
+    READY = "[スマホ通知] 待機列に入れるようになりました"
+
+    def setUp(self):
+        super().setUp()
+        self.queued_calls = []
+        self.watcher = QueueWatch.Watcher(
+            self.dir, lambda: QueueWatch.notify_ready(self.logs.append), clock=self.clock, wall=self.wall,
+            on_queued=lambda: (self.queued_calls.append(1), QueueWatch.notify_queued(self.logs.append)))
+
+    def test_a_new_post_logs_once_and_sends_nothing(self):
+        self.write(LOG_A, post("19:50:20", 39837))
+        self.poll()
+        self.assertEqual(self.logs, [self.QUEUED])
+        self.assertEqual(self.sent, [], "スマホへは送らない")
+        self.assertEqual(self.played, [], "声は鳴らさない")
+        self.poll()
+        self.pass_time(10)
+        self.poll()
+        self.assertEqual(self.logs, [self.QUEUED], "読み直さない・使い回さない")
+
+    def test_a_post_sixty_seconds_old_or_older_is_silent_and_fifty_nine_is_not(self):
+        self.write(LOG_A, post("19:49:34", 39837))          # wall 19:50:34 の 60 秒前
+        self.poll()
+        self.assertEqual(self.queued_calls, [])
+        self.write(LOG_A, post("19:49:35", 39838))          # 59 秒前
+        self.poll()
+        self.assertEqual(self.queued_calls, [1])
+
+    def test_an_old_post_in_the_first_read_is_silent_but_still_remembered(self):
+        self.write(LOG_A, post("19:40:00", 39837), get("19:50:32", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(self.queued_calls, [])
+        self.assertEqual(self.logs, [self.READY], "合図の動きは今までどおり")
+
+    def test_get_delete_and_joining_do_not_call_it(self):
+        self.write(LOG_A, get("19:50:30", 39837), delete("19:50:31", 39837), joining("19:50:32", 39837),
+                   other("19:50:33"))
+        self.poll()
+        self.settle()
+        self.assertEqual(self.queued_calls, [])
+        self.assertEqual(self.logs, [])
+
+    def test_the_ready_signal_still_works_after_the_notice(self):
+        self.write(LOG_A, post("19:50:00", 39837), get("19:50:32", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(self.logs, [self.QUEUED, self.READY])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.played), 1)
+
+    def test_no_instance_id_reaches_the_log(self):
+        self.write(LOG_A, post("19:50:20", 39837))
+        self.poll()
+        for text in self.logs:
+            for word in ("wrld_", "grp_", "39837"):
+                self.assertNotIn(word, text)
+
+    def test_a_watcher_without_on_queued_works_as_before(self):
+        watcher = QueueWatch.Watcher(self.dir, lambda: QueueWatch.notify_ready(self.logs.append),
+                                     clock=self.clock, wall=self.wall)
+        self.write(LOG_A, post("19:50:00", 39837), get("19:50:32", 39837))
+        watcher.poll()
+        self.pass_time(3)
+        watcher.poll()
+        self.assertEqual(self.logs, [self.READY])
+
+    def test_a_failing_callback_does_not_stop_the_reading(self):
+        def boom():
+            raise RuntimeError("boom")
+
+        self.watcher = QueueWatch.Watcher(self.dir, lambda: QueueWatch.notify_ready(self.logs.append),
+                                          clock=self.clock, wall=self.wall, on_queued=boom)
+        self.write(LOG_A, post("19:50:00", 39837), get("19:50:32", 39837))
+        with patch.object(DebugLog, "exception") as recorded:
+            self.poll()
+            self.settle()
+        self.assertTrue(recorded.called)
+        self.assertEqual(self.logs, [self.READY], "合図は出る")
+
+    def test_candidates_calls_on_queued_with_the_log_time_only(self):
+        calls = []
+        cands = QueueWatch.Candidates(lambda _at: None, on_queued=calls.append)
+        cands.feed(at("19:50:20"), post("19:50:20", 39837))
+        cands.feed(at("19:50:21"), get("19:50:21", 39837))
+        cands.feed(None, post("19:50:22", 39838))           # 時刻が読めない行は呼ばない
+        self.assertEqual(calls, [at("19:50:20")])
+
+    def test_candidates_swallows_an_error_from_on_queued(self):
+        def boom(_at):
+            raise RuntimeError("boom")
+
+        cands = QueueWatch.Candidates(lambda _at: None, on_queued=boom)
+        with patch.object(DebugLog, "exception") as recorded:
+            cands.feed(at("19:50:20"), post("19:50:20", 39837))
+        self.assertTrue(recorded.called)
+
+    def test_notify_queued_only_logs_one_line(self):
+        QueueWatch.notify_queued(self.logs.append)
+        self.assertEqual(self.logs, [self.QUEUED])
+        self.assertEqual((self.sent, self.played), ([], []))
+
+
+class TestSyncQueueWatcherWiring(unittest.TestCase):
+    """mainGUI の _sync_queue_watcher は、on_queued にツールのログへ 1 行出す関数をつなぐ（見張りは本物を始めない）"""
+
+    def test_the_watcher_gets_both_callbacks(self):
+        logs = []
+        app = type("FakeApp", (), {})()
+        app._log = logs.append
+        self.addCleanup(SharedState.set_phone_notify, False)
+        SharedState.set_phone_notify(True)
+        with patch.object(QueueWatch, "Watcher") as watcher_class,              patch.object(QueueWatch, "notify_ready") as ready:
+            mainGUI.App._sync_queue_watcher(app)
+            args, kwargs = watcher_class.call_args
+            self.assertEqual(args[0], config.VRCHAT_LOG_DIR)
+            args[1]()
+            ready.assert_called_once_with(logs.append)
+            kwargs["on_queued"]()
+        self.assertEqual(logs, ["[スマホ通知] 待機列に入りました"])
+        watcher_class.return_value.start.assert_called_once()
+
+
 class TestNoIdsInLogs(_Env):
     def test_no_topic_instance_world_or_group_id_reaches_any_log(self):
         self.write(LOG_A, post("19:45:00", 6515), delete("19:47:50", 6515), post("19:47:50", 39837),

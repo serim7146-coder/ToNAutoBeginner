@@ -22,6 +22,8 @@
 ログは最初に見つけたとき先頭から読む（ツールを開く前・通知を入れる前の POST も数える。そのとき読んだ合図は
 記録も一緒に使い切るので、あとで出直さない）。Get のログの時刻が QUEUE_READY_NOTICE_SEC 秒以上前の合図は、
 VRChat の通知が消えているので、黙って使い切る（ログにも出さず、送らない）。
+待機列に入れた行（POST）を読んだときも、その行のログの時刻が QUEUE_READY_NOTICE_SEC 秒未満なら、ツールのログに
+1 行出す（on_queued。声・スマホへの送信はしない）。先頭から読み直しているときの古い POST では出さない。
 
 後ろの 3 秒は、次の行が来るのを待たない（行の間が 55 秒開いた窓があり、VRChat の通知は 60 秒しか出ない）。
 候補は「候補より 3 秒以上後の時刻の行を読んだ」か「読んでから実時間で 3 秒たった」（tick。Watcher が読むたびに
@@ -123,11 +125,13 @@ class Candidates:
     """1 本のログぶん。読み取りのスレッド 1 本からだけ使う（feed と tick は同じスレッド）。
 
     on_ready(get_at) は合図が出たとき 1 回呼ぶ（get_at は Get のログの時刻 epoch 秒。インスタンスの印は渡さない）。
-    clock は実時間（テストが差し替える）"""
+    on_queued(post_at) は、待機列に入れた行（POST）を読むたびに呼ぶ（post_at は POST のログの時刻 epoch 秒。
+    印は渡さない。無ければ呼ばない）。clock は実時間（テストが差し替える）"""
 
-    def __init__(self, on_ready, clock=time.monotonic):
+    def __init__(self, on_ready, clock=time.monotonic, on_queued=None):
         self._on_ready = on_ready
         self._clock = clock
+        self._on_queued = on_queued
         self._recent: list = []         # このログで最近読んだ Get (ログの時刻, 印)。前後の判定用
         self._pending: list = []        # 閉じるのを待っている候補
 
@@ -154,6 +158,11 @@ class Candidates:
             elif verb == "Post" and queue:
                 if at is not None:
                     note_post(key, at)
+                    if self._on_queued is not None:
+                        try:
+                            self._on_queued(at)
+                        except Exception:
+                            DebugLog.exception("QueueWatch.Candidates.on_queued")
             elif verb == "Delete" and queue:
                 note_delete(key)
             return
@@ -216,11 +225,14 @@ class Watcher:
 
     読むだけ（マクロの操作・入力・OSC はしない）。poll() が 1 回ぶんで、テストはこれを直接回す。
     start() で裏のスレッド（daemon）が poll() を QUEUE_WATCH_INTERVAL_SEC ごとに回す。
-    on_signal は裏のスレッドから呼ばれる（Tk の変数には触らないこと）"""
+    on_signal は裏のスレッドから呼ばれる（Tk の変数には触らないこと）。
+    on_queued は、待機列に入れた行を読んだとき（そのログの時刻が QUEUE_READY_NOTICE_SEC 秒未満のものだけ）に
+    裏のスレッドから 1 回呼ぶ（無ければ呼ばない。インスタンスの印は渡さない）"""
 
-    def __init__(self, log_dir, on_signal, clock=time.monotonic, wall=time.time):
+    def __init__(self, log_dir, on_signal, clock=time.monotonic, wall=time.time, on_queued=None):
         self._log_dir = Path(log_dir)
         self._on_signal = on_signal
+        self._on_queued = on_queued
         self._clock = clock
         self._wall = wall
         self._logs: dict = {}           # パス → _Followed（見つけた順）
@@ -271,7 +283,7 @@ class Watcher:
             if wall - mtime > config.LOG_LIVE_GRACE_SEC:
                 continue
             self._order += 1
-            self._logs[path] = _Followed(path, self._order, Candidates(self._ready, self._clock), now)
+            self._logs[path] = _Followed(path, self._order, Candidates(self._ready, self._clock, on_queued=self._queued), now)
 
     def _read_new(self, log, now) -> list:
         """増えた分だけ読む。(ログの時刻, 行) の一覧（待機列に関係する行だけ）。
@@ -312,6 +324,17 @@ class Watcher:
         except Exception:
             DebugLog.exception("QueueWatch.Watcher")
 
+    def _queued(self, post_at: float):
+        """待機列に入れた行を読んだ。POST が古い（ログを先頭から読み直しているだけの）ものは黙る"""
+        if self._wall() - post_at >= config.QUEUE_READY_NOTICE_SEC:
+            return
+        if self._on_queued is None:
+            return
+        try:
+            self._on_queued()
+        except Exception:
+            DebugLog.exception("QueueWatch.Watcher")
+
     # ── 裏のスレッド ───────────────────────
     def start(self):
         if self._thread is not None and self._thread.is_alive():
@@ -337,6 +360,12 @@ class Watcher:
                 DebugLog.exception("QueueWatch.Watcher")
             if self._stop.wait(config.QUEUE_WATCH_INTERVAL_SEC):
                 break
+
+
+def notify_queued(logger):
+    """待機列に入った（Watcher の裏のスレッドから）。ツールのログに 1 行書くだけ（声・スマホへの送信はしない）。
+    インスタンスの印はログに出さない"""
+    logger("[スマホ通知] 待機列に入りました")
 
 
 def notify_ready(logger):
