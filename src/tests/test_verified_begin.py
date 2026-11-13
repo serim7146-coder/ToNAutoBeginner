@@ -3218,6 +3218,183 @@ class TestBeginByCursor(unittest.TestCase):
                          "2回目と3回目（前面化＋クリック）を押して諦める")
 
 
+class TestUseSpamIsAlwaysStopped(unittest.TestCase):
+    """do_after_round は連打を始めたあと、どの抜け方（return・例外）でも停止の合図（Event）を立てる。
+    連打のスレッドは本物を作らず、Event だけ渡す。本物の OSC・入力・窓は使わない"""
+
+    def _make(self):
+        cfg = WindowConfig(hwnd=0x100, osc_port=9000)
+        st = WindowState(instance_type=config.INSTANCE_PRIVATE, item_id=5, round_seq=1)
+        return ActionExecutor.ActionExecutor(cfg, st, lambda: True, lambda _m: None)
+
+    def _run(self, **override):
+        """do_after_round を回す。override: 差し替える関数の戻り値（例外なら投げる）。キーは関数名。
+        戻り値は (停止の合図, 例外 or None)。self.order に (関数名, そのとき合図が立っていたか)"""
+        ex = self._make()
+        spam = threading.Event()
+        self.order = []
+        values = dict(_wait_run_respawn=True, _item_begin_manual=False, _pos_ref_plan=None,
+                      _begin_precheck=True, _begin_move=None, _start_use_spam=spam,
+                      _wait_round_end=True, _handle_item_lost=True, _wait_other_windows=True,
+                      _press_begin=False, _confirm_begin=None, _gave_up_begin=False,
+                      _retry_after_giving_up=None, _hands_free=True, item_fetch_target=(1, 2),
+                      _fetch_item=None)
+        values.update(override)
+
+        def fake(name, value):
+            def call(*_a, **_k):
+                self.order.append((name, spam.is_set()))
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+            return call
+
+        error = None
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(config, "BEGIN_WAIT_SEC", 0))
+            stack.enter_context(patch.object(ActionExecutor.time, "sleep"))
+            for name, value in values.items():
+                stack.enter_context(patch.object(ex, name, side_effect=fake(name, value)))
+            try:
+                ex.do_after_round()
+            except Exception as e:      # noqa: BLE001 - 例外のまま抜ける回を見る
+                error = e
+        return spam, error
+
+    def _fetched(self):
+        return any(n == "_fetch_item" for n, _ in self.order)
+
+    def test_a_round_end_wait_that_fails_stops_the_spam(self):
+        spam, error = self._run(_wait_round_end=False)
+        self.assertTrue(spam.is_set())
+        self.assertIsNone(error)
+        self.assertFalse(self._fetched(), "return で抜ける回は後ろへ進まない")
+
+    def test_a_loss_that_is_not_handled_stops_the_spam(self):
+        spam, error = self._run(_handle_item_lost=False)
+        self.assertTrue(spam.is_set())
+        self.assertIsNone(error)
+        self.assertFalse(self._fetched())
+
+    def test_a_manual_loss_stops_the_spam(self):
+        spam, error = self._run(_handle_item_lost="manual")
+        self.assertTrue(spam.is_set())
+        self.assertFalse(self._fetched())
+
+    def test_other_windows_that_never_release_stop_the_spam(self):
+        spam, error = self._run(_wait_other_windows=False)
+        self.assertTrue(spam.is_set())
+        self.assertFalse(self._fetched())
+
+    def test_a_failed_precheck_just_before_the_press_stops_the_spam(self):
+        """最初の _begin_precheck（連打の前）は通り、押す直前の 2 回目で False"""
+        answers = iter([True, False])
+        ex = self._make()
+        spam = threading.Event()
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ex, "_wait_run_respawn", return_value=True), \
+             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_pos_ref_plan", return_value=None), \
+             patch.object(ex, "_begin_precheck", side_effect=lambda **_k: next(answers)), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=spam), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_press_begin") as press:
+            ex.do_after_round()
+        self.assertTrue(spam.is_set())
+        press.assert_not_called()
+
+    def test_an_exception_stops_the_spam_and_still_propagates(self):
+        spam, error = self._run(_wait_round_end=RuntimeError("boom"))
+        self.assertTrue(spam.is_set())
+        self.assertIsInstance(error, RuntimeError)
+        self.assertFalse(self._fetched())
+
+    def test_an_exception_while_pressing_stops_the_spam(self):
+        spam, error = self._run(_press_begin=RuntimeError("boom"))
+        self.assertTrue(spam.is_set())
+        self.assertIsInstance(error, RuntimeError)
+
+    def test_the_normal_path_stops_the_spam_before_the_rest_runs(self):
+        """押せた通常の回: 連打は止まってから、そのあとの完全放置モードの取得が動く"""
+        ex = self._make()
+        ex._st.begin_done = True
+        ex._st.item_id = 0
+        spam = threading.Event()
+        seen = []
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ex, "_wait_run_respawn", return_value=True), \
+             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_pos_ref_plan", return_value=None), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=spam), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_press_begin", return_value=True), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_gave_up_begin", return_value=False), \
+             patch.object(ex, "_hands_free", return_value=True), \
+             patch.object(ex, "item_fetch_target", return_value=(1, 2)), \
+             patch.object(ex, "_fetch_item", side_effect=lambda *a, **k: seen.append(spam.is_set())):
+            ex.do_after_round()
+        self.assertEqual(seen, [True], "連打を止めた後に取りに行く")
+
+    def test_the_spam_is_stopped_before_the_long_retry(self):
+        """あきらめのやり直し（何時間も続きうる）の前に連打が止まっている"""
+        seen = []
+        ex = self._make()
+        spam = threading.Event()
+        with patch.object(config, "BEGIN_WAIT_SEC", 0), \
+             patch.object(ActionExecutor.time, "sleep"), \
+             patch.object(ex, "_wait_run_respawn", return_value=True), \
+             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_pos_ref_plan", return_value=None), \
+             patch.object(ex, "_begin_precheck", return_value=True), \
+             patch.object(ex, "_begin_move"), \
+             patch.object(ex, "_start_use_spam", return_value=spam), \
+             patch.object(ex, "_wait_round_end", return_value=True), \
+             patch.object(ex, "_handle_item_lost", return_value=True), \
+             patch.object(ex, "_wait_other_windows", return_value=True), \
+             patch.object(ex, "_press_begin", return_value=True), \
+             patch.object(ex, "_confirm_begin"), \
+             patch.object(ex, "_gave_up_begin", return_value=True), \
+             patch.object(ex, "_hands_free", return_value=False), \
+             patch.object(ex, "_retry_after_giving_up",
+                          side_effect=lambda _seq: seen.append(spam.is_set())):
+            ex.do_after_round()
+        self.assertEqual(seen, [True])
+
+    def test_the_spam_loop_ends_when_the_instance_changes(self):
+        ex = self._make()
+        st = ex._st
+        st.item_id = 0
+        st.round_over_time = time.time() - 60      # 連打を始める時刻は過ぎている
+        stop = threading.Event()
+        sent = []
+
+        def press(_address, _sec):
+            sent.append(1)
+            if len(sent) == 2:
+                st.instance_seq += 1        # 連打の最中にインスタンスを移った
+            if len(sent) > 5:
+                stop.set()                  # 止まらない実装でもテストが終わるように
+            return True
+
+        with patch.object(ex, "_use_right_reaches_begin", return_value=False), \
+             patch.object(ex._osc, "press", side_effect=press), \
+             patch.object(stop, "wait"):
+            ex._spam_use_right_loop(stop, st.round_seq)
+
+        self.assertEqual(len(sent), 2, "番号が変わった次の周で終わる")
+        self.assertFalse(stop.is_set())
+
+
 
 
 class TestBeginNeverDropsTheItem(unittest.TestCase):

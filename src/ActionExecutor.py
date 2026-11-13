@@ -1450,11 +1450,13 @@ class ActionExecutor:
 
     def _spam_use_right_loop(self, stop, round_seq: int):
         st = self._st
+        instance_seq = st.instance_seq  # 連打の最中にインスタンスを移ったら終わる
         start = (st.round_over_time or time.time()) + config.BEGIN_USE_SPAM_START_SEC
         reach_at, reach = 0.0, False    # 連打で押せる状態か（前面か、カーソルがこの窓の上）
         while not stop.is_set():
             if (not self._is_running() or st.begin_done or st.in_round
-                    or st.round_seq != round_seq or not self.can_operate()):
+                    or st.round_seq != round_seq or st.instance_seq != instance_seq
+                    or not self.can_operate()):
                 return
             if time.time() < start:
                 stop.wait(0.1)
@@ -1934,43 +1936,47 @@ class ActionExecutor:
         # 移動はフリーズ中でも行うので、ここでのフリーズ確認は省く
         if not self._begin_precheck(check_freeze=False):
             return
-        if not st.in_round:
-            self._begin_move()
-            # Verified Round End が出た瞬間には、もう Begin が押せる。
-            # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
-            # 差し込むだけにする（カーソルを奪う時間を最小にする）
-            # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
-            spam = None if self._item_begin_manual() else self._start_use_spam(round_seq)
-            # ロスト判定は Verified Round End で行われるので、必ず
-            # 待ってからフリーズ処理をする。RoundOver時点で判定すると
-            # まだ立っておらずフリーズが張られない。
-            if not self._wait_round_end():
-                return
-            lost = self._handle_item_lost()
-            if lost == "manual":
-                if spam is not None:
-                    spam.set()      # ロストが Verified Round End で初めて分かった回は、連打を先に始めている。止める
-                return              # FY: Begin は利用者が押す。あきらめのやり直しも動かない
-            if not lost:
-                return
-            # ここから先はフォーカスを要するので他窓の解除を待つ
-            if not self._wait_other_windows():
-                return
-            if not self._begin_precheck():
-                return
-            time.sleep(0.1)
+        # 連打を始めたあとは、どの抜け方（return・例外）でも必ず止める。止め忘れると次のラウンドの開始などで
+        # 自分から終わるまで UseRight を送り続ける
+        try:
             if not st.in_round:
-                clicked = self._press_begin()
+                self._begin_move()
+                # Verified Round End が出た瞬間には、もう Begin が押せる。
+                # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
+                # 差し込むだけにする（カーソルを奪う時間を最小にする）
+                # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
+                spam = None if self._item_begin_manual() else self._start_use_spam(round_seq)
+                # ロスト判定は Verified Round End で行われるので、必ず
+                # 待ってからフリーズ処理をする。RoundOver時点で判定すると
+                # まだ立っておらずフリーズが張られない。
+                if not self._wait_round_end():
+                    return
+                lost = self._handle_item_lost()
+                if lost == "manual":
+                    if spam is not None:
+                        spam.set()      # ロストが Verified Round End で初めて分かった回は、連打を先に始めている。止める
+                    return              # FY: Begin は利用者が押す。あきらめのやり直しも動かない
+                if not lost:
+                    return
+                # ここから先はフォーカスを要するので他窓の解除を待つ
+                if not self._wait_other_windows():
+                    return
+                if not self._begin_precheck():
+                    return
+                time.sleep(0.1)
+                if not st.in_round:
+                    clicked = self._press_begin()
 
-        if clicked:
-            self._confirm_begin(round_seq)
-            if self._gave_up_begin(round_seq):
-                if spam is not None:
-                    spam.set()      # やり直しは何時間も続きうる。その間 UseRight を送り続けない（リスポーンのメニューにも当たる）
-                    spam = None
-                self._retry_after_giving_up(round_seq)
-        if spam is not None:
-            spam.set()      # 連打を止める（条件が変われば自分でも終わる）
+            if clicked:
+                self._confirm_begin(round_seq)
+                if self._gave_up_begin(round_seq):
+                    if spam is not None:
+                        spam.set()      # やり直しは何時間も続きうる。その間 UseRight を送り続けない（リスポーンのメニューにも当たる）
+                        spam = None
+                    self._retry_after_giving_up(round_seq)
+        finally:
+            if spam is not None:
+                spam.set()      # 連打を止める（条件が変われば自分でも終わる）
 
         # 完全放置モード: 装備待ち（フリーズ・前面化・音声）は無いが、Begin が通った後に
         # ロストしたアイテムを取りに行く（依頼者）。取れなくても何もしない（次のラウンドでまた）
