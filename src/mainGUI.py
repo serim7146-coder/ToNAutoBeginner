@@ -4325,16 +4325,26 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
+    def _log_at_bottom(self) -> bool:
+        """メイン画面のログの一番下を見ているか（遡って読んでいるときは False）"""
+        try:
+            return self.log_text.yview()[1] >= 0.9999
+        except tk.TclError:
+            return True
+
     def _append_log_lines(self, lines: list[str]):
+        at_bottom = self._log_at_bottom()       # 足す前の見え方。遡っている間は一番下へ飛ばさない
         self.log_text.config(state="normal")
         try:
             self.log_text.insert("end", "".join(lines))
             self._log_line_count += sum(max(1, l.count("\n")) for l in lines)
-            excess = self._log_line_count - max(1, config.GUI_LOG_MAX_LINES)
+            limit = config.GUI_LOG_MAX_LINES if at_bottom else config.GUI_LOG_MAX_LINES_SCROLLED
+            excess = self._log_line_count - max(1, limit)
             if excess > 0:
                 self.log_text.delete("1.0", f"{excess + 1}.0")
                 self._log_line_count -= excess
-            self.log_text.see("end")
+            if at_bottom:
+                self.log_text.see("end")
         finally:
             self.log_text.config(state="disabled")
 

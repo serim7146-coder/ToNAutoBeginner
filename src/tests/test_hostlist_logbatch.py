@@ -235,6 +235,7 @@ class TestWishIdsCache(unittest.TestCase):
 class _FakeLogText:
     def __init__(self):
         self.lines, self.state, self.inserts, self.deletes, self.sees = [], None, [], [], []
+        self.at_bottom = True           # False なら遡って読んでいる（yview の下端が 1 未満）
 
     def config(self, **kwargs):
         self.state = kwargs.get("state", self.state)
@@ -251,6 +252,9 @@ class _FakeLogText:
     def see(self, index):
         self.sees.append(index)
 
+    def yview(self):
+        return (0.0, 1.0 if self.at_bottom else 0.5)
+
 
 class _FakeOverlay:
     def __init__(self):
@@ -265,6 +269,7 @@ class _FakeApp:
     _log = mainGUI.App._log
     _flush_log_lines = mainGUI.App._flush_log_lines
     _append_log_lines = mainGUI.App._append_log_lines
+    _log_at_bottom = mainGUI.App._log_at_bottom
     _append_log_text = mainGUI.App._append_log_text
 
     def __init__(self):
@@ -363,6 +368,58 @@ class TestLogBatching(unittest.TestCase):
         self.assertEqual(len(app.log_text.lines), 3)
         self.assertIn("L2", app.log_text.lines[0])
         self.assertIn("L4", app.log_text.lines[2])
+
+    def _add_lines(self, count, prefix="L"):
+        app = self.app
+        for i in range(count):
+            app._log(f"{prefix}{i}")
+        app.afters.pop()()
+
+    def test_at_the_bottom_it_follows_and_cuts_at_the_normal_limit(self):
+        app = self.app
+        with patch.object(config, "GUI_LOG_MAX_LINES", 3), patch.object(config, "GUI_LOG_MAX_LINES_SCROLLED", 6):
+            self._add_lines(5)
+        self.assertEqual(app.log_text.sees, ["end"])
+        self.assertEqual(app._log_line_count, 3)
+
+    def test_scrolled_up_it_does_not_jump_and_keeps_more_than_the_normal_limit(self):
+        app = self.app
+        app.log_text.at_bottom = False
+        with patch.object(config, "GUI_LOG_MAX_LINES", 3), patch.object(config, "GUI_LOG_MAX_LINES_SCROLLED", 6):
+            self._add_lines(5)
+        self.assertEqual(app.log_text.sees, [], "遡っている間は一番下へ飛ばさない")
+        self.assertEqual(app.log_text.deletes, [], "普通の上限を超えても消さない")
+        self.assertEqual(app._log_line_count, 5)
+        self.assertEqual(len(app.log_text.lines), 5)
+
+    def test_scrolled_up_it_still_cuts_at_the_scrolled_limit(self):
+        app = self.app
+        app.log_text.at_bottom = False
+        with patch.object(config, "GUI_LOG_MAX_LINES", 3), patch.object(config, "GUI_LOG_MAX_LINES_SCROLLED", 6):
+            self._add_lines(8)
+        self.assertEqual(app.log_text.sees, [])
+        self.assertEqual(app._log_line_count, 6)
+        self.assertEqual(len(app.log_text.lines), 6)
+        self.assertIn("L7", app.log_text.lines[-1])
+
+    def test_back_at_the_bottom_the_next_add_cuts_to_the_normal_limit_and_follows(self):
+        app = self.app
+        app.log_text.at_bottom = False
+        with patch.object(config, "GUI_LOG_MAX_LINES", 3), patch.object(config, "GUI_LOG_MAX_LINES_SCROLLED", 6):
+            self._add_lines(5)
+            app.log_text.at_bottom = True
+            self._add_lines(1, "N")
+        self.assertEqual(app._log_line_count, 3)
+        self.assertEqual(len(app.log_text.lines), 3)
+        self.assertEqual(app.log_text.sees, ["end"])
+
+    def test_a_tcl_error_from_yview_counts_as_the_bottom(self):
+        app = self.app
+        with patch.object(app.log_text, "yview", side_effect=tk.TclError("gone")):
+            self.assertTrue(app._log_at_bottom())
+
+    def test_the_scrolled_limit_is_larger_than_the_normal_one(self):
+        self.assertEqual((config.GUI_LOG_MAX_LINES, config.GUI_LOG_MAX_LINES_SCROLLED), (1000, 5000))
 
     def test_the_overlay_is_updated_once_with_every_line(self):
         app = self.app
