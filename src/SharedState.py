@@ -165,6 +165,10 @@ get_follow_utils, set_follow_utils = _FOLLOW_UTILS.get, _FOLLOW_UTILS.set
 _RUN_RESPAWN = _Setting(True, bool)
 get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set
 
+# 2 枠目・3 枠目の Bloodthirsty の合図を待ってから判定する（全窓共通・既定 ON。OFF なら合図を待たない）
+_WAIT_BLOODTHIRSTY = _Setting(True, bool)
+get_wait_bloodthirsty, set_wait_bloodthirsty = _WAIT_BLOODTHIRSTY.get, _WAIT_BLOODTHIRSTY.set
+
 # スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
 _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set

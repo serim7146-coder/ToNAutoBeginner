@@ -1318,7 +1318,8 @@ class LogMonitor:
         st = self.st
         rt = round_type or st.round_type
         wait = config.TERROR_VARIANT_WAIT_SEC
-        if (st.round_type in config.BLOODTHIRSTY_SLOT_ROUNDS and config.CURIOUS_CREATURE_ID in st.terror_ids
+        if (SharedState.get_wait_bloodthirsty()
+                and st.round_type in config.BLOODTHIRSTY_SLOT_ROUNDS and config.CURIOUS_CREATURE_ID in st.terror_ids
                 and self._bloodthirsty_changes_decision(rt)):
             slot = st.terror_ids.index(config.CURIOUS_CREATURE_ID)
             wait = config.BLOODTHIRSTY_SLOT_WAIT_SEC[min(slot, len(config.BLOODTHIRSTY_SLOT_WAIT_SEC) - 1)]
