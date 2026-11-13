@@ -19,7 +19,7 @@ if sys.platform == "win32":
         "ToNAutoBeginner.ToNAutoBeginner"
     )
 
-import BanList
+import AccessCheck
 import config
 import mainGUI
 
@@ -41,7 +41,7 @@ def hold_running_mutex():
 
 def main():
     hold_running_mutex()
-    BanList.enforce_startup()
+    AccessCheck.enforce_startup()
     app = mainGUI.App()
     app.mainloop()
 

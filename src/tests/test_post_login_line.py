@@ -88,6 +88,7 @@ class TestPostLoginInTheMonitor(unittest.TestCase):
             else:
                 with patch.object(monitor, "_user_from_log_head", return_value=False):
                     monitor._detect_instance_from_log()
+            monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
         return monitor, fetch
 
     def test_the_head_read_takes_the_id_and_the_name_once(self):
@@ -130,6 +131,7 @@ class TestPostLoginInTheMonitor(unittest.TestCase):
                  patch.object(DebugLog, "write", side_effect=written.append), \
                  patch("builtins.print") as printed:
                 monitor._detect_instance_from_log()
+                monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
             outcome.assert_called_once_with(ME, name)
             self.assertTrue(any("UserID検出" in m for m in monitor.logs))
             texts = (monitor.logs + [str(w) for w in written]

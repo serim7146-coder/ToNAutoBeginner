@@ -136,8 +136,12 @@ def resource_path(filename: str) -> Path:
     return candidates[0]
 
 
-# 締め出す UID の一覧（gitignore。無ければ空として扱う）
-BAN_UIDS_PATH = resource_path("assets/data/ban_uids.txt")
+# ── サーバーへの確認（AccessCheck。supabase/check_access.sql）──
+ACCESS_TIMEOUT_SEC         = 5.0            # 1 回の確認の通信の待ち
+ACCESS_STARTUP_TIMEOUT_SEC = 3.0            # 起動時の確認の通信の待ち（画面を出す前なので短く）
+ACCESS_MEMORY_SEC          = 3600.0         # 同じ UID を聞き直す間隔
+ACCESS_GRACE_SEC           = 3 * 86400.0    # サーバーに聞けないとき、最後の OK からこの間は動かす
+ACCESS_RETRY_SEC           = 30.0           # 確認できずに待っている窓が聞き直す間隔
 
 # ── テラーIDとテラー名の対応表.json ──
 TERRORS = ReadJson.load_terrors(resource_path("assets/data/terrors.json"))

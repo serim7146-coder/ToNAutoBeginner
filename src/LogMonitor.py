@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
-import BanList
+import AccessCheck
 import ContinueList
 import ContinueTable
 import SharedState
@@ -50,6 +50,12 @@ HELD_LOST_INSTANCE = "インスタンス移動"
 HELD_LOST_REBORN = "猫消費"
 HELD_LOST_USED = "使用"
 HELD_LOST_SUICIDE = "自爆"
+
+# サーバーに確認できず、この窓を始めないときの画面のログ（理由ごとに 1 回）
+ACCESS_NOTICES = {
+    AccessCheck.UNREACHABLE: "サーバーに確認できないため、この窓は操作しません",
+    AccessCheck.NO_UID: "ログインの行が見つからないため、この窓は操作しません",
+}
 
 
 # ═══════════════════════════════════════════════
@@ -96,6 +102,7 @@ class LogMonitor:
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
         self._stop_event = threading.Event()
+        self._access_notices: set = set()       # 画面に出した「動かせない理由」（理由ごとに 1 回）
         self._thread: Optional[threading.Thread] = None
         # 定期の Verified を見分ける（窓ごと。起動時の遡りで位相を取り戻す）
         self._verified = VerifiedTracker.VerifiedTracker()
@@ -754,13 +761,69 @@ class LogMonitor:
         return False
 
     def _apply_user_auth(self, event):
-        """ログインの行（自分の名前と usr_ID）を反映し、統計用の番号を取りに行く"""
-        BanList.enforce(event.user_id)
+        """ログインの行（自分の名前と usr_ID）を反映する。統計用の番号は、サーバーの確認（_verify_access）が
+        通ってから取りに行く（_run）"""
         self._log(f"UserID検出: {event.user_id}")
         self.st.local_player_name = event.player_name
         self.st.local_user_id = event.user_id
-        # 統計用の通信（最大10秒）は待たない
-        self._start_daemon(self._fetch_transformed_uid, event.user_id, event.player_name)
+
+    def _start_transformed_uid_fetch(self):
+        """統計用の番号を取りに行く。統計用の通信（最大10秒）は待たない"""
+        st = self.st
+        if st.local_user_id:
+            self._start_daemon(self._fetch_transformed_uid, st.local_user_id, st.local_player_name)
+
+    def _verify_access(self) -> bool:
+        """この窓が自分の UID でサーバーに確認して、動かしてよいか（監視のスレッドで呼ぶ。通信で待つ）。
+        締め出しなら、ここで何も出さずにプロセスが終わる。動かせない理由は、理由ごとに 1 回だけ画面に出す"""
+        result = AccessCheck.enforce(self.st.local_user_id)
+        if result == AccessCheck.ALLOWED:
+            return True
+        if result in ACCESS_NOTICES and result not in self._access_notices:
+            self._access_notices.add(result)
+            self._log(ACCESS_NOTICES[result])
+        return False
+
+    def _wait_for_access(self) -> bool:
+        """確認が通るまで待つ（_verify_access が False のあと）。待つ間は何も処理しない（ログからログインの行
+        だけを拾う）。通れば True、止められたら False。ACCESS_RETRY_SEC ごと（とログインの行を拾った直後）に
+        聞き直す"""
+        cfg = self.cfg
+        pos = self.st.log_pos
+        rest = b""
+        next_check = time.monotonic() + config.ACCESS_RETRY_SEC
+        while self._running and not self._stop_event.is_set():
+            login = False
+            try:
+                size = cfg.log_path.stat().st_size
+                if size < pos:
+                    pos = 0
+                    rest = b""
+                if size > pos:
+                    with open(cfg.log_path, "rb") as f:
+                        f.seek(pos)
+                        chunk = f.read()
+                    pos += len(chunk)
+                    lines = (rest + chunk).split(b"\n")
+                    rest = lines.pop()
+                    for raw in lines:
+                        line = raw.rstrip(b"\r").decode("utf-8", errors="replace")
+                        if (LogParser.USER_AUTH_MARK not in line
+                                and LogParser.POST_LOGIN_MARK not in line):
+                            continue
+                        event = LogParser.parse(line)
+                        if event and event.kind == LogParser.EVENT_USER_AUTH:
+                            self._apply_user_auth(event)
+                            login = True
+            except Exception:
+                DebugLog.exception("LogMonitor._wait_for_access")
+            if login or time.monotonic() >= next_check:
+                if self._verify_access():
+                    return True
+                next_check = time.monotonic() + config.ACCESS_RETRY_SEC
+            if self._stop_event.wait(config.LOG_POLL_INTERVAL):
+                return False
+        return False
 
     def _learn_verified_phase(self, events):
         """起動時: 過去の Verified・開始・RoundOver・Verified Round End を古い順に
@@ -1012,6 +1075,14 @@ class LogMonitor:
         # log_pos を確定させた後に行う。先に検出すると、その間にVRChatが追記した行が
         # 「起動前からあった行」として読み飛ばされる。
         self._detect_instance_from_log(end=self.st.log_pos)
+        # サーバーに確認してから始める。確認できない間は何も処理しない（判定・操作・音・統計の送信をしない）。
+        # 待った場合は、通った時点の末尾から状態を読み直す（待つ間のラウンド・入退室を取り込むため）
+        if not self._verify_access():
+            if not self._wait_for_access():
+                return
+            self.st.log_pos = cfg.log_path.stat().st_size
+            self._detect_instance_from_log(end=self.st.log_pos)
+        self._start_transformed_uid_fetch()
         self._log("監視開始")
         # 書きかけの行（まだ改行が来ていない末尾）。完全な行として読まず、次の読みに持ち越す
         # （UtilsWatch.refresh・ToNEntry.wait_verified と同じ）。VRChat が 1 行を書き終える前に読むと、
@@ -1043,6 +1114,7 @@ class LogMonitor:
                     self._check_pending_verified()
                     self._flush_item_use_log()
                     self._check_item_used()
+                    AccessCheck.recheck_async(self.st.local_user_id)       # 1 時間に 1 回（中で絞る）
                     try:
                         self._check_group_list_state()
                     except Exception as e:
@@ -1782,8 +1854,9 @@ class LogMonitor:
             st.early_read_void = True
 
     def _on_user_auth(self, event):
-        """ログイン（自分の名前と usr_ID）"""
-        BanList.enforce(event.user_id)
+        """ログイン（自分の名前と usr_ID）。締め出しなら何も出さずに終わる（確認できないだけなら、
+        動いている窓は止めない）"""
+        AccessCheck.enforce(event.user_id)
         st = self.st
         st.local_player_name = event.player_name
         st.local_user_id = event.user_id
