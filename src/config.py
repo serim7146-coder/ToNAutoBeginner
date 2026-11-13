@@ -737,7 +737,7 @@ FOG_NO_OBJECT_DTM_ENABLED = True
 FOG_NO_OBJECT_DTM_SEC     = 5.0
 
 # ── VRChat起動 ──
-MAX_WINDOWS             = 8      # 同時に扱える窓数の上限
+MAX_WINDOWS             = 20     # 同時に扱える窓数の上限
 # 窓が現れてから次を起動するまでの間隔。
 # 詰めると一部の窓が ToN に入室できない。原因は世界の入室ではなく VRChat API の
 # レート制限（HTTP 429）。ログイン直後に各クライアントが投げる inventory /

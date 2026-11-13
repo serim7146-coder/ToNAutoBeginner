@@ -1011,7 +1011,7 @@ class TestOldExtractDirs(unittest.TestCase):
 
 
 class TestMultiWindowLaunch(unittest.TestCase):
-    """1〜8窓の起動と自動Join"""
+    """1〜MAX_WINDOWS窓の起動と自動Join"""
 
     class FakeVar:
         def __init__(self, value):
@@ -1028,6 +1028,10 @@ class TestMultiWindowLaunch(unittest.TestCase):
         flat = [p for pair in pairs for p in pair]
 
         self.assertEqual(len(set(flat)), len(flat), "受信・送信ポートが衝突している")
+
+    def test_the_ports_of_window_20(self):
+        base = config.OSC_BASE_IN_PORT + 19 * config.OSC_PORT_STRIDE
+        self.assertEqual(OSCClient.ports_for_window(19), (base, base + 1))
 
     def test_eight_windows_get_distinct_instances(self):
         """同じprivateインスタンスには入れないので、窓ごとに別インスタンスが要る"""

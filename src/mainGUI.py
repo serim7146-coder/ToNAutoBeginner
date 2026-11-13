@@ -671,7 +671,7 @@ class WindowTab(ttk.Frame):
         pf.pack(fill="x", padx=10, pady=2)
         ttk.Label(pf, text="--profile=").pack(side="left")
         self.v_profile = tk.IntVar(value=0)
-        ttk.Spinbox(pf, from_=0, to=15, textvariable=self.v_profile, width=4).pack(side="left", padx=(2, 8))
+        ttk.Spinbox(pf, from_=0, to=99, textvariable=self.v_profile, width=4).pack(side="left", padx=(2, 8))
         ttk.Label(pf, text="※ 同じ番号の窓は同じアカウント設定を共有します",
                   foreground=config.GUI_YLW).pack(side="left")
 

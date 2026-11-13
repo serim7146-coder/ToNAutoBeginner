@@ -509,6 +509,16 @@ class TestSaveAndLoad(_AppCase):
             self.assertEqual(mainGUI._as_window_freezes({"window_freezes": bad}), {}, bad)
         self.assertEqual(mainGUI._as_window_freezes(None)[1], _values(), "壊れた全体でも落ちない")
 
+    def test_the_window_limit_is_twenty(self):
+        """窓 20 まで残し、21 は捨てる"""
+        self.assertEqual(config.MAX_WINDOWS, 20)
+        data = {"window_freezes": {"20": _values(freeze_8pages=True), "21": _values(freeze_8pages=True)}}
+
+        got = mainGUI._as_window_freezes(data)
+
+        self.assertEqual(sorted(got), [20])
+        self.assertEqual(got[20], _values(freeze_8pages=True))
+
     def test_the_new_key_wins_over_the_old_ones(self):
         data = {"window_freezes": {"1": _values()}, "freeze_8pages": True, "freeze_rounds": ["Fog"]}
         got = mainGUI._as_window_freezes(data)
