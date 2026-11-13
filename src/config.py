@@ -142,6 +142,9 @@ ACCESS_STARTUP_TIMEOUT_SEC = 3.0            # 起動時の確認の通信の待�
 ACCESS_MEMORY_SEC          = 3600.0         # 同じ UID を聞き直す間隔
 ACCESS_GRACE_SEC           = 3 * 86400.0    # サーバーに聞けないとき、最後の OK からこの間は動かす
 ACCESS_RETRY_SEC           = 30.0           # 確認できずに待っている窓が聞き直す間隔
+# 統計用の番号（transformed_uid）の取得に通信で失敗したとき、やり直すまでの待ち（秒）。要素の数だけやり直す
+# （最初の 1 回＋この数）。待つ間に監視を止めたり UID が変わったりしたら、そこでやめる
+TRANSFORMED_UID_RETRY_SEC  = (30.0, 60.0, 120.0)
 
 # ── テラーIDとテラー名の対応表.json ──
 TERRORS = ReadJson.load_terrors(resource_path("assets/data/terrors.json"))
