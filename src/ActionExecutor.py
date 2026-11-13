@@ -110,7 +110,7 @@ class ActionExecutor:
         self._item_loss_watch_seq = -1
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
-        self._osc = OSCClient.OSCClient(cfg.osc_port, on_send=self._on_osc_sent) if cfg.osc_port else None
+        self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
         self._chase_lock = threading.Lock()
         self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
         self._chase_stop = None           # 送り直しのスレッドを止める合図
@@ -153,15 +153,6 @@ class ActionExecutor:
     @property
     def uses_osc(self) -> bool:
         return self._osc is not None
-
-    def _on_osc_sent(self, address, value):
-        """OSC を送れたあとに呼ばれる（送ったスレッドから）。/input/UseRight は、この窓の手に持ったアイテムの使用の合図
-        （ItemUse）。押し始め（0→1）だけが使用で、判定は Tracker が持つ。ほかのアドレスは見ない"""
-        if address != ItemUse.USE_ADDRESS:
-            return
-        tracker = self._st.item_use
-        if tracker is not None:
-            tracker.osc_use_input(bool(value))
 
     def can_operate(self) -> bool:
         """この窓で OSC 操作・クリック操作をしてよいか（can_operate_in）。送る入口は全部これを見る"""
@@ -712,6 +703,7 @@ class ActionExecutor:
                 self._log(f"自爆が効いていません → やり直し（{attempt}/{limit}回目）")
             key = SharedState.get_suicide_key()
             st._skip_time = time.time()
+            st.skip_maxwell_seq = round_seq if self._holding_maxwell() else -1
             self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
             if not WindowOperator.hold_key_background(
                     self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
@@ -726,6 +718,14 @@ class ActionExecutor:
                 return
         if self._should_skip(round_seq):
             self._log(f"⚠ 自爆を{limit}回試しましたが死にませんでした")
+
+    def _held_log_name(self) -> str:
+        """手に持っている物のログの名前（持っていない・LogMonitor が追跡を作る前は ""）"""
+        tracker = self._st.item_use
+        return "" if tracker is None else tracker.held_name()
+
+    def _holding_maxwell(self) -> bool:
+        return ItemUse.norm(self._held_log_name()) == config.MAXWELL_LOG_NAME
 
     def _should_skip(self, round_seq: int) -> bool:
         """いま自爆してよいか。やり直すたびに見直す"""

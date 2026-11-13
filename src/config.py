@@ -94,6 +94,10 @@ ITEM_FETCH_LIMIT_SEC = 10.0
 # 見送った回はやり直しの回数に数えない。移動（店の前まで）は毎回する。店の操作 3.8 秒＋戻し 1 秒＋余裕 2 秒 = 12 − 7
 ITEM_FETCH_FRONT_LATEST_SEC = 5.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
+# 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って手でクリックしたらアイテムロスト
+CONSUMABLE_ITEM_IDS = frozenset({36, 74, 79})
+# Maxwell を手に持ったときのログの名前（空白なし・小文字で比べる）。手に持ったまま自爆したらアイテムロスト
+MAXWELL_LOG_NAME = "maxwell"
 
 # 録画中だけ、当ツールの窓を画面キャプチャから外す。物理モニタには見えたままで、
 # 操作もできる。消えるのは録画・スクリーンショット・画面共有の中だけ。
@@ -113,7 +117,6 @@ GUI_LOG_MAX_LINES = 1000
 # 遡って読んでいる間（一番下を見ていないとき）の上限。読んでいる所が消えないよう、普通より多く残す
 GUI_LOG_MAX_LINES_SCROLLED = 5000
 GUI_OVERLAY_LOG_MAX_LINES = 20
-GUI_OVERLAY_ITEM_REFRESH_MS = 100      # オーバーレイ上部の手持ちアイテムの表示の更新（CT・効果の残り秒）
 
 
 def resource_path(filename: str) -> Path:
