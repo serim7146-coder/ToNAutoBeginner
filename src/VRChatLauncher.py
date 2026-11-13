@@ -23,7 +23,6 @@ OFFLINE_EXE_NAME = "VRChat.exe"
 RE_LIBRARY_PATH = re.compile(r'"path"\s+"([^"]+)"')
 # ログの Joining 行から ワールドID:インスタンスID（region等の修飾込み）を取り出す
 # 各種URL形式からワールドID・インスタンスIDを取り出す
-RE_USER_AUTH    = re.compile(r"User Authenticated: .*?\((usr_[0-9a-fA-F-]+)\)")
 
 
 # ── VRChat.exeの検出 ──────────────────────────
@@ -132,11 +131,9 @@ def latest_user_id(log_dir) -> Optional[str]:
                 if (LogParser.USER_AUTH_MARK not in line
                         and LogParser.POST_LOGIN_MARK not in line):
                     continue            # 前絞り（正規表現は重い）
-                m = RE_USER_AUTH.search(line)
-                if m:
-                    return m.group(1)
-                # post login checks の行は ID が 2 番目のグループ（名前が 1 番目）
-                m = LogParser.RE_POST_LOGIN.search(LogParser.strip_prefix(line))
+                # 行頭の時刻を外して、LogParser のログインの行の式で読む（UID は 2 番目のグループ。名前が 1 番目）
+                text = LogParser.strip_prefix(line)
+                m = LogParser.RE_USER_AUTH.search(text) or LogParser.RE_POST_LOGIN.search(text)
                 if m:
                     return m.group(2)
     except Exception:
