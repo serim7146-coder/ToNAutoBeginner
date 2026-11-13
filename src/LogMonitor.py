@@ -762,8 +762,7 @@ class LogMonitor:
 
     def _apply_user_auth(self, event):
         """ログインの行（自分の名前と usr_ID）を反映する。統計用の番号は、サーバーの確認（_verify_access）が
-        通ってから取りに行く（_run）"""
-        self._log(f"UserID検出: {event.user_id}")
+        通ってから取りに行く（_run）。UID を画面のログに出すのも、確認が通ってから（_start_transformed_uid_fetch）"""
         self.st.local_player_name = event.player_name
         self.st.local_user_id = event.user_id
 
@@ -771,6 +770,7 @@ class LogMonitor:
         """統計用の番号を取りに行く。統計用の通信（最大10秒）は待たない"""
         st = self.st
         if st.local_user_id:
+            self._log(f"UserID検出: {st.local_user_id}")
             self._start_daemon(self._fetch_transformed_uid, st.local_user_id, st.local_player_name)
 
     def _verify_access(self) -> bool:
