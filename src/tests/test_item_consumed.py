@@ -168,13 +168,15 @@ class TestConsumableClick(_Case):
         self.monitor._check_item_used()
         self.assertEqual(len(self._lost_lines()), 1)
 
-    def test_a_drop_before_the_check_cancels_the_click(self):
+    def test_a_drop_before_the_check_does_not_cancel_the_click(self):
+        """使うと無くなる物は、クリックの直後に Drop の行が来る。見回りの前に離していてもロストにする"""
         self._equip(BURGER)
         self.tracker.pickup("SomeHeldThing")
         self._click()
         self.tracker.drop("SomeHeldThing")
         self.monitor._check_item_used()
-        self.assertEqual(self.st.item_id, BURGER)
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
+        self.assertEqual(len(self._lost_lines()), 1)
 
     def test_the_debug_line_has_the_item_and_the_held_name_only(self):
         self._equip(GLOGNUT)
@@ -322,7 +324,8 @@ class TestMaxwellSuicide(_Case):
         self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
         self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
 
-    def test_dropping_it_before_the_retry_is_not_lost(self):
+    def test_leaving_the_hand_before_the_retry_is_still_lost(self):
+        """長押しの途中でゲームが手から外すことがある。1 回目の始まりで持っていたら、やり直しで死んでもロスト"""
         self._equip(MAXWELL_ID)
         self.tracker.pickup("Maxwell")
         seen = []
@@ -330,13 +333,14 @@ class TestMaxwellSuicide(_Case):
         def during(n):
             seen.append(self.st.skip_maxwell_seq)
             if n == 1:
-                self.tracker.drop("Maxwell")             # 1 回目のあとに離した
+                self.tracker.drop("Maxwell")             # 1 回目の長押しの間に手から外れた
             else:
                 self._die(n)
 
         self.assertEqual(self._suicide(during=during), 2)
-        self.assertEqual(seen, [self.ROUND_SEQ, -1], "2 回目の始まりで見直す")
-        self.assertEqual(self._lost_lines(), [])
+        self.assertEqual(seen, [self.ROUND_SEQ, self.ROUND_SEQ], "一度立てた印は、このラウンドの間は下ろさない")
+        self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
 
     def test_a_reborn_in_the_same_second_writes_the_lost_line_once(self):
         self._equip(MAXWELL_ID)

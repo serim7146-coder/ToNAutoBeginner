@@ -138,11 +138,10 @@ class TestUseTracker(unittest.TestCase):
     def test_a_second_click_while_the_mark_remains_does_not_overwrite_it(self):
         self.tr.pickup(CHARM)
         self.tr.use(ItemUse.SOURCE_HAND)
-        self.tr.pickup("Maxwell")                 # 置き換えで印は消える
-        self.assertIsNone(self.tr.take_use())
-        self.tr.use(ItemUse.SOURCE_HAND)          # Maxwell で印
-        self.tr.use(ItemUse.SOURCE_HAND)          # 残っている間の 2 回目
-        self.assertEqual(self.tr.take_use(), "Maxwell")
+        self.tr.pickup("Maxwell")                 # 置き換えても、取り出すまで印は残る
+        self.tr.use(ItemUse.SOURCE_HAND)          # 残っている間の 2 回目（上書きしない）
+        self.tr.use(ItemUse.SOURCE_HAND)
+        self.assertEqual(self.tr.take_use(), CHARM)
         self.assertIsNone(self.tr.take_use(), "2 回分にはならない")
 
     def test_the_mark_remembers_the_name_held_at_the_click(self):
@@ -150,18 +149,20 @@ class TestUseTracker(unittest.TestCase):
         self.tr.use(ItemUse.SOURCE_HAND)
         self.assertEqual(self.tr.take_use(), CHARM)
 
-    def test_a_drop_clears_the_mark(self):
+    def test_a_drop_keeps_the_mark(self):
+        """使うと無くなる物は、クリックの直後に Drop の行が来る。取り出す前に離しても印は残る"""
         self.tr.pickup(CHARM)
         self.tr.use(ItemUse.SOURCE_HAND)
         self.tr.drop(CHARM)
-        self.tr.pickup(CHARM)
+        self.assertEqual(self.tr.held_name(), "")
+        self.assertEqual(self.tr.take_use(), CHARM)
         self.assertIsNone(self.tr.take_use())
 
-    def test_a_pickup_of_another_name_clears_the_mark(self):
+    def test_a_pickup_of_another_name_keeps_the_mark(self):
         self.tr.pickup(CHARM)
         self.tr.use(ItemUse.SOURCE_HAND)
         self.tr.pickup("Other")
-        self.assertIsNone(self.tr.take_use())
+        self.assertEqual(self.tr.take_use(), CHARM)
 
     def test_a_reset_clears_the_mark(self):
         self.tr.pickup(CHARM)

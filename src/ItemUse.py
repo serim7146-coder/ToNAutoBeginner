@@ -49,15 +49,14 @@ class UseTracker:
             if self._held:
                 self._lines.append(f"離した: {self._held}")   # Drop の無い次の Pickup は置き換える
             self._held = name
-            self._used = None
             self._lines.append(f"持った: {name}")
 
     def drop(self, name):
-        """離した。持っているものと同じ名前のときだけ持っていないに戻す"""
+        """離した。持っているものと同じ名前のときだけ持っていないに戻す。
+        クリックの印は消さない（使うと無くなる物は、クリックの直後に Drop の行が来る。印は take_use か reset で消える）"""
         with self._lock:
             if self._held and name == self._held:
                 self._held = ""
-                self._used = None
                 self._lines.append(f"離した: {name}")
 
     def reset(self, reason):

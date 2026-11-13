@@ -703,7 +703,10 @@ class ActionExecutor:
                 self._log(f"自爆が効いていません → やり直し（{attempt}/{limit}回目）")
             key = SharedState.get_suicide_key()
             st._skip_time = time.time()
-            st.skip_maxwell_seq = round_seq if self._holding_maxwell() else -1
+            if self._holding_maxwell():
+                # 一度立てたら、このラウンドの間は下ろさない（長押しの途中でゲームが手から外すことがあり、
+                # やり直しの長押しの時点ではもう持っていない）
+                st.skip_maxwell_seq = round_seq
             self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
             if not WindowOperator.hold_key_background(
                     self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
