@@ -2038,6 +2038,47 @@ class TestStatisticsPlayersGui(_StatsWindowFixture, unittest.TestCase):
         analyze.assert_called_once()
 
 
+class TestStatisticsTreeColumns(_StatsWindowFixture, unittest.TestCase):
+    """表の列: 境目を引いた列だけが変わる（伸びるのは右端の余白の列だけ）・横のスクロールバー"""
+
+    def _trees(self):
+        w = self.window
+        return {"round_legend": w.round_legend, "terror_tree": w.terror_tree,
+                "terror_rounds_tree": w.terror_rounds_tree, "round_kind_tree": w.round_kind_tree,
+                "map_tree": w.map_tree}
+
+    def test_only_the_pad_column_stretches(self):
+        for name, tree in self._trees().items():
+            columns = list(tree["columns"])
+            self.assertEqual(columns[-1], StatisticsGUI.PAD_COLUMN, name)
+            for col in columns[:-1]:
+                self.assertFalse(int(tree.column(col, "stretch")), f"{name}.{col}")
+            pad = StatisticsGUI.PAD_COLUMN
+            self.assertTrue(int(tree.column(pad, "stretch")), name)
+            self.assertEqual(int(tree.column(pad, "minwidth")), 0, name)
+            self.assertEqual(tree.heading(pad, "text"), "", name)
+
+    def test_the_trees_have_an_xscrollcommand(self):
+        for name, tree in self._trees().items():
+            self.assertTrue(str(tree.cget("xscrollcommand")), name)
+
+    def test_the_xscrollbar_hides_unless_the_table_overflows(self):
+        tree = self.window.map_tree
+        bar = next(c for c in tree.master.winfo_children() if c.winfo_class() == "TScrollbar" and str(c.cget("orient")) == "horizontal")
+        self.root.update()
+        self.assertEqual(bar.grid_info()["row"], 1)
+        StatisticsGUI.StatisticsWindow._set_xscroll(bar, "0.0", "1.0")
+        self.assertFalse(bar.grid_info(), "はみ出していない間は隠れる")
+        StatisticsGUI.StatisticsWindow._set_xscroll(bar, "0.0", "0.8")
+        self.assertTrue(bar.grid_info(), "はみ出したら出る")
+        self.assertEqual(tuple(float(v) for v in bar.get()), (0.0, 0.8))
+
+    def test_the_row_values_are_unchanged(self):
+        w = self.window
+        iid = w.map_tree.insert("", "end", values=("Map", 3))
+        self.assertEqual(w.map_tree.item(iid, "values"), ("Map", "3"))
+
+
 class TestStatisticsDefaultStart(_StatsWindowFixture, unittest.TestCase):
     """開始の初期値は固定の 2026/10/01 00:00（PC のローカル時刻）"""
 
