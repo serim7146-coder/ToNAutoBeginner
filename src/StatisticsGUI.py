@@ -80,6 +80,7 @@ ROUND_COLORS = {
     "Special": "#94e2d5",
 }
 LEGEND_STYLE = "Legend.Treeview"
+PAD_COLUMN = "_pad"      # 表の右端の余白用の列（余りの幅を受ける。見出し・値は空）
 # テラーの一覧の文字色（独自の番号 → (色, 太字か)。依頼者の指定。背景は白のまま）。
 # 独自の番号は分類ごとに範囲が違うので、番号だけで引く
 TERROR_TEXT_COLORS = {
@@ -442,19 +443,38 @@ class StatisticsWindow(tk.Toplevel):
         return frame
 
     def _tree(self, parent, columns, style: str | None = None) -> ttk.Treeview:
-        """[(列, 見出し, 幅, 寄せ)] の表（縦のスクロールつき）"""
+        """[(列, 見出し, 幅, 寄せ)] の表（縦・横のスクロールつき）。
+
+        列は伸ばさない（境目を引いた列だけが変わる）。余りは右端の余白の列が受ける。
+        """
         body = ttk.Frame(parent)
         body.pack(side="left", fill="both", expand=True)
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(0, weight=1)
         extra = {"style": style} if style else {}
-        tree = ttk.Treeview(body, columns=[c[0] for c in columns], show="headings", **extra)
+        tree = ttk.Treeview(body, columns=[c[0] for c in columns] + [PAD_COLUMN], show="headings", **extra)
         for col, text, width, anchor in columns:
             tree.heading(col, text=text)
-            tree.column(col, width=width, minwidth=48, anchor=anchor, stretch=(anchor == "w"))
-        scroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scroll.set)
-        tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="left", fill="y")
+            tree.column(col, width=width, minwidth=48, anchor=anchor, stretch=False)
+        tree.heading(PAD_COLUMN, text="")
+        tree.column(PAD_COLUMN, width=1, minwidth=0, stretch=True)
+        yscroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        xscroll = ttk.Scrollbar(body, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=yscroll.set,
+                       xscrollcommand=lambda first, last: self._set_xscroll(xscroll, first, last))
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
         return tree
+
+    @staticmethod
+    def _set_xscroll(scrollbar, first, last):
+        """はみ出していない間は横のスクロールバーを隠す"""
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            scrollbar.grid_remove()
+        else:
+            scrollbar.grid()
+        scrollbar.set(first, last)
 
     def _build_round_tab(self):
         tab = self._tab("ラウンド")
