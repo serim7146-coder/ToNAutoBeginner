@@ -119,7 +119,7 @@ RE_LOG_PREFIX = re.compile(r"^(?:\d{4}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}\s+\w+\s
 #   [Behaviour] Drop object: 'BloodKatCharm, was equipped = True' Throw on release, last input method = Mouse
 RE_PICKUP = re.compile(r"^\[Behaviour\] Pickup object: '(.+?)' equipped = True\b")
 RE_DROP = re.compile(r"^\[Behaviour\] Drop object: '(.+?), was equipped = True'")
-RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):\d+(.*?)(?:~region\(|$)")
+RE_JOINING = re.compile(r"\[Behaviour\] Joining (wrld_[^:]+):[^~\s]+(.*?)(?:~region\(|$)")
 JOINING_MARK = "Joining wrld_"
 RE_MASTER_SWITCHED = re.compile(r"^\[Behaviour\] OnMasterClientSwitched$")
 # 名前と triggered の間に空白が無い。Enrage / Enrage2 / Enrage3 は
