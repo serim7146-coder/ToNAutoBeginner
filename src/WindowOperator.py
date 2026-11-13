@@ -9,6 +9,7 @@ import win32api
 import win32process
 import keyboard
 import pydirectinput
+pydirectinput.FAILSAFE = False   # 既定は True。カーソルが主モニタの左上の角にあると mouseUp が例外を投げ、左ボタンが押されたまま残る
 
 import config
 import DebugLog
@@ -960,8 +961,10 @@ def click_with_tab(hold_sec: float, still_front=None, pause: bool = True) -> boo
             return False
         DebugLog.write("[操作] クリック（Tab の後）")
         pydirectinput.mouseDown(_pause=pause)
-        time.sleep(hold_sec)
-        pydirectinput.mouseUp(_pause=pause)
+        try:
+            time.sleep(hold_sec)
+        finally:
+            pydirectinput.mouseUp(_pause=pause)     # 途中で例外が出ても左ボタンを離す（そのあとで Tab を離す）
     finally:
         keyboard.release(key)
     return True
@@ -990,8 +993,10 @@ def mouse_up(pause: bool = False):
 def mouse_click(hold_sec: float, pause: bool = False):
     """前面の窓の今のカーソルの位置を左クリックする（Tab は呼び出し側が押している）"""
     pydirectinput.mouseDown(_pause=pause)
-    time.sleep(hold_sec)
-    pydirectinput.mouseUp(_pause=pause)
+    try:
+        time.sleep(hold_sec)
+    finally:
+        pydirectinput.mouseUp(_pause=pause)     # 途中で例外が出ても左ボタンを離す
 
 
 def _click():
