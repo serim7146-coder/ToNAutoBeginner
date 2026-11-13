@@ -317,16 +317,6 @@ REAL_AFK_WATCH = ActionExecutor.ActionExecutor.do_afk_watch
 ActionExecutor.ActionExecutor.do_afk_watch = lambda self, round_seq: None
 
 
-# ── アイテムの自動クリック（OSC の UseRight を送る見張り）と、窓の上の表示のスタイル指定を、ほかのテストで動かさない ──
-# 自動クリックの見張りはラウンド中ずっと回って OSC を送りうる。確かめるテストは本物（REAL_ITEM_AUTO_CLICK）を呼ぶ。
-# 窓の上の表示のスタイル指定（SetWindowLong）は本物の窓の属性を変える。確かめるテストは本物（REAL_SET_OVERLAY_STYLE）を
-# 偽の user32 で呼ぶ
-REAL_ITEM_AUTO_CLICK = ActionExecutor.ActionExecutor.do_item_auto_click
-ActionExecutor.ActionExecutor.do_item_auto_click = lambda self, round_seq: None
-REAL_SET_OVERLAY_STYLE = WindowOperator.set_overlay_style
-WindowOperator.set_overlay_style = lambda hwnd: True
-
-
 # ── テストで本物の設定を書き換えない ─────────────────────
 # %APPDATA%\ToNAutoBeginner の settings.json / fog_object_names.json は
 # 依頼者の本物の設定。テスト全体を一時フォルダに向ける

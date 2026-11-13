@@ -1,5 +1,4 @@
 """ToN ListTool の主催リスト・参加者・タブ"""
-import types
 from tests.support import *  # noqa: F401,F403
 import ContinueList
 
@@ -110,8 +109,6 @@ class TestAppTabLifecycle(unittest.TestCase):
             def freeze_values(self):
                 return {"from": self.idx}
 
-            v_item_auto_click = types.SimpleNamespace(get=lambda: False)
-
             def destroy(self):
                 self.destroyed = True
 
@@ -119,7 +116,7 @@ class TestAppTabLifecycle(unittest.TestCase):
             def __init__(self, parent, idx, on_log_selected=None, on_settings_changed=None,
                          section_collapsed=None, on_section_toggled=None, on_continue_choice=None,
                          on_open_window_table=None, on_item_switch=None, on_broadcast=None,
-                         on_freeze_changed=None, on_item_auto_click_changed=None):
+                         on_freeze_changed=None):
                 self.parent = parent
                 self.idx = idx
                 self.on_log_selected = on_log_selected
@@ -129,9 +126,6 @@ class TestAppTabLifecycle(unittest.TestCase):
 
             def set_freeze_values(self, values):
                 self.freeze_set = values
-
-            def set_item_auto_click(self, value):
-                self.item_auto_click_set = value
 
             def restore(self, saved):
                 self.restored = saved
@@ -152,7 +146,6 @@ class TestAppTabLifecycle(unittest.TestCase):
         app._on_tab_section_toggled = lambda _key, _collapsed: None
         app._schedule_settings_save = lambda: None
         app._window_freezes = {}
-        app._window_item_auto_click = {}
         app._update_ctrl_hint = lambda: None
         app.after_idle = lambda func: None     # 作り直しの後の案内の判定（Ctrl＋クリック）は見ない
         app.tabs = [OldTab(0), OldTab(1)]
