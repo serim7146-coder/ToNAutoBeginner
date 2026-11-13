@@ -1106,8 +1106,7 @@ class LogMonitor:
                         if chunk:
                             lines = (rest + chunk).split(b"\n")
                             rest = lines.pop()
-                            for raw in lines:
-                                self._process(raw.rstrip(b"\r").decode("utf-8", errors="replace"))
+                            self._process_lines(lines)
                     except Exception as e:
                         DebugLog.exception("LogMonitor._run")
                         self._log(f"読み取りエラー: {e}")
@@ -1126,6 +1125,26 @@ class LogMonitor:
         except Exception as e:
             DebugLog.exception("LogMonitor._run")
             self._log(f"読み取りエラー: {e}")
+
+    def _process_lines(self, lines):
+        """読んだ行（bytes）を 1 行ずつ処理する。1 行の処理で例外が出ても、その行だけ飛ばして次へ進む
+        （同じ読みの残りの行を捨てない。log_pos は先に進めてあるので、捨てると取り返せない）。
+
+        画面のログは 1 回の読みにつき 1 行だけ（最初の例外の文言と、失敗した行数）。
+        飛ばした行の中身は画面にも debug.log にも出さない（他人の名前が入りうる）"""
+        first_error = None
+        failed = 0
+        for raw in lines:
+            try:
+                self._process(raw.rstrip(b"\r").decode("utf-8", errors="replace"))
+            except Exception as e:
+                DebugLog.exception("LogMonitor._run")
+                failed += 1
+                if first_error is None:
+                    first_error = e
+        if failed:
+            count = f"（この読みで {failed} 行）" if failed > 1 else ""
+            self._log(f"読み取りエラー: {first_error}{count}")
 
     def _mark_sabotage_murder(self):
         st = self.st
