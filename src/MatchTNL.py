@@ -1,5 +1,6 @@
 import functools
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -254,7 +255,8 @@ def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
             mine.setdefault(round_key, set()).update(ids)
 
 
-HOST_STATE_SIDECARS = ("-wal", "-shm")
+HOST_STATE_SIDECARS = ("-wal",)     # -shm は写さない（写した -wal から SQLite が作り直す）
+HOST_STATE_COPY_ATTEMPTS = 3        # 写している最中に元が変わったときの、写しの回数の上限
 PARTICIPANT_SECTION = 0        # 1 は待機
 
 
@@ -268,6 +270,39 @@ def _wish_ids(bits) -> frozenset:
     if not isinstance(bits, (bytes, bytearray)):
         return frozenset()
     return _wish_ids_cached(bytes(bits))
+
+
+def _source_stamp(path: str):
+    """元ファイルの (大きさ, 更新時刻ns)。無ければ None（-wal の有無も見分ける）"""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return st.st_size, st.st_mtime_ns
+
+
+def _copy_host_state(path: str, copy: Path) -> None:
+    """本体と -wal を copy の隣へ写す。写す前後で元の stat が変わったら写し直す。
+    HOST_STATE_COPY_ATTEMPTS 回とも変わったら例外（呼び出し側が次の周期で再試行する）"""
+    sources = [(str(path), str(copy))]
+    sources += [(str(path) + suffix, str(copy) + suffix) for suffix in HOST_STATE_SIDECARS]
+    for _attempt in range(HOST_STATE_COPY_ATTEMPTS):
+        before = [_source_stamp(src) for src, _dst in sources]
+        changed = False
+        for (src, dst), stamp in zip(sources, before):
+            Path(dst).unlink(missing_ok=True)       # 前の回の写しを残さない
+            if stamp is None and dst != str(copy):
+                continue                            # -wal が無い
+            try:
+                shutil.copy2(src, dst)
+            except FileNotFoundError:
+                if dst == str(copy):
+                    raise                           # 本体が無いのは今までどおり例外
+                changed = True                      # -wal が写す間に消えた（checkpoint）
+        if not changed and before == [_source_stamp(src) for src, _dst in sources]:
+            return
+    raise sqlite3.OperationalError(
+        f"主催リストを写している間に元が変わり続けました（{HOST_STATE_COPY_ATTEMPTS} 回）")
 
 
 def load_host_state(path: str,
@@ -284,18 +319,19 @@ def load_host_state(path: str,
     ので、タブごとの内訳も `meta["tabs_data"]` に入れて返す（畳んだ戻り値は
     そのまま。呼び出し側は対応づけできたときだけ内訳を使う）。
 
-    ListTool が書いている最中を掴まないよう、本体と -wal / -shm を一時フォルダへ
-    写してから読む。ListTool のフォルダには一切書かない。壊れている・途中だった
+    ListTool が書いている最中を掴まないよう、本体と -wal（あれば）だけを一時フォルダへ
+    写してから読む。-shm は写さない（別の瞬間に写した -shm は写した -wal と食い違い、
+    WAL の新しい分が見えなくなる。-shm は WAL の索引なので、写した -wal から SQLite が
+    作り直す）。そのため写しは読み書きで開くが、書くのは一時フォルダの写しだけで、
+    SQL は select だけ。ListTool のフォルダには一切書かず、元のファイルを sqlite では
+    開かない。写している間に元の本体か -wal の大きさ・更新時刻が変わったら写し直し
+    （HOST_STATE_COPY_ATTEMPTS 回まで）。それでも変わり続けた・壊れている・途中だった
     場合は例外を投げる（呼び出し側の再試行に任せる。以前の JSON 版と同じ）。
     """
     with tempfile.TemporaryDirectory() as work:
         copy = Path(work) / "host_state.sqlite3"
-        shutil.copy2(path, copy)
-        for suffix in HOST_STATE_SIDECARS:
-            side = Path(str(path) + suffix)
-            if side.exists():
-                shutil.copy2(side, str(copy) + suffix)
-        con = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+        _copy_host_state(path, copy)
+        con = sqlite3.connect(str(copy))
         try:
             members = con.execute(
                 "select id, tab_index, section, vrc_name from participants").fetchall()

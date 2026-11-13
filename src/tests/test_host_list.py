@@ -1663,6 +1663,186 @@ class TestHostStateSqlite(unittest.TestCase):
 
 
 
+class TestHostStateCopy(unittest.TestCase):
+    """主催リストの読み方: 本体と -wal だけを一時フォルダへ写し、-shm は写さない。
+
+    別の瞬間に写した -shm は写した -wal と食い違い、読み取り専用で開くと WAL の新しい分が
+    見えなかった（参加者は読めるのに続行リストが 0 件）。元のフォルダには書かない。
+    """
+
+    CLASSIC = "Classic/クラシック"
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._dir.cleanup)
+        self.folder = Path(self._dir.name) / "ListTool"
+        self.folder.mkdir()
+        self.db = self.folder / "host_state.sqlite3"
+        self._writers = []
+        self.addCleanup(self._close_writers)
+
+    def _close_writers(self):
+        for con in self._writers:
+            con.close()
+
+    def _wal_only_state(self):
+        """続行リスト（wishes）が -wal にだけある状態を作る（書いた接続は開いたまま）"""
+        write_host_state(self.db, [[(0, "ひと", {self.CLASSIC: {3}})]])
+        con = sqlite3.connect(str(self.db))
+        self._writers.append(con)
+        con.execute("pragma journal_mode=wal")
+        con.execute("pragma wal_autocheckpoint=0")
+        con.execute("insert into participants(id, tab_index, section, position,"
+                    " vrc_name, is_visible) values (99, 0, 0, 1, 'あとから', 1)")
+        con.execute("insert into wishes values (99, ?, ?)", (self.CLASSIC, wish_bits({11})))
+        con.commit()
+        self.assertTrue(Path(str(self.db) + "-wal").exists(), "前提: -wal がある")
+
+    def _snapshot_with(self, shm: bytes | None) -> Path:
+        """-wal だけに wishes がある状態を別フォルダへ写し（書いた接続は開いたまま）、
+        そこへ偽の -shm を置く。ListTool が開いている間は -shm を直接いじれないので、
+        止まっているフォルダとして作る"""
+        self._wal_only_state()
+        snap = Path(self._dir.name) / "snap"
+        snap.mkdir()
+        shutil.copy2(self.db, snap / self.db.name)
+        shutil.copy2(str(self.db) + "-wal", snap / (self.db.name + "-wal"))
+        if shm is not None:
+            (snap / (self.db.name + "-shm")).write_bytes(shm)
+        return snap / self.db.name
+
+    def _listing(self, folder: Path):
+        return {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in folder.iterdir()}
+
+    # ── -wal だけにある分が読める ──────────────
+    def test_wishes_only_in_the_wal_are_read(self):
+        self._wal_only_state()
+
+        keep_on, meta, wishes = MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11})
+        self.assertEqual(wishes["あとから"], {self.CLASSIC: {11}})
+        self.assertEqual(meta["participants"], 2)
+
+    def test_a_stale_zero_filled_shm_in_the_source_folder_does_not_hide_the_wal(self):
+        db = self._snapshot_with(bytes(32768))
+
+        keep_on, _meta, wishes = MatchTNL.load_host_state(str(db))
+
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11})
+        self.assertEqual(wishes["あとから"], {self.CLASSIC: {11}})
+
+    def test_a_garbage_shm_in_the_source_folder_does_not_hide_the_wal(self):
+        db = self._snapshot_with(bytes(range(256)) * 128)
+
+        keep_on, _meta, wishes = MatchTNL.load_host_state(str(db))
+
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11})
+        self.assertEqual(wishes["あとから"], {self.CLASSIC: {11}})
+
+    def test_the_shm_is_not_copied(self):
+        db = self._snapshot_with(bytes(32768))
+        copied = []
+        real_copy2 = shutil.copy2
+
+        def spy(src, dst, *a, **k):
+            copied.append(os.path.basename(str(src)))
+            return real_copy2(src, dst, *a, **k)
+
+        with patch.object(MatchTNL.shutil, "copy2", side_effect=spy):
+            MatchTNL.load_host_state(str(db))
+
+        self.assertEqual(copied, [db.name, db.name + "-wal"])
+
+    # ── -wal が無い ─────────────────────────
+    def test_a_database_without_a_wal_is_read(self):
+        write_host_state(self.db, [[(0, "ひと", {self.CLASSIC: {3}})]])
+        self.assertFalse(Path(str(self.db) + "-wal").exists(), "前提: -wal が無い")
+
+        keep_on, meta, _w = MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(keep_on, {self.CLASSIC: {3}})
+        self.assertEqual(meta["participants"], 1)
+
+    # ── 写している間に元が変わった ─────────────
+    def _touching_copy2(self, times: int):
+        """本体を写し終えるたび、最初の times 回だけ元の本体の更新時刻を動かす（写している最中に
+        ListTool が書いたことにする）。呼ばれた回数も数える"""
+        real_copy2 = shutil.copy2
+        state = {"bodies": 0}
+
+        def fake(src, dst, *a, **k):
+            result = real_copy2(src, dst, *a, **k)
+            if os.path.basename(str(src)) == self.db.name:
+                state["bodies"] += 1
+                if state["bodies"] <= times:
+                    st = os.stat(src)
+                    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+            return result
+
+        return fake, state
+
+    def test_it_copies_again_when_the_source_changed_while_copying(self):
+        self._wal_only_state()
+        fake, state = self._touching_copy2(times=1)
+
+        with patch.object(MatchTNL.shutil, "copy2", side_effect=fake):
+            keep_on, _meta, _w = MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(state["bodies"], 2, "1 回目は変わったので写し直した")
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11})
+
+    def test_it_copies_again_when_the_wal_changed_while_copying(self):
+        self._wal_only_state()
+        real_copy2 = shutil.copy2
+        wal_copies = []
+
+        def fake(src, dst, *a, **k):
+            result = real_copy2(src, dst, *a, **k)
+            if str(src).endswith("-wal"):
+                wal_copies.append(src)
+                if len(wal_copies) == 1:
+                    st = os.stat(src)
+                    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+            return result
+
+        with patch.object(MatchTNL.shutil, "copy2", side_effect=fake):
+            keep_on, _meta, _w = MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(len(wal_copies), 2)
+        self.assertEqual(keep_on[self.CLASSIC], {3, 11})
+
+    def test_it_raises_when_the_source_keeps_changing(self):
+        self._wal_only_state()
+        fake, state = self._touching_copy2(times=99)
+
+        with patch.object(MatchTNL.shutil, "copy2", side_effect=fake):
+            with self.assertRaises(sqlite3.OperationalError):
+                MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(state["bodies"], MatchTNL.HOST_STATE_COPY_ATTEMPTS)
+
+    # ── 元のフォルダに書かない ─────────────────
+    def test_the_source_folder_is_unchanged_after_reading(self):
+        db = self._snapshot_with(bytes(32768))
+        snap = db.parent
+        before = self._listing(snap)
+        before_bytes = {p.name: p.read_bytes() for p in snap.iterdir()}
+
+        MatchTNL.load_host_state(str(db))
+
+        self.assertEqual(self._listing(snap), before, "ファイルの一覧・大きさ・更新時刻")
+        self.assertEqual({p.name: p.read_bytes() for p in snap.iterdir()}, before_bytes)
+
+    def test_the_source_folder_of_a_live_wal_is_unchanged_after_reading(self):
+        self._wal_only_state()
+        before = self._listing(self.folder)
+
+        MatchTNL.load_host_state(str(self.db))
+
+        self.assertEqual(self._listing(self.folder), before)
+
+
 class TestWindowTabMatching(unittest.TestCase):
     """ToN ListTool の複窓対応: 窓ごとに、対応するタブの続行リストだけを使う。
 
