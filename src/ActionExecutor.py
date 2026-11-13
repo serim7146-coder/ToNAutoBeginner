@@ -340,7 +340,8 @@ class ActionExecutor:
         if self._osc is not None:
             ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC, stop=self._stopped)
         else:
-            ok = WindowOperator.hold_key_background(self._cfg.hwnd, "space", config.JUMP_PRESS_SEC,
+            # _background_key は 1 文字しか受けないので、スペースは空白 1 文字で渡す（"space" は弾かれる）
+            ok = WindowOperator.hold_key_background(self._cfg.hwnd, " ", config.JUMP_PRESS_SEC,
                                                     stop=self._stopped)
         if ok is False:
             self._log("⚠ ジャンプを送れません（最小化中など）")
