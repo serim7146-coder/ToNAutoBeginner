@@ -909,14 +909,45 @@ class LogMonitor:
 
         届く前にラウンドが終われば、その統計は transformed_uid = None で送られる
         （通信に失敗したときと同じ）
+
+        通信に失敗（例外）したら、TRANSFORMED_UID_RETRY_SEC の間隔でやり直す（最初の 1 回＋その数）。
+        send_Users が None を返すとき（設定なし・DB に関数がない・割り当てられない）は例外ではなく、
+        やり直しても変わらないので、今までどおり None を入れて終わる。
+        取りに行った UID が今の UID と違う・監視が止まっているときは、結果を入れない（古い結果で
+        上書きしない）。画面のログは、最初の失敗で 1 行と、最後（成功かあきらめ）の 1 行だけ。
+        途中のやり直しは debug.log
         """
-        try:
-            self.st.transformed_uid = ConnectDB.send_Users(user_id, name)
-        except Exception as e:
-            DebugLog.exception("LogMonitor._fetch_transformed_uid")
-            self._log(f"transformed_uid の取得に失敗: {e}")
+        st = self.st
+        waits = config.TRANSFORMED_UID_RETRY_SEC
+        for attempt in range(len(waits) + 1):
+            if attempt:
+                if self._stop_event.wait(waits[attempt - 1]):
+                    return
+                if not self._transformed_uid_still_wanted(user_id):
+                    return
+            try:
+                value = ConnectDB.send_Users(user_id, name)
+            except Exception as e:
+                DebugLog.exception("LogMonitor._fetch_transformed_uid")
+                if not self._transformed_uid_still_wanted(user_id):
+                    return
+                if attempt == 0:
+                    self._log(f"transformed_uid の取得に失敗: {e}"
+                              f"（{len(waits)}回までやり直します）")
+                else:
+                    self._debug(f"transformed_uid の取得に失敗（{attempt}回目のやり直し）: {e}")
+                continue
+            if not self._transformed_uid_still_wanted(user_id):
+                self._debug("transformed_uid: 取りに行った間に UID が変わった（または止めた）ので捨てます")
+                return
+            st.transformed_uid = value
+            self._log(f"transformed_uid: {value}")
             return
-        self._log(f"transformed_uid: {self.st.transformed_uid}")
+        self._log("transformed_uid の取得をあきらめました（統計は番号なしで送ります）")
+
+    def _transformed_uid_still_wanted(self, user_id) -> bool:
+        """統計用の番号の取得を続けてよいか（監視が動いていて、この窓の UID が取りに行った UID のまま）"""
+        return self._running and self.st.local_user_id == user_id
 
     def _restore_players(self, events):
         """Joining 以降の入退室を古い順に積み上げる"""

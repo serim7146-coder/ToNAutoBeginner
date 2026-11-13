@@ -555,6 +555,7 @@ class TestStartScanPrefilter(unittest.TestCase):
     def test_the_scan_does_not_wait_for_the_statistics_id(self):
         path = self._log_file(self.LINES)
         monitor = self._monitor(path)
+        monitor._running = True         # 動いている監視にだけ番号を入れる（止まった窓には入れない）
         done = threading.Event()
 
         def slow(_uid, _name=None):
@@ -581,11 +582,13 @@ class TestStartScanPrefilter(unittest.TestCase):
 
     def test_a_failed_request_leaves_the_id_empty(self):
         monitor = self._monitor(self._log_file(self.LINES))
+        monitor._running = True         # 動いている監視だけがやり直す（待ちは実時間で待たない）
 
         def offline(_uid, _name=None):
             raise OSError("offline")    # 毎回作る（使い回すと例外がログを掴んだままになる）
 
         with patch.object(ConnectDB, "send_Users", side_effect=offline), \
+             patch.object(monitor._stop_event, "wait", return_value=False), \
              patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
             monitor._detect_instance_from_log()
             monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
