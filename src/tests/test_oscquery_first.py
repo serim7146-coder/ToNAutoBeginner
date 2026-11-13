@@ -138,14 +138,20 @@ class TestOSCQueryFirst(_FirstCase):
         self.assertEqual(self.ports.binds, [("127.0.0.1", 9021)], "窓1 の固定ポートは開かない")
 
     def test_the_way_does_not_change_later(self):
-        """固定ポートで受けている窓に、後から OSCQuery で届いても固定ポートのまま（二重にしない）"""
+        """固定ポートで 1 通でも受けた窓に、後から OSCQuery で届いても固定ポートのまま（二重にしない）。
+        まだ 1 通も受けていない窓は切り替わる（tests/test_oscquery_late.py）"""
         r = self._receiver(11, 9011, "窓1")
         r.start()
         self.assertEqual(self._wait_mode(r), OSCReceiver.MODE_PORT)
+        packet = OSCClient.OSCClient.build_message(OSCReceiver.VELOCITY_MAGNITUDE, 4.0)
+        self.ports.packets[9011] = [(packet, ("127.0.0.1", 50000))]
+        deadline = time.time() + 2
+        while r.speed is None and time.time() < deadline:
+            time.sleep(0.005)
         service = OSCQuery.current()
         self.assertFalse(service.route(5001, OSCReceiver.VELOCITY_MAGNITUDE, 9.9))
         self.assertEqual(r.mode, OSCReceiver.MODE_PORT)
-        self.assertIsNone(r.speed, "OSCQuery の分は捨てる")
+        self.assertEqual(r.speed, 4.0, "OSCQuery の分は捨てる")
         self.assertEqual(self.ports.binds, [("127.0.0.1", 9011)], "開き直さない")
 
     def test_an_oscquery_window_does_not_fall_back_later(self):
