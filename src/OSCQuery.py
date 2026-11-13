@@ -14,7 +14,14 @@ VRChat の送信ポート（9001 など）を bind すると、先に開いた�
 窓ごとの受信器（OSCReceiver.VelocityReceiver）が start で登録・stop で外す。サービスはツールが動いている間
 出しっぱなし（窓の監視の開始・停止のたびに名乗りを出し入れしない。出し入れを重ねると VRChat が見つけなく
 なった疑いがある。DS）。立てるのは最初の窓の監視か VRChat の起動（ensure）、取り下げるのはツールを閉じるとき
-（shutdown）。届いた値は、その窓が OSCQuery で受けると決めたときだけ渡す（固定ポートの窓には渡さない）。
+（shutdown）。
+- 届いた値は、その窓が OSCQuery で受けると決めたときだけ渡す。待っている窓・受け取れない窓（固定ポートも
+  使えなかった）・固定ポートでまだ 1 通も受けていない窓は、OSCQuery で届いたら OSCQuery に切り替える。固定ポートで
+  1 通でも受けた窓には渡さない（二重に受けない）
+- VRChat はサービスを見つけた直後に値をまとめて送るが、サービスはツールの起動から出しっぱなしなので、それは
+  監視を始める前（受信器が 0 個）に届くことがある。値は捨てるが、送ってきたプロセスの PID は覚えておく
+  （has_sent）。あとから監視を始めた窓は、その PID が覚えにあれば 15 秒待たずに OSCQuery に決める
+- HTTP（`/?HOST_INFO`・`/`）を VRChat が読みに来たかは、ログのためだけに覚える（判定には使わない）
 """
 import json
 import random
@@ -167,6 +174,8 @@ class Service:
         self._unknown_logged_at = 0.0   # 分からない送り元を最後に書いた時刻
         self._unknown_since_log = 0     # その後の件数
         self._unknown_ports = {}        # 送り元ポート → PID（最後の行以降。例に出す分。挿入順）
+        self._sent_pids = set()         # OSCQuery の受け口へ速さ・接地を送ってきたプロセスの PID（受信器が 0 個の間も）
+        self._http_seen = False         # VRChat が HTTP を読みに来たことがあるか（ログのため。HTTP のスレッドが書く）
 
     def start(self) -> bool:
         try:
@@ -176,6 +185,7 @@ class Service:
 
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self):
+                    service._note_http()
                     status, value = respond(self.path, service.name, service.osc_port)
                     body = json.dumps(value).encode("utf-8")
                     self.send_response(status)
@@ -201,6 +211,28 @@ class Service:
         DebugLog.write(f"[OSCQuery] サービス {self.name}: OSC 127.0.0.1:{self.osc_port}・"
                        f"HTTP 127.0.0.1:{self.http_port}")
         return True
+
+    @property
+    def http_seen(self) -> bool:
+        """VRChat が HTTP を読みに来たことがあるか（ログのため。見つけてもらえたかの目安）"""
+        with self._lock:
+            return self._http_seen
+
+    def _note_http(self):
+        """HTTP のアクセス（サーバーのスレッド）。初回だけ debug.log に 1 行"""
+        with self._lock:
+            first = not self._http_seen
+            self._http_seen = True
+        if first:
+            DebugLog.write("[OSCQuery] VRChat が HTTP を読みに来ました（見つけてもらえた）")
+
+    def has_sent(self, pid: int) -> bool:
+        """その PID のプロセスが、このサービスの受け口へ速さ・接地を送ってきたことがあるか
+        （サービスが生きている間。受信器が 0 個の間に届いたものも覚えている）"""
+        if not pid:
+            return False
+        with self._lock:
+            return pid in self._sent_pids
 
     @property
     def advertised(self) -> bool:
@@ -300,12 +332,18 @@ class Service:
             if not self._idle_logged:
                 self._idle_logged = True
                 DebugLog.write("[OSCQuery] 受け取る窓がありません（監視していない）→ 届いたものは数えずに捨てます")
+            # 値は捨てるが、送ってきた PID は覚える（あとで監視を始めた窓がすぐ OSCQuery に決められる）。
+            # 送り元が表に無いときだけ、同じ間隔（PORTS_REFRESH_SEC）を空けて netstat を取り直す
+            if src_port not in self._port_pid and time.time() - self._refreshed_at >= PORTS_REFRESH_SEC:
+                self._refresh_ports()
+            self._remember_sender(src_port)
             return False
         receiver = self._receiver_for(src_port)
         wait = PORTS_RECHECK_SEC if src_port in self._port_pid else PORTS_REFRESH_SEC
         if receiver is None and time.time() - self._refreshed_at >= wait:
             self._refresh_ports()
             receiver = self._receiver_for(src_port)
+        self._remember_sender(src_port)
         if receiver is None:
             self.unknown += 1
             self._unknown_since_log += 1
@@ -330,6 +368,12 @@ class Service:
                            f"{receiver.window_label}")
         receiver._handle(address, value)
         return True
+
+    def _remember_sender(self, src_port: int):
+        pid = self._port_pid.get(src_port)
+        if pid:
+            with self._lock:
+                self._sent_pids.add(pid)
 
     def _receiver_for(self, src_port: int):
         pid = self._port_pid.get(src_port)

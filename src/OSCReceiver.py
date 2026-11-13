@@ -6,11 +6,16 @@ ToNはラウンド種別に応じてプレイヤーの移動速度を変える�
 
 受け方は窓ごと（DS。依頼者 2026-10-11「OSCQuery で接続して、接続できなかったら固定ポート」）:
 1. まずツールに1つの OSCQuery のサービス（OSCQuery.py）で待つ。サービスが送り元のポート → PID → 窓で
-   振り分けて渡す。VRChat はサービスを見つけた直後にアバターの今の値をまとめて送るので、届いた＝つながった
+   振り分けて渡す。VRChat はサービスを見つけた直後にアバターの今の値をまとめて送るので、届いた＝つながった。
+   その値が監視を始める前に届いていたら（サービスが PID を覚えている）、15 秒待たずに start でそのまま
+   OSCQuery に決める（固定ポートは開かない）
 2. OSCQUERY_CONNECT_WAIT_SEC たってもその窓から届かなければ、固定ポート（VRChat の送信ポート 9001 など）を
    開く（先に開いたアプリだけが受け取れる。OSCQuery で届く窓は開かないので、ほかのアプリが使える）
 3. 固定ポートもほかのアプリが使っていれば、受け取れない（公開ログにそのアプリの名前）
-一度決めた受け方は、その監視の間は変えない（固定ポートの窓に後から OSCQuery で届いても捨てる）。
+受け方の切り替え: 固定ポートで 1 通も受けていない窓（固定ポートで待っている・受け取れない）に、あとから
+OSCQuery で届いたら、固定ポートを閉じて OSCQuery に切り替える（アバターが止まっていて 15 秒届かなかっただけの
+窓が、動いてから受けられるように）。固定ポートで 1 通でも受けた窓は変えない（OSCQuery で届いても捨てる。
+二重に受けない）。止めた受信器は何も受けない・切り替えない。
 
 注意: VRChatはアバターが持っているパラメータしか送らない。VelocityMagnitudeが
 アバターに定義されていないと1件も飛んでこないため、呼び出し側は ever_received を
@@ -91,6 +96,7 @@ class VelocityReceiver:
         self._registered = False
         self.mode = MODE_WAITING
         self._sock = None
+        self._port_received = False         # 固定ポートで速さ・接地を 1 通でも受けたか（受けたら OSCQuery へ切り替えない）
         self._running = False
         self._stop_event = threading.Event()
         self._wait_thread = None            # OSCQuery で届くのを待つスレッド（止めたらすぐ終わる）
@@ -125,6 +131,8 @@ class VelocityReceiver:
         self._stop_event.clear()
         if OSCQuery.acquire(self):
             self._registered = True
+            if self._decide_from_earlier_packets():
+                return True
             self._wait_thread = TaskStats.thread("OSCReceiver._wait_then_fall_back", self._wait_then_fall_back, daemon=True)
             self._wait_thread.start()
         else:
@@ -132,10 +140,27 @@ class VelocityReceiver:
             self.fall_back()
         return True
 
+    def _decide_from_earlier_packets(self) -> bool:
+        """監視を始める前に、この窓の VRChat が OSCQuery へ送ってきていた（サービスが PID を覚えている）なら、
+        待たずに OSCQuery に決める。決めたら True"""
+        import OSCQuery
+        service = OSCQuery.current()
+        pid = self.pid
+        if service is None or not pid or not service.has_sent(pid):
+            return False
+        with self._lock:
+            if self.mode != MODE_WAITING or not self._running:
+                return False
+            self.mode = MODE_OSCQUERY
+        DebugLog.write(f"[速度の受信] {self.window_label}: OSCQuery で受信（監視の前に届いていた・PID {pid}）。"
+                       f"固定ポート {self._port} は開きません")
+        return True
+
     def stop(self):
         self._running = False
         self._stop_event.set()
-        sock, self._sock = self._sock, None
+        with self._lock:
+            sock, self._sock = self._sock, None
         if sock is not None:
             try:
                 sock.close()
@@ -162,17 +187,40 @@ class VelocityReceiver:
         self.fall_back()
 
     def accept_oscquery(self) -> bool:
-        """OSCQuery で届いた値を受けるか。待っている間に届いたら OSCQuery に決める（以後は変えない）"""
+        """OSCQuery で届いた値を受けるか。OSCQuery の受信スレッドから呼ばれる。
+        待っている窓は OSCQuery に決める。固定ポートでまだ 1 通も受けていない窓（固定ポートで待っている）と
+        受け取れない窓も、OSCQuery に切り替える（固定ポートは閉じる）。固定ポートで 1 通でも受けた窓・
+        止めた窓は変えない（受けない）"""
+        sock = None
         with self._lock:
-            if self.mode == MODE_WAITING and self._running:
+            if not self._running:
+                return False
+            before = self.mode
+            if before == MODE_WAITING:
                 self.mode = MODE_OSCQUERY
-                first = True
-            else:
-                first = False
+            elif before == MODE_PORT and not self._port_received:
+                self.mode = MODE_OSCQUERY
+                sock, self._sock = self._sock, None
+            elif before == MODE_NONE:
+                self.mode = MODE_OSCQUERY
             accept = self.mode == MODE_OSCQUERY
-        if first:
-            DebugLog.write(f"[速度の受信] {self.window_label}: OSCQuery で受信（PID {self.pid}）。固定ポート "
-                           f"{self._port} は開きません")
+            changed = accept and before != MODE_OSCQUERY
+        if sock is not None:
+            try:
+                sock.close()                # 固定ポートの受信スレッド（_run）は OSError で静かに終わる
+            except Exception:
+                DebugLog.exception("OSCReceiver.accept_oscquery")
+        if changed:
+            if before == MODE_WAITING:
+                DebugLog.write(f"[速度の受信] {self.window_label}: OSCQuery で受信（PID {self.pid}）。固定ポート "
+                               f"{self._port} は開きません")
+            elif before == MODE_PORT:
+                DebugLog.write(f"[速度の受信] {self.window_label}: 固定ポート {self._port} では 1 通も受けていない"
+                               f"うちに OSCQuery で届いた（PID {self.pid}）→ 固定ポートを閉じて OSCQuery で受信")
+            else:
+                DebugLog.write(f"[速度の受信] {self.window_label}: 受け取れなかったが OSCQuery で届いた"
+                               f"（PID {self.pid}）→ OSCQuery で受信")
+                self._log(f"{self.window_label}: OSCQuery で受け取れるようになりました")
         return accept
 
     def fall_back(self, why=None):
@@ -194,20 +242,42 @@ class VelocityReceiver:
                            f"（{e}）→ 受け取れません")
             self._give_up(f"ポート {self._port} は {owner} が使っています")
             return
-        self._sock = sock
-        reason = why or f"OSCQuery で {config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない "
+        with self._lock:
+            keep = self.mode == MODE_PORT and self._running     # 開く間に OSCQuery へ切り替わった・止めた
+            if keep:
+                self._sock = sock
+        if not keep:
+            try:
+                sock.close()
+            except Exception:
+                DebugLog.exception("OSCReceiver.fall_back")
+            return
+        reason = why or f"OSCQuery で {config.OSCQUERY_CONNECT_WAIT_SEC:.0f}秒届かない{self._http_note()} "
         DebugLog.write(f"[速度の受信] {self.window_label}: {reason}→ 固定ポート {self._port} で受信")
         TaskStats.thread("OSCReceiver._run", self._run, daemon=True).start()
 
+    @staticmethod
+    def _http_note() -> str:
+        """「OSCQuery で届かない」の行に添える、VRChat が HTTP を読みに来ていたか（ログのため。判定には使わない）。
+        サービスが無ければ添えない"""
+        import OSCQuery
+        service = OSCQuery.current()
+        if service is None:
+            return ""
+        return "（HTTP は読みに来ていた）" if service.http_seen else "（HTTP も読みに来ていない）"
+
     def _give_up(self, why: str):
         with self._lock:
+            if self.mode != MODE_PORT:
+                return                      # 受け取れないと決める間に OSCQuery へ切り替わった・止めた
             self.mode = MODE_NONE
         self._log(f"{self.window_label}: 速度を受け取れません（OSCQuery で届かず、{why}）")
 
     def _run(self):
-        while self._running and self._sock is not None:
+        sock = self._sock                   # 閉じられたら（止めた・OSCQuery へ切り替えた）OSError で静かに終わる
+        while self._running and sock is not None:
             try:
-                data, _addr = self._sock.recvfrom(4096)
+                data, _addr = sock.recvfrom(4096)
             except socket.timeout:
                 continue
             except OSError:
@@ -217,6 +287,10 @@ class VelocityReceiver:
             parsed = parse_message(data)
             if parsed is None:
                 continue
+            with self._lock:
+                if self.mode == MODE_OSCQUERY:
+                    break                   # 切り替えた後に読んだ 1 通は受けない（二重にしない）
+                self._port_received = True  # 1 通でも受けたら、以後 OSCQuery へは切り替えない
             self._handle(*parsed)
 
     def _handle(self, address, value):

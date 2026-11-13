@@ -54,13 +54,14 @@ class _ServiceCase(_Case):
 
 
 class TestNobodyToReceive(_ServiceCase):
-    """C1: 受信器が 0 のとき、届いたものは捨てるだけ"""
+    """C1: 受信器が 0 のとき、届いたものは捨てるだけ（送ってきた PID は覚える。tests/test_oscquery_late.py）"""
 
     def test_nothing_is_counted_or_looked_up(self):
         for _ in range(300):
             self.assertFalse(self.service.route(5009, OSCReceiver.VELOCITY_MAGNITUDE, 6.5))
         self.assertEqual(self.service.unknown, 0)
-        self.assertEqual(self.netstat_calls, 0, "対応表（netstat）も取り直さない")
+        # PID を覚えるために対応表（netstat）を取り直すが、間引き（表にある送り元は取り直さない）を超えない
+        self.assertEqual(self.netstat_calls, 1, "300 件届いても取り直しは 1 回")
         self.assertEqual(self.lines(_UNKNOWN), [])
 
     def test_one_line_only_for_the_first(self):

@@ -268,7 +268,7 @@ class TestFixedPortWithoutAdvert(_FirstCase):
             r.start()
             self.assertEqual(self._wait_mode(r), OSCReceiver.MODE_PORT)
         lines = [c.args[0] for c in write.call_args_list]
-        self.assertIn("[速度の受信] 窓1: OSCQuery で 0秒届かない → 固定ポート 9011 で受信", lines)
+        self.assertIn("[速度の受信] 窓1: OSCQuery で 0秒届かない（HTTP も読みに来ていない） → 固定ポート 9011 で受信", lines)
         self.assertFalse(any("mDNS で公開されていない" in l for l in lines))
 
     def test_the_advert_time_is_taken_off_the_wait(self):
