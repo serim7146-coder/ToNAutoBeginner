@@ -701,9 +701,13 @@ class TestAppLogLimit(unittest.TestCase):
             def see(self, index):
                 self.seen = index
 
+            def yview(self):
+                return (0.0, 1.0)
+
         app = type("FakeApp", (), {})()
         app.log_text = FakeLogText()
         app._log_line_count = 0
+        app._log_at_bottom = lambda: mainGUI.App._log_at_bottom(app)
         app._append_log_lines = lambda lines: mainGUI.App._append_log_lines(app, lines)   # FT: 1 行も複数行の道を通る
 
         with patch.object(config, "GUI_LOG_MAX_LINES", 3):
