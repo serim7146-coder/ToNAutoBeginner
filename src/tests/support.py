@@ -357,6 +357,7 @@ def setUpModule():
     SharedState.set_continue_drop_item(False)
     SharedState.set_continue_restore_window(False)
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
+    SharedState.set_wait_bloodthirsty(True)     # 前のテストの OFF を残さない（既定は ON）
     # App を作るたびに最大 WS の見張り（MemoryWatch）の本物のスレッドが立つと、モジュールが終わって debug.log のパスが
     # 本物に戻った後も生き残り、本物の debug.log に書きうる。立てた済みの印を入れて start() を何もしなくする。
     # 見張りを確かめるテスト（test_memory_watch）は自分で _thread を None にして使う
@@ -1007,6 +1008,7 @@ def _with_cancel_key(app, key=config.SUICIDE_CANCEL_KEY):
     app._refresh_item_fetch_button = lambda: None
     app._refresh_continue_after_checks = lambda: None
     app._refresh_run_respawn_check = lambda: None
+    app._refresh_wait_bloodthirsty_check = lambda: None
     app._refresh_chase_check = lambda: None
     app._refresh_suicide_cancel_key_label = lambda: None
     app._unhook_suicide_cancel_key = lambda: None

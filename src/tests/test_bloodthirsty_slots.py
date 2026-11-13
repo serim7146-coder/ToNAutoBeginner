@@ -538,5 +538,124 @@ class TestDelayedDecisionLoop(_Base):
         decide.assert_called_once_with("Bloodbath")
 
 
+class TestWaitBloodthirstyCheck(_Base):
+    """チェック「Bloodthirsty を待つ」（全窓共通・保存・既定 ON）。OFF なら 2 枠目・3 枠目の合図を待たない"""
+
+    PRIVATE = config.INSTANCE_PRIVATE
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_wait_bloodthirsty, True)
+
+    def _wait(self, round_type, ids, keep_on):
+        return self._monitor(self.PRIVATE, keep_on, round_type, ids=ids)._variant_wait_sec()
+
+    def _waits_by_slot(self):
+        keep_on = {BLOODBATH_KEY: {BLOODTHIRSTY}}
+        waits = []
+        for slot in range(3):
+            ids = [2, 4, 5]
+            ids[slot] = CURIOUS
+            waits.append(self._wait("Bloodbath", ids, keep_on))
+        return waits
+
+    def test_on_by_default_keeps_the_slot_waits(self):
+        self.assertTrue(SharedState.get_wait_bloodthirsty())
+        self.assertEqual(self._waits_by_slot(), [0.3, 6.0, 11.0])
+        self.assertEqual(self._wait("Midnight", [2, CURIOUS, 5], {MIDNIGHT_KEY: {BLOODTHIRSTY}}), 6.0)
+
+    def test_off_does_not_wait_in_any_slot(self):
+        SharedState.set_wait_bloodthirsty(False)
+        self.assertEqual(self._waits_by_slot(), [config.TERROR_VARIANT_WAIT_SEC] * 3)
+        self.assertEqual(self._wait("Midnight", [2, CURIOUS, 5], {MIDNIGHT_KEY: {BLOODTHIRSTY}}), 0.3)
+        self.assertEqual(self._wait("Double Trouble", [2, CURIOUS], {DT_KEY: {BLOODTHIRSTY}}), 0.3)
+
+    def test_off_decides_at_killers_without_the_long_wait(self):
+        SharedState.set_wait_bloodthirsty(False)
+        monitor = self._monitor(self.PRIVATE, {BLOODBATH_KEY: {BLOODTHIRSTY}})
+        monitor._running = True
+
+        started, waits = self._killers(monitor, [2, 4, CURIOUS], "Bloodbath")
+
+        self.assertNotIn("6.0秒", "".join(waits))
+        self.assertNotIn("11.0秒", "".join(waits))
+        self.assertEqual(monitor._variant_wait_sec(), config.TERROR_VARIANT_WAIT_SEC)
+
+    def test_off_does_not_touch_the_midnight_alternate_wait(self):
+        """Foxy の 11 秒待ち（MIDNIGHT_ALTERNATE_WAIT_ENABLED）はこのチェックとは別"""
+        SharedState.set_wait_bloodthirsty(False)
+        with patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True):
+            self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.FOXY_ID}}), 11.0)
+
+    def test_a_change_of_the_check_changes_the_setting_and_saves(self):
+        app = type("FakeApp", (), {})()
+        app._schedule_settings_save = MagicMock()
+        for value in (False, True):
+            app.v_wait_bloodthirsty = MagicMock(get=lambda value=value: value)
+            mainGUI.App._on_wait_bloodthirsty_changed(app)
+            self.assertEqual(SharedState.get_wait_bloodthirsty(), value)
+        self.assertEqual(app._schedule_settings_save.call_count, 2)
+
+    def test_the_check_follows_the_setting(self):
+        app = type("FakeApp", (), {})()
+        app.v_wait_bloodthirsty = MagicMock()
+        SharedState.set_wait_bloodthirsty(False)
+        mainGUI.App._refresh_wait_bloodthirsty_check(app)
+        app.v_wait_bloodthirsty.set.assert_called_once_with(False)
+
+    def _load(self, data):
+        app = _with_cancel_key(type("FakeApp", (), {})())
+        app.tabs = []
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_ton_access", "v_instance_link", "v_emergency_key", "v_start_key",
+                     "v_tnl", "v_obs_enabled", "v_obs_freeze", "v_obs_host",
+                     "v_obs_port", "v_obs_password"):
+            setattr(app, name, MagicMock())
+        for name in ("_add_tool_row", "_refresh_emergency_key_label", "_refresh_start_key_label",
+                     "_apply_obs_settings", "_apply_saved_window_settings",
+                     "_load_own_list", "_log", "_load_window_volume_settings", "_load_fog_early_read_setting",
+                     "_load_launch_options_setting"):
+            setattr(app, name, lambda *a, **k: None)
+        with patch.object(mainGUI, "load_settings", return_value=dict(data)),              patch.object(mainGUI, "save_settings"):
+            mainGUI.App._load_saved_settings(app)
+
+    def test_the_saved_value_is_loaded(self):
+        for data, expected in (({"wait_bloodthirsty": False}, False),
+                               ({"wait_bloodthirsty": True}, True),
+                               ({}, True),
+                               ({"wait_bloodthirsty": "x"}, True),
+                               ({"wait_bloodthirsty": None}, True),
+                               ({"wait_bloodthirsty": 0}, True)):
+            SharedState.set_wait_bloodthirsty(not expected)
+            self._load(data)
+            self.assertEqual(SharedState.get_wait_bloodthirsty(), expected, data)
+
+    def test_it_is_saved(self):
+        SharedState.set_wait_bloodthirsty(False)
+        app = _with_cancel_key(type("FakeApp", (), {})())
+        app.tabs = []
+        app.tool_rows = []
+        app._win_count_pref = None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world",
+                     "v_ton_access", "v_emergency_key",
+                     "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port", "v_obs_password"):
+            setattr(app, name, MagicMock(get=lambda: ""))
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update),              patch.object(mainGUI, "load_settings", return_value={}),              patch.object(SecretStore, "protect", return_value=""):
+            app._window_volume_settings = lambda: {}
+            app._fog_early_read_setting = lambda: {}
+            app._launch_options_setting = lambda: {}
+            app._window_freeze_setting = lambda: {}
+            mainGUI.App._save_launch_settings(app)
+        self.assertIs(saved["wait_bloodthirsty"], False)
+
+    def test_the_check_is_in_the_row_and_on_by_default(self):
+        gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
+        self.assertIn("self.v_wait_bloodthirsty = tk.BooleanVar(value=True)", gui)
+        self.assertIn('text="Bloodthirsty を待つ"', gui)
+        src = Path(SharedState.__file__).read_text(encoding="utf-8")
+        self.assertIn("_WAIT_BLOODTHIRSTY = _Setting(True, bool)", src)
+
+
 if __name__ == "__main__":
     unittest.main()
