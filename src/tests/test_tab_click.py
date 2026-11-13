@@ -85,6 +85,16 @@ class TestClickWithTab(unittest.TestCase):
             WindowOperator.click_with_tab(0.1)
         self.assertEqual(self.inputs.keys(), [("press", TAB), ("release", TAB)])
 
+    def test_the_left_button_is_let_go_when_the_hold_is_interrupted(self):
+        """押してから離すまでの間（hold_sec の待ち）に例外が出ても mouseUp を送る。そのあとで Tab を離す"""
+        def boom():
+            raise OSError("x")
+        self.inputs.on_sleep = lambda: boom() if ("down", True) in self.inputs.calls else None
+        with self.assertRaises(OSError):
+            WindowOperator.click_with_tab(0.1)
+        self.assertEqual(self.inputs.keys(), [("press", TAB), ("down", True), ("up", True), ("release", TAB)],
+                         "マウスを離す → Tab を離す")
+
     def test_the_lead_can_be_zero(self):
         with patch.object(config, "CLICK_TAB_LEAD_SEC", 0):
             WindowOperator.click_with_tab(0.1)
@@ -136,3 +146,33 @@ class TestBeginAndEntryClicks(unittest.TestCase):
         entry = ToNEntry.ToNEntry(0x10, osc_port=9000, can_operate=lambda: False)
         self.assertFalse(entry.click("警告同意"))
         self.assertEqual(self.inputs.calls, [])
+
+
+class TestMouseClickAndFailsafe(unittest.TestCase):
+    def test_pydirectinput_failsafe_is_off(self):
+        """カーソルが主モニタの左上の角にあっても FailSafeException を投げさせない（mouseUp が飛ぶと左ボタンが残る）。
+        tests/support は pydirectinput を MagicMock に差し替えているので、モジュールを読み込んだ時に
+        FAILSAFE へ False を入れたことを見る（本物の pydirectinput は読まない）"""
+        self.assertIs(WindowOperator.pydirectinput.FAILSAFE, False)
+        src = Path(WindowOperator.__file__).read_text(encoding="utf-8")
+        self.assertIn("import pydirectinput\npydirectinput.FAILSAFE = False", src)
+
+    def test_mouse_click_lets_go_when_the_hold_is_interrupted(self):
+        inputs = _Inputs(self)
+        inputs.on_sleep = lambda: (_ for _ in ()).throw(OSError("x"))
+        with self.assertRaises(OSError):
+            WindowOperator.mouse_click(0.1)
+        self.assertEqual(inputs.keys(), [("down", False), ("up", False)])
+
+    def test_mouse_click_is_unchanged_when_nothing_fails(self):
+        inputs = _Inputs(self)
+        WindowOperator.mouse_click(0.1, pause=True)
+        self.assertEqual(inputs.calls, [("down", True), ("sleep", 0.1), ("up", True)])
+
+    def test_the_drag_halves_stay_separate(self):
+        """mouse_down / mouse_up はドラッグ用。呼ぶ側が対で呼ぶので、片方だけ送る"""
+        inputs = _Inputs(self)
+        WindowOperator.mouse_down()
+        self.assertEqual(inputs.keys(), [("down", False)])
+        WindowOperator.mouse_up()
+        self.assertEqual(inputs.keys(), [("down", False), ("up", False)])
