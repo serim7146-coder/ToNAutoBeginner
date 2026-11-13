@@ -3052,7 +3052,8 @@ class App(tk.Tk):
         watcher = getattr(self, "_queue_watcher", None)
         if SharedState.get_phone_notify():
             if watcher is None:
-                watcher = QueueWatch.Watcher(config.VRCHAT_LOG_DIR, lambda: QueueWatch.notify_ready(self._log))
+                watcher = QueueWatch.Watcher(config.VRCHAT_LOG_DIR, lambda: QueueWatch.notify_ready(self._log),
+                                             on_queued=lambda: QueueWatch.notify_queued(self._log))
                 self._queue_watcher = watcher
                 watcher.start()
         elif watcher is not None:
