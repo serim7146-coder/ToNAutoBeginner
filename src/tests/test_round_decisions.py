@@ -2175,6 +2175,7 @@ class TestGroupListStatePolled(unittest.TestCase):
             monitor.cfg.log_path = log
             with patch.object(config, "LOG_POLL_INTERVAL", 0), \
                  patch.object(monitor, "_check_group_list_state", boom), \
+                 patch.object(monitor, "_verify_access", return_value=True), \
                  patch.object(monitor, "_detect_instance_from_log"):
                 monitor._run()
 
@@ -2199,6 +2200,7 @@ class TestGroupListStatePolled(unittest.TestCase):
             monitor.cfg.log_path = log
             with patch.object(config, "LOG_POLL_INTERVAL", 0), \
                  patch.object(monitor, "_check_group_list_state", count), \
+                 patch.object(monitor, "_verify_access", return_value=True), \
                  patch.object(monitor, "_detect_instance_from_log"):
                 monitor._run()
 
@@ -2235,6 +2237,7 @@ class TestGroupListStatePolled(unittest.TestCase):
             with patch.object(config, "LOG_POLL_INTERVAL", 0), \
                  patch.object(monitor, "_process", side_effect=seen.append), \
                  patch.object(monitor, "_check_group_list_state", tick), \
+                 patch.object(monitor, "_verify_access", return_value=True), \
                  patch.object(monitor, "_detect_instance_from_log"):
                 monitor._run()
 

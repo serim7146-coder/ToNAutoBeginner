@@ -152,6 +152,7 @@ import OSCQuery
 import OBSClient
 import Recorder
 import SecretStore
+import AccessCheck
 import FogEarlyRead
 import BeginDetect
 import BeginMiss
@@ -176,6 +177,10 @@ import AutoUpdate
 import Migration
 import config
 from State import WindowConfig, WindowState
+
+# AccessCheck の本物の入口（setUpModule が偽物に差し替える前の値。確かめるテストが使う）
+REAL_ASK_SERVER = AccessCheck._ask_server
+REAL_TERMINATE = AccessCheck._TERMINATE
 
 # ── 統計画面の集計は、テストでは同じスレッドで続けて回す ─────────────
 # 本物は裏のスレッドで集計して after(0) で当てる。mainloop の無いテストではそれが届かないので、
@@ -336,18 +341,24 @@ def setUpModule():
                        debug=config.DEBUG_LOG_PATH,
                        rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust,
-                       items=config.ITEMS,
-                       ban=config.BAN_UIDS_PATH)
+                       items=config.ITEMS)
     # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
     config.ITEMS = {}
-    # 依頼者の手元の本物の締め出し一覧（ban_uids.txt）にテストを左右させない。無いパスにしておく
-    config.BAN_UIDS_PATH = root / "no_such_ban_uids.txt"
     config.SETTINGS_PATH = root / "settings.json"
     config.DEBUG_LOG_PATH = root / "debug.log"
     config.ROUND_STORE_PATH = root / "rounds.sqlite"
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
+    # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい・UID 必須」の答え。
+    # 手元の記録（access.dat）は config.SETTINGS_PATH の隣なので、上の砂場に入る。DPAPI は本物を呼ばない。
+    # 答えを変えるテストは patch.object(AccessCheck, "_ask_server", ...) で差し替える
+    _real_paths["ask_server"] = AccessCheck._ask_server
+    _real_paths["access_secret_store"] = AccessCheck.SecretStore
+    AccessCheck._ask_server = _fake_ask_server
+    AccessCheck.SecretStore = FakeSecretStore
+    AccessCheck._TERMINATE = _refuse_terminate         # 差し替え忘れでテストの実行ごと終わらせない
+    AccessCheck.reset_for_tests()
     # 本物の DB（.env があると Supabase につながる）へ送らない。差し替え忘れた送信は
     # オフラインと同じに失敗させる（urlopen を差し替えるテストは、その間それが勝つ）
     _real_paths["urlopen"] = urllib.request.urlopen
@@ -379,6 +390,33 @@ def end_sound_threads(timeout: float = 3.0) -> bool:
         time.sleep(0.01)
 
 
+class FakeSecretStore:
+    """AccessCheck の手元の記録（access.dat）を包む SecretStore の偽物（本物の DPAPI を呼ばない）。
+    protect は ASCII の文字列を返し、unprotect は protect したものだけを戻す（それ以外は None）"""
+
+    @staticmethod
+    def protect(text):
+        return "FAKE:" + base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+    @staticmethod
+    def unprotect(value):
+        if not isinstance(value, str) or not value.startswith("FAKE:"):
+            return None
+        try:
+            return base64.b64decode(value[5:], validate=True).decode("utf-8")
+        except Exception:
+            return None
+
+
+def _refuse_terminate(_code):
+    raise AssertionError("テスト中に AccessCheck が本物の終わらせる処理を呼んだ（_TERMINATE を差し替えること）")
+
+
+def _fake_ask_server(_uid, _timeout):
+    """AccessCheck._ask_server の既定の偽物: 使ってよい（サーバーには出ない）"""
+    return {"allowed": True, "min_version": "", "require_uid": True}
+
+
 def _refuse_network(*_args, **_kwargs):
     raise OSError("テスト中は本物のネットワーク（DB）へ送らない")
 
@@ -394,7 +432,10 @@ def tearDownModule():
     config.ROUND_STORE_PATH = _real_paths["rounds"]
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
-    config.BAN_UIDS_PATH = _real_paths["ban"]
+    AccessCheck.reset_for_tests()
+    AccessCheck._ask_server = _real_paths["ask_server"]
+    AccessCheck.SecretStore = _real_paths["access_secret_store"]
+    AccessCheck._TERMINATE = REAL_TERMINATE
     _sandbox.cleanup()
     _OscSocketTrap.check()
     input_guard.check_outside()             # テストの外（別のスレッドの残りなど）で本物に届いた分（FF）

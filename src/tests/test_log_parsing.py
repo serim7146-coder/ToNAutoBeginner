@@ -459,6 +459,7 @@ class TestStartScanPrefilter(unittest.TestCase):
             else:
                 with patch.object(LogMonitor.LogMonitor, "_START_SCAN_MARKS", marks):
                     monitor._detect_instance_from_log()
+            monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
         st = monitor.st
         return (st.local_user_id, st.local_player_name, st.transformed_uid,
                 st.instance_type, st.instance_access, st.players_known,
@@ -564,6 +565,7 @@ class TestStartScanPrefilter(unittest.TestCase):
         with patch.object(ConnectDB, "send_Users", side_effect=slow):
             started = time.monotonic()
             monitor._detect_instance_from_log()
+            monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
             took = time.monotonic() - started
             self.assertLess(took, 1.0, "通信（2秒）を待たずに返る")
             self.assertTrue(monitor.st.players_known, "遡りは済んでいる")
@@ -586,6 +588,7 @@ class TestStartScanPrefilter(unittest.TestCase):
         with patch.object(ConnectDB, "send_Users", side_effect=offline), \
              patch.object(monitor, "_start_daemon", side_effect=lambda f, *a: f(*a)):
             monitor._detect_instance_from_log()
+            monitor._start_transformed_uid_fetch()      # サーバーの確認が通った後に _run が行う
 
         self.assertIsNone(monitor.st.transformed_uid)
         self.assertTrue(monitor.st.players_known, "遡りは最後まで済む")

@@ -545,7 +545,8 @@ class TestLogMonitorItemUse(unittest.TestCase):
             monitor.st.item_use.pickup(CHARM)
             monitor._running = True
             monitor._stop_event.set()                   # 1 周で抜ける
-            with patch.object(DebugLog, "write") as written:
+            with patch.object(DebugLog, "write") as written, \
+                 patch.object(monitor, "_verify_access", return_value=True):     # 確認は別のテストで見る
                 monitor._run()
         self.assertIn("[窓1] [アイテム] 持った: BloodKatCharm", [c.args[0] for c in written.call_args_list])
 

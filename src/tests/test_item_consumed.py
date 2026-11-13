@@ -206,7 +206,8 @@ class TestConsumableClick(_Case):
             monitor._check_item_used = lambda: order.append("check")
             monitor._running = True
             monitor._stop_event.set()                   # 1 周で抜ける
-            monitor._run()
+            with patch.object(monitor, "_verify_access", return_value=True):     # 確認は別のテストで見る
+                monitor._run()
         self.assertEqual(order[:2], ["flush", "check"])
 
     def test_the_constants(self):
