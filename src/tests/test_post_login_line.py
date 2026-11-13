@@ -170,3 +170,62 @@ class TestLatestUserIdPostLogin(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self._write(d, "2026-10-31_10-00-00", [PREFIX + "other"])
             self.assertIsNone(VRChatLauncher.latest_user_id(d))
+
+
+class TestOldStyleUidAndLastParenthesis(unittest.TestCase):
+    """UID は `usr_`＋16進とハイフン、または古い形（英数字ちょうど 10 文字）。どの行も行末の (…) で取る"""
+
+    OLD_FORM = "AbCd123456"            # 作り物（英数字 10 文字）
+    ME2 = "usr_00000000-0000-0000-0000-00000000000c"
+
+    def _lines(self, name, uid):
+        return {
+            "User Authenticated": f"User Authenticated: {name} ({uid})",
+            "post login": post_login(name=name, user=uid),
+            "joined": f"[Behaviour] OnPlayerJoined {name} ({uid})",
+            "left": f"[Behaviour] OnPlayerLeft {name} ({uid})",
+        }
+
+    def test_the_old_form_is_read_in_every_line(self):
+        kinds = {"User Authenticated": LogParser.EVENT_USER_AUTH, "post login": LogParser.EVENT_USER_AUTH,
+                 "joined": LogParser.EVENT_PLAYER_JOINED, "left": LogParser.EVENT_PLAYER_LEFT}
+        for label, line in self._lines("tester", self.OLD_FORM).items():
+            event = LogParser.parse(PREFIX + line)
+            self.assertIsNotNone(event, label)
+            self.assertEqual((event.kind, event.user_id, event.player_name),
+                             (kinds[label], self.OLD_FORM, "tester"), label)
+
+    def test_the_new_form_is_still_read(self):
+        for label, line in self._lines("tester", self.ME2).items():
+            event = LogParser.parse(PREFIX + line)
+            self.assertEqual((event.user_id, event.player_name), (self.ME2, "tester"), label)
+
+    def test_a_name_that_contains_a_uid_shaped_parenthesis_takes_the_last_one(self):
+        for name in ("a (usr_a)", "x (usr_a) y", f"p ({self.OLD_FORM})", "q (b) (c)"):
+            for label, line in self._lines(name, self.ME2).items():
+                event = LogParser.parse(PREFIX + line)
+                self.assertEqual((event.user_id, event.player_name), (self.ME2, name), (label, name))
+        for label, line in self._lines("a (usr_a)", self.OLD_FORM).items():
+            event = LogParser.parse(PREFIX + line)
+            self.assertEqual((event.user_id, event.player_name), (self.OLD_FORM, "a (usr_a)"), label)
+
+    def test_a_parenthesis_that_is_not_a_uid_is_not_read(self):
+        for bad in ("VR=False", "AbCd12345", "AbCd1234567", "AbCd_12345", "usr_", "usr_xyz", "", "Quest"):
+            for label, line in self._lines("tester", bad).items():
+                self.assertIsNone(LogParser.parse(PREFIX + line), (label, bad))
+
+    def test_text_after_the_parenthesis_is_not_a_login(self):
+        self.assertIsNone(LogParser.parse(PREFIX + f"User Authenticated: tester ({self.ME2}) extra"))
+
+    def test_the_latest_user_id_reads_both_forms_through_the_parser(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "output_log_2026-10-31_10-00-00.txt").write_bytes(
+                (PREFIX + f"User Authenticated: o (usr_a) ({self.OLD_FORM})\r\n").encode("utf-8"))
+            self.assertEqual(VRChatLauncher.latest_user_id(d), self.OLD_FORM)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "output_log_2026-10-31_10-00-00.txt").write_bytes(
+                (PREFIX + post_login(name="b (c)", user=self.ME2) + "\r\n").encode("utf-8"))
+            self.assertEqual(VRChatLauncher.latest_user_id(d), self.ME2)
+
+    def test_the_launcher_no_longer_has_its_own_login_pattern(self):
+        self.assertFalse(hasattr(VRChatLauncher, "RE_USER_AUTH"))

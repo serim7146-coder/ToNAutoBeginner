@@ -79,7 +79,10 @@ ITEM_EQUIP_MARK = "Equipping "
 # 8 Pages でページを取った（n 枚目）。持ち込めないアイテムはここでなくなる
 RE_PAGE_COLLECTED = re.compile(r"^Page Collected - (\d)/8$")
 PAGE_COLLECTED_MARK = "Page Collected - "
-RE_USER_AUTH = re.compile(r"User Authenticated: (.+?) \((usr_[0-9a-f-]+)\)")
+# VRChat の UID。`usr_` ＋ 16 進とハイフン、または古い形（英数字ちょうど 10 文字）。
+# どの行も行末の `(…)` で取る。名前に括弧が入っても、最後の括弧を UID とする（名前の方を最長で取る）
+UID_PATTERN = r"(usr_[0-9a-f-]+|[0-9A-Za-z]{10})"
+RE_USER_AUTH = re.compile(r"User Authenticated: (.+) \(" + UID_PATTERN + r"\)$")
 # 前絞りの印（*_MARK）。ログを末尾から遡る処理は、20万行を全部 parse() にかけると
 # 1本1秒以上かかる。探す行は必ずこの文字列を含むので、含まない行は parse() に
 # かけずに飛ばす。正規表現を直したら一緒に直すこと（グループを開く ( を除いた正規表現に
@@ -88,17 +91,17 @@ USER_AUTH_MARK = "User Authenticated: "
 # 2026-10-29 の VRChat の更新で User Authenticated の行が出なくなった。代わりにログイン直後に 1 回出る
 #   [Authentication - <記号>] Preforming post login checks for 名前 (usr_…)
 # を同じ意味（EVENT_USER_AUTH）で読む。綴りは VRChat 側の誤り。直されたときのため Performing も受ける。
-# 名前に括弧が入りうるので、行末の (usr_...) で区切る
-RE_POST_LOGIN = re.compile(r"\] (?:Pre|Per)forming post login checks for (.+?) \((usr_[0-9a-f-]+)\)$")
+# 名前に括弧が入りうるので、行末の (UID) で区切る
+RE_POST_LOGIN = re.compile(r"\] (?:Pre|Per)forming post login checks for (.+) \(" + UID_PATTERN + r"\)$")
 POST_LOGIN_MARK = "post login checks for "
 # 入退室。`[PlayerLog] OnPlayerJoined: 名前 (VR=False)` という別形式も出るが
 # usr_ID が無いので [Behaviour] の方だけを使う（両方拾うと二重に数える）。
 # 名前に括弧が入りうるので、末尾の (usr_...) で区切る。
 # OnPlayerJoinComplete / OnPlayerLeftRoom は直後の空白が無いので当たらない
 RE_PLAYER_JOINED = re.compile(
-    r"^\[Behaviour\] OnPlayerJoined (.+) \((usr_[0-9a-f-]+)\)$")
+    r"^\[Behaviour\] OnPlayerJoined (.+) \(" + UID_PATTERN + r"\)$")
 RE_PLAYER_LEFT = re.compile(
-    r"^\[Behaviour\] OnPlayerLeft (.+) \((usr_[0-9a-f-]+)\)$")
+    r"^\[Behaviour\] OnPlayerLeft (.+) \(" + UID_PATTERN + r"\)$")
 PLAYER_JOINED_MARK = "OnPlayerJoined "
 PLAYER_LEFT_MARK = "OnPlayerLeft "
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
