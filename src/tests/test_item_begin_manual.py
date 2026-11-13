@@ -109,7 +109,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
         ex._begin_move = MagicMock()
         ex._retry_after_giving_up = MagicMock()
 
-        def found_at_round_end():
+        def found_at_round_end(**_kw):
             st.waiting_for_equip = True
             return True
         ex._wait_round_end = found_at_round_end

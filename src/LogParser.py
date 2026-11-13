@@ -143,6 +143,7 @@ class LogEvent:
     previous_item_id: int | None = None
     player_name: str = ""
     instance: str = ""      # 入室の行の wrld_… から後ろ全部（同じインスタンスなら誰でも同じ）
+    world: str = ""         # 入室の行のワールドの ID（wrld_…。インスタンスの番号・種類は含まない）
     page: int = 0           # Page Collected の n（今は使わない）
     flag: str = ""          # 置き換えの合図の WindowState の属性（EVENT_REPLACEMENT）
     pickup_name: str = ""   # Pickup・Drop したアイテムのログの名前
@@ -325,7 +326,7 @@ def parse(line: str) -> LogEvent | None:
     m = RE_JOINING.search(line)
     if m:
         return LogEvent(EVENT_JOINING, suffix=m.group(2),
-                        instance=line[m.start(1):].strip())
+                        instance=line[m.start(1):].strip(), world=m.group(1))
 
     m = RE_ITEM_EQUIP.match(line)
     if m:

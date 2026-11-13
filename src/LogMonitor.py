@@ -71,7 +71,8 @@ class LogMonitor:
                  on_round_settings_cleared=None,
                  lists: MatchTNL.SharedLists | None = None,
                  on_list_changed=None,
-                 on_held_item_changed=None):
+                 on_held_item_changed=None,
+                 window_alive=None):
         self.cfg = cfg
         # 続行リスト一式。全窓で共有する1つを持つ（mainGUI が中の dict を差し替える）。
         # 渡されなければ、ほかの引数からこの窓だけのものを作る（監視だけで使うとき・テスト）。
@@ -93,6 +94,11 @@ class LogMonitor:
         # 持っているアイテム・インスタンスの種類が変わったことをGUIへ伝える（窓ごとのスレッドから呼ぶ。アイテムで切り替える
         # 窓のドロップダウンの表示を直すため。GUI 側が画面のスレッドへ渡す）。渡さなければ何もしない
         self._on_held_item_changed = on_held_item_changed
+        # VRChat の窓がまだあるかを返す関数（引数なし。mainGUI が WindowOperator.window_exists を渡す）。
+        # None なら窓を見ない（監視だけで使うとき・テスト）。消えたのを最初に見たとき 1 回だけ、そのラウンドを片づける
+        self._window_alive = window_alive
+        self._window_gone = False
+        self._window_checked_at = None      # 最後に窓を確かめた time.monotonic()（config.WINDOW_ALIVE_CHECK_SEC ごと）
         # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
         self.early_read_capable = False
         self.st = WindowState()
@@ -570,8 +576,12 @@ class LogMonitor:
         SharedState.equip_freeze_end(self.st)
         self._log("✅ アイテム装備 → フリーズ解除")
 
-    def _release_equip_wait_after_delay(self):
+    def _release_equip_wait_after_delay(self, round_seq=None):
+        """round_seq を渡すと、待つ間に番号が変わった（インスタンスを抜けた・窓が消えた。_abandon_round が
+        もう解いている）ら何もしない（ほかの窓が張った分にも触らない・何も出さない）"""
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
+        if round_seq is not None and self.st.round_seq != round_seq:
+            return
         SharedState.equip_freeze_end(self.st)
         if SharedState.get_equip_freeze_count() == 0:
             self._log("✅ 全窓フリーズ解除")
@@ -731,6 +741,10 @@ class LogMonitor:
                     self.st.instance_type = self._parse_instance_type(event.suffix)
                     self.st.instance_access = LogParser.instance_access(event.suffix)
                     self._log(f"インスタンスタイプ検出: {self._instance_label(self.st.instance_type, event.suffix)}")
+                    if event.world:
+                        self.st.in_ton_world = event.world == config.TON_WORLD_ID
+                        if not self.st.in_ton_world:
+                            self._log("ToN 以外のワールドにいます → この窓は操作しません")
                     # マクロを途中で始めても人数が分かるように。積み上げないと
                     # 空＝ソロ扱いになり、他人の周回を自分の tnl で裁く
                     self._restore_players(reversed(player_events))
@@ -1156,6 +1170,7 @@ class LogMonitor:
                     self._check_pending_verified()
                     self._flush_item_use_log()
                     self._check_item_used()
+                    self._check_window_alive()
                     AccessCheck.recheck_async(self.st.local_user_id)       # 1 時間に 1 回（中で絞る）
                     try:
                         self._check_group_list_state()
@@ -2008,7 +2023,7 @@ class LogMonitor:
         # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
         if st.waiting_for_equip and st.item_id:
             st.waiting_for_equip = False
-            self._start_daemon(self._release_equip_wait_after_delay)
+            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
 
     def _on_round_start(self, event):
         """ラウンド開始"""
@@ -2066,15 +2081,9 @@ class LogMonitor:
         # 速度検知フリーズは種別に関わらずここで必ず解除する。
         # Punishedの正規の解除条件であると同時に、アイテムを取らないまま
         # ラウンドが始まった8 Pagesの保険でもある（無いと全窓が永久に止まる）。
-        if st.speed_freeze_held:
-            st.speed_freeze_kind = ""
-            SharedState.speed_freeze_end(st)
-            self._log("ラウンド開始 → 速度検知フリーズ解除")
         # ラウンド突入フリーズも、種別を判定する前に必ず解除する。
         # 死亡せずに終わった場合（生存・切断など）の永久フリーズを防ぐ保険。
-        if st.round_freeze_held:
-            SharedState.round_freeze_end(st)
-            self._log("ラウンド開始 → ラウンド突入フリーズ解除")
+        self._release_speed_and_round_freezes("ラウンド開始")
         st.is_open_special_round_round = False
         st.all_continue_round          = False
         st.after_round_over            = False     # 音量の分類（FH）
@@ -2220,6 +2229,102 @@ class LogMonitor:
         if st.round_freeze_held:
             self._start_daemon(self._release_round_freeze_after_delay,
                                st.round_seq, st.reborn_seq, *said)
+
+    def _release_speed_and_round_freezes(self, label: str):
+        """この窓が張っている速度検知フリーズ・ラウンド突入フリーズを外す（張っていなければ何もしない）。
+        label は何から数えたか（ラウンド開始・インスタンス移動など。画面のログの頭になる）"""
+        st = self.st
+        if st.speed_freeze_held:
+            st.speed_freeze_kind = ""
+            SharedState.speed_freeze_end(st)
+            self._log(f"{label} → 速度検知フリーズ解除")
+        if st.round_freeze_held:
+            SharedState.round_freeze_end(st)
+            self._log(f"{label} → ラウンド突入フリーズ解除")
+
+    def _abandon_round(self, label: str) -> bool:
+        """この窓のラウンドを「終わった」として片づける（インスタンスを抜けた・VRChat の窓が消えた）。
+        ログ監視のスレッドで呼ぶ。続行・突入・速度検知・装備待ちのフリーズを全部外して、ほかの窓を止め続けない。
+        まだ送っていないそのラウンドの統計は送らない（Killers の行で送り済みの分は取り消さない）。
+        何も無いとき（最初の入室など）は何も言わず、2 回続けて呼んでも二重にならない。
+        label は何から数えたか。ラウンドの途中だった・フリーズを張っていたなら True"""
+        st = self.st
+        had_round = st.in_round
+        held = bool(st.is_continue_round or st.continue_freeze_held or st.speed_freeze_held
+                    or st.round_freeze_held or st.equip_freeze_held)
+        # 自分の窓のスレッドを先に止める。番号を見ている遅れた予約・AFK 回避・連打・押し直し・取得などがこれで止まる
+        st.in_round = False
+        st.round_seq += 1
+        # 統計: 送っていない分は送らない（遅れて送る予約・RoundOver・Verified Round End も、これで送らない）
+        st.statistics_sent = True
+        st.terror_ids = []
+        # ラウンドの印
+        st.round_type = ""
+        st.sus_players = []
+        st.pending_sabotage_murder = False
+        st.sabotage_murder_this_round = False
+        st.fog = False
+        st.fog_reading = False
+        st.early_read_hits = {}
+        st.fog_no_object_deadline = 0.0
+        st.all_continue_round = False
+        st.after_round_over = True
+        st.is_open_special_round_round = False
+        st.glorbo_afk = False
+        # Begin の受理の印
+        st.begin_done = False
+        st.begin_accepted_at = 0.0
+        st.round_end_seen = False
+        st.pending_verified_time = 0.0
+        st.begin_move_done = False
+        st.speed_probe_done = False
+        st.speed_strafe_done = False
+        st.speed_round_kind = ""
+        self._ignored_verified = None
+        if had_round:
+            self._log(f"{label} → ラウンドの途中でした。終わったものとして片づけます"
+                      "（このラウンドの統計は送りません）")
+        if had_round or held:
+            # 続行・突入で始めた録画は、ここで止める（RoundOver の処理と同じ呼び方）
+            Recorder.on_round_over(self.window_idx)
+        # フリーズを解く。ほかの窓を起こすのは最後（印を全部戻してから）
+        # 続行: 解くと窓の位置を戻す処理（after_continue_round）も呼ばれる（SharedState の続行フリーズの終わりの合図）
+        had_continue_freeze = st.continue_freeze_held
+        self._clear_stale_continue_round()
+        if had_continue_freeze:
+            self._log(f"{label} → 続行ラウンドのフリーズ解除")
+        self._release_speed_and_round_freezes(label)
+        equip_held = st.equip_freeze_held
+        st.waiting_for_equip = False
+        SharedState.equip_freeze_end(st)
+        if equip_held:
+            self._log(f"{label} → 装備待ちフリーズ解除")
+        return had_round or held
+
+    def _check_window_alive(self):
+        """VRChat の窓が消えた（落ちた・閉じた）かを、config.WINDOW_ALIVE_CHECK_SEC ごとに見る。消えたのを最初に
+        見た 1 回だけ、そのラウンドを片づける。立ち上げ直した VRChat には付き直さない（今と同じ）。
+        window_alive を渡されていない監視は何も見ない。調べて例外が出たら「ある」と見なす"""
+        if self._window_alive is None or self._window_gone:
+            return
+        now = time.monotonic()
+        if (self._window_checked_at is not None
+                and now - self._window_checked_at < config.WINDOW_ALIVE_CHECK_SEC):
+            return
+        self._window_checked_at = now
+        try:
+            alive = bool(self._window_alive())
+        except Exception:
+            DebugLog.exception("LogMonitor._check_window_alive")
+            return
+        if alive:
+            return
+        self._window_gone = True
+        try:
+            self._abandon_round("VRChat の窓が消えた")
+        except Exception:
+            DebugLog.exception("LogMonitor._check_window_alive")        # 片づけに失敗しても監視のループは続ける
+        self._log("⚠ VRChat の窓が見つかりません（落ちた・閉じた）→ この窓のラウンドを片づけました")
 
     def _on_reborn(self, event):
         """猫（Maxwell）で復活した。直前の死亡を取り消し、猫を消費したのでアイテムロストにする。
@@ -2438,14 +2543,13 @@ class LogMonitor:
         # インスタンスを移動するとアイテムは消える（依頼者）
         self._lose_held_item(HELD_LOST_INSTANCE)
         st.last_lost_item_id = 0                # 前のインスタンスでロストした分は取りに行かない
-        if st.equip_freeze_held and not self._auto_begin_active():
-            # 移った先ではラウンド開始がすぐ来るとは限らない。全窓を止め続けないよう外す
-            st.waiting_for_equip = False
-            SharedState.equip_freeze_end(st)
-            self._log("インスタンス移動 → 装備待ちフリーズ解除")
+        # 移った先ではラウンド開始がすぐ来るとは限らない。ラウンドの途中だったなら終わったものとして片づけ、
+        # 全窓を止め続けない（続行・突入・速度検知・装備待ちのフリーズを外す。Begin を押す窓の装備待ちも）
+        self._abandon_round("インスタンス移動")
         st.instance_id = event.instance
         st.instance_type = self._parse_instance_type(event.suffix)
         st.instance_access = LogParser.instance_access(event.suffix)
+        self._enter_world(event.world)
         if not self._action.can_operate() and self._action.chase_stop():
             self._log("チェイス停止（プライベートのインスタンスではなくなりました）")
         # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
@@ -2475,6 +2579,21 @@ class LogMonitor:
             self._on_round_settings_cleared(self.window_idx)
         self._log(f"インスタンスタイプ: {self._instance_label(st.instance_type, event.suffix)}")
         self._notify_held_item_changed()        # 干し芋・焼き芋かどうかで、窓の表示が変わる
+
+    def _enter_world(self, world: str):
+        """入室したワールドが ToN か。ToN 以外の間は、この窓を操作しない（can_operate）。
+        world が空（読めなかった）なら今の値を変えない。切り替わったときだけ画面に 1 行"""
+        st = self.st
+        if not world:
+            return
+        in_ton = world == config.TON_WORLD_ID
+        if in_ton == st.in_ton_world:
+            return
+        st.in_ton_world = in_ton
+        if in_ton:
+            self._log("ToN のワールドに入りました → この窓の操作を再開します")
+        else:
+            self._log("ToN 以外のワールドに入りました → この窓は操作しません")
 
     def _on_pickup(self, event):
         """アイテムを手に持った（Pickup object）。店の Equipping とは別。使用の判定の「持っている」"""
@@ -2516,7 +2635,7 @@ class LogMonitor:
         # 両条件（装備＋Begin）が揃ったら遅延フリーズ解除
         elif st.waiting_for_equip and st.begin_done:
             st.waiting_for_equip = False
-            self._start_daemon(self._release_equip_wait_after_delay)
+            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
 
     def _on_lived(self, event):
         """生存"""

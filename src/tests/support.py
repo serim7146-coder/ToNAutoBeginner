@@ -178,6 +178,10 @@ import Migration
 import config
 from State import WindowConfig, WindowState
 
+# ToN のワールドの ID。入室の行がこれだと窓を操作する（ToN 以外のワールドでは操作しない。WindowState.in_ton_world）。
+# 入室のあとに操作を期待するテストの入室の行は、作り物の wrld_x ではなくこれを使う
+TON_WORLD = config.TON_WORLD_ID
+
 # AccessCheck の本物の入口（setUpModule が偽物に差し替える前の値。確かめるテストが使う）
 REAL_ASK_SERVER = AccessCheck._ask_server
 REAL_TERMINATE = AccessCheck._TERMINATE

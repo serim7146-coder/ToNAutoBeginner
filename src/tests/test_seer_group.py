@@ -5,7 +5,7 @@ import re
 import FogEarlyRead
 
 SEER = config.SEER_GROUP_ID
-JOIN = "[Behaviour] Joining wrld_5b6e3b1f-a8c7-4b3d-9a0e-1f2a3b4c5d6e:12345~group({gid})~groupAccessType({access})~region(jp)"
+JOIN = "[Behaviour] Joining " + TON_WORLD + ":12345~group({gid})~groupAccessType({access})~region(jp)"
 
 
 def _parse(suffix):

@@ -156,7 +156,7 @@ class ActionExecutor:
 
     def can_operate(self) -> bool:
         """この窓で OSC 操作・クリック操作をしてよいか（can_operate_in）。送る入口は全部これを見る"""
-        return can_operate_in(self._st.instance_type)
+        return self._st.in_ton_world and can_operate_in(self._st.instance_type)
 
     # ── チェイス（押し続けて回る）──────────────────
     # 向き → (OSC のアドレス2つ, OSC が使えない窓のキー2つ)。Shift なし
@@ -1774,15 +1774,20 @@ class ActionExecutor:
             self._log("⚠ アイテムロスト → Beginへ向かいます（フリーズは Begin が通ってから）")
         return True
 
-    def _wait_round_end(self, timeout: float = 30.0) -> bool:
-        """Verified Round End が来るまで待つ。これが来ないとBeginは押せない。"""
+    def _wait_round_end(self, timeout: float = 30.0, round_seq=None) -> bool:
+        """Verified Round End が来るまで待つ。これが来ないとBeginは押せない。
+        round_seq を渡すと、待つ間に番号が変わった（インスタンスを抜けた・窓が消えた）ら黙って False"""
         st = self._st
+        if round_seq is not None and st.round_seq != round_seq:
+            return False
         if st.round_end_seen:
             return True
         self._log("Intermission待ち…")
         deadline = time.time() + timeout
         while time.time() < deadline:
             if not self._is_running() or st.in_round:
+                return False
+            if round_seq is not None and st.round_seq != round_seq:
                 return False
             if st.round_end_seen:
                 return True
@@ -1923,6 +1928,8 @@ class ActionExecutor:
                     remain = deadline - time.time()
                 if remain > 0:
                     time.sleep(remain)
+        if st.round_seq != round_seq:
+            return          # 待つ間にインスタンスを抜けた・窓が消えた（LogMonitor._abandon_round）。黙って終わる
         # Beginはフレ/フレ+/招待/招待+のみ
         if not self.can_operate():
             return
@@ -1949,7 +1956,7 @@ class ActionExecutor:
                 # ロスト判定は Verified Round End で行われるので、必ず
                 # 待ってからフリーズ処理をする。RoundOver時点で判定すると
                 # まだ立っておらずフリーズが張られない。
-                if not self._wait_round_end():
+                if not self._wait_round_end(round_seq=round_seq):
                     return
                 lost = self._handle_item_lost()
                 if lost == "manual":
@@ -1963,8 +1970,10 @@ class ActionExecutor:
                     return
                 if not self._begin_precheck():
                     return
+                if st.round_seq != round_seq:
+                    return      # 他窓を待つ間にインスタンスを抜けた・窓が消えた。押さずに黙って終わる
                 time.sleep(0.1)
-                if not st.in_round:
+                if not st.in_round and st.round_seq == round_seq:
                     clicked = self._press_begin()
 
             if clicked:

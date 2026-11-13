@@ -785,6 +785,8 @@ LOG_LIVE_GRACE_SEC        = 120.0
 
 # ── ログの更新頻度 ──
 LOG_POLL_INTERVAL    = 0.3
+# VRChat の窓がまだあるかを見る間隔（秒。LogMonitor の監視のループから間引く）
+WINDOW_ALIVE_CHECK_SEC = 2.0
 LOG_START_SCAN_CHUNK_BYTES = 256 * 1024
 
 # ── スマホ通知（ntfy。PhoneNotify・QueueWatch）──

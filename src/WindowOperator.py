@@ -712,6 +712,18 @@ def client_height(hwnd: int) -> int | None:
     return int(height) if height and height > 0 else None
 
 
+def window_exists(hwnd: int) -> bool:
+    """窓がまだあるか（落ちた・閉じた検知用）。hwnd が 0 なら False。調べられなければ True
+    （消えたとは見なさない）"""
+    if not hwnd:
+        return False
+    try:
+        return bool(win32gui.IsWindow(hwnd))
+    except Exception:
+        DebugLog.exception("WindowOperator.window_exists")
+        return True
+
+
 def window_state(hwnd: int) -> str | None:
     """窓の状態。"normal"・"maximized"・"minimized"・"fullscreen"（窓の矩形＝モニターの矩形で
     タイトルバーなし）。窓が無い・取れなければ None"""

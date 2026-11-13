@@ -3120,7 +3120,7 @@ class TestBeginByCursor(unittest.TestCase):
         src = Path(ActionExecutor.__file__).read_text(encoding="utf-8")
         flow = src[src.index("    def do_after_round"):]
         self.assertLess(flow.index("self._start_use_spam(round_seq)"),
-                        flow.index("self._wait_round_end()"))
+                        flow.index("self._wait_round_end(round_seq=round_seq)"))
         self.assertIn("spam.set()", flow)
 
     def test_a_minimized_window_falls_back_to_the_click(self):
