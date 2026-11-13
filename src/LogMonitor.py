@@ -48,6 +48,8 @@ HELD_LOST_RUN_DEATH = "Run 死亡"
 HELD_LOST_SABOTAGE = "Sabotage マーダー"
 HELD_LOST_INSTANCE = "インスタンス移動"
 HELD_LOST_REBORN = "猫消費"
+HELD_LOST_USED = "使用"
+HELD_LOST_SUICIDE = "自爆"
 
 
 # ═══════════════════════════════════════════════
@@ -90,7 +92,7 @@ class LogMonitor:
         self.st = WindowState()
         self.st.window_idx = window_idx
         # 手に持ったアイテムの使用の判定（ItemUse）。持っているかを書き換えるのはこの LogMonitor だけ
-        self.st.item_use = ItemUse.UseTracker(window_idx, players=self._player_count)
+        self.st.item_use = ItemUse.UseTracker(window_idx)
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
         self._stop_event = threading.Event()
@@ -239,7 +241,7 @@ class LogMonitor:
         if event.kind == LogParser.EVENT_VERIFIED:
             return          # 受理か無視かが決まってから1行（_debug_verified）
         if event.kind in (LogParser.EVENT_PICKUP, LogParser.EVENT_DROP):
-            return          # 持った・離した・使用は ItemUse が溜め、_flush_item_use_log がまとめて書く
+            return          # 持った・離したは ItemUse が溜め、_flush_item_use_log がまとめて書く
         parts = []
         if event.round_type:
             parts.append(f"種類={event.round_type}")
@@ -269,12 +271,29 @@ class LogMonitor:
         DebugLog.write(f"[窓{self.window_idx}] {msg}")
 
     def _flush_item_use_log(self):
-        """ItemUse が溜めた持った・離した・使用の行を debug.log へ（フックの中では書かないため、ここでまとめて）"""
+        """ItemUse が溜めた持った・離した・持っていないの行を debug.log へ（フックの中では書かないため、ここでまとめて）"""
         try:
             for line in self.st.item_use.take_debug_lines():
                 self._debug(f"[アイテム] {line}")
         except Exception:
             DebugLog.exception("LogMonitor._flush_item_use_log")
+
+    def _check_item_used(self):
+        """手に持っている間に手でクリックがあったら、消費系のアイテムを装備していればアイテムロストにする。
+        クリックの印は 1 回分（ItemUse.take_use）。装備が消費系でないときのクリックは捨てる"""
+        try:
+            held_name = self.st.item_use.take_use()
+            if held_name is None:
+                return
+            item_id = self.st.held_item_id
+            if item_id not in config.CONSUMABLE_ITEM_IDS:
+                return
+            label = ItemCatalog.label(item_id, config.ITEMS)
+            self._debug(f"[アイテム] 消費系を手に持って使用 → アイテムロスト: {label}（手に持っていた物: {held_name}）")
+            self._mark_item_lost(f"{label} を{HELD_LOST_USED}: アイテムロスト")
+            self._lose_held_item(HELD_LOST_USED)
+        except Exception:
+            DebugLog.exception("LogMonitor._check_item_used")
 
     @staticmethod
     def _parse_instance_type(suffix: str) -> str:
@@ -1023,6 +1042,7 @@ class LogMonitor:
                         self._log(f"読み取りエラー: {e}")
                     self._check_pending_verified()
                     self._flush_item_use_log()
+                    self._check_item_used()
                     try:
                         self._check_group_list_state()
                     except Exception as e:
@@ -2026,6 +2046,10 @@ class LogMonitor:
                 config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
             self._log("✅ 自爆成功")
             st._skip_time = 0.0
+            if st.skip_maxwell_seq == st.round_seq:
+                st.skip_maxwell_seq = -1
+                self._mark_item_lost("Maxwell を持って自爆: アイテムロスト")
+                self._lose_held_item(HELD_LOST_SUICIDE)
         self._mark_out_of_round("死亡")
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")

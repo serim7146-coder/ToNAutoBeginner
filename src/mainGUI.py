@@ -943,8 +943,7 @@ class LogOverlay(tk.Toplevel):
     """半透明の最前面ログオーバーレイウィンドウ"""
     MAX_LINES = config.GUI_OVERLAY_LOG_MAX_LINES
 
-    def __init__(self, parent, item_lines=None):
-        """item_lines: 呼ぶと上の部分に出す行（手に持ったアイテムの CT・効果。ItemUse）の list を返す関数。None なら上の部分は無い"""
+    def __init__(self, parent):
         super().__init__(parent)
         self.title("Log Overlay")
         self.overrideredirect(True)      # タイトルバーなし
@@ -955,9 +954,6 @@ class LogOverlay(tk.Toplevel):
         self._lines: list[str] = []
         self._drag_x = 0
         self._drag_y = 0
-        self._item_lines = None             # 上の部分の行を返す関数（set_item_lines）
-        self._items_text = ""               # 上の部分に今出している文字（同じなら設定し直さない）
-        self._item_job = None               # 更新の予約（after の id）
         _remember_own_window(self)
 
         # ヘッダ（ドラッグ用）
@@ -981,10 +977,6 @@ class LogOverlay(tk.Toplevel):
         hf.bind("<ButtonPress-1>",   self._drag_start)
         hf.bind("<B1-Motion>",       self._drag_move)
 
-        # 手に持ったアイテムの CT・効果（ヘッダとログの間。行があるときだけ置く）
-        self._items = tk.Label(self, text="", bg="#000000", fg="#f9e2af", justify="left", anchor="w",
-                               font=(UIFont.UI, 9, "bold"))
-
         # ログテキスト
         self.text = tk.Text(
             self, bg="#000000", fg="#a6e3a1",
@@ -1004,37 +996,6 @@ class LogOverlay(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._closed = False
-        if item_lines is not None:
-            self.set_item_lines(item_lines)
-
-    def set_item_lines(self, item_lines):
-        """上の部分の行を返す関数を設定し、更新を始める（0.1 秒ごと）"""
-        self._item_lines = item_lines
-        if self._item_job is None:
-            self._refresh_items()
-
-    def _refresh_items(self):
-        """上の部分を作り直す。行が無ければ外す。閉じたあとは再予約しない"""
-        self._item_job = None
-        if self._closed or self._item_lines is None:
-            return
-        try:
-            lines = list(self._item_lines() or [])
-        except Exception:
-            DebugLog.exception("mainGUI.LogOverlay._refresh_items")
-            lines = []
-        text = "\n".join(lines)
-        if text != self._items_text:
-            self._items_text = text
-            if lines:
-                self._items.config(text=text)
-                self._items.pack(fill="x", padx=4, before=self.text)
-            else:
-                self._items.pack_forget()
-        try:
-            self._item_job = self.after(config.GUI_OVERLAY_ITEM_REFRESH_MS, self._refresh_items)
-        except tk.TclError:
-            self._item_job = None
 
     def append(self, msg: str):
         self.append_many([msg])
@@ -1054,12 +1015,6 @@ class LogOverlay(tk.Toplevel):
 
     def close(self):
         self._closed = True
-        job, self._item_job = self._item_job, None
-        if job is not None:
-            try:
-                self.after_cancel(job)
-            except tk.TclError:
-                pass
         self.destroy()
 
     def _drag_start(self, e):
@@ -5162,19 +5117,7 @@ class App(tk.Tk):
             self._overlay.close()
             self._overlay = None
         else:
-            self._overlay = LogOverlay(self, item_lines=self._item_use_lines)
-
-    def _item_use_lines(self) -> list:
-        """オーバーレイの上の部分の行。対応アイテムを手に持っている窓ごとに 1 行（窓の番号順）。Tk のスレッドで呼ぶ"""
-        rows = []
-        for monitor in list(self.monitors):
-            tracker = getattr(monitor.st, "item_use", None)
-            if tracker is None:
-                continue
-            status = tracker.status()
-            if status:
-                rows.append((monitor.window_idx, ItemUse.status_text(monitor.window_idx, status)))
-        return [text for _idx, text in sorted(rows, key=lambda row: row[0])]
+            self._overlay = LogOverlay(self)
 
     def _clear_log(self):
         self.log_text.config(state="normal")

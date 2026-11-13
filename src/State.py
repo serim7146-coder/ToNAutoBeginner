@@ -135,6 +135,7 @@ class WindowState:
     # 続行フリーズを張った・外した瞬間に呼ぶ（引数 True / False。LogMonitor が入れる）
     continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0
+    skip_maxwell_seq: int = -1      # Maxwell を手に持って自爆を始めたラウンドの番号（死亡の行で見る。-1 = 無し）
     begin_done: bool = False
     begin_accepted_at: float = 0.0  # 自分の Begin が受理された（Connecting）壁時計の時刻（FR。店の操作の見送りの判定）
     speed_round_kind: str = ""   # 速度から先読みしたラウンド種別（通知済みのもの）
