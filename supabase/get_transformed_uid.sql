@@ -14,6 +14,10 @@
 -- 表示名（p_name）: ツールはログインの行で読んだ自分の表示名を添えて呼ぶ。DB 側が Users.name に入れる
 --   （最新だけ。変わっていれば name_updated_at も更新する）。ツールは表示名をログに出さない。
 --
+-- 最後に見た時刻（last_seen_at）: この関数が呼ばれるたびに更新する。古い版（v1.4.1 以前）は
+--   この関数だけを呼び check_access は呼ばないので、last_seen_at が新しいのに last_checked_at
+--   （check_access.sql の列）が無い（古い）人は古い版。
+--
 -- 流す順: SQL → リリース。
 --   先にツールだけ新しくすると、引数が合わず 404 → transformed_uid なしで動く（統計の番号が抜ける）。
 --   古い版のツールは p_name なしで呼ぶ → default null なので今まで通り動く。
@@ -32,6 +36,7 @@ create unique index if not exists users_transformed_uid_key on public."Users" (t
 -- 1b. 表示名の列（ツールが読んだ最新の名前と、その更新時刻）
 alter table public."Users" add column if not exists name text;
 alter table public."Users" add column if not exists name_updated_at timestamptz;
+alter table public."Users" add column if not exists last_seen_at timestamptz;     -- check_access.sql と同じ列
 
 -- 2. 関数。所有者の権限で Users を読む（security definer）ので、呼ぶ側に Users の権限は要らない
 --    古い (text) を消してから新しい (text, text default null) を作る（同じ実行で流す）
@@ -62,6 +67,8 @@ begin
 
   select transformed_uid, name into found, found_name from public."Users" where "VRChat_uid" = p_vrchat_uid;
   if found is not null then
+    -- 見た時刻は毎回更新する（名前の更新とは別）
+    update public."Users" set last_seen_at = now() where "VRChat_uid" = p_vrchat_uid;
     -- 名前が来ていて、今のと違うときだけ更新する
     if v_name is not null and v_name is distinct from found_name then
       update public."Users" set name = v_name, name_updated_at = now() where "VRChat_uid" = p_vrchat_uid;
@@ -73,8 +80,8 @@ begin
   for i in 1..200 loop
     candidate := (floor(random() * 65536) - 32768)::smallint;
     begin
-      insert into public."Users" ("VRChat_uid", transformed_uid, name, name_updated_at)
-        values (p_vrchat_uid, candidate, v_name, case when v_name is null then null else now() end);
+      insert into public."Users" ("VRChat_uid", transformed_uid, name, name_updated_at, last_seen_at)
+        values (p_vrchat_uid, candidate, v_name, case when v_name is null then null else now() end, now());
       return candidate;
     exception when unique_violation then
       -- 同じ uid が同時に登録された → そちらの番号を返す。番号が重なった → 引き直す
