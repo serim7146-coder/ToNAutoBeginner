@@ -617,6 +617,8 @@ BLOODTHIRSTY_SLOT_ROUNDS = frozenset({"Bloodbath", "Midnight", "Double Trouble"}
 BLOODTHIRSTY_SLOT_WAIT_SEC = (TERROR_VARIANT_WAIT_SEC, 6.0, 11.0)
 # Midnight の 3 枠目（Alternate）の Evil Purple Foxy / Neo Pilot の合図は約 10 秒後に出る（依頼者 2026-11-10。誤差 1 秒を足す）
 MIDNIGHT_ALTERNATE_WAIT_SEC = 11.0
+# 依頼者 2026-11-13: Winterfest まで止める。True に戻すと 11 秒待ちが戻る
+MIDNIGHT_ALTERNATE_WAIT_ENABLED = False
 TERROR_VARIANT_POLL_SEC = 0.2
 # 置き換えの候補があるラウンドの統計を、Killers の行から最大これだけ待ってから送る（合図が来たらその場で送る）。
 # ログの時刻は 1 秒単位なので、同じ秒の行でも 1 秒近く離れて届きうる。統計は急がないので、判定の待ちより長く取る

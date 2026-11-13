@@ -267,6 +267,7 @@ class TestSlotWaitLength(_Base):
 
         self.assertEqual(monitor._variant_wait_sec(), 0.3)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_g_foxy_alone_waits_for_the_third_slot_signal(self):
         """Midnight の Curious が 2 枠目でも、判定を変えるのが Foxy（3 枠目の Sanic の置き換え）だけなら、
         Bloodthirsty の 6 秒ではなく Foxy の 11 秒"""
@@ -281,6 +282,7 @@ class TestSlotWaitLength(_Base):
         self.assertIn("11.0秒", waits[0])
         self.assertEqual(monitor._variant_wait_sec("Midnight"), 11.0)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_g_both_changing_uses_the_longer_wait(self):
         monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID, BLOODTHIRSTY}}, "Midnight",
                                 ids=[2, CURIOUS, config.SANIC_ID])
@@ -293,16 +295,36 @@ class TestSlotWaitLength(_Base):
 
         self.assertEqual(monitor._variant_wait_sec("Midnight"), 6.0)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_m_midnight_third_slot_sanic_with_foxy_listed(self):
         self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.FOXY_ID}}), 11.0)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_m_midnight_third_slot_fusion_pilot_with_neo_pilot_listed(self):
         self.assertEqual(self._wait("Midnight", [2, 4, config.FUSION_PILOT_ID],
                                     {MIDNIGHT_KEY: {config.NEO_PILOT_ID}}), 11.0)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_m_sanic_listed_but_foxy_not_listed_changes_to_a_skip(self):
         """Sanic が続行で、Foxy に置き換わると自爆になるので待つ"""
         self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.SANIC_ID}}), 11.0)
+
+    def test_m_the_alternate_wait_is_off_by_default(self):
+        """依頼者 2026-11-13: Winterfest まで止める。既定では 3 枠目が Sanic / Fusion Pilot で結論が変わる構成でも 0.3 秒"""
+        self.assertFalse(config.MIDNIGHT_ALTERNATE_WAIT_ENABLED)
+        for tid, listed in ((config.SANIC_ID, config.FOXY_ID), (config.FUSION_PILOT_ID, config.NEO_PILOT_ID)):
+            monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {listed}}, "Midnight", ids=[2, 4, tid])
+            self.assertTrue(monitor._midnight_alternate_changes_decision("Midnight"), "結論が変わる前提")
+            self.assertEqual(monitor._variant_wait_sec("Midnight"), config.TERROR_VARIANT_WAIT_SEC, tid)
+        for itype in GROUPS:
+            self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID], {MIDNIGHT_KEY: {config.FOXY_ID}}, itype),
+                             config.TERROR_VARIANT_WAIT_SEC, itype)
+
+    def test_m_the_alternate_wait_off_keeps_the_bloodthirsty_slot_wait(self):
+        monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID, BLOODTHIRSTY}}, "Midnight",
+                                ids=[2, CURIOUS, config.SANIC_ID])
+
+        self.assertEqual(monitor._variant_wait_sec("Midnight"), 6.0)
 
     def test_m_no_wait_when_the_decision_does_not_change(self):
         for keep_on in ({}, {MIDNIGHT_KEY: {2}}, {MIDNIGHT_KEY: {config.FOXY_ID, config.SANIC_ID}}):
@@ -322,6 +344,7 @@ class TestSlotWaitLength(_Base):
                 self.assertTrue(monitor._replacement_changes_decision(round_type), "Foxy / Neo で結論が変わる前提")
                 self.assertEqual(monitor._variant_wait_sec(round_type), 0.3, (round_type, tid))
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_m_group_midnight_third_slot(self):
         for itype in GROUPS:
             self.assertEqual(self._wait("Midnight", [2, 4, config.SANIC_ID],
@@ -337,6 +360,7 @@ class TestSlotWaitLength(_Base):
 
         self.assertNotIn("_delayed_decision", started)
 
+    @patch.object(config, "MIDNIGHT_ALTERNATE_WAIT_ENABLED", True)
     def test_m_the_signal_ends_the_wait_with_a_decision(self):
         """合図（Foxy）が来たら残り時間を待たずに判定して続行する。実時間では待たない"""
         monitor = self._monitor(self.PRIVATE, {MIDNIGHT_KEY: {config.FOXY_ID}}, "Midnight",
