@@ -1311,10 +1311,10 @@ class LogMonitor:
             self._send_round_statistics_once()
 
     def _variant_wait_sec(self, round_type: str | None = None) -> float:
-        """置き換え待ちの上限（秒）。普通は TERROR_VARIANT_WAIT_SEC。次の 2 つは合図が遅れて出るので、判定が変わるときだけ長くする
-        （両方当たるときは長いほう）。
+        """置き換え待ちの上限（秒）。普通は TERROR_VARIANT_WAIT_SEC。次は合図が遅れて出るので、判定が変わるときだけ長くする。
         - Bloodbath・Midnight・Double Trouble で Curious がいる枠の Bloodthirsty（枠に応じた秒数）
-        - Midnight の 3 枠目（Alternate）の Sanic・Fusion Pilot の Evil Purple Foxy / Neo Pilot（MIDNIGHT_ALTERNATE_WAIT_SEC）"""
+        Midnight の 3 枠目（Alternate）の Sanic・Fusion Pilot の Evil Purple Foxy / Neo Pilot の 11 秒待ち（MIDNIGHT_ALTERNATE_WAIT_SEC）は
+        今は止めてある（MIDNIGHT_ALTERNATE_WAIT_ENABLED = False）。True にすると、Bloodthirsty と両方当たるときは長いほうになる"""
         st = self.st
         rt = round_type or st.round_type
         wait = config.TERROR_VARIANT_WAIT_SEC
@@ -1322,7 +1322,7 @@ class LogMonitor:
                 and self._bloodthirsty_changes_decision(rt)):
             slot = st.terror_ids.index(config.CURIOUS_CREATURE_ID)
             wait = config.BLOODTHIRSTY_SLOT_WAIT_SEC[min(slot, len(config.BLOODTHIRSTY_SLOT_WAIT_SEC) - 1)]
-        if self._midnight_alternate_changes_decision(rt):
+        if config.MIDNIGHT_ALTERNATE_WAIT_ENABLED and self._midnight_alternate_changes_decision(rt):
             wait = max(wait, config.MIDNIGHT_ALTERNATE_WAIT_SEC)
         return wait
 
