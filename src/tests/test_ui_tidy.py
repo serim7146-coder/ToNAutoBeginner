@@ -460,14 +460,16 @@ class TestDv2MainScreen(_AppCase):
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
-                                 ("Checkbutton", "Utilsの判断に従う")])        # EB
+                                 ("Checkbutton", "Utilsの判断に従う"),         # EB
+                                 ("Checkbutton", "Bloodthirsty を待つ")])
         variables = [str(w.cget("variable")) for w in row.pack_slaves()
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
                                                       self.app.v_continue_restore_window,
                                                       self.app.v_run_respawn,
                                                       self.app.v_fog_early_read,
-                                                      self.app.v_follow_utils)])
+                                                      self.app.v_follow_utils,
+                                                      self.app.v_wait_bloodthirsty)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
         title = self.app.tabs[0].freeze_box.grid_slaves(row=0, column=0)[0]       # FG: grid
