@@ -11,7 +11,8 @@ MARGINS = (7, 0, 7, 7)                  # 見えない縁（左・上・右・�
 class TestGrid(unittest.TestCase):
     def test_rows_and_columns(self):
         for n, text in ((1, "1×1"), (2, "2×1"), (3, "2×2"), (4, "2×2"), (5, "3×2"), (6, "3×2"),
-                        (7, "4×2"), (8, "4×2"), (9, "3×3")):
+                        (7, "4×2"), (8, "4×2"), (9, "3×3"), (10, "4×3"), (12, "4×3"), (13, "5×3"),
+                        (19, "7×3"), (20, "7×3")):
             self.assertEqual(WindowArrange.size_text(n), text, n)
 
     def test_one_window_fills_the_area(self):
@@ -52,9 +53,11 @@ class TestGrid(unittest.TestCase):
 
     def test_cells_tile_without_gaps_or_overlaps(self):
         area = (-1920, 33, 1, 1073)                     # 割り切れない幅・高さ・負の座標
-        for n in range(1, 12):
+        for n in range(1, 21):
             cells = WindowArrange.cells(area, n)
             self.assertEqual(len(cells), n)
+            for l, t, r, b in cells:
+                self.assertTrue(area[0] <= l < r <= area[2] and area[1] <= t < b <= area[3], (n, (l, t, r, b)))
             total = sum((r - l) * (b - t) for l, t, r, b in cells)
             self.assertEqual(total, (area[2] - area[0]) * (area[3] - area[1]), n)
             for i, a in enumerate(cells):

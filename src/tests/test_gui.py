@@ -1148,6 +1148,10 @@ class TestWindowCountIsRemembered(unittest.TestCase):
         for n in (1, 4, config.MAX_WINDOWS):
             self.assertEqual(mainGUI._valid_win_count(n), n, n)
 
+    def test_the_window_count_limit_is_twenty(self):
+        self.assertEqual(mainGUI._valid_win_count(20), 20)
+        self.assertIsNone(mainGUI._valid_win_count(21))
+
     def test_broken_values_are_ignored(self):
         for value in ("6", "abc", 0, -1, config.MAX_WINDOWS + 1, 2.5, None,
                       True, False, [], {}):
