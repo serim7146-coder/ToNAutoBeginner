@@ -255,6 +255,7 @@ def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
         return
     listed = {}
     for round_key, slot_values in data.items():
+        round_key = HOST_SAVE_KEY_ALIASES.get(round_key, round_key)
         if not isinstance(slot_values, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = _listtool_ids(slot_values)

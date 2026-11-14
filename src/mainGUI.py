@@ -3524,7 +3524,7 @@ class App(tk.Tk):
         user_save = _first_existing(config.USER_SAVE_PATH, config.USER_SAVE_LEGACY_PATH)
         local = config.HOST_LOCAL_STATE_PATH
         # ToN ListTool 2.21.3 以降は host_local_state.bin（あればこちらを優先。sqlite の wishes は空になる）
-        is_local = os.path.lexists(local)
+        is_local = os.path.exists(local)
         if is_local:
             path, load, name = local, MatchTNL.load_host_local_state, os.path.basename(local)
         else:
