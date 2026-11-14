@@ -15,9 +15,10 @@ GHOST_ALT = "Ghost (Alternate)/ゴースト (Alternate)"
 
 
 def bits_text(ids) -> str:
-    """ListTool の wish_bits の書き方（8 バイトごとに ":" 区切りの 16 進）"""
+    """ListTool の wish_bits の書き方（64 ビット整数を上位桁から 16 進 16 桁にして ":" 区切り。
+    バイト列は下位バイトから並ぶので、8 バイトごとに逆順にしてから 16 進にする）"""
     raw = wish_bits(ids)
-    return ":".join(raw[i:i + 8].hex() for i in range(0, 40, 8))
+    return ":".join(raw[i:i + 8][::-1].hex() for i in range(0, 40, 8))
 
 
 def person(name, rounds, **extra):
@@ -92,9 +93,16 @@ class TestLoadHostLocalState(LocalStateTestCase):
                 "0000000000000000:0000000000000000")
         raw = MatchTNL._wish_bits_to_bytes(text)
         self.assertEqual(len(raw), 40)
-        self.assertEqual(MatchTNL._wish_ids(raw), {31, 43, 44, 57, 66, 109, 160, 164, 180, 181})
+        self.assertEqual(MatchTNL._wish_ids(raw), {1, 19, 20, 39, 85, 122, 140, 141, 152, 156})
         got = self.load([{"participants": [person("a_test", {CLASSIC: text})]}])
-        self.assertEqual(got[0], {CLASSIC: {31, 43, 44, 57, 66, 109}})   # 160 番台はそのラウンドに無い
+        # ListTool の 140・141・152・156 は独自の番号では Alternate の 1006・1007・1018・1022（The Knight of Toren・
+        # Tragedy・Lisa・Ambush）。Classic のラウンドの枠に無いので外れ、1〜122 の 6 つが残る
+        self.assertEqual(got[0], {CLASSIC: {1, 19, 20, 39, 85, 122}})
+
+    def test_the_lowest_bit_of_the_64_bit_word_is_id_0_not_56(self):
+        """要素は 64 ビット整数（上位桁から）。"…0001" の最下位ビットは番号 0 で、バイト列の並びを取り違えると 56 になる"""
+        text = ":".join(["0000000000000001"] + ["0000000000000000"] * 4)
+        self.assertEqual(MatchTNL._wish_ids(MatchTNL._wish_bits_to_bytes(text)), {0})
 
     def test_the_new_randomizer_key_goes_into_the_randomizer_slot(self):
         got = self.load([{"participants": [person("a_test", {RANDOMIZER_NEW: {5, 7}}),
