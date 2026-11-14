@@ -103,6 +103,17 @@ class TestTerrorsJsonFormat(unittest.TestCase):
                 self.assertTrue(id_.isdigit(), (category, id_))
                 self.assertIsInstance(name, str, (category, id_))
 
+    def test_enrage_name_decaying_sponge_resolves_to_decayed_sponge(self):
+        """Enrage の `Decaying Sponge` を 1000 の個体名として前倒しに使える（実ファイル）"""
+        self.assertEqual(ReadJson.fog_terror_id_by_name("Decaying Sponge", config.TERRORS), 1000)
+
+    def test_neighbouring_sponge_names_keep_their_answers(self):
+        """`Decaying Sponge` を足しても、ほかのスポンジ系の答えは変わらない（実ファイル）"""
+        self.assertEqual(ReadJson.fog_terror_id_by_name("Decayed Sponge", config.TERRORS), 1000)
+        self.assertEqual(ReadJson.fog_terror_id_by_name("Demented Spongebob", config.TERRORS), 2)
+        self.assertEqual(ReadJson.fog_terror_id_by_name("Spongefly Swarm", config.TERRORS), 16)
+        self.assertIsNone(ReadJson.fog_terror_id_by_name("Quadruple Sponge", config.TERRORS))
+
     def test_ids_and_names_resolve_in_the_new_shape(self):
         data = self._data()
 
