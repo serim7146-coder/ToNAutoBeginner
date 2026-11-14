@@ -354,7 +354,7 @@ def setUpModule():
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
-    # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい・UID 必須」の答え。
+    # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい」の答え。
     # 手元の記録（access.dat）は config.SETTINGS_PATH の隣なので、上の砂場に入る。DPAPI は本物を呼ばない。
     # 答えを変えるテストは patch.object(AccessCheck, "_ask_server", ...) で差し替える
     _real_paths["ask_server"] = AccessCheck._ask_server
@@ -418,7 +418,7 @@ def _refuse_terminate(_code):
 
 def _fake_ask_server(_uid, _timeout):
     """AccessCheck._ask_server の既定の偽物: 使ってよい（サーバーには出ない）"""
-    return {"allowed": True, "min_version": "", "require_uid": True}
+    return True
 
 
 def _refuse_network(*_args, **_kwargs):
