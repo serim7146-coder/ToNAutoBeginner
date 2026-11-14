@@ -484,16 +484,24 @@ def _unseal_local_state(raw: bytes) -> dict:
 
 
 def _wish_bits_to_bytes(text: str) -> bytes:
-    """"xxxx:xxxx:…" → 40 バイト。長さが違う・16 進でないなら ValueError"""
+    """"xxxx:xxxx:…" → 40 バイト。要素が 16 桁の 16 進 5 個でなければ ValueError。
+    ":" 区切りの各要素は 64 ビット整数（上位桁から）なので、8 バイトごとに逆順にする。
+    sqlite の wishes.bits は下位バイトから並んでいたので、並びが逆"""
     if not isinstance(text, str):
         raise ValueError("wish_bits が文字列ではありません")
-    try:
-        raw = bytes.fromhex(text.replace(":", ""))
-    except ValueError:
-        raise ValueError("wish_bits が 16 進ではありません") from None
-    if len(raw) != LOCAL_STATE_WISH_BYTES:
-        raise ValueError(f"wish_bits の長さが違います（{len(raw)} バイト）")
-    return raw
+    parts = text.split(":")
+    if len(parts) != LOCAL_STATE_WISH_BYTES // 8:
+        raise ValueError(f"wish_bits の要素数が違います（{len(parts)} 個）")
+    out = bytearray()
+    for part in parts:
+        if len(part) != 16:
+            raise ValueError(f"wish_bits の要素の桁数が違います（{len(part)} 桁）")
+        try:
+            word = bytes.fromhex(part)
+        except ValueError:
+            raise ValueError("wish_bits が 16 進ではありません") from None
+        out += word[::-1]
+    return bytes(out)
 
 
 def load_host_local_state(path: str,
