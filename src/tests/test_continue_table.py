@@ -521,19 +521,17 @@ class TestImports(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
         return path
 
-    def test_from_tnl_takes_the_nonzero_ids_and_folds_the_listtool_only_keys(self):
-        folded = next(iter(MatchTNL.HOST_SAVE_FOLDED_KEYS))
-        target = MatchTNL.HOST_SAVE_FOLDED_KEYS[folded]
+    def test_from_tnl_takes_the_nonzero_ids_and_skips_the_ignored_keys(self):
+        ignored = next(iter(MatchTNL.HOST_SAVE_IGNORED_KEYS))
         path = self._write("a.tnl", {"list_name": "x", "data": {
-            KEY: {"5": 1, "6": 0, "7": 1}, ALT: {"150": 0}, folded: {"1": 1}, "bad": 3}})
-        self.assertEqual(ContinueTable.from_tnl(path), {KEY: frozenset({5, 7}), target: frozenset({1})})
+            KEY: {"5": 1, "6": 0, "7": 1}, ALT: {"150": 0}, ignored: {"1": 1}, "bad": 3}})
+        self.assertEqual(ContinueTable.from_tnl(path), {KEY: frozenset({5, 7})})
 
     def test_from_tnnl_takes_targets_dict(self):
-        folded = next(iter(MatchTNL.HOST_SAVE_FOLDED_KEYS))
-        target = MatchTNL.HOST_SAVE_FOLDED_KEYS[folded]
-        path = self._write("a.tnnl", {"targets_dict": {KEY: [3, 1], ALT: [], folded: [9]},
+        ignored = next(iter(MatchTNL.HOST_SAVE_IGNORED_KEYS))
+        path = self._write("a.tnnl", {"targets_dict": {KEY: [3, 1], ALT: [], ignored: [9]},
                                       "metadata": {"Name": "x"}})
-        self.assertEqual(ContinueTable.from_tnnl(path), {KEY: frozenset({1, 3}), target: frozenset({9})})
+        self.assertEqual(ContinueTable.from_tnnl(path), {KEY: frozenset({1, 3})})
 
     def test_from_tnnl_without_targets_dict_is_an_error(self):
         with self.assertRaises(ValueError):

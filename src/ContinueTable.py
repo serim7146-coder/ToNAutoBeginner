@@ -758,7 +758,7 @@ def overlay_label(base: dict, effective: dict, round_type: str, ids) -> str:
 # ── 取り込み ────────────────────────────
 def from_tnl(path) -> dict:
     """ListTool の続行リスト（.tnl）→ {キー: frozenset}。値が 0 でない番号だけ
-    （霧 (Alternate)・ゴースト (Alternate) の枠は通常の霧・ゴーストへ畳む。続行リストの読み込みと同じ）"""
+    （HOST_SAVE_IGNORED_KEYS は除く。続行リストの読み込みと同じ）"""
     keep_on, _meta = MatchTNL.load_tnl(str(path))
     return {key: frozenset(ids) for key, ids in keep_on.items() if ids}
 
@@ -771,9 +771,7 @@ def from_tnnl(path) -> dict:
     if not isinstance(targets, dict):
         raise ValueError("targets_dict がありません")
     table = _table_of(targets)
-    listed: dict = {}
-    for key, ids in table.items():
-        listed.setdefault(MatchTNL.fold_round_key(key), set()).update(ids)
+    listed = {key: ids for key, ids in table.items() if key not in MatchTNL.HOST_SAVE_IGNORED_KEYS}
     return {key: frozenset(ids) for key, ids in MatchTNL.own_list_from_listtool(listed, ".tnnl").items()}
 
 
