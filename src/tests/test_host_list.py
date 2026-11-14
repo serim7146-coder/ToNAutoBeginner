@@ -1486,7 +1486,7 @@ class TestHostSelfInTabs(unittest.TestCase):
                 MatchTNL.tab_for_window(meta["tabs_data"], {self.HOST, "知らない人"}), tabs)
             monitor = self._monitor(meta["tabs_data"], ["知らない人"])
             self.assertIsNone(monitor._window_tab(), tabs)
-            self.assertTrue(any("見つかりません" in m for m in monitor.logs), monitor.logs)
+            self.assertTrue(any("特定できません" in m for m in monitor.logs), monitor.logs)
 
     def test_the_same_tab_is_chosen_as_without_the_host(self):
         tabs = [[(0, "あ"), (0, "い"), (0, "う")], [(0, "え"), (0, "お")]]
@@ -1910,7 +1910,7 @@ class TestWindowTabMatching(unittest.TestCase):
         monitor = self._monitor(tabs, present=["か", "き"])
 
         self.assertEqual(monitor._keep_on(), {}, "共有リスト＋名前の絞り込みのまま")
-        self.assertTrue(any("見つかりません" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(any("特定できません" in m for m in monitor.logs), monitor.logs)
 
     def test_a_tie_is_not_matched(self):
         tabs = self._tabs((["あ", "か"], {self.CLASSIC: {1}}, []),
@@ -2003,6 +2003,70 @@ class TestWindowTabMatching(unittest.TestCase):
         self.assertEqual(monitor._keep_on(), {}, "名前で絞った共有リスト")
 
 
+
+
+    # ── 対応づけに失敗したときの文言 ──────────────
+    def test_tab_match_detail_reports_zero_overlap(self):
+        """重なりが 0 人なら『重なり最大0人』（数字だけ）"""
+        tabs = self._tabs((["あ"], None, []), (["い"], None, []), (["う"], None, []))
+
+        self.assertEqual(MatchTNL.tab_match_detail(tabs["tabs"], {"x", "y"}),
+                         "タブ3個 / 在室2人 / 重なり最大0人")
+
+    def test_tab_match_detail_reports_tied_tabs_with_one_based_numbers(self):
+        """同数で絞れないときは、タブ番号（1 始まり）と人数"""
+        tabs = self._tabs((["あ"], None, []), (["い"], None, []), (["う"], None, []))
+
+        self.assertEqual(MatchTNL.tab_match_detail(tabs["tabs"], {"あ", "い"}),
+                         "タブ3個 / 在室2人 / タブ1・タブ2 が1人で同数")
+
+    def test_tab_match_detail_survives_no_tabs(self):
+        """タブが 0 個でも落ちない"""
+        self.assertEqual(MatchTNL.tab_match_detail({}, {"あ"}),
+                         "タブ0個 / 在室1人 / 重なり最大0人")
+
+    def test_tab_match_detail_never_contains_names(self):
+        """在室者の名前は出さない（タブ番号と人数だけ）"""
+        tabs = self._tabs((["あ", "い"], None, []), (["あ", "い"], None, []))
+
+        for present in ({"あ", "い"}, {"あ", "知らない人"}, {"知らない人"}):
+            detail = MatchTNL.tab_match_detail(tabs["tabs"], present)
+            for name in ("あ", "い", "知らない人", "ぬし"):
+                self.assertNotIn(name, detail, detail)
+
+    def test_a_failed_match_logs_the_new_message_without_shared_list(self):
+        """対応づけに失敗したら画面に新しい文言。『共有リスト』は出さない"""
+        tabs = self._tabs((["あ"], None, []), (["い"], None, []))
+        monitor = self._monitor(tabs, present=["う", "え"])
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+
+        with patch.object(DebugLog, "write"):
+            monitor._window_tab()
+
+        line = [m for m in monitor.logs if "[主催リスト]" in m]
+        self.assertEqual(len(line), 1, monitor.logs)
+        self.assertIn("ListTool のどのタブがどのインスタンスか特定できません", line[0])
+        self.assertIn("この窓の3人の希望で判定します", line[0])
+        self.assertNotIn("共有リスト", line[0])
+
+    def test_a_failed_match_writes_the_reason_to_debug_log_only(self):
+        """同じとき debug.log へ理由と数字の 1 行（画面には出さない・名前は入れない）"""
+        tabs = self._tabs((["あ"], None, []), (["い"], None, []))
+        monitor = self._monitor(tabs, present=["う", "え"])
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.set_list_source, None)
+        written = []
+
+        with patch.object(DebugLog, "write", side_effect=written.append):
+            monitor._window_tab()
+
+        lines = [m for m in written if "タブの対応づけに失敗" in m]
+        self.assertEqual(len(lines), 1, written)
+        self.assertIn("タブ2個 / 在室3人 / 重なり最大0人", lines[0])
+        for name in ("あ", "い", "う", "え", "ぬし"):
+            self.assertNotIn(name, lines[0])
+        self.assertFalse(any("タブの対応づけに失敗" in m for m in monitor.logs), monitor.logs)
 
 
 class TestRealHostStateTabs(unittest.TestCase):

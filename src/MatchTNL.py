@@ -581,6 +581,33 @@ def load_host_local_state(path: str,
                               listed, len(tab_list), user_save_path, user_save_raw)
 
 
+def _tab_overlaps(tabs_data: dict, present_names) -> list:
+    """[(タブの index, 重なった人数)] をタブ順で返す。
+
+    主催者自身（`data["host_self"]`）は全タブに足してあるので数えない
+    """
+    present = set(present_names or ())
+    return [(tab, len(present & (set(data.get("participants") or ()) - {data.get("host_self")})))
+            for tab, data in sorted((tabs_data or {}).items(), key=lambda kv: str(kv[0]))]
+
+
+def tab_match_detail(tabs_data: dict, present_names) -> str:
+    """対応づけに失敗した理由を、debug.log 用の 1 行にする（数字だけ）。
+
+    名前は出さない（タブ番号と人数だけ）。タブ番号は「タブ1 に対応」と同じく
+    1 始まり。最大の重なりが 0 人なら「重なり最大0人」、複数のタブが同じ最大で
+    並ぶなら「タブ2・タブ5 が3人で同数」
+    """
+    present = set(present_names or ())
+    overlaps = _tab_overlaps(tabs_data, present)
+    head = f"タブ{len(overlaps)}個 / 在室{len(present)}人"
+    best = max((n for _tab, n in overlaps), default=0)
+    if best <= 0:
+        return f"{head} / 重なり最大0人"
+    tied = sorted(tab for tab, n in overlaps if n == best)
+    return f"{head} / " + "・".join(f"タブ{tab + 1}" for tab in tied) + f" が{best}人で同数"
+
+
 def tab_for_window(tabs_data: dict, present_names) -> int | None:
     """その窓にいる人の名前から、対応するタブを選ぶ。
 
@@ -595,8 +622,7 @@ def tab_for_window(tabs_data: dict, present_names) -> int | None:
     if not present or not tabs_data:
         return None
     best, best_overlap, tied = None, 0, False
-    for tab, data in sorted(tabs_data.items(), key=lambda kv: str(kv[0])):
-        overlap = len(present & (set(data.get("participants") or ()) - {data.get("host_self")}))
+    for tab, overlap in _tab_overlaps(tabs_data, present):
         if overlap > best_overlap:
             best, best_overlap, tied = tab, overlap, False
         elif overlap == best_overlap and overlap > 0:

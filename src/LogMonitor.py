@@ -1044,8 +1044,10 @@ class LogMonitor:
             if index != self._tab_index:
                 self._tab_index = index
                 if index is None:
-                    self._log("[主催リスト] 対応するタブが見つかりません"
-                              "（共有リストを使います）")
+                    self._log("[主催リスト] ListTool のどのタブがどのインスタンスか特定できません"
+                              f" → この窓の{len(present)}人の希望で判定します")
+                    self._debug("[主催リスト] タブの対応づけに失敗: "
+                                + MatchTNL.tab_match_detail(tabs, present))
                 else:
                     hit = len(present & set(tabs[index].get("participants") or ()))
                     self._log(f"[主催リスト] タブ{index + 1} に対応"
