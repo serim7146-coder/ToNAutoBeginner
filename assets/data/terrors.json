@@ -142,7 +142,7 @@
   ],
 
   "alternate": [
-    {"id": 1000, "name": "Decayed Sponge", "terrors": ["Decayed Sponge"], "objects": ["Corrupted Spongebob"]},
+    {"id": 1000, "name": "Decayed Sponge", "terrors": ["Decayed Sponge", "Decaying Sponge"], "objects": ["Corrupted Spongebob"]},
     {"id": 1001, "name": "Whiteface", "terrors": ["Whiteface"], "objects": ["WHITEFACE"]},
     {"id": 1002, "name": "Sanic", "terrors": ["Sanic"], "objects": ["SANIC"]},
     {"id": 1003, "name": "Parhelion", "terrors": ["Parhelion"], "objects": ["Parhelion"]},
