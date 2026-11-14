@@ -1292,6 +1292,7 @@ class App(tk.Tk):
         # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
         self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
+        self._host_local_fail_stamp: tuple | None = None   # (stamp, 文言) 新形式を読めなかった stamp。同じ中身で解析し直さない
         self._user_save_cache: tuple | None = None   # _read_user_save の前回の結果（裏スレッドだけが触る）
         self._dropped_logs: tuple | None = None      # 候補から外したログ（同じ内容なら黙る）
         self._capture_warned = False                 # キャプチャ除外の警告は1度だけ
@@ -3520,10 +3521,16 @@ class App(tk.Tk):
         if not self._process_cache.watch(config.TON_LISTTOOL_PROCESS):
             return "lost", "ToN ListTool が起動していません"
 
-        path = _first_existing(config.HOST_STATE_PATH, config.HOST_STATE_LEGACY_PATH)
         user_save = _first_existing(config.USER_SAVE_PATH, config.USER_SAVE_LEGACY_PATH)
-        load = MatchTNL.load_host_state
-        name = os.path.basename(path)
+        local = config.HOST_LOCAL_STATE_PATH
+        # ToN ListTool 2.21.3 以降は host_local_state.bin（あればこちらを優先。sqlite の wishes は空になる）
+        is_local = os.path.lexists(local)
+        if is_local:
+            path, load, name = local, MatchTNL.load_host_local_state, os.path.basename(local)
+        else:
+            path = _first_existing(config.HOST_STATE_PATH, config.HOST_STATE_LEGACY_PATH)
+            load = MatchTNL.load_host_state
+            name = os.path.basename(path)
         if not os.path.exists(path):
             return "lost", f"{name} がありません"
         try:
@@ -3539,18 +3546,26 @@ class App(tk.Tk):
         _, user_save_digest, user_save_raw = self._user_save_cache
         stamp = (stat.st_mtime, stat.st_size,   # 同じ秒内の書き換えを取りこぼさない
                  user_save_digest,
-                 _file_stamp(path + "-wal"))
+                 None if is_local else _file_stamp(path + "-wal"))      # 新形式に WAL は無い
         if stamp == self._host_save_stamp and SharedState.get_list_source() == "host":
             return "same", None
+        # 同じ中身で失敗したものは、中身が変わるまで解析し直さない（別の PC・別のユーザーから持ってきた
+        # フォルダで、3 秒ごとに DPAPI を叩き続けない）
+        failed = getattr(self, "_host_local_fail_stamp", None)
+        if is_local and failed is not None and failed[0] == stamp:
+            return "error", failed[1]
 
         try:
             keep_on, meta, wishes = load(path, user_save, user_save_raw=user_save_raw)
         except Exception as e:
+            if is_local:
+                self._host_local_fail_stamp = (stamp, str(e))
             DebugLog.exception("mainGUI._read_host_source")
             # 別プロセスが書いている最中を掴みうる。ここで tnl へ倒すと3秒ごとに
             # 往復しかねないので、前の値を保持して次のtickで再試行する
             return "error", str(e)
 
+        self._host_local_fail_stamp = None
         if not meta["listed"]:
             # 参加者にも待機にも続行リストを持つ人がいない＝周回そのものが無い。
             # 「参加者0人」だけでは切り替えない——ToN ListTool は複窓だと全員を

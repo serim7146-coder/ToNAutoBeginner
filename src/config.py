@@ -51,6 +51,9 @@ _LISTTOOL_DIR = os.path.join(os.environ.get("APPDATA", ""), "ToN ListTool")
 # ToN ListTool 2.17 以降は state\・lists\ の下（2026-10-21 の更新で移った）。前の直下は残っていれば読む（GF）
 HOST_STATE_PATH = os.path.join(_LISTTOOL_DIR, "state", "host_state.sqlite3")
 HOST_STATE_LEGACY_PATH = os.path.join(_LISTTOOL_DIR, "host_state.sqlite3")
+# ToN ListTool 2.21.3 以降は、人ごとの続行リストがここに移った（sqlite の wishes は空になる）
+HOST_LOCAL_STATE_PATH = os.path.join(_LISTTOOL_DIR, "state", "host_local_state.bin")
+HOST_LOCAL_STATE_MAGIC = b"LTHS"
 # 主催者自身の続行リスト。host_save の participants には入らないため別に読む
 USER_SAVE_PATH = os.path.join(_LISTTOOL_DIR, "lists", "user_save.json")
 USER_SAVE_LEGACY_PATH = os.path.join(_LISTTOOL_DIR, "user_save.json")
