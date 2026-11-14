@@ -186,9 +186,10 @@ class TestLayout(unittest.TestCase):
             self.assertEqual({TerrorIds.HUNGRY_HOME_INVADER, TerrorIds.ATRACHED} <= set(ids), key == KEY, key)
             self.assertEqual(bool({TerrorIds.HUNGRY_HOME_INVADER, TerrorIds.ATRACHED} & set(ids)), key == KEY, key)
 
-    def test_rounds_without_a_variant_have_no_variant_row(self):
-        for name in ("Cracked",):
-            self.assertNotIn("variant", _blocks(_round_key(name))[1], name)
+    def test_cracked_has_only_bloodthirsty_in_the_variant_row(self):
+        """以前は Cracked だけ Bloodthirsty の枠が無かった（Curious が出るのに置き換え先が無い抜け。2026-11-14 に足した）"""
+        blocks, _kinds = _blocks(_round_key("Cracked"))
+        self.assertEqual(_tids(blocks["variant"]), [TerrorIds.BLOODTHIRSTY_CREATURE])
 
     def test_fog_and_midnight_are_classic_then_alternate_then_variant(self):
         for name in ("Fog", "Midnight"):
