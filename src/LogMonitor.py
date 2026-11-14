@@ -107,6 +107,8 @@ class LogMonitor:
         self.st.item_use = ItemUse.UseTracker(window_idx)
         self.sequence = RoundSequence.RoundSequence()
         self._running = False
+        # 「このラウンドで 1 回だけ」の確認と印を、ログのスレッドと待ってから送るスレッドで重ねないための鍵
+        self._once_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._access_notices: set = set()       # 画面に出した「動かせない理由」（理由ごとに 1 回）
         self._thread: Optional[threading.Thread] = None
@@ -388,6 +390,8 @@ class LogMonitor:
 
     def _focus_this_window_for(self, label: str):
         with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._running:       # 鍵を待っている間に止まることがある
+                return
             ok, loan = WindowOperator.borrow_front(self.cfg.hwnd)
             if ok:
                 SharedState.keep_front_loan(self.st, loan)    # フリーズが解けたら返す
@@ -580,6 +584,8 @@ class LogMonitor:
         """round_seq を渡すと、待つ間に番号が変わった（インスタンスを抜けた・窓が消えた。_abandon_round が
         もう解いている）ら何もしない（ほかの窓が張った分にも触らない・何も出さない）"""
         time.sleep(config.EQUIP_RELEASE_DELAY_SEC)
+        if not self._running:
+            return
         if round_seq is not None and self.st.round_seq != round_seq:
             return
         SharedState.equip_freeze_end(self.st)
@@ -725,7 +731,7 @@ class LogMonitor:
                     # 新しい順の最初の 1 つ。開始なら進行中、終わりならラウンドの間
                     round_checked = True
                     if event.kind == LogParser.EVENT_ROUND_START:
-                        running_round = (at, len(player_events))
+                        running_round = (at, len(player_events), event.map_id, event.round_type)
 
                 if event.kind == LogParser.EVENT_USER_AUTH and not auth_scanned:
                     # 遡りで最初に見えたログインの行だけを使う（それが最新。先頭から読んだものと違えば入り直している）。
@@ -888,13 +894,16 @@ class LogMonitor:
 
     def _restore_running_round(self, running_round, player_events: list):
         """監視開始の遡り: 途中から始めたときの今のラウンドの開始の時刻と、開始の行の時点の人数を
-        st.round_start_time・st.round_players に入れる（DB に送るときだけに使う。ほかは見ない）。
-        running_round は (開始の行の時刻, その行より新しい入退室の数)。進んでいるラウンドが無ければ None で何もしない。
+        st.round_start_time・st.round_players に、開始の行のマップ番号とラウンド名を st.map_id・st.round_type に入れる。
+        時刻と人数は DB に送るときだけに使う。マップとラウンド名は DB に送るのに加えて、round_type は判定
+        （続行／自爆・ラウンド指定自爆・続行表）でも見る。st.in_round などラウンド開始の副作用は戻さない。
+        running_round は (開始の行の時刻, その行より新しい入退室の数, マップ番号, ラウンド名)。
+        進んでいるラウンドが無ければ None で何もしない。
         player_events は古い順の入退室。人数は開始の行より前の入退室だけを積んだもの（自分を含む）"""
         if running_round is None:
             return
         st = self.st
-        at, newer = running_round
+        at, newer, map_id, round_type = running_round
         players = set()
         for event in player_events[:len(player_events) - newer]:
             if event.kind == LogParser.EVENT_PLAYER_JOINED:
@@ -903,6 +912,8 @@ class LogMonitor:
                 players.discard(event.user_id)
         st.round_start_time = at
         st.round_players = max(1, len(players | ({st.local_user_id} if st.local_user_id else set())))
+        st.map_id = map_id
+        st.round_type = round_type
 
     def _restore_three_wins(self, lived: int, round_types: list):
         """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、
@@ -1333,9 +1344,8 @@ class LogMonitor:
         （送信は裏のスレッド）。ids が None なら今のラウンドのテラー（無ければ「テラー: 不明」）"""
         try:
             st = self.st
-            if st.phone_notified_seq == st.round_seq:
+            if not self._claim_phone_notice():
                 return
-            st.phone_notified_seq = st.round_seq
             topic = self._phone_topic()
             if topic is None or self._hands_free():
                 return
@@ -3206,9 +3216,10 @@ class LogMonitor:
             if (is_open_special_round_target and is_private
                     and RoundDecision.open_special_active(st.open_special_round_wins,
                                                           self._after_unlock(), self._unlock_target())):
-                st.is_open_special_round_round = True
-                self._log(f"{self._unlock_target()}クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{self._unlock_target()}）")
-                self._start_daemon(self._action.do_open_special_round_loop)
+                if not st.is_open_special_round_round:      # 判定が同じラウンドで 2 回通ってもループは 1 本
+                    st.is_open_special_round_round = True
+                    self._log(f"{self._unlock_target()}クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{self._unlock_target()}）")
+                    self._start_daemon(self._action.do_open_special_round_loop)
             elif is_open_special_round_target and not is_private:
                 self._log("DTM/WaldoラウンドだがAFK解除はprivateのみ")
             elif is_open_special_round_target:
@@ -3246,11 +3257,26 @@ class LogMonitor:
             return f"〔{ItemCatalog.label(held, config.ITEMS)} での続行設定〕"
         return f"〔{ContinueTable.ITEM_NONE_LABEL}ときの続行設定〕"
 
+    def _claim_statistics(self) -> bool:
+        """この窓のこのラウンドの統計を送る権利を取る（取れたら True）。鍵の中で確認と印を立てる"""
+        with self._once_lock:
+            if self.st.statistics_sent:
+                return False
+            self.st.statistics_sent = True
+            return True
+
+    def _claim_phone_notice(self) -> bool:
+        """この窓のこのラウンドのスマホ通知を送る権利を取る（取れたら True）"""
+        with self._once_lock:
+            if self.st.phone_notified_seq == self.st.round_seq:
+                return False
+            self.st.phone_notified_seq = self.st.round_seq
+            return True
+
     def _send_round_statistics_once(self):
         st = self.st
-        if st.statistics_sent or not st.terror_ids:
+        if not st.terror_ids or not self._claim_statistics():
             return
-        st.statistics_sent = True
         ConnectDB.register_round(
             self._round_type_for_db(st.terror_ids),
             list(st.terror_ids),
@@ -3266,9 +3292,8 @@ class LogMonitor:
     def _send_null_terror_round(self):
         """テラーを持たないラウンド（config.NULL_TERROR_ROUND_IDS）を、テラー無しで1回だけ送る"""
         st = self.st
-        if st.statistics_sent:
+        if not self._claim_statistics():
             return
-        st.statistics_sent = True
         ConnectDB.register_round(
             st.round_type,
             [],
@@ -3308,9 +3333,8 @@ class LogMonitor:
     def _send_early_statistics(self, tid: int):
         """DB にだけ送る。判定には使わない。送信について何も出さない"""
         st = self.st
-        if st.statistics_sent:
+        if not self._claim_statistics():
             return
-        st.statistics_sent = True
         ConnectDB.register_round(
             self._round_type_for_db([tid]), [tid], st.map_id, st.transformed_uid, quiet=True,
             instance_key=self._db_instance_key(), round_time=st.round_start_time,

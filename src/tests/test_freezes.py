@@ -1739,6 +1739,7 @@ class TestReturnFront(unittest.TestCase):
         monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=self.VRC), {}, lambda _m: None,
                                         window_idx=1)
         monitor.logger = lambda _m: None
+        monitor._running = True         # 止めた後は前面に出さない。これは動いている監視の話
         return monitor
 
     RETURNED = [("cursor", CURSOR), ("focus", EDITOR)]

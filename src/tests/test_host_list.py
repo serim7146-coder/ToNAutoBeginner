@@ -2021,11 +2021,18 @@ class TestRealHostStateTabs(unittest.TestCase):
         counts = {tab: len(data["participants"]) for tab, data in sorted(tabs.items())}
         self.assertEqual(sum(counts.values()), meta["participants"],
                          "タブごとの人数の合計が全体と合う")
-        # 参加者がいるタブは、その名前で引ける
+        # 参加者がいるタブは、その名前で引ける。ただし、あるタブの参加者が
+        # 別のタブに全員含まれていると重なりが同点になり、tab_for_window は
+        # 決められず None を返す（設計どおり）。実データしだいなので、その
+        # タブの確認だけ飛ばす
         for tab, data in tabs.items():
-            if data["participants"]:
-                self.assertEqual(
-                    MatchTNL.tab_for_window(tabs, data["participants"]), tab)
+            own = set(data["participants"]) - {data.get("host_self")}
+            if not own:
+                continue
+            if any(t != tab and own <= (set(d["participants"]) - {d.get("host_self")})
+                   for t, d in tabs.items()):
+                continue
+            self.assertEqual(MatchTNL.tab_for_window(tabs, data["participants"]), tab)
 
 
 

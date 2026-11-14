@@ -116,6 +116,34 @@ class TestStartedInTheMiddleOfARound(_Case):
         self.assertEqual(self._sent()["round_time"], _epoch(30))
 
 
+class TestTheMapAndTheRoundNameAreRestored(_Case):
+    """途中から始めたとき、開始の行のマップ番号とラウンド名も戻す（無いと map 0・ラウンド名なしで送られる）"""
+
+    def test_the_map_and_the_round_type_are_those_of_the_start_line(self):
+        monitor = self._started([(2, JOIN), (3, _joined("A", "usr_a")), (10, _start("Fog"))])
+        self.assertEqual(monitor.st.map_id, 12)
+        self.assertEqual(monitor.st.round_type, "Fog")
+        self.assertFalse(monitor.st.in_round, "ラウンド開始の副作用は戻さない")
+
+    def test_the_statistics_carry_them(self):
+        monitor = self._started([(2, JOIN), (3, _joined("A", "usr_a")), (10, _start("Fog"))])
+        self._feed(monitor, 20, KILLERS)
+        self.send.assert_called_once()
+        self.assertEqual(self.send.call_args.args[0], "Fog")
+        self.assertEqual(self.send.call_args.args[2], 12)
+        self.assertFalse(monitor.st.in_round)
+
+    def test_the_latest_start_line_wins(self):
+        monitor = self._started([(2, JOIN), (10, _start("Classic")), (11, "RoundOver"), (12, _start("Fog"))])
+        self.assertEqual(monitor.st.round_type, "Fog")
+        self.assertEqual(monitor.st.map_id, 12)
+
+    def test_nothing_is_restored_between_rounds(self):
+        monitor = self._started([(2, JOIN), (10, _start("Fog")), (11, "RoundOver")])
+        self.assertEqual(monitor.st.map_id, 0)
+        self.assertEqual(monitor.st.round_type, "")
+
+
 class TestStartedBetweenRounds(_Case):
     def test_nothing_is_remembered_between_rounds(self):
         monitor = self._started([(2, JOIN), (3, _joined("A", "usr_a")), (10, _start()), (11, "RoundOver"),
