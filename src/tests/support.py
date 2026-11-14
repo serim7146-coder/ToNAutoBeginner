@@ -345,13 +345,17 @@ def setUpModule():
                        debug=config.DEBUG_LOG_PATH,
                        rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust,
-                       items=config.ITEMS)
+                       items=config.ITEMS,
+                       host_local=config.HOST_LOCAL_STATE_PATH)
     # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
     config.ITEMS = {}
     config.SETTINGS_PATH = root / "settings.json"
     config.DEBUG_LOG_PATH = root / "debug.log"
     config.ROUND_STORE_PATH = root / "rounds.sqlite"
     config.FOG_OBJECT_NAMES_PATH = root / "fog_object_names.json"
+    # 本物の ToN ListTool の host_local_state.bin（DPAPI で封じてある）を読まない。無いパスへ向け、
+    # 確かめるテストが一時フォルダのものへ差し替える
+    config.HOST_LOCAL_STATE_PATH = str(root / "no_host_local_state.bin")
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
     # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい」の答え。
@@ -436,6 +440,7 @@ def tearDownModule():
     config.ROUND_STORE_PATH = _real_paths["rounds"]
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
+    config.HOST_LOCAL_STATE_PATH = _real_paths["host_local"]
     AccessCheck.reset_for_tests()
     AccessCheck._ask_server = _real_paths["ask_server"]
     AccessCheck.SecretStore = _real_paths["access_secret_store"]
@@ -724,6 +729,26 @@ def write_host_state_like_json(path, raw):
                 members.append((section, member.get("vrc_name"), rounds))
         tabs.append(members)
     write_host_state(path, tabs)
+
+
+def fake_dpapi_unprotect(blob):
+    """MatchTNL._dpapi_unprotect の差し替え用。write_host_local_state が付けた DPAPI 風ヘッダ
+    （dwVersion 4 バイト + プロバイダ GUID 16 バイト）を外して、封じていない中身を返す"""
+    return blob[4 + len(MatchTNL._DPAPI_GUID):]
+
+
+def write_host_local_state(path, raw, *, magic=b"LTHS", version=1, seal=None):
+    """テスト用の host_local_state.bin を書く（ToN ListTool 2.21.3 以降の保存形式）。
+
+    raw は JSON になる辞書（{"tabs": [{"participants": [...], "waiting": [...]}, ...]}）。
+    中身は magic + 版 + DPAPI 風ヘッダ + gzip(json)。DPAPI 風ヘッダは dwVersion(4 バイト) + プロバイダ GUID で、
+    MatchTNL._unseal_local_state の GUID 探索が通る。暗号化はしない（seal で差し替えられる）ので、
+    読むテストは MatchTNL._dpapi_unprotect を fake_dpapi_unprotect に差し替えること（本物の DPAPI は呼ばない）"""
+    body = gzip.compress(json.dumps(raw, ensure_ascii=False).encode("utf-8"))
+    if seal is not None:
+        body = seal(body)
+    blob = struct.pack("<I", 1) + MatchTNL._DPAPI_GUID + body
+    Path(path).write_bytes(magic + bytes([version]) + blob)
 
 
 def write_old_host_save(path, participants):

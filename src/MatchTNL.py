@@ -1,4 +1,5 @@
 import functools
+import gzip
 import json
 import os
 import shutil
@@ -218,6 +219,7 @@ def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
     data = raw.get("data", {})
     listed: dict[str, set[int]] = {}
     for round_key, slot_values in data.items():
+        round_key = HOST_SAVE_KEY_ALIASES.get(round_key, round_key)
         if not isinstance(slot_values, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = _listtool_ids(slot_values)
@@ -238,6 +240,13 @@ HOST_SAVE_IGNORED_KEYS = frozenset({
     "Fog (Alternate)/霧 (Alternate)",
     "Ghost (Alternate)/ゴースト (Alternate)",
 })
+
+
+# 2.21.3 の wish_bits はラウンド名の日本語側が変わっているものがある。
+# 枠の表（continue_slots.json）は従来のキーなので、読むときに寄せる
+HOST_SAVE_KEY_ALIASES = {
+    "Randomizer/ランダマイザー": "Randomizer/Randomizer",
+}
 
 
 def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
@@ -374,28 +383,41 @@ def load_host_state(path: str,
         listed_ids.add(pid)
         if isinstance(name, str) and name:
             wishes.setdefault(name, {})
+        round_key = HOST_SAVE_KEY_ALIASES.get(round_key, round_key)
         if round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = _wish_ids(bits)
         if ids:
-            per_person.setdefault(pid, {})[round_key] = ids
+            per_person.setdefault(pid, {}).setdefault(round_key, set()).update(ids)
     for pid, listtool_ids in per_person.items():
         tab, section, name = by_id[pid]
         mine = wishes.get(name) if isinstance(name, str) and name else None
         tab_data = tabs_data.get(tab)
-        # 数秒ごとに読むので、捨てた番号・外した件数の行は同じものを何度も書かない（once）
-        for round_key, ids in own_list_from_listtool(listtool_ids, "主催リスト", once=True).items():
-            if section == PARTICIPANT_SECTION:
-                keepOn_set.setdefault(round_key, set()).update(ids)
-                if tab_data is not None:
-                    tab_data["keepOn"].setdefault(round_key, set()).update(ids)
-            if mine is not None:
-                # 同名が複数タブにいることがある。畳んで持つ
-                mine.setdefault(round_key, set()).update(ids)
-            if tab_data is not None and isinstance(name, str) and name:
-                tab_data["wishes"].setdefault(name, {}).setdefault(
-                    round_key, set()).update(ids)
+        _fold_person_wishes(listtool_ids, section, name, mine, tab_data, keepOn_set)
 
+    return _finish_host_state(keepOn_set, wishes, tabs_data, participants, participant_names,
+                              len(listed_ids), tabs, user_save_path, user_save_raw)
+
+
+def _fold_person_wishes(listtool_ids: dict, section, name, mine, tab_data, keepOn_set: dict):
+    """1 人ぶんの {キー: ListTool の番号の集合} を独自の番号に直し、keepOn_set・その人の希望・タブの内訳へ足す"""
+    # 数秒ごとに読むので、捨てた番号・外した件数の行は同じものを何度も書かない（once）
+    for round_key, ids in own_list_from_listtool(listtool_ids, "主催リスト", once=True).items():
+        if section == PARTICIPANT_SECTION:
+            keepOn_set.setdefault(round_key, set()).update(ids)
+            if tab_data is not None:
+                tab_data["keepOn"].setdefault(round_key, set()).update(ids)
+        if mine is not None:
+            # 同名が複数タブにいることがある。畳んで持つ
+            mine.setdefault(round_key, set()).update(ids)
+        if tab_data is not None and isinstance(name, str) and name:
+            tab_data["wishes"].setdefault(name, {}).setdefault(
+                round_key, set()).update(ids)
+
+
+def _finish_host_state(keepOn_set, wishes, tabs_data, participants, participant_names,
+                       listed, tabs, user_save_path, user_save_raw):
+    """主催者自身のリストを足し、meta を組む（SQLite 版・新形式で共通）"""
     host_self = None
     if user_save_path:
         host_self = _load_host_own_list(user_save_path, keepOn_set, wishes, raw=user_save_raw)
@@ -417,7 +439,7 @@ def load_host_state(path: str,
     # listed は「続行リストを持っている人」。ListTool は全部OFFの行を書かないので、
     # 行が1件でもある人を数える（JSON 版の「data を持つ人」と同じ意味）
     meta = {"participants": participants,   # 自分は数えない
-            "listed": len(listed_ids),
+            "listed": listed,
             "participant_names": participant_names,
             "tabs": tabs,
             # 窓ごとの対応づけに使うタブの内訳。
@@ -426,6 +448,128 @@ def load_host_state(path: str,
             "tabs_data": tabs_data,
             "host_self": host_self}
     return keepOn_set, meta, wishes
+
+
+CRYPTPROTECT_UI_FORBIDDEN = 0x1
+_DPAPI_GUID = bytes.fromhex("d08c9ddf0115d1118c7a00c04fc297eb")
+LOCAL_STATE_WISH_BYTES = 40         # 320 ビット（sqlite の wishes.bits と同じ並び）
+
+
+def _dpapi_unprotect(blob: bytes) -> bytes:
+    """DPAPI の暗号文を復号する。テストはこれを差し替える（テストから DPAPI は呼ばない）"""
+    import win32crypt
+    _description, data = win32crypt.CryptUnprotectData(
+        blob, None, None, None, CRYPTPROTECT_UI_FORBIDDEN)
+    return data
+
+
+def _unseal_local_state(raw: bytes) -> dict:
+    """"LTHS" + 版 + DPAPI → gzip → JSON。形が違えば ValueError。
+    DPAPI の暗号文は、プロバイダ GUID の 4 バイト前（dwVersion）から始まる。
+    ヘッダが伸びても壊れないよう、固定の位置ではなく GUID を探す"""
+    if not raw.startswith(config.HOST_LOCAL_STATE_MAGIC):
+        raise ValueError("host_local_state: 先頭の印が違います")
+    pos = raw.find(_DPAPI_GUID)
+    if pos < 4:
+        raise ValueError("host_local_state: DPAPI の暗号文が見つかりません")
+    try:
+        data = json.loads(gzip.decompress(_dpapi_unprotect(raw[pos - 4:])))
+    except Exception as e:
+        # 中身・パス・名前はメッセージに入れない（型名だけ）
+        raise ValueError(f"host_local_state を開けません（{type(e).__name__}）") from None
+    if not isinstance(data, dict):
+        raise ValueError("host_local_state: 中身が辞書ではありません")
+    return data
+
+
+def _wish_bits_to_bytes(text: str) -> bytes:
+    """"xxxx:xxxx:…" → 40 バイト。長さが違う・16 進でないなら ValueError"""
+    if not isinstance(text, str):
+        raise ValueError("wish_bits が文字列ではありません")
+    try:
+        raw = bytes.fromhex(text.replace(":", ""))
+    except ValueError:
+        raise ValueError("wish_bits が 16 進ではありません") from None
+    if len(raw) != LOCAL_STATE_WISH_BYTES:
+        raise ValueError(f"wish_bits の長さが違います（{len(raw)} バイト）")
+    return raw
+
+
+def load_host_local_state(path: str,
+                          user_save_path: str | None = None,
+                          user_save_raw: bytes | None = None
+                          ) -> tuple[dict[str, set[int]], dict, dict]:
+    """ToN ListTool 2.21.3 以降の主催リスト（host_local_state.bin）を読む。戻り値は load_host_state と同じ形。
+
+    ListTool は一時ファイルへ書いて os.replace で差し替えるので、一気に読んで閉じる
+    （一時フォルダへ写さない）。ListTool のフォルダには書かない。
+    各人の wish_bits が 40 バイトにならない行は、その行だけ捨てる（debug.log に件数を 1 回）。
+    壊れた容れ物（印・版・DPAPI・gzip・JSON）は ValueError（呼び出し側が猶予のあと .tnl へ）"""
+    with open(path, "rb") as f:
+        raw = f.read()
+    data = _unseal_local_state(raw)
+    tab_list = data.get("tabs")
+    if not isinstance(tab_list, list):
+        raise ValueError("host_local_state: tabs がありません")
+
+    keepOn_set: dict[str, set[int]] = {}
+    wishes: dict[str, dict[str, set[int]]] = {}
+    participants = 0
+    participant_names: set = set()
+    tabs_data: dict = {}
+    listed = 0
+    dropped = 0
+    for tab_index, tab in enumerate(tab_list):
+        if not isinstance(tab, dict):
+            continue
+        for section, key in ((PARTICIPANT_SECTION, "participants"), (1, "waiting")):
+            members = tab.get(key)
+            for member in members if isinstance(members, list) else ():
+                if not isinstance(member, dict):
+                    continue
+                tab_data = tabs_data.setdefault(tab_index, {"participants": set(), "waiting": set(),
+                                                            "keepOn": {}, "wishes": {}})
+                name = member.get("vrc_name")
+                has_name = isinstance(name, str) and bool(name)
+                if section == PARTICIPANT_SECTION:
+                    participants += 1
+                    if has_name:
+                        participant_names.add(name)
+                        tab_data["participants"].add(name)
+                elif has_name:
+                    tab_data["waiting"].add(name)
+                bits_by_round = member.get("wish_bits")
+                if not isinstance(bits_by_round, dict):
+                    continue
+                person: dict = {}
+                rows = 0
+                for round_key, text in bits_by_round.items():
+                    try:
+                        bits = _wish_bits_to_bytes(text)
+                    except ValueError:
+                        dropped += 1
+                        continue
+                    rows += 1
+                    round_key = HOST_SAVE_KEY_ALIASES.get(round_key, round_key)
+                    if round_key in HOST_SAVE_IGNORED_KEYS:
+                        continue
+                    ids = _wish_ids(bits)
+                    if ids:
+                        person.setdefault(round_key, set()).update(ids)
+                if not rows:
+                    continue            # 読めた行が 1 つも無い人は「リストを持つ人」に数えない
+                # 行が 1 つでもあれば「リストを持っている人」（全部 OFF でも {} で残す。sqlite 版と同じ）
+                listed += 1
+                if has_name:
+                    wishes.setdefault(name, {})
+                mine = wishes.get(name) if has_name else None
+                _fold_person_wishes(person, section, name, mine, tab_data, keepOn_set)
+    if dropped:
+        TerrorIds._report_once("host_local_bits", dropped,
+                               f"[主催リスト] 読めない wish_bits を {dropped} 件捨てました")
+
+    return _finish_host_state(keepOn_set, wishes, tabs_data, participants, participant_names,
+                              listed, len(tab_list), user_save_path, user_save_raw)
 
 
 def tab_for_window(tabs_data: dict, present_names) -> int | None:
