@@ -335,16 +335,16 @@ class TestLoadHostSave(unittest.TestCase):
 
         self.assertEqual(keep_on, {self.FOG: {5}}, "全部0のラウンドキーは残さない")
 
-    def test_alternate_fog_key_is_folded_into_the_normal_fog(self):
-        """host_save 側にだけあるキー。LOG_TO_TNL で通常Fogに寄せているので、読むときも通常Fogへ畳む（FV の捨てるを改めた）"""
+    def test_alternate_fog_key_is_ignored(self):
+        """host_save 側にだけあるキー。既存は LOG_TO_TNL で通常Fogに寄せている"""
         path = self._write({"version": 5, "tabs": [{
             "participants": [self._member({self.FOG_ALT: {"1": 1},
                                            self.CLASSIC: {"2": 1}})]}]})
 
         keep_on, _meta, _wishes = MatchTNL.load_host_state(path)
 
-        self.assertEqual(keep_on, {self.CLASSIC: {2}, self.FOG: {1}})
-        self.assertNotIn(self.FOG_ALT, keep_on, "Fog (Alternate) のキーは残らない")
+        self.assertEqual(keep_on, {self.CLASSIC: {2}})
+        self.assertNotIn(1, keep_on.get(self.FOG, set()), "通常Fogへ畳まないこと")
 
     def test_a_broken_file_raises(self):
         """呼び出し側が握って前の値を保持する。ここでは握り潰さない"""
@@ -977,7 +977,7 @@ class TestHostOwnList(unittest.TestCase):
         self.assertNotIn(self.PAGES, keep_on)
         self.assertEqual(wishes["serim01"], {self.CLASSIC: {9}})
 
-    def test_the_alternate_keys_are_folded_into_the_normal_keys(self):
+    def test_the_alternate_keys_are_ignored(self):
         self._write_host(1)
         self._write_user(self._account({self.FOG_ALT: {"1": 1},
                                         self.PAGES: {"70": 1}}))
@@ -985,8 +985,7 @@ class TestHostOwnList(unittest.TestCase):
         keep_on, _meta, wishes = self._load()
 
         self.assertNotIn(self.FOG_ALT, keep_on)
-        self.assertEqual(keep_on.get(MatchTNL.LOG_TO_TNL["Fog"]), {1}, "通常の Fog のキーへ畳む")
-        self.assertEqual(wishes["serim01"], {MatchTNL.LOG_TO_TNL["Fog"]: {1}, self.PAGES: {3057}})
+        self.assertEqual(wishes["serim01"], {self.PAGES: {3057}})
 
     def test_a_host_with_everything_off_is_kept_empty(self):
         """全部 OFF は「続行したいものが無い」。リストが無いのとは違う"""
@@ -1050,7 +1049,7 @@ class TestOldListToolIsNotRead(unittest.TestCase):
     def test_the_shared_parts_are_still_there(self):
         """新旧で共用していた部品は残す（主催者自身のリストが使う）"""
         for name in ("_fold_wishes", "_wish_ids", "_load_host_own_list",
-                     "HOST_SAVE_FOLDED_KEYS", "fold_round_key", "load_host_state"):
+                     "HOST_SAVE_IGNORED_KEYS", "load_host_state"):
             self.assertTrue(hasattr(MatchTNL, name), name)
         self.assertTrue(hasattr(config, "USER_SAVE_PATH"))
 
@@ -1589,12 +1588,12 @@ class TestHostStateSqlite(unittest.TestCase):
 
         keep_on, meta, wishes = self._load([people])
 
-        self.assertEqual(keep_on, {self.CLASSIC: {1, 2, 130}, MatchTNL.LOG_TO_TNL["Fog"]: {9}},
-                         "参加者だけを畳む。Fog (Alternate) は通常の Fog のキーへ畳む")
-        self.assertEqual(wishes, {"さんかしゃA": {self.CLASSIC: {1, 130}, MatchTNL.LOG_TO_TNL["Fog"]: {9}},
+        self.assertEqual(keep_on, {self.CLASSIC: {1, 2, 130}},
+                         "参加者だけを畳む。Fog (Alternate) は無視する")
+        self.assertEqual(wishes, {"さんかしゃA": {self.CLASSIC: {1, 130}},
                                   "さんかしゃB": {self.CLASSIC: {2}},
-                                  "たいきC": {MatchTNL.LOG_TO_TNL["Fog"]: {4, 5}}},
-                         "待機も名前では引ける。畳んだキーは名前ごとにも入る")
+                                  "たいきC": {}},
+                         "待機も名前では引ける。無視するキーは名前ごとにも入らない")
         self.assertEqual(meta["participants"], 2)
         self.assertEqual(meta["participant_names"], {"さんかしゃA", "さんかしゃB"})
         self.assertEqual(meta["listed"], 3)

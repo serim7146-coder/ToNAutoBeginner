@@ -218,30 +218,26 @@ def load_tnl(path: str) -> tuple[dict[str, set[int]], dict]:
     data = raw.get("data", {})
     listed: dict[str, set[int]] = {}
     for round_key, slot_values in data.items():
-        if not isinstance(slot_values, dict):
+        if not isinstance(slot_values, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = _listtool_ids(slot_values)
         if ids:
-            listed.setdefault(fold_round_key(round_key), set()).update(ids)
+            listed[round_key] = ids
     keepOn_set = {key: set(ids) for key, ids in own_list_from_listtool(listed, ".tnl").items()}
     meta = {k: raw.get(k, "") for k in ("list_name", "creator", "created_at")}
     return keepOn_set, meta
 
 
-# ListTool にだけあるラウンドのキー。ツールは Fog (Alternate) / Ghost (Alternate) を
-# LOG_TO_TNL で通常の Fog / Ghost のキーに寄せて判定するので、読み込むときに
-# 寄せ先のキーへ畳む。出るテラーの番号が重ならない（通常の Fog は Classic と 4002、
-# Fog (Alternate) は Alternate と 4010・4011）ので、同じキーに入れても誤って当たらない。
-# 以前は捨てていた（FV）。そのため霧 (Alternate) のタブに付けた続行が効かなかった
-HOST_SAVE_FOLDED_KEYS = {
-    "Fog (Alternate)/霧 (Alternate)":         LOG_TO_TNL["Fog"],
-    "Ghost (Alternate)/ゴースト (Alternate)": LOG_TO_TNL["Ghost"],
-}
-
-
-def fold_round_key(round_key: str) -> str:
-    """ListTool にだけあるラウンドのキーを、ツールのキーへ寄せる（ほかのキーはそのまま）"""
-    return HOST_SAVE_FOLDED_KEYS.get(round_key, round_key)
+# host_save 側にだけ存在するラウンドキー。ログ側は LOG_TO_TNL で通常の
+# Fog/Ghost に寄せているので、ここで畳むと既存の判定が変わる。無視する。
+# tnl の読み込みでも同じ（FV。件数・ラウンド数を主催リストと合わせる）。
+# 2026-11-14 に通常の Fog/Ghost へ畳む形を試したが、主催リストの実データでは
+# このキーの中身は全員同じ「Classic 全部 ON」の固定の塊で、希望が入っていなかった
+# （ListTool が機械的に書いている）ため戻した。オルタネイトの希望は Fog/霧 のタブ（134〜169）に入っている。
+HOST_SAVE_IGNORED_KEYS = frozenset({
+    "Fog (Alternate)/霧 (Alternate)",
+    "Ghost (Alternate)/ゴースト (Alternate)",
+})
 
 
 def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
@@ -250,11 +246,11 @@ def _fold_wishes(data, keepOn_set: dict, mine: dict | None):
         return
     listed = {}
     for round_key, slot_values in data.items():
-        if not isinstance(slot_values, dict):
+        if not isinstance(slot_values, dict) or round_key in HOST_SAVE_IGNORED_KEYS:
             continue
         ids = _listtool_ids(slot_values)
         if ids:
-            listed.setdefault(fold_round_key(round_key), set()).update(ids)
+            listed[round_key] = ids
     for round_key, ids in own_list_from_listtool(listed, "主催者のリスト", once=True).items():
         keepOn_set.setdefault(round_key, set()).update(ids)
         if mine is not None:
@@ -378,9 +374,11 @@ def load_host_state(path: str,
         listed_ids.add(pid)
         if isinstance(name, str) and name:
             wishes.setdefault(name, {})
+        if round_key in HOST_SAVE_IGNORED_KEYS:
+            continue
         ids = _wish_ids(bits)
         if ids:
-            per_person.setdefault(pid, {}).setdefault(fold_round_key(round_key), set()).update(ids)
+            per_person.setdefault(pid, {})[round_key] = ids
     for pid, listtool_ids in per_person.items():
         tab, section, name = by_id[pid]
         mine = wishes.get(name) if isinstance(name, str) and name else None
