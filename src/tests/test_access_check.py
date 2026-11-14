@@ -10,8 +10,8 @@ UID = "usr_00000000-aaaa-bbbb-cccc-000000000001"
 OTHER = "usr_00000000-aaaa-bbbb-cccc-000000000002"
 PREFIX = "2026.10.31 12:40:19 Debug      -  "
 DAY = 86400.0
-ALLOW = {"allowed": True, "min_version": "", "require_uid": True}
-DENY = {"allowed": False, "min_version": "", "require_uid": True}
+ALLOW = True
+DENY = False
 
 
 class _Terminated(BaseException):
@@ -28,7 +28,7 @@ class _Case(unittest.TestCase):
         self.now = [1_800_000_000.0]            # 壁の時計（epoch 秒）
         self.mono = [1000.0]                    # 単調時計
         self.terminate = MagicMock()
-        self.ask = MagicMock(return_value=dict(ALLOW))
+        self.ask = MagicMock(return_value=ALLOW)
         for target, name, value in ((config, "SETTINGS_PATH", self.dir / "settings.json"),
                                     (AccessCheck, "_TERMINATE", self.terminate),
                                     (AccessCheck, "_ask_server", self.ask),
@@ -57,7 +57,7 @@ class TestVerify(_Case):
         self.terminate.assert_not_called()
 
     def test_a_banned_answer(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.BANNED)
         self.terminate.assert_not_called()          # verify は終わらせない（enforce が終わらせる）
 
@@ -127,7 +127,7 @@ class TestVerify(_Case):
             self.assertEqual(AccessCheck.verify(UID), AccessCheck.UNREACHABLE, bad)
 
     def test_a_banned_record_stays_banned_without_an_answer(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.verify(UID)
         self.forget_memory()
         self.ask.return_value = None
@@ -139,10 +139,10 @@ class TestVerify(_Case):
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.BANNED)
 
     def test_an_allowed_answer_clears_an_old_banned_record(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.verify(UID)
         self.forget_memory()
-        self.ask.return_value = dict(ALLOW)
+        self.ask.return_value = ALLOW
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.ALLOWED)
         self.forget_memory()
         self.ask.return_value = None
@@ -160,10 +160,10 @@ class TestVerify(_Case):
         self.assertEqual(self.ask.call_count, 3, "別の UID は別")
 
     def test_a_banned_uid_is_never_asked_again(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.verify(UID)
         self.mono[0] += 10 * config.ACCESS_MEMORY_SEC
-        self.ask.return_value = dict(ALLOW)
+        self.ask.return_value = ALLOW
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.BANNED)
         self.assertEqual(self.ask.call_count, 1)
 
@@ -172,7 +172,7 @@ class TestVerify(_Case):
         AccessCheck.verify(UID)
         AccessCheck.verify(UID)
         self.assertEqual(self.ask.call_count, 2)
-        self.ask.return_value = dict(ALLOW)
+        self.ask.return_value = ALLOW
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.ALLOWED)
 
     def test_a_grace_ok_is_not_remembered_as_an_answer(self):
@@ -180,34 +180,27 @@ class TestVerify(_Case):
         self.forget_memory()
         self.ask.return_value = None
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.ALLOWED)
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         self.assertEqual(AccessCheck.verify(UID), AccessCheck.BANNED, "次はサーバーに聞き直す")
 
     def test_the_uid_is_trimmed(self):
         AccessCheck.verify(f"  {UID}\n")
         self.ask.assert_called_once_with(UID, config.ACCESS_TIMEOUT_SEC)
 
-    def test_without_a_uid_the_server_setting_decides(self):
+    def test_without_a_uid_the_result_is_no_uid_and_the_server_is_not_asked(self):
         for empty in (None, "", "   "):
             self.ask.reset_mock()
-            self.ask.return_value = {"allowed": True, "min_version": "", "require_uid": True}
             self.assertEqual(AccessCheck.verify(empty), AccessCheck.NO_UID, empty)
-            self.ask.assert_called_once_with(None, config.ACCESS_TIMEOUT_SEC)
-            self.ask.return_value = {"allowed": True, "min_version": "", "require_uid": False}
-            self.assertEqual(AccessCheck.verify(empty), AccessCheck.ALLOWED, empty)
+            self.ask.assert_not_called()
 
-    def test_without_a_uid_and_without_an_answer_the_saved_setting_decides(self):
-        self.ask.return_value = None
-        self.assertEqual(AccessCheck.verify(None), AccessCheck.NO_UID, "記録が無ければ UID 必須")
-        self.ask.return_value = {"allowed": True, "min_version": "", "require_uid": False}
-        AccessCheck.verify(None)                                # 設定を覚える
-        self.forget_memory()
-        self.ask.return_value = None
-        self.assertEqual(AccessCheck.verify(None), AccessCheck.ALLOWED)
-        self.ask.return_value = {"allowed": True, "min_version": "", "require_uid": True}
-        AccessCheck.verify(None)
-        self.ask.return_value = None
-        self.assertEqual(AccessCheck.verify(None), AccessCheck.NO_UID)
+    def test_without_a_uid_nothing_goes_out_even_with_the_real_ask(self):
+        """本物の _ask_server に戻しても、UID が無ければ urlopen は呼ばれない・記録も書かれない"""
+        calls = []
+        with patch.object(AccessCheck, "_ask_server", REAL_ASK_SERVER),              patch.object(urllib.request, "urlopen", lambda *a, **k: calls.append(a)):
+            for empty in (None, "", "   ", 12345):
+                self.assertEqual(AccessCheck.verify(empty), AccessCheck.NO_UID, empty)
+        self.assertEqual(calls, [], "通信しない")
+        self.assertFalse(AccessCheck._record_path().exists(), "記録も書かない")
 
     def test_a_non_string_uid_is_no_uid(self):
         self.assertEqual(AccessCheck.verify(12345), AccessCheck.NO_UID)
@@ -215,7 +208,7 @@ class TestVerify(_Case):
 
 class TestEnforce(_Case):
     def test_a_banned_uid_terminates_once(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.enforce(UID)
         self.terminate.assert_called_once_with(0)
 
@@ -230,7 +223,7 @@ class TestEnforce(_Case):
         for banned_by in ("answer", "record"):
             self.forget_memory()
             self.terminate.reset_mock()
-            self.ask.return_value = dict(DENY) if banned_by == "answer" else None
+            self.ask.return_value = DENY if banned_by == "answer" else None
             written = []
             with patch.object(DebugLog, "write", side_effect=written.append), \
                  patch.object(DebugLog, "exception", side_effect=written.append), \
@@ -248,7 +241,7 @@ class TestEnforce(_Case):
 
 class TestEnforceStartup(_Case):
     def test_a_banned_latest_user_terminates(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         with patch.object(VRChatLauncher, "latest_user_id", return_value=UID) as latest:
             AccessCheck.enforce_startup()
         latest.assert_called_once_with(config.VRCHAT_LOG_DIR)
@@ -305,12 +298,11 @@ class TestAskServer(unittest.TestCase):
         self.calls = calls
         return result
 
-    GOOD = {"allowed": True, "min_version": "v1.2.3", "require_uid": True}
+    GOOD = {"allowed": True}
 
     def test_a_good_answer(self):
-        self.assertEqual(self._ask(self.GOOD), self.GOOD)
-        self.assertEqual(self._ask({"allowed": False, "min_version": "v0.0.0", "require_uid": False}),
-                         {"allowed": False, "min_version": "v0.0.0", "require_uid": False})
+        self.assertIs(self._ask(self.GOOD), True)
+        self.assertIs(self._ask({"allowed": False}), False)
 
     def test_the_request_carries_only_the_uid_and_the_version(self):
         self._ask(self.GOOD, timeout=2.5)
@@ -342,16 +334,16 @@ class TestAskServer(unittest.TestCase):
 
     def test_a_bad_answer_is_no_answer(self):
         for body in (b"not json", b"", b"[]", b"null", b'"x"', b"123",
-                     {"allowed": "true"}, {"allowed": 1}, {"allowed": None}, {"min_version": "v1.0.0"}, []):
+                     {"allowed": "true"}, {"allowed": 1}, {"allowed": None}, {"other": "x"}, []):
             self.assertIsNone(self._ask(body), body)
 
-    def test_the_other_fields_are_made_safe(self):
-        self.assertEqual(self._ask({"allowed": True}),
-                         {"allowed": True, "min_version": "", "require_uid": True})
-        self.assertEqual(self._ask({"allowed": True, "min_version": 5, "require_uid": "no"}),
-                         {"allowed": True, "min_version": "", "require_uid": True})
-        self.assertEqual(self._ask({"allowed": True, "min_version": None, "require_uid": False}),
-                         {"allowed": True, "min_version": "", "require_uid": False})
+    def test_fields_an_older_server_still_sends_are_ignored(self):
+        # 古いサーバーの答えが運んでいたキー。ツールから名前が消えたことを grep で確かめるため、文字を継いで書く
+        old_keys = {"min_" + "version": "v9.9.9", "require_" + "uid": False}
+        self.assertIs(self._ask({"allowed": True, **old_keys}), True)
+        self.assertIs(self._ask({"allowed": False, **old_keys}), False)
+        odd = {"min_" + "version": 5, "require_" + "uid": "no"}
+        self.assertIs(self._ask({"allowed": True, **odd}), True)
 
     def test_a_failure_writes_only_the_kind_of_error(self):
         for exc in (urllib.error.URLError(f"{UID} {ConnectDB.SUPABASE_URL}"), OSError(UID)):
@@ -377,7 +369,7 @@ class TestAskServer(unittest.TestCase):
              patch.dict(os.environ, env):
             result = self._ask(self.GOOD)
             self.assertEqual(os.environ["SUPABASE_URL"], env["SUPABASE_URL"], "os.environ を書き換えない")
-        self.assertEqual(result, self.GOOD)
+        self.assertIs(result, True)
         values.assert_called_once_with(Path(AccessCheck.__file__).resolve().parent / ".env")
         (req, _timeout), = self.calls
         self.assertEqual(req.full_url, "https://bundled.example/rest/v1/rpc/check_access")
@@ -393,7 +385,7 @@ class TestAskServer(unittest.TestCase):
     def test_a_development_run_without_a_setting_runs_without_asking(self):
         with patch.object(ConnectDB, "SUPABASE_URL", None), patch.object(ConnectDB, "SUPABASE_KEY", None):
             result = self._ask(self.GOOD)
-        self.assertEqual(result, {"allowed": True, "min_version": "", "require_uid": False})
+        self.assertIs(result, True)
         self.assertEqual(self.calls, [], "通信しない")
 
     def test_the_url_and_the_key_are_hidden_from_the_debug_log(self):
@@ -406,7 +398,7 @@ class TestAskServer(unittest.TestCase):
 
 class TestRecord(_Case):
     def test_the_file_has_no_raw_uid(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.verify(UID)
         AccessCheck.verify(OTHER)           # BANNED のメモリがあっても別の UID は聞く
         raw = AccessCheck._record_path().read_text(encoding="ascii")
@@ -418,12 +410,11 @@ class TestRecord(_Case):
         self.assertEqual(len(AccessCheck._key(UID)), 64)
         self.assertEqual(AccessCheck._key(UID), hashlib.sha256(UID.encode("utf-8")).hexdigest())
 
-    def test_the_record_holds_the_time_and_the_settings(self):
-        self.ask.return_value = {"allowed": True, "min_version": "v1.5.0", "require_uid": False}
+    def test_the_record_holds_only_the_time_and_the_ban_mark(self):
         AccessCheck.verify(UID)
         record = self.record()
         self.assertEqual(record["users"][AccessCheck._key(UID)], {"ok_at": self.now[0], "banned": False})
-        self.assertEqual((record["min_version"], record["require_uid"]), ("v1.5.0", False))
+        self.assertEqual(set(record), {"users"})
 
     def test_the_file_is_written_by_replacing_a_temp_file(self):
         with patch.object(AccessCheck.os, "replace", wraps=os.replace) as replace:
@@ -445,7 +436,7 @@ class TestRecord(_Case):
             self.assertEqual(AccessCheck.verify(UID), AccessCheck.ALLOWED)
 
     def test_the_uid_is_not_in_the_bug_report(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.verify(UID)
         home = r"C:\Users\Alice"
         debug = self.dir / "debug.log"
@@ -463,54 +454,6 @@ class TestRecord(_Case):
         for name in z.namelist():
             self.assertNotIn(UID, z.read(name).decode("utf-8", "replace"), name)
             self.assertNotIn("access", name)
-
-
-class TestTooOld(_Case):
-    def _learn(self, minimum):
-        self.forget_memory()                        # 1 時間以内は聞き直さないので、入れ直してから聞く
-        self.ask.return_value = {"allowed": True, "min_version": minimum, "require_uid": True}
-        AccessCheck.verify(UID)
-
-    def test_a_larger_minimum_is_too_old(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            self._learn("v1.5.0")
-            self.assertEqual(AccessCheck.too_old(), "v1.5.0")
-            self._learn("v2.0")
-            self.assertEqual(AccessCheck.too_old(), "v2.0")
-            self._learn("1.4.2")
-            self.assertEqual(AccessCheck.too_old(), "1.4.2")
-
-    def test_the_same_or_a_smaller_minimum_is_fine(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            for minimum in ("v1.4.1", "v1.4.0", "v1.3.9", "v0.0.0", "v1.4"):
-                self._learn(minimum)
-                self.assertEqual(AccessCheck.too_old(), "", minimum)
-
-    def test_a_value_that_cannot_be_read_is_fine(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            for minimum in ("", "latest", "あ", "v", "..."):
-                self._learn(minimum)
-                self.assertEqual(AccessCheck.too_old(), "", minimum)
-
-    def test_nothing_known_is_fine(self):
-        self.assertEqual(AccessCheck.too_old(), "")
-
-    def test_the_minimum_survives_a_restart(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            self._learn("v1.5.0")
-            self.forget_memory()
-            self.assertEqual(AccessCheck.too_old(), "v1.5.0")
-
-    def test_a_no_uid_answer_also_teaches_the_minimum(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            self.ask.return_value = {"allowed": True, "min_version": "v9.0.0", "require_uid": True}
-            AccessCheck.verify(None)
-            self.assertEqual(AccessCheck.too_old(), "v9.0.0")
-
-    def test_an_old_version_is_not_stopped_by_verify_itself(self):
-        with patch.object(config, "APP_VERSION", "v1.4.1"):
-            self._learn("v9.0.0")
-            self.assertEqual(AccessCheck.verify(UID), AccessCheck.ALLOWED)
 
 
 class TestRecheck(_Case):
@@ -573,7 +516,7 @@ class TestRecheck(_Case):
     def test_a_banned_answer_terminates(self):
         AccessCheck.verify(UID)
         self.mono[0] += config.ACCESS_MEMORY_SEC
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         AccessCheck.recheck_async(UID)
         self.started[0].target()
         self.terminate.assert_called_once_with(0)
@@ -664,7 +607,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
     def test_an_ok_starts_the_window_and_then_fetches_the_statistics_id(self):
         monitor = self.monitor(self.log_file([_login()]))
         order = []
-        self.ask.side_effect = lambda uid, timeout: (order.append("ask"), dict(ALLOW))[1]
+        self.ask.side_effect = lambda uid, timeout: (order.append("ask"), ALLOW)[1]
         self.send.side_effect = lambda uid, name=None: (order.append("send"), 7)[1]
         self.run_in_thread(monitor)
         self.wait_for(lambda: self.started(monitor), "監視開始")
@@ -682,7 +625,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
         time.sleep(0.2)
         self.send.assert_not_called()
         self.assertFalse(self.started(monitor))
-        self.ask.return_value = dict(ALLOW)
+        self.ask.return_value = ALLOW
         self.wait_for(lambda: self.started(monitor), "監視開始")
         self.wait_for(lambda: self.send.call_count == 1, "send_Users")
         self.send.assert_called_once_with(UID, "tester")
@@ -714,7 +657,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
         self.assertEqual(spy.call_count, 1)
         self.append(path, "[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)",
                     "[Behaviour] OnPlayerJoined other (usr_00000000-aaaa-bbbb-cccc-0000000000ff)")
-        self.ask.return_value = dict(ALLOW)
+        self.ask.return_value = ALLOW
         self.wait_for(lambda: self.started(monitor), "監視開始")
         self.assertEqual(spy.call_count, 2, "待った場合は遡りをやり直す")
         self.assertIn("usr_00000000-aaaa-bbbb-cccc-0000000000ff", monitor.st.players,
@@ -739,8 +682,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
         time.sleep(0.2)
         monitor._process.assert_not_called()
         self.assertFalse(self.started(monitor))
-        self.ask.assert_called()                    # UID なしで聞いている
-        self.assertTrue(all(c.args[0] is None for c in self.ask.call_args_list))
+        self.ask.assert_not_called()                # UID が無いうちはサーバーに聞かない
         self.append(path, "[Authentication - x] Preforming post login checks for tester (%s)" % UID)
         self.wait_for(lambda: self.started(monitor), "監視開始")
         self.assertEqual(monitor.st.local_user_id, UID)
@@ -757,16 +699,6 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
             self.wait_for(lambda: self.notices(monitor, NO_UID_TEXT), "文言")
             self.append(path, _login())
             self.wait_for(lambda: self.started(monitor), "監視開始")
-
-    def test_without_a_uid_the_server_can_say_it_is_not_needed(self):
-        monitor = self.monitor(self.log_file(["[Behaviour] Joining wrld_now:2~private(usr_me)~region(jp)"]))
-        self.ask.return_value = {"allowed": True, "min_version": "", "require_uid": False}
-        self.run_in_thread(monitor)
-        self.wait_for(lambda: self.started(monitor), "監視開始")
-        self.assertEqual(monitor.st.local_user_id, "")
-        time.sleep(0.1)
-        self.send.assert_not_called()               # UID が無いので統計用の番号は取りに行かない
-        self.assertEqual(self.notices(monitor, NO_UID_TEXT), 0)
 
     def test_a_missing_uid_and_an_unreachable_server_says_the_server_text_once_per_reason(self):
         path = self.log_file([])
@@ -807,7 +739,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
 
     def test_a_banned_answer_ends_the_process_without_a_word(self):
         monitor = self.monitor(self.log_file([_login()]))
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         self.terminate.side_effect = SystemExit         # 裏のスレッドを黙って終わらせる（本物の os._exit の代わり）
         written = []
         with patch.object(DebugLog, "write", side_effect=written.append):
@@ -825,7 +757,7 @@ class TestMonitorWaitsForTheAnswer(_MonitorCase):
 class TestMonitorVerifyAccess(_MonitorCase):
     def test_a_banned_result_that_comes_back_logs_no_reason(self):
         monitor = self.monitor(Path("unused.txt"))
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         monitor.st.local_user_id = UID
         self.assertFalse(monitor._verify_access())
         self.terminate.assert_called_once_with(0)
@@ -862,7 +794,7 @@ class TestLoginLineWhileRunning(_MonitorCase):
         return monitor
 
     def test_a_banned_login_line_terminates_before_anything_is_stored_or_logged(self):
-        self.ask.return_value = dict(DENY)
+        self.ask.return_value = DENY
         self.terminate.side_effect = _Terminated
         for fmt in (self.LOGIN, self.POST_LOGIN):
             self.terminate.reset_mock()
@@ -912,47 +844,19 @@ class _Stopped(Exception):
     """窓の準備まで進んだことを知らせる目印"""
 
 
-class TestTooOldInTheGui(_Case):
-    def _app(self, minimum):
-        app = mainGUI.App.__new__(mainGUI.App)
-        app.logs = []
-        app._log = app.logs.append
-        app._start_quiet = False
-        app.keepOn_set = True
-        patcher = patch.object(AccessCheck, "too_old", return_value=minimum)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        return app
-
-    def test_start_refuses_and_says_why(self):
-        app = self._app("v9.0.0")
-        with patch.object(mainGUI.messagebox, "showwarning") as warned, \
-             patch.object(app, "_resolve_tab_ports", create=True) as resolved:
-            mainGUI.App._start(app)
-        warned.assert_called_once()
-        resolved.assert_not_called()                # 始めずに戻った
-        self.assertEqual(app.logs, ["[更新] この版は使えません（v9.0.0 以上が必要です）。更新してください"])
-
-    def test_the_quiet_start_does_not_show_a_dialog(self):
-        app = self._app("v9.0.0")
-        app._start_quiet = True
-        with patch.object(mainGUI.messagebox, "showwarning") as warned:
-            mainGUI.App._start(app)
-        warned.assert_not_called()
-        self.assertEqual(len(app.logs), 1)
-
-    def test_a_fine_version_starts_as_before(self):
-        app = self._app("")
-        with patch.object(mainGUI.messagebox, "showwarning") as warned, \
-             patch.object(app, "_resolve_tab_ports", side_effect=_Stopped, create=True):
-            with self.assertRaises(_Stopped):               # 断らずに先（窓の準備）へ進んだ
-                mainGUI.App._start(app)
-        warned.assert_not_called()
-        self.assertFalse(any("この版は使えません" in m for m in app.logs))
-
-    def test_the_text(self):
-        self.assertEqual(mainGUI._too_old_text("v1.5.0"),
-                         "[更新] この版は使えません（v1.5.0 以上が必要です）。更新してください")
+class TestStartIsNotRefusedByVersion(_Case):
+    def test_start_goes_on_to_the_window_setup_whatever_the_version(self):
+        for version in ("v0.0.1", "v1.4.1", "v99.0.0"):
+            app = mainGUI.App.__new__(mainGUI.App)
+            app.logs = []
+            app._log = app.logs.append
+            app._start_quiet = False
+            app.keepOn_set = True
+            with patch.object(config, "APP_VERSION", version),                  patch.object(mainGUI.messagebox, "showwarning") as warned,                  patch.object(app, "_resolve_tab_ports", side_effect=_Stopped, create=True):
+                with self.assertRaises(_Stopped):               # 断らずに先（窓の準備）へ進んだ
+                    mainGUI.App._start(app)
+            warned.assert_not_called()
+            self.assertFalse(any("この版は使えません" in m for m in app.logs), version)
 
 
 if __name__ == "__main__":

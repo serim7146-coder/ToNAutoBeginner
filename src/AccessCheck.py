@@ -1,7 +1,7 @@
 """動かしてよいかをサーバー（Supabase の check_access。supabase/check_access.sql）に聞く。
 
-締め出しの一覧と「使える最低の版」はサーバーにある。ツールは自分の UID と版だけを送って、
-{"allowed", "min_version", "require_uid"} を受け取る。締め出しなら、何も出さずにプロセスを終える
+締め出しの一覧はサーバーにある。ツールは自分の UID と版だけを送って、
+{"allowed": bool} を受け取る。締め出しなら、何も出さずにプロセスを終える
 （終わらせれば、マクロ・VRChat の起動・スマホ通知・OSC・声・窓の操作がすべて止まる）。
 理由・UID はどこにも出さない（ログ・デバッグログ・画面・不具合の報告のどれにも）。
 
@@ -11,10 +11,10 @@
   ALLOWED     動かしてよい
   BANNED      締め出し（enforce は終わらせる）
   UNREACHABLE サーバーに聞けず、最後の OK から ACCESS_GRACE_SEC を過ぎた（一度も OK が無い）
-  NO_UID      UID が読めず、サーバーの設定 require_uid が真
+  NO_UID      UID が読めない（サーバーには聞かない）
 
 サーバーに聞けないときのために、手元の記録（access.dat。DPAPI で包む）に、UID の SHA-256 ごとの
-最後の OK の時刻と締め出しの印、サーバーの設定を残す。生の UID は書かない。
+最後の OK の時刻と締め出しの印を残す。生の UID は書かない。
 """
 import hashlib
 import json
@@ -26,7 +26,6 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-import AutoUpdate
 import DebugLog
 import SecretStore
 import TaskStats
@@ -52,7 +51,6 @@ _FUTURE_SLACK_SEC = 300.0       # 手元の記録の時刻が、今よりこれ�
 _lock = threading.Lock()
 _memory: dict = {}              # UID の印 → (ALLOWED か BANNED, 聞いた時刻 monotonic)。サーバーの答えだけ
 _asked: dict = {}               # UID の印 → 最後に聞いた時刻 monotonic（答えが来なくても）
-_settings: dict = {}            # 最後の答えの設定 {"min_version", "require_uid"}
 _rechecking = False
 
 
@@ -91,14 +89,14 @@ def _server_config() -> tuple:
     return url, key
 
 
-def _ask_server(uid: Optional[str], timeout: float) -> Optional[dict]:
-    """check_access を呼ぶ。答えが {"allowed": bool, ...} の形ならそれ（min_version は文字列・
-    require_uid は真偽に整える）。つながらない・HTTP エラー（404 を含む）・JSON でない・形が違う → None"""
+def _ask_server(uid: str, timeout: float) -> Optional[bool]:
+    """check_access を呼ぶ。答えが {"allowed": bool, ...} の形なら allowed（ほかのキーは無視する）。
+    つながらない・HTTP エラー（404 を含む）・JSON でない・形が違う → None"""
     url, key = _server_config()
     if not url or not key:
         if _compiled():
             return None
-        return {"allowed": True, "min_version": "", "require_uid": False}     # 開発実行は確認なしで動かす
+        return True     # 開発実行は確認なしで動かす
     body = {"p_vrchat_uid": uid, "p_version": config.APP_VERSION}
     req = urllib.request.Request(
         f"{url}/rest/v1/rpc/{RPC_NAME}",
@@ -115,10 +113,7 @@ def _ask_server(uid: Optional[str], timeout: float) -> Optional[dict]:
     if not isinstance(value, dict) or not isinstance(value.get("allowed"), bool):
         DebugLog.write("[確認] 答えの形が違います")
         return None
-    min_version = value.get("min_version")
-    return {"allowed": value["allowed"],
-            "min_version": min_version if isinstance(min_version, str) else "",
-            "require_uid": value.get("require_uid") is not False}
+    return value["allowed"]
 
 
 # ── 手元の記録 ────────────────────────────
@@ -167,25 +162,18 @@ def _entry(record: dict, key: str) -> tuple:
     return float(ok_at), banned
 
 
-def _remember(answer: dict, key: Optional[str], allowed: Optional[bool]) -> None:
-    """サーバーの答えを覚える（設定は常に。UID は key があるとき）。変わったときだけ書く"""
+def _remember(key: str, allowed: bool) -> None:
+    """サーバーの答えを覚える（UID の印ごとの最後の OK の時刻・締め出しの印）"""
     with _lock:
-        _settings["min_version"] = answer["min_version"]
-        _settings["require_uid"] = answer["require_uid"]
         record = _load_record()
-        before = json.dumps(record, sort_keys=True)
-        record["min_version"] = answer["min_version"]
-        record["require_uid"] = answer["require_uid"]
-        if key is not None:
-            old = record["users"].get(key)
-            old_ok_at = old.get("ok_at") if isinstance(old, dict) else None
-            if allowed:
-                record["users"][key] = {"ok_at": _wall(), "banned": False}
-            else:
-                record["users"][key] = {"ok_at": old_ok_at if isinstance(old_ok_at, (int, float))
-                                        and not isinstance(old_ok_at, bool) else 0, "banned": True}
-        if key is not None or json.dumps(record, sort_keys=True) != before:
-            _save_record(record)
+        old = record["users"].get(key)
+        old_ok_at = old.get("ok_at") if isinstance(old, dict) else None
+        if allowed:
+            record["users"][key] = {"ok_at": _wall(), "banned": False}
+        else:
+            record["users"][key] = {"ok_at": old_ok_at if isinstance(old_ok_at, (int, float))
+                                    and not isinstance(old_ok_at, bool) else 0, "banned": True}
+        _save_record(record)
 
 
 # ── 確認 ─────────────────────────────────
@@ -196,7 +184,7 @@ def verify(uid: Optional[str], timeout: Optional[float] = None) -> str:
         timeout = config.ACCESS_TIMEOUT_SEC
     uid = uid.strip() if isinstance(uid, str) else ""
     if not uid:
-        return _verify_without_uid(timeout)
+        return NO_UID
     key = _key(uid)
     with _lock:
         hit = _memory.get(key)
@@ -204,15 +192,14 @@ def verify(uid: Optional[str], timeout: Optional[float] = None) -> str:
         result, at = hit
         if result == BANNED or _mono() - at < config.ACCESS_MEMORY_SEC:
             return result
-    answer = _ask_server(uid, timeout)
+    allowed = _ask_server(uid, timeout)
     with _lock:
         _asked[key] = _mono()
-    if answer is not None:
-        allowed = answer["allowed"]
+    if allowed is not None:
         result = ALLOWED if allowed else BANNED
         with _lock:
             _memory[key] = (result, _mono())
-        _remember(answer, key, allowed)
+        _remember(key, allowed)
         return result
     with _lock:
         ok_at, banned = _entry(_load_record(), key)
@@ -221,18 +208,6 @@ def verify(uid: Optional[str], timeout: Optional[float] = None) -> str:
     if ok_at is not None and _wall() - ok_at < config.ACCESS_GRACE_SEC:
         return ALLOWED
     return UNREACHABLE
-
-
-def _verify_without_uid(timeout: float) -> str:
-    answer = _ask_server(None, timeout)
-    if answer is not None:
-        _remember(answer, None, None)
-        require = answer["require_uid"]
-    else:
-        with _lock:
-            saved = _load_record().get("require_uid")
-        require = saved if isinstance(saved, bool) else True
-    return NO_UID if require else ALLOWED
 
 
 def enforce(uid: Optional[str], timeout: Optional[float] = None) -> str:
@@ -253,22 +228,6 @@ def enforce_startup() -> None:
     if not uid:
         return
     enforce(uid, timeout=config.ACCESS_STARTUP_TIMEOUT_SEC)
-
-
-def too_old() -> str:
-    """覚えている min_version が今の版（config.APP_VERSION）より大きければ、その min_version。
-    そうでなければ ""。解釈できない値は ""（止めない）"""
-    with _lock:
-        minimum = _settings.get("min_version")
-        if minimum is None:
-            minimum = _load_record().get("min_version")
-    if not isinstance(minimum, str):
-        return ""
-    wanted = AutoUpdate.parse_version(minimum)
-    current = AutoUpdate.parse_version(config.APP_VERSION)
-    if wanted and current and wanted > current:
-        return minimum
-    return ""
 
 
 def recheck_async(uid: Optional[str]) -> None:
@@ -300,5 +259,4 @@ def reset_for_tests() -> None:
     with _lock:
         _memory.clear()
         _asked.clear()
-        _settings.clear()
         _rechecking = False

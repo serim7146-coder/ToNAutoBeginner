@@ -22,7 +22,6 @@ import TaskStats
 import MemoryWatch
 from config import resource_path
 import ActionExecutor
-import AccessCheck
 import AutoUpdate
 import ItemUse
 import LogMonitor
@@ -910,11 +909,6 @@ def _valid_win_count(value):
     return value
 
 
-def _too_old_text(minimum: str) -> str:
-    """サーバーが決めた最低の版（minimum）より古いときの、画面のログの文言"""
-    return f"[更新] この版は使えません（{minimum} 以上が必要です）。更新してください"
-
-
 def _remember_own_window(widget):
     """当ツールの窓を覚える。録画中はここに入っている窓を隠す。
 
@@ -1356,10 +1350,6 @@ class App(tk.Tk):
         # exe 単体ならインストーラー版へ移す。移すときは更新の確認はしない（Setup が最新）
         if not self._start_migration():
             self._start_update_check()
-        # サーバーが決めた「使える最低の版」より古いなら、始められないことを先に知らせる（始める時にも断る）
-        minimum = AccessCheck.too_old()
-        if minimum:
-            self._log(_too_old_text(minimum))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _remember_own_window(self)       # 録画中だけキャプチャから外すため
         Recorder.set_window_hider(self._set_own_windows_hidden)
@@ -4011,13 +4001,6 @@ class App(tk.Tk):
 
     def _start(self):
         """self._start_quiet（入室操作の前の自動開始。ED）なら、窓が無いときに止まる画面（エラーの窓）を出さずにログだけ"""
-        minimum = AccessCheck.too_old()
-        if minimum:
-            # サーバーが決めた最低の版より古い。始めずに戻る（更新の確認は今までのまま。自動では入れ替えない）
-            self._log(_too_old_text(minimum))
-            if not getattr(self, "_start_quiet", False):
-                messagebox.showwarning("この版は使えません", "この版は使えません。更新してください。")
-            return
         if not self.keepOn_set:
             # tnl無しでも開始できる。続行リストが空＝tnlからの続行は0件として動く
             # （霧ラウンドや3クラ解放など、tnl以外を根拠にした続行はそのまま効く）
