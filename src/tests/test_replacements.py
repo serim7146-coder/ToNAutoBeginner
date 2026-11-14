@@ -614,6 +614,35 @@ class TestReplacementWait(unittest.TestCase):
         self.assertEqual(started, ["_delayed_decision"])
         self.assertNotIn("do_skip", started)
 
+    def test_cracked_waits_only_when_the_list_has_bloodthirsty(self):
+        """実機の報告: Cracked で Curious の 1 ms 後に Bloodthirsty の合図が来たのに、待たずに自爆した。
+        続行リストに 4002 があるときだけ、置き換えで結論が変わるので待つ"""
+        with tempfile.TemporaryDirectory() as tmp:     # 本物の読み込みを通す（枠に 4002 が無いと捨てられる）
+            path = Path(tmp) / "cracked.tnl"
+            path.write_text(json.dumps({"list_name": "x", "data": {self.CRACKED_KEY: {"192": 1}}}),
+                            encoding="utf-8")
+            loaded, _meta = MatchTNL.load_tnl(str(path))
+        wanted = self._monitor("Cracked", loaded)
+        wanted.st.terror_ids = [self.CURIOUS]
+        unwanted = self._monitor("Cracked", {self.CRACKED_KEY: {5}})
+        unwanted.st.terror_ids = [self.CURIOUS]
+
+        self.assertTrue(wanted._replacement_changes_decision("Cracked"))
+        self.assertFalse(unwanted._replacement_changes_decision("Cracked"),
+                         "4002 が無ければ置き換えても結論は同じ（待ちを増やさない）")
+
+    def test_cracked_slot_keeps_bloodthirsty_from_a_listtool_file(self):
+        """ListTool の 192（Bloodthirsty）を狂気のタブに付けた .tnl の希望を、読み込みで捨てない"""
+        slots = MatchTNL.slots()
+        self.assertIn(TerrorIds.BLOODTHIRSTY_CREATURE, slots.by_key[self.CRACKED_KEY])
+        self.assertIn(self.CRACKED_KEY, slots.variants[TerrorIds.BLOODTHIRSTY_CREATURE])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cracked.tnl"
+            path.write_text(json.dumps({"list_name": "x", "data": {self.CRACKED_KEY: {"192": 1}}}),
+                            encoding="utf-8")
+            keep_on, _meta = MatchTNL.load_tnl(str(path))
+        self.assertEqual(keep_on, {self.CRACKED_KEY: {TerrorIds.BLOODTHIRSTY_CREATURE}})
+
     def test_it_works_in_all_three_instance_types(self):
         for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_HOSHIIMO,
                       config.INSTANCE_YAKIIMO):

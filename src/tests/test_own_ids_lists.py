@@ -369,8 +369,11 @@ class TestWhereSpecialMoonGoes(unittest.TestCase):
         self.assertFalse({4003, 4004, 4005, 4006, 4007, 4008} & slots[CLASSIC])
 
     def test_bloodthirsty_is_in_every_round_the_listtool_has_192(self):
+        # Cracked/狂気 だけは、凍結した前の枠に 192 が無かったが、ListTool には枠があり（狂気のタブの 192 を
+        # 実際に付けている人がいる）、Curious が出るのに Bloodthirsty の枠が無い抜けだった。2026-11-14 に足した
+        self.assertIn(TerrorIds.BLOODTHIRSTY_CREATURE, MatchTNL.slots().by_key["Cracked/狂気"])
         for key, ids in _old_slots().items():
-            if key in (SPECIAL, MYSTIC, BLOOD):
+            if key in (SPECIAL, MYSTIC, BLOOD, "Cracked/狂気"):
                 continue
             self.assertEqual(TerrorIds.BLOODTHIRSTY_CREATURE in MatchTNL.slots().by_key.get(key, ()),
                              192 in ids, key)
