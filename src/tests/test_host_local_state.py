@@ -111,6 +111,20 @@ class TestLoadHostLocalState(LocalStateTestCase):
         write_host_state(db, [[(0, "a_test", {RANDOMIZER_NEW: {5}})]])
         self.assertEqual(MatchTNL.load_host_state(db)[0], {RANDOMIZER: {5}})
 
+    def test_the_host_own_list_also_maps_the_new_randomizer_key(self):
+        """主催者自身の user_save.json（_load_host_own_list 経由）にも 2.21.3 の新しいキーが来る"""
+        user = self.dir / "user_save.json"
+        user.write_text(json.dumps({"last_active": "host_test", "accounts": {
+            "host_test": {"data": {RANDOMIZER_NEW: {"5": 1, "7": 1}, CLASSIC: {"1": 1}}}}}),
+            encoding="utf-8")
+        self.write([{"participants": [person("a_test", {CLASSIC: {2}})]}])
+        keep_on, meta, wishes = MatchTNL.load_host_local_state(self.bin, str(user))
+        self.assertEqual(keep_on[RANDOMIZER], {5, 7})
+        self.assertNotIn(RANDOMIZER_NEW, keep_on)
+        self.assertEqual(wishes["host_test"][RANDOMIZER], {5, 7})
+        self.assertEqual(meta["host_self"], "host_test")
+        self.assertEqual(meta["tabs_data"][0]["keepOn"][RANDOMIZER], {5, 7})
+
     def test_the_alternate_keys_are_ignored_as_before(self):
         got = self.load([{"participants": [person("a_test", {FOG_ALT: {10, 11}, GHOST_ALT: {20},
                                                               FOG: {1}})]}])

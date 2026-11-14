@@ -11,6 +11,12 @@ import types
 import UiInbox
 
 
+def _exists_except_host_local(path):
+    """os.path.exists を True にする差し替え。ただし host_local_state.bin（新形式）だけは「無い」にして、
+    これらのテストが確かめる sqlite 版の読み方へ進ませる"""
+    return str(path) != str(config.HOST_LOCAL_STATE_PATH)
+
+
 # ── ① user_save.json のダイジェスト ─────────────────
 class TestUserSaveDigest(unittest.TestCase):
     def setUp(self):
@@ -71,7 +77,7 @@ class TestUserSaveDigest(unittest.TestCase):
         loaded = ({"Classic/クラシック": {1}}, {"listed": 1, "participants": 1}, {})
         with patch.object(config, "USER_SAVE_PATH", str(user)), \
              patch.object(config, "HOST_STATE_PATH", str(Path(self._dir.name) / "host_state.sqlite3")), \
-             patch.object(mainGUI.os.path, "exists", return_value=True), \
+             patch.object(mainGUI.os.path, "exists", side_effect=_exists_except_host_local), \
              patch.object(mainGUI.os, "stat", return_value=fake_stat), \
              patch.object(mainGUI, "_file_stamp", return_value=None), \
              patch.object(SharedState, "get_list_source", return_value="host"), \
@@ -150,7 +156,7 @@ class TestUserSaveOpenOnce(unittest.TestCase):
 
         with patch.object(config, "USER_SAVE_PATH", str(self.user)), \
              patch.object(config, "HOST_STATE_PATH", str(self.db)), \
-             patch.object(mainGUI.os.path, "exists", return_value=True), \
+             patch.object(mainGUI.os.path, "exists", side_effect=_exists_except_host_local), \
              patch.object(mainGUI.os, "stat", return_value=fake_stat), \
              patch.object(SharedState, "get_list_source", return_value="host"), \
              patch.object(MatchTNL, "load_host_state", side_effect=fake_load), \
