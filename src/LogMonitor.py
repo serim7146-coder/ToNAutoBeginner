@@ -731,7 +731,7 @@ class LogMonitor:
                     # 新しい順の最初の 1 つ。開始なら進行中、終わりならラウンドの間
                     round_checked = True
                     if event.kind == LogParser.EVENT_ROUND_START:
-                        running_round = (at, len(player_events), event.map_id, event.round_type)
+                        running_round = (at, len(player_events), event.map_id)
 
                 if event.kind == LogParser.EVENT_USER_AUTH and not auth_scanned:
                     # 遡りで最初に見えたログインの行だけを使う（それが最新。先頭から読んだものと違えば入り直している）。
@@ -894,16 +894,17 @@ class LogMonitor:
 
     def _restore_running_round(self, running_round, player_events: list):
         """監視開始の遡り: 途中から始めたときの今のラウンドの開始の時刻と、開始の行の時点の人数を
-        st.round_start_time・st.round_players に、開始の行のマップ番号とラウンド名を st.map_id・st.round_type に入れる。
-        時刻と人数は DB に送るときだけに使う。マップとラウンド名は DB に送るのに加えて、round_type は判定
-        （続行／自爆・ラウンド指定自爆・続行表）でも見る。st.in_round などラウンド開始の副作用は戻さない。
-        running_round は (開始の行の時刻, その行より新しい入退室の数, マップ番号, ラウンド名)。
+        st.round_start_time・st.round_players に、開始の行のマップ番号を st.map_id に入れる。
+        どれも DB に送るときだけに使う。ラウンド名（st.round_type）は戻さない。判定（続行／自爆・ラウンド指定自爆・続行表）でも
+        見る欄なので、開始の行を見ていないラウンドに判定を効かせないため（通常のラウンドでは Killers の行が埋める）。
+        st.in_round などラウンド開始の副作用も戻さない。
+        running_round は (開始の行の時刻, その行より新しい入退室の数, マップ番号)。
         進んでいるラウンドが無ければ None で何もしない。
         player_events は古い順の入退室。人数は開始の行より前の入退室だけを積んだもの（自分を含む）"""
         if running_round is None:
             return
         st = self.st
-        at, newer, map_id, round_type = running_round
+        at, newer, map_id = running_round
         players = set()
         for event in player_events[:len(player_events) - newer]:
             if event.kind == LogParser.EVENT_PLAYER_JOINED:
@@ -913,7 +914,6 @@ class LogMonitor:
         st.round_start_time = at
         st.round_players = max(1, len(players | ({st.local_user_id} if st.local_user_id else set())))
         st.map_id = map_id
-        st.round_type = round_type
 
     def _restore_three_wins(self, lived: int, round_types: list):
         """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、

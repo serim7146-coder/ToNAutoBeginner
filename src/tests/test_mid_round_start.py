@@ -25,8 +25,8 @@ def _left(name, uid):
     return f"[Behaviour] OnPlayerLeft {name} ({uid})"
 
 
-def _start(round_type="Fog"):
-    return f"This round is taking place at Sewers (12) and the round type is {round_type}"
+def _start(round_type="Fog", map_id=12):
+    return f"This round is taking place at Sewers ({map_id}) and the round type is {round_type}"
 
 
 class _Case(unittest.TestCase):
@@ -116,27 +116,29 @@ class TestStartedInTheMiddleOfARound(_Case):
         self.assertEqual(self._sent()["round_time"], _epoch(30))
 
 
-class TestTheMapAndTheRoundNameAreRestored(_Case):
-    """途中から始めたとき、開始の行のマップ番号とラウンド名も戻す（無いと map 0・ラウンド名なしで送られる）"""
+class TestOnlyTheMapIsRestored(_Case):
+    """途中から始めたとき、開始の行のマップ番号だけを戻す（無いと map 0 で送られる）。ラウンド名（st.round_type）は
+    判定でも見る欄なので戻さない（開始の行を見ていないラウンドに判定を効かせない。通常のラウンドでは Killers の行が埋める）"""
 
-    def test_the_map_and_the_round_type_are_those_of_the_start_line(self):
+    def test_the_map_is_that_of_the_start_line_and_the_round_type_is_left_empty(self):
         monitor = self._started([(2, JOIN), (3, _joined("A", "usr_a")), (10, _start("Fog"))])
         self.assertEqual(monitor.st.map_id, 12)
-        self.assertEqual(monitor.st.round_type, "Fog")
+        self.assertEqual(monitor.st.round_type, "", "ラウンド名は戻さない（判定に効かせない）")
         self.assertFalse(monitor.st.in_round, "ラウンド開始の副作用は戻さない")
 
-    def test_the_statistics_carry_them(self):
+    def test_the_statistics_carry_the_map_and_the_round_type_of_the_killers_line(self):
         monitor = self._started([(2, JOIN), (3, _joined("A", "usr_a")), (10, _start("Fog"))])
         self._feed(monitor, 20, KILLERS)
         self.send.assert_called_once()
-        self.assertEqual(self.send.call_args.args[0], "Fog")
-        self.assertEqual(self.send.call_args.args[2], 12)
+        self.assertEqual(self.send.call_args.args[0], "Fog", "ラウンド名は Killers の行が埋める")
+        self.assertEqual(self.send.call_args.args[2], 12, "マップは遡りで戻した開始の行のもの")
         self.assertFalse(monitor.st.in_round)
 
     def test_the_latest_start_line_wins(self):
-        monitor = self._started([(2, JOIN), (10, _start("Classic")), (11, "RoundOver"), (12, _start("Fog"))])
-        self.assertEqual(monitor.st.round_type, "Fog")
+        monitor = self._started([(2, JOIN), (10, _start("Classic", 5)), (11, "RoundOver"),
+                                 (12, _start("Fog", 12))])
         self.assertEqual(monitor.st.map_id, 12)
+        self.assertEqual(monitor.st.round_type, "")
 
     def test_nothing_is_restored_between_rounds(self):
         monitor = self._started([(2, JOIN), (10, _start("Fog")), (11, "RoundOver")])
