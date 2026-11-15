@@ -705,13 +705,14 @@ class TestLaunchDetailRows(_AppCase):
 
     def test_the_second_row_has_the_four_checks_in_order(self):
         rows = self._rows()
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         self.assertEqual(rows[0].pack_slaves()[0].cget("text"), "インスタンスタイプ:")
         self.assertEqual([w.cget("text") for w in rows[1].pack_slaves()],
                          ["ToNへ自動Join", "入室後の選択画面を自動で進める", "自動でBeginを押す",
                           "Guidance Plushを自動取得"])
         self.assertIs(rows[1], self.app.chk_ton_entry_plush.master)
-        self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "起動オプション:")
+        self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "難易度:")      # 選択画面で押すもの
+        self.assertEqual(rows[3].pack_slaves()[0].cget("text"), "起動オプション:")
 
     def test_no_yellow_note_labels(self):
         texts = [str(w.cget("text")) for w in _all_widgets(self.app.chk_ton_entry_plush.master.master)

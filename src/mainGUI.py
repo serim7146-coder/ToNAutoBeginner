@@ -280,6 +280,13 @@ def _as_window_freezes(data) -> dict:
             for number in range(1, config.MAX_WINDOWS + 1)}
 
 
+# 入室後の選択画面で押すもの（GUI の値 → ToNEntry の番号。難易度 0 Casual・1 Mild・2 Spicy、音楽 0 Yeah・1 Nope）
+TON_ENTRY_FLAVORS = {"casual": 0, "mild": 1, "spicy": 2}
+TON_ENTRY_MUSICS = {"yeah": 0, "nope": 1}
+TON_ENTRY_FLAVOR_GUI_DEFAULT = "casual"
+TON_ENTRY_MUSIC_GUI_DEFAULT = "nope"
+
+
 def load_settings() -> dict:
     """設定ファイルを読み込む。無い・壊れている場合は空dict。"""
     try:
@@ -2355,6 +2362,22 @@ class App(tk.Tk):
                                                    variable=self.v_ton_entry_plush,
                                                    command=self._refresh_launch_chain)
         self.chk_ton_entry_plush.pack(side="left", padx=(12, 0))
+        # 選択画面で押すもの（難易度・音楽）。「入室後の選択画面を自動で進める」が OFF の間は灰色
+        lf2b = ttk.Frame(f2_launch)
+        lf2b.pack(fill="x", pady=(4, 0))
+        self.v_ton_flavor = tk.StringVar(value=TON_ENTRY_FLAVOR_GUI_DEFAULT)
+        self.v_ton_music = tk.StringVar(value=TON_ENTRY_MUSIC_GUI_DEFAULT)
+        self.rb_ton_entry_choice = []
+        ttk.Label(lf2b, text="難易度:").pack(side="left")
+        for text, value in (("Casual", "casual"), ("Mild", "mild"), ("Spicy", "spicy")):
+            rb = ttk.Radiobutton(lf2b, text=text, variable=self.v_ton_flavor, value=value)
+            rb.pack(side="left", padx=(6, 0))
+            self.rb_ton_entry_choice.append(rb)
+        ttk.Label(lf2b, text="音楽:").pack(side="left", padx=(24, 0))
+        for text, value in (("そのまま(Nope)", "nope"), ("切る(Yeah)", "yeah")):
+            rb = ttk.Radiobutton(lf2b, text=text, variable=self.v_ton_music, value=value)
+            rb.pack(side="left", padx=(6, 0))
+            self.rb_ton_entry_choice.append(rb)
         self._refresh_launch_chain()
 
         # 起動オプション（config.LAUNCH_OPTION の後ろに足す。空白で区切る。既定は空）
@@ -3632,6 +3655,12 @@ class App(tk.Tk):
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         if hasattr(self, "v_ton_entry_plush"):
             self.v_ton_entry_plush.set(data.get("ton_entry_plush") is not False)    # 無い・壊れた値は ON（false を保存したときだけ OFF）
+        if hasattr(self, "v_ton_flavor"):
+            flavor = data.get("ton_entry_flavor")
+            self.v_ton_flavor.set(flavor if isinstance(flavor, str) and flavor in TON_ENTRY_FLAVORS else TON_ENTRY_FLAVOR_GUI_DEFAULT)
+        if hasattr(self, "v_ton_music"):
+            music = data.get("ton_entry_music")
+            self.v_ton_music.set(music if isinstance(music, str) and music in TON_ENTRY_MUSICS else TON_ENTRY_MUSIC_GUI_DEFAULT)
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
@@ -4843,6 +4872,9 @@ class App(tk.Tk):
             self._log("[入室操作] 対象の窓がありません")
             return
         press_begin = begin
+        # 選択画面で押す難易度・音楽（GUI の値 → 番号。分からなければ ToNEntry の既定）
+        flavor = TON_ENTRY_FLAVORS.get(getattr(getattr(self, "v_ton_flavor", None), "get", lambda: None)())
+        music = TON_ENTRY_MUSICS.get(getattr(getattr(self, "v_ton_music", None), "get", lambda: None)())
         # セーブコードは最初に 1 回だけ読み、全窓に同じものを貼る（DY。中身はどこにも書かない）
         save_code = SaveLoad.read_clipboard() if press_begin else ""
         self._entry_stop.clear()
@@ -4867,6 +4899,8 @@ class App(tk.Tk):
                         is_running=lambda: not self._entry_stop.is_set(),
                         # 移動・クリックは private だけ（ログの最後の入室で見る。分からなければしない）
                         can_operate=entry_can_operate(log_path),
+                        flavor=flavor,
+                        music=music,
                     )
                     try:
                         if entry.run() and press_begin and not self._entry_stop.is_set():
@@ -4900,6 +4934,8 @@ class App(tk.Tk):
             for chk, on in ((self.chk_ton_entry, join), (self.chk_ton_begin, entry),
                             (self.chk_ton_entry_plush, begin)):
                 chk.config(state="normal" if on else "disabled")
+            for rb in getattr(self, "rb_ton_entry_choice", []):      # 難易度・音楽は「選択画面を自動で進める」に従う
+                rb.config(state="normal" if entry else "disabled")
         except (tk.TclError, AttributeError):
             pass
 
@@ -5029,6 +5065,10 @@ class App(tk.Tk):
             "ton_entry":     self.v_ton_entry.get(),
             "ton_begin":     self.v_ton_begin.get(),
             "ton_entry_plush": bool(getattr(self, "v_ton_entry_plush", None) and self.v_ton_entry_plush.get()),
+            "ton_entry_flavor": getattr(getattr(self, "v_ton_flavor", None), "get",
+                                        lambda: TON_ENTRY_FLAVOR_GUI_DEFAULT)(),
+            "ton_entry_music": getattr(getattr(self, "v_ton_music", None), "get",
+                                       lambda: TON_ENTRY_MUSIC_GUI_DEFAULT)(),
             "join_world":    self.v_join_world.get(),
             "ton_instance_access": self.v_ton_access.get(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],

@@ -661,21 +661,31 @@ TON_INSTANCE_ACCESS_CHOICES      = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACC
 TON_INSTANCE_ACCESS_DEFAULT      = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
-# スポーン地点と向きが固定なので、決まった秒数の横移動で的が照準（画面中央）に来る。
-# 画面の座標は使わない（ToNEntry）
+# 選択画面の 4 つは、画面の四角（ボタンの枠）を絵で探し、Tab を押したままカーソルを置いてクリックする
+# （EntryPanel・ToNEntry）。照準（画面中央）で押す方式は、1 画面目の格子で押し分けられず、
+# 季節イベントでロゴの色が変わると待ちの判定も狂うのでやめた
 TON_ENTRY_ENABLED = True
 TON_ENTRY_BEGIN   = True   # 選択画面突破後にBeginまで押すか
 
-# 入室時の操作手順（実測で決めた移動量）
-# アバターを横移動させると的が画面中央（クロスヘア）に来る。
-# 画面座標は使わない（パネルの見かけの大きさが距離で変わるため）。
-# 最後の2つは的がほぼ同じ位置なので移動せず続けて押す。
+# 入室時の操作手順。expect は期待する四角の個数（None なら個数は見ない）、
+# pick は押す番号（x の昇順で 0 から。"flavor"・"music" は GUI の値）
 TON_ENTRY_STEPS = [
-    {"move": "right", "sec": 0.35, "label": "警告同意"},
-    {"move": "left",  "sec": 0.65, "label": "難易度(Casual)"},
-    {"move": "right", "sec": 0.55, "label": "BGM"},
-    {"move": None,    "sec": 0.0,  "label": "LET ME PLAY"},
+    {"label": "警告の了解",  "expect": None, "pick": 0},
+    {"label": "難易度",      "expect": 3,    "pick": "flavor"},
+    {"label": "音楽",        "expect": 2,    "pick": "music"},
+    {"label": "LET ME PLAY", "expect": 2,    "pick": 1},
 ]
+TON_ENTRY_FLAVOR_DEFAULT = 0   # Casual（0 Casual・1 Mild・2 Spicy）
+TON_ENTRY_MUSIC_DEFAULT  = 1   # Nope（音楽そのまま。0 Yeah・1 Nope）
+
+# 四角の探し方（EntryPanel）
+TON_ENTRY_RED_MIN         = 40     # 赤さ r - max(g, b) の下限。実測は枠 77〜98・地 16
+TON_ENTRY_RECTNESS_MIN    = 0.70   # 長方形らしさ（輪郭の面積 / 外接の四角）。実測の下限は 0.75
+TON_ENTRY_MIN_SIDE_RATIO  = 0.008  # 窓の高さに対する四角の最小辺
+TON_ENTRY_ROW_TOL         = 0.6    # 同じ行とみなす y のずれ（四角の高さ比）
+TON_ENTRY_SIZE_TOL        = 0.25   # 同じ大きさとみなす幅・高さのずれ
+TON_ENTRY_CLICK_SEC       = 0.15   # ボタンを押している長さ
+TON_ENTRY_STEP_FIND_SEC   = 20.0   # 1 画面ぶん、四角が出るのを待つ上限
 
 # 選択画面を抜けた後、ロビーのBeginまで移動する量（実測）
 # 入室直後は位置が違うため、ラウンド終了後の BEGIN_FORWARD_SEC とは別の値。
@@ -715,8 +725,6 @@ TON_ENTRY_POLL_SEC       = 2.0    # パネル確認の間隔
 TON_ENTRY_START_DELAY_SEC = 3.0   # パネル検出後、操作を始めるまでの待ち
 TON_ENTRY_SETTLE_SEC     = 1.0    # 移動後、クリックするまでの待ち
 TON_ENTRY_STEP_WAIT_SEC  = 3.0    # クリック後、次の画面が出るまでの待ち
-TON_ENTRY_MIN_RED_PIXELS = 300    # パネルが出ているとみなす赤画素の下限
-TON_PANEL_STABLE_COUNT   = 2      # 連続で検出できたら確定
 
 # ── OSC（窓ごとに別ポートを割り当てる） ──
 # VRChatは既定でUDP 9000を掴む。多重起動では --osc= で分けないと競合する。

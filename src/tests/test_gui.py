@@ -3274,6 +3274,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した
             "window_layout",                                     # DX で足した
             "ton_entry_plush",                                   # DZ で足した
+            "ton_entry_flavor", "ton_entry_music",               # 入室の選択画面の難易度・音楽
             "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）
             "follow_utils",                                      # EB で足した
             "phone_notify", "phone_notify_topic",                # スマホ通知（ntfy）で足した

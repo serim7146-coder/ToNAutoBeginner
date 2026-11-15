@@ -325,7 +325,8 @@ class TestWaitVerified(unittest.TestCase):
 class _Entry:
     made = []
 
-    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None):
+    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None,
+                 flavor=None, music=None):
         self.hwnd = hwnd
         self.calls = []
         _Entry.made.append(self)

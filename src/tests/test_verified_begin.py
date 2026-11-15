@@ -21,15 +21,10 @@ class TestToNEntry(unittest.TestCase):
         """
         steps = config.TON_ENTRY_STEPS
         self.assertEqual(len(steps), 4)
-        self.assertEqual(steps[0]["move"], "right")
-        self.assertEqual(steps[1]["move"], "left")
-        self.assertEqual(steps[2]["move"], "right")
-        self.assertIsNone(steps[3]["move"], "最後は移動せず続けて押す")
-        for step in steps[:3]:
-            with self.subTest(label=step["label"]):
-                self.assertGreater(step["sec"], 0, "移動する段は秒数が必要")
+        self.assertEqual([(s["expect"], s["pick"]) for s in steps],
+                         [(None, 0), (3, "flavor"), (2, "music"), (2, 1)])
         self.assertEqual([s["label"] for s in steps],
-                         ["警告同意", "難易度(Casual)", "BGM", "LET ME PLAY"])
+                         ["警告の了解", "難易度", "音楽", "LET ME PLAY"])
 
     def test_move_uses_osc_and_releases(self):
         """移動はOSCで送り、必ず解除する（入力が残ると操作不能になる）"""
@@ -69,7 +64,11 @@ class TestToNEntry(unittest.TestCase):
         """パネル検出直後は描画が整っていないので少し待つ"""
         entry = self._entry()
         slept = []
-        with patch.object(entry, "wait_for_panel", return_value=True),              patch.object(entry, "move", return_value=True),              patch.object(entry, "click", return_value=True),              patch.object(entry._osc, "stop_all"),              patch.object(ToNEntry.time, "sleep", side_effect=slept.append):
+        with patch.object(entry, "wait_for_panel", return_value=True), \
+             patch.object(entry, "_find_button", return_value=(10, 20)), \
+             patch.object(entry, "_click_point", return_value=True), \
+             patch.object(entry._osc, "stop_all"), \
+             patch.object(ToNEntry.time, "sleep", side_effect=slept.append):
             entry.run()
         self.assertIn(config.TON_ENTRY_START_DELAY_SEC, slept)
 
@@ -77,18 +76,17 @@ class TestToNEntry(unittest.TestCase):
         entry = self._entry()
         actions = []
         with patch.object(entry, "wait_for_panel", return_value=True), \
-             patch.object(entry, "move",
-                          side_effect=lambda d, s: actions.append(("move", d, s)) or True), \
-             patch.object(entry, "click",
-                          side_effect=lambda label: actions.append(("click", label)) or True), \
+             patch.object(entry, "_find_button",
+                          side_effect=lambda step: actions.append(("find", step["label"])) or (10, 20)), \
+             patch.object(entry, "_click_point",
+                          side_effect=lambda point, label: actions.append(("click", label)) or True), \
              patch.object(entry._osc, "stop_all"), \
              patch.object(ToNEntry.time, "sleep"):
             self.assertTrue(entry.run())
-        # 設定から期待値を組み立てる（秒数は調整で変わるため直書きしない）
+        # 設定から期待値を組み立てる（手順は調整で変わるため直書きしない）
         expected = []
         for step in config.TON_ENTRY_STEPS:
-            if step["move"]:
-                expected.append(("move", step["move"], step["sec"]))
+            expected.append(("find", step["label"]))
             expected.append(("click", step["label"]))
         self.assertEqual(actions, expected)
 
@@ -106,8 +104,8 @@ class TestToNEntry(unittest.TestCase):
     def test_run_aborts_when_click_fails(self):
         entry = self._entry()
         with patch.object(entry, "wait_for_panel", return_value=True), \
-             patch.object(entry, "move", return_value=True), \
-             patch.object(entry, "click", return_value=False), \
+             patch.object(entry, "_find_button", return_value=(10, 20)), \
+             patch.object(entry, "_click_point", return_value=False), \
              patch.object(entry._osc, "stop_all") as mock_stop, \
              patch.object(ToNEntry.time, "sleep"):
             self.assertFalse(entry.run())
