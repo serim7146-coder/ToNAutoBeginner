@@ -75,6 +75,29 @@ def is_first_time_only_moon(instance_type: str, round_type: str) -> bool:
                 and round_type in YAKIIMO_OPT_IN_MOONS)
 
 
+SETTING_SKIP = "skip"
+SETTING_CONTINUE = "continue"
+
+
+def setting_applies(instance_type: str, which: str, round_name: str) -> bool:
+    """窓ごとの全自爆（which="skip"）・全続行（which="continue"）の指定が、このインスタンスで効くか。
+    画面がチェックを押せなくするのに使う。判定そのものは decide / is_all_continue_regardless_of_terror
+    が決めるので、ここを変えても動きは変わらない（食い違わせないこと）。
+
+    - JUDGE_LIKE_INSTANCES（private 相当）: 全部効く
+    - グループ（干し芋・焼き芋）: moon だけ。ただし焼き芋の Twilight は decide が
+      continue_moons で決めるので、全続行だけが効き、全自爆は読まれない
+    - ほか（public・その他のグループ・Emerald City）: 効かない
+    """
+    if instance_type in config.JUDGE_LIKE_INSTANCES:
+        return True
+    if instance_type not in GROUP_INSTANCES or round_name not in MOONS:
+        return False
+    opt_in = (instance_type == config.INSTANCE_YAKIIMO
+              and round_name in YAKIIMO_OPT_IN_MOONS)
+    return opt_in if which == SETTING_CONTINUE else not opt_in
+
+
 def decide(
     instance_type: str,
     round_type: str,

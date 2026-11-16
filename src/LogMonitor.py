@@ -72,7 +72,8 @@ class LogMonitor:
                  lists: MatchTNL.SharedLists | None = None,
                  on_list_changed=None,
                  on_held_item_changed=None,
-                 window_alive=None):
+                 window_alive=None,
+                 on_instance_type=None):
         self.cfg = cfg
         # 続行リスト一式。全窓で共有する1つを持つ（mainGUI が中の dict を差し替える）。
         # 渡されなければ、ほかの引数からこの窓だけのものを作る（監視だけで使うとき・テスト）。
@@ -88,6 +89,9 @@ class LogMonitor:
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
         # 渡さなければ何もしない（監視だけで使うときはこれで足りる）
         self._on_round_settings_cleared = on_round_settings_cleared
+        # 入室でインスタンスタイプが分かったことをGUIへ伝える（窓ごとのスレッドから呼ぶ。効かない全自爆・全続行を押せなくするため。
+        # GUI 側が画面のスレッドへ渡す）。渡さなければ何もしない
+        self._on_instance_type = on_instance_type
         # 生存して続行リスト（ツールの中のもの）から外したことをGUIへ伝える（GN。窓ごとのスレッドから呼ぶ。
         # GUI 側が画面のスレッドで全窓へ反映・保存・件数の更新をする）。渡さなければ何もしない
         self._on_list_changed = on_list_changed
@@ -2622,6 +2626,8 @@ class LogMonitor:
         # 片方だけ外れていると、表示と動きが食い違う
         if self._on_round_settings_cleared:
             self._on_round_settings_cleared(self.window_idx)
+        if self._on_instance_type:
+            self._on_instance_type(self.window_idx, st.instance_type)
         self._log(f"インスタンスタイプ: {self._instance_label(st.instance_type, event.suffix)}")
         self._notify_held_item_changed()        # 干し芋・焼き芋かどうかで、窓の表示が変わる
 

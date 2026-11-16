@@ -476,6 +476,7 @@ class WindowTab(ttk.Frame):
                  on_freeze_changed=None):
         super().__init__(parent)
         self.idx = idx
+        self._instance_type = None                              # この窓のインスタンスタイプ（None は分からない。効かない全自爆・全続行を押せなくするのに使う）
         self._on_freeze_changed = on_freeze_changed             # (): 全窓フリーズの設定が変わった（App が保存を予約する）
         self._freeze_loading = False                            # 読み込み・戻す書き込みの間は True（保存を予約しない）
         self._on_broadcast = on_broadcast                       # (タブ, 種類, キー, 値): Ctrl を押して変えた設定を全窓へ写す
@@ -492,6 +493,7 @@ class WindowTab(ttk.Frame):
         self._on_log_selected = on_log_selected
         self._on_settings_changed = on_settings_changed
         self._build()
+        self.apply_instance_type(None)          # 枠の先頭の 1 行を出す
         self._watch_settings()
 
     def _section(self, parent, key: str, text: str) -> "CollapsibleFrame":
@@ -625,8 +627,44 @@ class WindowTab(ttk.Frame):
                       else (self.v_continue_rounds, self.v_skip_rounds))
         if name not in own:
             return
+        if not self._setting_applies(which, name):
+            return              # この窓では効かない指定。押せないチェックに入れない
         own[name].set(bool(value))
         exclusive_check(own[name], other[name])
+
+    def apply_instance_type(self, instance_type):
+        """この窓のインスタンスタイプが分かった・変わった: 効かないチェックを押せなくして外す。
+        None（分からない）なら全部押せるまま。判定の動きは変えない（押せるかどうかだけ）"""
+        self._instance_type = instance_type
+        for which, vars_, boxes in (("skip", self.v_skip_rounds, self.cb_skip_rounds),
+                                    ("continue", self.v_continue_rounds, self.cb_continue_rounds)):
+            for name, box in boxes.items():
+                ok = self._setting_applies(which, name)
+                box.state(["!disabled"] if ok else ["disabled"])
+                if not ok:
+                    vars_[name].set(False)
+        self.lbl_round_rule.configure(text=self._round_rule_text())
+
+    def _setting_applies(self, which: str, name: str) -> bool:
+        """この窓で、その指定が効くか。インスタンスタイプが分からなければ押せるままにする"""
+        return (self._instance_type is None
+                or GroupRound.setting_applies(self._instance_type, which, name))
+
+    def _round_rule_text(self) -> str:
+        """枠の先頭の 1 行。決まりそのものから作る（手書きの文言とずらさない）"""
+        if self._instance_type is None:
+            return "インスタンスがまだ分かりません（すべて押せます）"
+        parts = []
+        for which, title in (("skip", "全自爆"), ("continue", "全続行")):
+            names = [n for n in config.SKIP_ROUND_SELECTABLE
+                     if GroupRound.setting_applies(self._instance_type, which, n)]
+            if not names:
+                parts.append(f"{title}は効きません")
+            elif len(names) == len(config.SKIP_ROUND_SELECTABLE):
+                parts.append(f"{title}は全部効きます")
+            else:
+                parts.append(f"{title}は {' / '.join(names)} だけ効きます")
+        return f"インスタンス: {self._instance_type} → " + "、".join(parts)
 
     def live_settings(self) -> dict:
         """動作中の監視（WindowConfig）へ渡す、窓ごとの設定"""
@@ -651,6 +689,7 @@ class WindowTab(ttk.Frame):
             "hwnd_choices": list(self._hwnd_map.items()),
             "hwnd_sel": self.v_hwnd_sel.get(),
             "osc": (self.osc_in, self.osc_out),
+            "instance_type": self._instance_type,
         }
 
     def restore(self, saved: dict):
@@ -676,6 +715,8 @@ class WindowTab(ttk.Frame):
         self.cb_hwnd["values"] = list(self._hwnd_map)
         self.v_hwnd_sel.set(saved["hwnd_sel"])
         self.osc_in, self.osc_out = saved["osc"]
+        # 古い控えから効かない項目が True で入ってくることがある。最後に引き直して外す
+        self.apply_instance_type(saved.get("instance_type"))
 
     def _build(self):
         p = self
@@ -765,20 +806,23 @@ class WindowTab(ttk.Frame):
             self.cb_ct_choice[which] = box
         self.refresh_continue_choices()
 
-        # ── ラウンドごとの自爆設定（privateのみ） ──
-        rounds = self._section(
-            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
+        # ── ラウンドごとの自爆設定（効くかどうかはインスタンスで変わる。押せるものは apply_instance_type が決める） ──
+        rounds = self._section(p, "rounds", text="ラウンドごとの自爆設定")
         rounds.pack(fill="x", pady=(4, 0))
+        self.lbl_round_rule = ttk.Label(rounds.content, text="", foreground=config.GUI_YLW)
+        self.lbl_round_rule.pack(anchor="w", padx=10, pady=(2, 4))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
 
+        self.cb_skip_rounds = {}
+        self.cb_continue_rounds = {}
         self._round_grid(rounds.content, "■ 全自爆", self.v_skip_rounds,
-                         self.v_continue_rounds, which="skip")
+                         self.v_continue_rounds, which="skip", boxes=self.cb_skip_rounds)
         # Variant（置き換え後のテラー）はいつもリストで判定する。
         # 以前ここにあった切り替えは廃止した
         self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
-                         pady=(8, 0), which="continue")
+                         pady=(8, 0), which="continue", boxes=self.cb_continue_rounds)
 
         # ── 全窓フリーズ: この窓が当たったらほかの窓を止める。速度検知とラウンド突入。止める範囲は全窓 ──
         freeze = self._section(p, "freeze", text="全窓フリーズ")
@@ -860,24 +904,28 @@ class WindowTab(ttk.Frame):
         if which is not None:
             self._broadcast_if_ctrl("round", (which, name), bool(var.get()))
 
-    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0), which: str | None = None):
+    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0), which: str | None = None,
+                    boxes: dict | None = None):
         """ラウンド一覧のチェックボックスを1つ並べる。
 
         同じラウンドを両方に入れられると意味が矛盾するので、片方を入れたら
         もう片方を外す。並び順は config.SKIP_ROUND_SELECTABLE のまま。
         which（"skip" か "continue"）があれば、Ctrl を押して変えたとき全窓へ写す。
+        boxes があれば、名前 → チェックボックスを入れる（あとから押せる・押せないを切り替えるため）。
         """
         ttk.Label(parent, text=title, foreground=config.GUI_ACC).pack(
             anchor="w", padx=10, pady=pady)
         grid = ttk.Frame(parent)
         grid.pack(fill="x", padx=10)
         for i, (name, var) in enumerate(own.items()):
-            ttk.Checkbutton(
+            box = ttk.Checkbutton(
                 grid, text=name, variable=var,
-                command=lambda v=var, o=other[name], n=name: self._round_changed(which, n, v, o)
-            ).grid(row=i // config.SKIP_ROUND_COLUMNS,
-                   column=i % config.SKIP_ROUND_COLUMNS,
-                   sticky="w", padx=(0, 12), pady=1)
+                command=lambda v=var, o=other[name], n=name: self._round_changed(which, n, v, o))
+            box.grid(row=i // config.SKIP_ROUND_COLUMNS,
+                     column=i % config.SKIP_ROUND_COLUMNS,
+                     sticky="w", padx=(0, 12), pady=1)
+            if boxes is not None:
+                boxes[name] = box
 
 
     def _refresh_hwnds(self, discover=None, foreground=None):
@@ -4028,6 +4076,24 @@ class App(tk.Tk):
             # 監視スレッドで投げると、そのスレッドごと黙って止まる
             pass
 
+    def _set_tab_instance_type(self, window_idx: int, instance_type):
+        """監視スレッドから呼ばれる。窓の入室でインスタンスタイプが分かった: その窓タブの押せる・押せないを引き直す。
+        Tk はメインスレッドでしか触れない（UiInbox 越し）"""
+        try:
+            UiInbox.call_soon(self, lambda: self._apply_tab_instance_type(window_idx, instance_type))
+        except (tk.TclError, RuntimeError):
+            pass        # _clear_tab_round_settings と同じ。監視スレッドで投げるとそのスレッドごと止まる
+
+    def _apply_tab_instance_type(self, window_idx: int, instance_type):
+        """メインスレッドで動く"""
+        tab = next((t for t in getattr(self, "tabs", []) if t.idx == window_idx - 1), None)
+        if tab is None:
+            return              # 窓数を減らした後などに届いた
+        try:
+            tab.apply_instance_type(instance_type)
+        except tk.TclError:
+            pass        # ウィンドウ破棄後に呼ばれた
+
     def _do_clear_tab_round_settings(self, window_idx: int):
         """インスタンスが変わった窓のチェックを外す。メインスレッドで動く。
 
@@ -4201,6 +4267,7 @@ class App(tk.Tk):
         if not p:
             return
         itype = LogMonitor.LogMonitor.detect_instance_type_from_log(Path(p))
+        tab.apply_instance_type(itype)          # 効かない全自爆・全続行を押せなくする（分からなければ全部押せる）
         if itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
             self._log(f"[窓{tab.idx+1}] {itype}インスタンス検出 → グループ判定を適用します")
 
@@ -4281,6 +4348,7 @@ class App(tk.Tk):
                 window_idx=tab.idx + 1,
                 lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings,
+                on_instance_type=self._set_tab_instance_type,
                 on_list_changed=self._on_own_list_changed,
                 on_held_item_changed=self._on_held_item_changed,
                 window_alive=lambda h=cfg.hwnd: WindowOperator.window_exists(h))

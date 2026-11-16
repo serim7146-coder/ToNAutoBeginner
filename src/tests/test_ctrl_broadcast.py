@@ -127,6 +127,16 @@ class TestCtrlBroadcast(unittest.TestCase):
         _checkbutton(self.tabs[0], ROUND, 0).invoke()
         self.assertFalse(any(t.v_skip_rounds[ROUND].get() for t in self.tabs))
 
+    def test_a_window_where_the_round_does_not_apply_is_not_written(self):
+        """焼き芋の窓へ Classic の全自爆は写らない（押せないチェックに入れない）。ほかの窓へは写る"""
+        self.ctrl.return_value = True
+        self.tabs[1].apply_instance_type(config.INSTANCE_YAKIIMO)
+        _checkbutton(self.tabs[0], ROUND, 0).invoke()
+        self.assertTrue(self.tabs[0].v_skip_rounds[ROUND].get())
+        self.assertFalse(self.tabs[1].v_skip_rounds[ROUND].get())
+        for t in self.tabs[2:]:
+            self.assertTrue(t.v_skip_rounds[ROUND].get())
+
     def test_other_rounds_are_left_alone(self):
         self.ctrl.return_value = True
         other = config.SKIP_ROUND_SELECTABLE[1]
