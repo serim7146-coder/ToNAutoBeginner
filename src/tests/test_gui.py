@@ -1416,7 +1416,7 @@ class TestGuiTweaks(unittest.TestCase):
     # ── 1・2. 名前 ───────────────────────────
     def test_the_renamed_labels(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertIn('text="③ サウンド設定"', src)
+        self.assertIn('text="サウンド設定"', src)           # 設定の窓へ移して番号を外した
         self.assertNotIn("音声アナウンス設定", src)
         self.assertIn('text="霧即時判定"', src)              # DV3 で短く
         self.assertNotIn("霧看破を使う", src)

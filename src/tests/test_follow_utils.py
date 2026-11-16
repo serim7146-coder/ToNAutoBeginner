@@ -493,7 +493,12 @@ class TestTheCheckAndSettings(unittest.TestCase):
         self.assertIn("_FOLLOW_UTILS = _Setting(False, bool)", src)
         app = mainGUI.App()
         self.addCleanup(app.destroy)
-        row = next(w for w in app.pack_slaves()
+        # チェックの行は設定の窓（別窓）の「その他」の中
+        def widgets(parent):
+            for child in parent.winfo_children():
+                yield child
+                yield from widgets(child)
+        row = next(w for w in widgets(app._settings_window)
                    if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "Utilsの判断に従う"
                           for c in w.winfo_children()))
         self.assertIn("霧即時判定", [c.cget("text") for c in row.winfo_children()], "チェックの行")

@@ -444,6 +444,8 @@ WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、そ
 CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
 CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
 CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（px）
+SETTINGS_BAR_WIDTH = 20            # 設定の窓の初めの幅に足す、スクロールバーの分（px）
+SETTINGS_MAX_HEIGHT_RATIO = 0.8    # 設定の窓の初めの高さの上限（画面の高さに対する割合）
 CTRL_HINT_MARGIN_Y = 4  # 案内の上端と窓のタブの枠の上端の間（px）
 CTRL_HINT_PROBE_Y = 8   # タブの右端を調べるときの高さ（タブの帯の中。px）
 CTRL_HINT_PROBE_STEP = 4  # タブの右端を調べる間隔（px）
@@ -2401,8 +2403,12 @@ class App(tk.Tk):
         self._tab_sections = {key: True for key in WindowTab.SECTIONS}
         self._rebuild_tabs(self.v_win_count.get())
 
+        # 設定の窓（別窓。起動時に 1 回だけ作って隠す。中の Tk 変数は起動時から要る）。
+        # 移す枠の中身は 1 行も変えず、親だけをこの窓の中（self._settings_body）にする
+        self._build_settings_window()
+
         # 音声ファイル設定
-        fv_wrap = CollapsibleFrame(self, text="③ サウンド設定", collapsed=True)
+        fv_wrap = CollapsibleFrame(self._settings_body, text="サウンド設定", collapsed=True)
         fv_wrap.pack(fill="x", padx=12, pady=4)
         fv = fv_wrap.content
 
@@ -2512,8 +2518,8 @@ class App(tk.Tk):
         self._build_window_volume(fv)
         self._build_phone_notify(fv)
 
-        # ④ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
-        f4_wrap = CollapsibleFrame(self, text="④ 外部ツール起動", collapsed=True)
+        # ③ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
+        f4_wrap = CollapsibleFrame(self, text="③ 外部ツール起動", collapsed=True)
         f4_wrap.pack(fill="x", padx=12, pady=4)
         self.tool_frame = ttk.Frame(f4_wrap.content)
         self.tool_frame.pack(fill="x")
@@ -2521,8 +2527,8 @@ class App(tk.Tk):
         ttk.Button(f4_wrap.content, text="＋ 追加",
                    command=self._add_tool_row).pack(anchor="w", pady=(4, 0))
 
-        # ⑤ OBS自動録画（続行アナウンスが鳴る種類の続行ラウンドを録る）
-        f5_wrap = CollapsibleFrame(self, text="⑤ OBS自動録画", collapsed=True)
+        # OBS自動録画（設定の窓。続行アナウンスが鳴る種類の続行ラウンドを録る）
+        f5_wrap = CollapsibleFrame(self._settings_body, text="OBS自動録画", collapsed=True)
         f5_wrap.pack(fill="x", padx=12, pady=4)
         f5 = f5_wrap.content
         of1 = ttk.Frame(f5)
@@ -2564,11 +2570,13 @@ class App(tk.Tk):
             padx=10, pady=6, disabledforeground="#6c7086", command=self._on_start_stop_button)
         self.btn_start_stop.pack(side="left", padx=6)
         self._refresh_start_stop_button()
-        # 並び: マクロ開始 → オーバーレイ → 統計 → キーバインド → 報告（DV2）
+        # 並び: マクロ開始 → オーバーレイ → 統計 → 設定 → キーバインド → 報告（DV2）
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
+        ttk.Button(fc, text="⚙ 設定",
+                   command=self._open_settings_window, width=8).pack(side="left", padx=6)
         ttk.Button(fc, text="⌨ キーバインド",
                    command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="報告",
@@ -2617,8 +2625,11 @@ class App(tk.Tk):
         self.btn_item_fetch.pack(side="left", padx=(8, 0))
         self._refresh_item_fetch_button()
 
-        # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
-        fcr = ttk.Frame(self)
+        # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）。
+        # 設定の窓の「その他」に入れる
+        fother = ttk.LabelFrame(self._settings_body, text="その他", padding=4)
+        fother.pack(fill="x", padx=12, pady=4)
+        fcr = ttk.Frame(fother)
         fcr.pack(pady=(0, 4))
         # アイテムを落とすのはどのラウンドの後でも（DW。保存の名前 continue_drop_item はそのまま）。
         # 窓を戻すのは続行ラウンドの後だけ（全窓共通・保存・既定 ON）
@@ -2668,6 +2679,68 @@ class App(tk.Tk):
         # クレジット表示
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
+        self._fit_settings_window()
+
+    # ── 設定の窓 ──────────────────────────────────
+    def _build_settings_window(self):
+        """設定の窓を作って隠す（起動時に 1 回）。中の Tk 変数は起動時から存在している必要があるので、
+        開くたびに作り直さない（マクロ開始が声のパスと OBS の設定を読むため）"""
+        win = tk.Toplevel(self)
+        self._settings_window = win
+        win.title("設定")
+        win.configure(bg=config.GUI_BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
+        win.withdraw()
+        # 中身は縦にスクロール（ContinueTableGUI の決まりの欄と同じ作り）
+        area = ttk.Frame(win)
+        area.pack(fill="both", expand=True)
+        self._settings_canvas = tk.Canvas(area, bg=config.GUI_BG, highlightthickness=0)
+        bar = ttk.Scrollbar(area, orient="vertical", command=self._settings_canvas.yview)
+        self._settings_canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self._settings_canvas.pack(side="left", fill="both", expand=True)
+        body = ttk.Frame(self._settings_canvas)
+        self._settings_body = body
+        self._settings_item = self._settings_canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _e: self._settings_canvas.configure(
+            scrollregion=self._settings_canvas.bbox("all")))
+        # 横は canvas の幅に合わせる（合わせないと中身が切れる）
+        self._settings_canvas.bind("<Configure>", lambda e: self._settings_canvas.itemconfigure(
+            self._settings_item, width=e.width))
+        self._settings_canvas.bind("<Enter>", lambda _e: self._settings_canvas.bind_all(
+            "<MouseWheel>", self._settings_wheel))
+        self._settings_canvas.bind("<Leave>", lambda _e: self._settings_canvas.unbind_all("<MouseWheel>"))
+        return win
+
+    def _settings_wheel(self, event):
+        self._settings_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def _fit_settings_window(self):
+        """設定の窓の初めの大きさ: 幅は中身の求める幅（＋スクロールバー）、高さは中身か画面の 8 割の低い方"""
+        win = self._settings_window
+        try:
+            win.update_idletasks()
+            width = self._settings_body.winfo_reqwidth() + SETTINGS_BAR_WIDTH
+            height = min(self._settings_body.winfo_reqheight(),
+                         int(win.winfo_screenheight() * SETTINGS_MAX_HEIGHT_RATIO))
+            win.geometry(f"{width}x{height}")
+        except tk.TclError:
+            pass
+
+    def _open_settings_window(self):
+        """「⚙ 設定」: 隠してある窓を出して前に出す（二重に開かない）"""
+        self._settings_window.deiconify()
+        self._settings_window.lift()
+
+    def _hide_settings_window(self):
+        """設定の窓を隠す。ホイールの結び付け（bind_all）を必ず外す
+        （窓の上で閉じると、ほかの窓へ効きが残る。ContinueTableGUI.destroy と同じ）"""
+        try:
+            self._settings_canvas.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
+        self._settings_window.withdraw()
 
     def _tabs_right_edge(self) -> int:
         """窓のタブの並びの右端（px。self.nb の左端から）。タブが無い・調べられないときは 0"""

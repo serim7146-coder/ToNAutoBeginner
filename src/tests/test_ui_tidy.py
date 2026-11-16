@@ -396,7 +396,7 @@ class TestFreezeFrame(_AppCase):
     def test_no_freeze_checks_left_outside(self):
         outside = [w.cget("text") for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
                    and "フリーズ" in w.cget("text")
-                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # ⑤ OBS自動録画のスイッチ
+                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # OBS自動録画（設定の窓）のスイッチ
         self.assertEqual(outside, [])
 
     def test_the_checks_work_as_before(self):
@@ -437,7 +437,7 @@ class TestDv2MainScreen(_AppCase):
 
     def test_the_button_order(self):
         self.assertEqual([w.cget("text") for w in self._row()],
-                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⌨ キーバインド", "報告"])
+                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⚙ 設定", "⌨ キーバインド", "報告"])
 
     def test_the_start_button_is_the_biggest_and_keeps_its_size(self):
         self.app.update_idletasks()
@@ -454,9 +454,11 @@ class TestDv2MainScreen(_AppCase):
 
     def test_the_short_check_names(self):
         """DV3: 見出しを無くして短い名前だけ（詳しくは README）"""
-        row = next(w for w in self.app.pack_slaves()
+        # チェックの行は設定の窓の「その他」の中（メイン画面の直下には無い）
+        row = next(w for w in _all_widgets(self.app._settings_window)
                    if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
                           for c in w.winfo_children()))
+        self.assertEqual(row.master.cget("text"), "その他")
         items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
@@ -805,3 +807,155 @@ class TestCarryOverToggles(_AppCase):
                 getattr(self.app, name)()
                 getattr(self.app, name)()
             self.assertEqual(save.call_count, 2, name)
+
+
+class TestSettingsWindow(_AppCase):
+    """設定の窓（別窓）: サウンド設定・OBS自動録画・その他（チェックの行）を移した。起動時に 1 回作って隠す。
+    本物の窓は出さない（deiconify・lift は偽物。ほかは隠したまま見る）"""
+
+    def _main_widgets(self):
+        """メイン画面の中のウィジェット（設定の窓の中は含めない）"""
+        return [w for w in _all_widgets(self.app) if w.winfo_toplevel() is self.app]
+
+    def _texts(self, widgets):
+        return [str(w.cget("text")) for w in widgets if "text" in w.keys()]
+
+    def test_the_window_is_built_once_and_hidden(self):
+        win = self.app._settings_window
+        self.assertEqual(win.title(), "設定")
+        self.assertEqual(win.state(), "withdrawn")
+        self.assertTrue(win.resizable()[0] and win.resizable()[1])
+
+    def test_the_button_is_after_the_statistics_and_opens_the_window_once(self):
+        row = self.app.btn_start_stop.master
+        texts = [w.cget("text") for w in row.pack_slaves()]
+        self.assertEqual(texts.index("⚙ 設定"), texts.index("統計") + 1)
+        self.assertEqual(texts[-1], "報告", "報告は行の最後のまま")
+        button = next(w for w in row.pack_slaves() if w.cget("text") == "⚙ 設定")
+        windows = lambda: [w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]
+        before = windows()
+        with patch.object(self.app._settings_window, "deiconify") as show, \
+                patch.object(self.app._settings_window, "lift") as lift:
+            button.invoke()
+            button.invoke()
+        self.assertEqual(show.call_count, 2)
+        self.assertEqual(lift.call_count, 2)
+        self.assertEqual(windows(), before, "押しても窓は増えない（作り直さない）")
+        self.assertIn(self.app._settings_window, windows())
+
+    def test_the_three_frames_are_in_the_window_and_not_on_the_main_screen(self):
+        inside = self._texts(_all_widgets(self.app._settings_window))
+        for title in ("サウンド設定", "OBS自動録画", "その他"):
+            self.assertIn(title, inside, title)
+        main = self._texts(self._main_widgets())
+        for text in ("サウンド設定", "OBS自動録画", "その他", "アイテムを落とす", "窓位置リセット",
+                     "Runリスポーン", "霧即時判定", "Utilsの判断に従う", "Bloodthirsty を待つ",
+                     "続行ラウンドを録画する", "ツールの音量:"):
+            self.assertNotIn(text, main, text)
+        self.assertFalse([t for t in main if t.startswith(("③ サウンド", "⑤", "④"))], main)
+
+    def test_the_numbers_are_moved_up(self):
+        main = self._texts(self._main_widgets())
+        self.assertIn("① 続行リスト", main)
+        self.assertIn("② 窓数・ログ設定", main)
+        self.assertIn("③ 外部ツール起動", main)
+
+    def test_the_big_buttons_stay_on_the_main_screen(self):
+        for name in ("btn_hands_free", "btn_item_get_begin", "btn_speed_detect", "btn_item_fetch"):
+            self.assertIs(getattr(self.app, name).winfo_toplevel(), self.app, name)
+        self.assertIs(self.app.log_text.winfo_toplevel(), self.app)
+
+    def test_the_moved_widgets_live_in_the_settings_window(self):
+        win = self.app._settings_window
+        for name in ("_announce_frame", "lbl_volume"):
+            self.assertIs(getattr(self.app, name).winfo_toplevel(), win, name)
+        for name in ("v_continue_drop_item", "v_run_respawn", "v_voice_continue", "v_obs_host",
+                     "v_obs_port", "v_obs_password", "v_obs_enabled", "v_obs_freeze", "v_volume"):
+            self.assertTrue(hasattr(self.app, name), name)
+
+    def test_the_contents_scroll_with_the_wheel(self):
+        canvas = self.app._settings_canvas
+        with patch.object(canvas, "yview_scroll") as scroll:
+            self.app._settings_wheel(type("E", (), {"delta": -120})())
+            self.app._settings_wheel(type("E", (), {"delta": 120})())
+        self.assertEqual(scroll.call_args_list, [call(1, "units"), call(-1, "units")])
+        self.assertIs(self.app._settings_body.master, canvas)
+        for child in self.app._settings_body.winfo_children():
+            self.assertTrue(child.winfo_manager(), "中身は body に pack されている")
+
+    def test_hiding_removes_the_wheel_binding(self):
+        """窓を隠すと bind_all の <MouseWheel> が外れる（残ると続行表・統計の窓でホイールが効かない）"""
+        self.app._settings_canvas.bind_all("<MouseWheel>", self.app._settings_wheel)
+        self.assertTrue(self.app.bind_all("<MouseWheel>"))
+        self.app._hide_settings_window()
+        self.assertEqual(self.app.bind_all("<MouseWheel>"), "")
+        self.assertEqual(self.app._settings_window.state(), "withdrawn")
+        self.assertTrue(self.app._settings_window.winfo_exists(), "壊さない（隠すだけ）")
+
+    def test_the_close_button_hides_instead_of_destroying(self):
+        win = self.app._settings_window
+        handler = win.tk.call("wm", "protocol", win, "WM_DELETE_WINDOW")
+        self.assertTrue(handler, "閉じるボタンの処理を持っている")
+        win.tk.call(handler)
+        self.assertEqual(win.state(), "withdrawn")
+        self.assertTrue(win.winfo_exists())
+
+    def test_the_first_height_is_at_most_80_percent_of_the_screen(self):
+        win = self.app._settings_window
+        with patch.object(win, "winfo_screenheight", return_value=100), \
+                patch.object(self.app._settings_body, "winfo_reqheight", return_value=5000), \
+                patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertRegex(geometry.call_args.args[0], r"^\d+x80$")
+        with patch.object(win, "winfo_screenheight", return_value=1000), \
+                patch.object(self.app._settings_body, "winfo_reqheight", return_value=300), \
+                patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertRegex(geometry.call_args.args[0], r"^\d+x300$")
+
+    def test_start_without_ever_opening_the_window_reads_the_voices_and_obs(self):
+        """設定の窓を一度も開かずにマクロを開始しても、声のパスと OBS の設定を読める（落ちない）"""
+        self.assertEqual(self.app._settings_window.state(), "withdrawn")
+        self.app.v_voice_continue.set("  C:/test/continue.mp3 ")
+        self.app.v_voice_afk.set("afk-test.mp3")
+        self.app.v_obs_enabled.set(True)
+        self.app.v_obs_host.set("10.0.0.5")
+        self.app.v_obs_port.set("4456")
+        self.app.v_obs_password.set("dummy")
+        cfg = WindowConfig(hwnd=0x10, log_path=Path("output_log.txt"))
+        tab = type("Tab", (), {"idx": 0, "osc_in": 0, "osc_out": 0,
+                               "get_config": lambda _s: (cfg, None)})()
+        saved_tabs = self.app.tabs
+        self.addCleanup(setattr, self.app, "tabs", saved_tabs)
+        self.addCleanup(self.app.monitors.clear)
+        self.addCleanup(setattr, self.app, "_running", False)
+        self.app.tabs = [tab]
+        with patch.object(self.app, "_resolve_tab_ports"), \
+                patch.object(self.app, "_start_window_volume"), \
+                patch.object(self.app, "_debug_start"), \
+                patch.object(self.app, "_refresh_continue_choices"), \
+                patch.object(self.app, "_refresh_start_stop_button"), \
+                patch.object(SharedState, "begin_run"), \
+                patch.object(SharedState, "register_window_hwnd"), \
+                patch.object(mainGUI.Recorder, "configure") as configure, \
+                patch.object(mainGUI.Recorder, "stop_all"), \
+                patch.object(mainGUI.LogMonitor, "LogMonitor") as monitor:
+            self.app._start()
+        self.assertEqual(cfg.voice_continue, "C:/test/continue.mp3")
+        self.assertEqual(cfg.voice_afk, "afk-test.mp3")
+        self.assertEqual(len(self.app.monitors), 1)
+        monitor.return_value.start.assert_called_once()
+        args = configure.call_args
+        self.assertEqual(args.args[:3], (True, "10.0.0.5", 4456))
+        self.assertEqual(args.args[3], "dummy")
+
+    def test_the_saved_names_are_unchanged(self):
+        """移した枠の保存の名前は 1 つも変わらない（前の版の settings.json がそのまま読める）"""
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        for name in ("continue_drop_item", "continue_restore_window", "run_respawn", "wait_bloodthirsty",
+                     "follow_utils", "voice_enabled", "voice_volumes", "obs_record", "obs_record_freeze",
+                     "obs_host", "obs_port"):
+            self.assertIn(name, stored, name)
