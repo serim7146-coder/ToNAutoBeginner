@@ -11,7 +11,7 @@ class KillerDecision:
     is_continue_round: bool
 
 
-ALTERNATE_SUFFIX = " (Alternate)"
+ALTERNATE_SUFFIX = MatchTNL.ALTERNATE_SUFFIX    # 置き場所は MatchTNL（LogParser も使う）
 
 
 def selectable_round_name(round_type: str) -> str:

@@ -53,9 +53,38 @@ BLOODBATH_EX = "Bloodbath EX"
 ROUND_TYPE_ALIASES = {"EX": BLOODBATH_EX}
 
 
+_japanese = False       # 日本語のラウンド名を読んだか（プロセス全体で 1 つ）
+
+
+def japanese_seen() -> bool:
+    """日本語のラウンド名を 1 度でも読んだか。ToN の表示言語が日本語だという確定した証拠。
+    アイテム自動取得が、店の見本を日本語のものだけに絞るのに使う"""
+    return _japanese
+
+
+def forget_japanese():
+    """インスタンスに入り直した: 言語を見直す。VRChat の表示言語はインスタンスを
+    抜けないと変えられない（依頼者 2026-11-17）ので、入り直しが唯一の変わりうる所。
+    次に日本語のラウンド名を読んだら、1 ラウンドで元に戻る"""
+    global _japanese
+    _japanese = False
+
+
 def _round_type(raw: str) -> str:
+    """ラウンドの種類。日本語表示の ToN は訳した名前を出すので、英語へ戻す（MatchTNL.JP_ROUND_TYPES）。
+    「ゴースト (Alternate)」のように接尾が付くことがある。接尾は日本語でも英語のまま"""
+    global _japanese
     name = raw.strip()
-    return ROUND_TYPE_ALIASES.get(name, name)
+    name = ROUND_TYPE_ALIASES.get(name, name)
+    suffix = ""
+    if name.endswith(MatchTNL.ALTERNATE_SUFFIX):
+        name, suffix = name[:-len(MatchTNL.ALTERNATE_SUFFIX)], MatchTNL.ALTERNATE_SUFFIX
+    english = MatchTNL.JP_ROUND_TYPES.get(name)
+    if english is None:
+        return name + suffix
+    if english != name:         # 日本語と英語が同じ名前（Classic.exe・Randomizer）は証拠にならない
+        _japanese = True
+    return english + suffix
 
 
 def _killers_round_type(raw: str, a: str, b: str, c: str) -> str:

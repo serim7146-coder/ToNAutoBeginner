@@ -48,6 +48,9 @@ SPECIAL_MOON_KEY = "Special/Moon"
 LISTTOOL_MOON_KEYS = ("Mystic Moon/ミスティックムーン", "Blood Moon/ブラッドムーン")
 LEGACY_MOON_KEYS = LISTTOOL_MOON_KEYS + ("Twilight/トワイライト", "Solstice/ソルスティス")
 
+# Killers の行の「Ghost (Alternate)」の接尾。日本語表示でも英語のまま（前に半角スペース 1 つ）
+ALTERNATE_SUFFIX = " (Alternate)"
+
 LOG_TO_TNL = {
     "Classic":           "Classic/クラシック",
     "Classic.exe":       "Classic.exe/Classic.exe",
@@ -247,6 +250,44 @@ HOST_SAVE_IGNORED_KEYS = frozenset({
 HOST_SAVE_KEY_ALIASES = {
     "Randomizer/ランダマイザー": "Randomizer/Randomizer",
 }
+
+
+# ToN が日本語表示のとき、ラウンドの種類だけが訳されて出る（ほかの印は英語のまま。
+# 実ログ 29,683 行で確認）。日本語 → 英語の逆引きは、同じ表を 2 つ持たないために
+# LOG_TO_TNL・moon のキー・2.21.3 の別名から組み立てる。
+# ⚠ ListTool の日本語と ToN の日本語は別物（Run は ListTool が「走れ！」、ToN は「Run」）。
+# ListTool 側が言い方を変えると判定が黙って変わるので、tests/test_japanese_round_names.py に
+# 組み立てた結果を丸ごと書き写してある
+JP_ROUND_TYPES_EXTRA = {
+    # ListTool のキーが Special/Moon なので日本語名が入っていない 2 つ（依頼者 2026-11-17）
+    "コールドナイト": "Cold Night",
+    "スペシャル": "Special",
+}
+JP_ROUND_TYPES_SKIP = frozenset({"Moon"})   # Special/Moon の日本語側。6 ラウンドが共有する枠の名前
+
+
+def _build_jp_round_types() -> dict:
+    """日本語のラウンド名 → 英語のラウンド名。LOG_TO_TNL ほかから組み立てる"""
+    out = {}
+
+    def add(english: str, japanese: str):
+        if (japanese and japanese not in JP_ROUND_TYPES_SKIP
+                and ALTERNATE_SUFFIX not in english and japanese not in out):
+            out[japanese] = english
+
+    for english, key in LOG_TO_TNL.items():
+        half = key.split("/")
+        if len(half) == 2:
+            add(english, half[1])
+    for key in LISTTOOL_MOON_KEYS + LEGACY_MOON_KEYS + tuple(HOST_SAVE_KEY_ALIASES):
+        half = key.split("/")
+        if len(half) == 2:
+            add(half[0], half[1])
+    out.update(JP_ROUND_TYPES_EXTRA)
+    return out
+
+
+JP_ROUND_TYPES = _build_jp_round_types()
 
 
 def _fold_wishes(data, keepOn_set: dict, mine: dict | None):

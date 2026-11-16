@@ -98,6 +98,7 @@ class LogMonitor:
         # None なら窓を見ない（監視だけで使うとき・テスト）。消えたのを最初に見たとき 1 回だけ、そのラウンドを片づける
         self._window_alive = window_alive
         self._window_gone = False
+        self._said_japanese = False         # 「日本語用に変更しました」をこの窓で言ったか（インスタンスに入り直すと下ろす）
         self._window_checked_at = None      # 最後に窓を確かめた time.monotonic()（config.WINDOW_ALIVE_CHECK_SEC ごと）
         # この窓のログが看破できる起動方法か（--enable-sdk-log-levels）。start() で読む
         self.early_read_capable = False
@@ -1904,6 +1905,20 @@ class LogMonitor:
         name = self._HANDLERS.get(event.kind)
         if name is not None:
             getattr(self, name)(event)
+        if event.kind in self._ROUND_NAME_EVENTS:
+            self._announce_japanese()
+
+    # ラウンドの種類の名前を読む行（日本語表示かどうかが分かる所）
+    _ROUND_NAME_EVENTS = frozenset({
+        LogParser.EVENT_ROUND_START, LogParser.EVENT_KILLERS_SET,
+        LogParser.EVENT_KILLERS_UNKNOWN, LogParser.EVENT_KILLERS_REVEALED,
+    })
+
+    def _announce_japanese(self):
+        """ラウンド名が日本語で来ていたら、窓ごとに 1 回だけ知らせる（アイテム自動取得が日本語の見本を使う）"""
+        if LogParser.japanese_seen() and not self._said_japanese:
+            self._said_japanese = True
+            self._log("処理を日本語用に変更しました")
 
     def _on_replacement_signal(self, event):
         """置き換えテラーの合図（TerrorReplacement.SIGNALS）。どれも 知らせる → 差し替える。
@@ -2564,6 +2579,9 @@ class LogMonitor:
     def _on_joining(self, event):
         """インスタンスに入った"""
         st = self.st
+        # 表示言語はインスタンスを抜けないと変えられない。入り直したので、日本語かどうかを見直す
+        LogParser.forget_japanese()
+        self._said_japanese = False
         st.item_use.reset("インスタンス移動")
         # インスタンスを移動するとアイテムは消える（依頼者）
         self._lose_held_item(HELD_LOST_INSTANCE)
