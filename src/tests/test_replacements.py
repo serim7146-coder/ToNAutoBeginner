@@ -65,7 +65,7 @@ class TestSelfInsertsBloodthirsty(unittest.TestCase):
 
     def test_omitting_the_flag_keeps_the_old_behaviour(self):
         decided = RoundDecision.decide_killers(
-            {}, [self.SELF_INSERTS], "Unbound", 99, False)
+            {}, [self.SELF_INSERTS], "Unbound", 99, 0)
 
         self.assertFalse(decided.is_continue_round)
 
@@ -220,7 +220,7 @@ class TestSelfInsertsBloodthirstyTable(unittest.TestCase):
     def test_decide_killers_follows_the_list_when_the_table_disables_it(self):
         def decide(keep_on, disabled):
             return RoundDecision.decide_killers(
-                keep_on, [self.SELF_INSERTS], "Unbound", 99, False, bloodthirsty_variant=True,
+                keep_on, [self.SELF_INSERTS], "Unbound", 99, 0, bloodthirsty_variant=True,
                 self_inserts_table_disabled=disabled).is_continue_round
         self.assertTrue(decide({}, False))
         self.assertFalse(decide({}, True), "リストに 283 が無ければ自爆")

@@ -284,7 +284,7 @@ class TestSpecialMoonKey(unittest.TestCase):
 
     def test_the_open_special_round_path_is_unchanged(self):
         dtm = config.DTM_ID
-        decision = RoundDecision.decide_killers({}, [dtm], "Classic", 0, True)
+        decision = RoundDecision.decide_killers({}, [dtm], "Classic", 0, 3)
 
         self.assertTrue(decision.is_open_special_round_target)
         self.assertTrue(decision.is_continue_round)
@@ -2006,12 +2006,12 @@ class TestRoundDecision(unittest.TestCase):
 
     def test_decide_killers_uses_tnl_and_open_special_target(self):
         keep_on = {"Classic/クラシック": {42}}
-        decision = RoundDecision.decide_killers(keep_on, [42], "Classic", 0, False)
+        decision = RoundDecision.decide_killers(keep_on, [42], "Classic", 0, 0)
         self.assertTrue(decision.is_continue_round)
         self.assertFalse(decision.is_open_special_round_target)
 
         target_id = next(iter(config.OPEN_SPECIAL_ROUND_TERROR_IDS))
-        special = RoundDecision.decide_killers({}, [target_id], "Classic", 0, True)
+        special = RoundDecision.decide_killers({}, [target_id], "Classic", 0, 3)
         self.assertTrue(special.is_continue_round)
         self.assertTrue(special.is_open_special_round_target)
 
