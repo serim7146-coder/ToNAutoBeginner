@@ -1343,7 +1343,7 @@ class TestTheAssetsFolder(unittest.TestCase):
 
     def test_every_bundled_file_is_found_through_resource_path(self):
         import BeginDetect, ItemFetch, RespawnButton, RunFace, SaveLoad, Statistics
-        names = [*BeginDetect.TEMPLATE_FILES, ItemFetch.TEMPLATE_FILE, RespawnButton.TEMPLATE_FILE,
+        names = [*BeginDetect.TEMPLATE_FILES, *ItemFetch.TEMPLATE_FILES, RespawnButton.TEMPLATE_FILE,
                  RunFace.TEMPLATE_FILE, SaveLoad.CODEBOX_FILE, SaveLoad.ARROW_FILE, Statistics.MAPS_FILENAME,
                  "assets/data/terrors.json", "assets/data/item.json", "assets/ToNAutoBeginnerIcon.ico"]
         for name in names:

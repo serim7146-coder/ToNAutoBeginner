@@ -656,7 +656,7 @@ class TestItemFetch(unittest.TestCase):
         import numpy as np
         if not ItemFetch.available():
             self.skipTest("SIFT か見本が使えない")
-        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_FILE)), dtype=np.uint8)
+        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_EN)), dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_COLOR)
         canvas = np.zeros((1080, 1920, 3), np.uint8)
         canvas[245:505, 760:1140] = img
@@ -1200,7 +1200,7 @@ class TestItemFetch(unittest.TestCase):
     def test_the_template_is_built_into_the_exe(self):
         build = _load_build_script()
         self.assertIn("--include-data-dir=assets/templates=assets/templates", build.BASE_ARGS)
-        self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_FILE))).is_file())
+        self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_EN))).is_file())
 
 
 

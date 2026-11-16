@@ -100,7 +100,7 @@ class TestShowTheWholePanel(_FetchCase):
     def test_the_template_size(self):
         import cv2
         import numpy as np
-        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_FILE)), dtype=np.uint8)
+        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_EN)), dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
         self.assertEqual((img.shape[1], img.shape[0]), ItemFetch.TEMPLATE_SIZE)
         self.assertEqual((ItemFetch.PANEL_MARGIN, ItemFetch.PANEL_TRIES), (0.02, 6))

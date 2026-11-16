@@ -20,9 +20,15 @@ import threading
 import time
 
 import config
+import LogParser
 
-TEMPLATE_FILE = "assets/templates/shop/shop_main.png"   # 店の最初の画面（1920x1080 の x760〜1140・y245〜505）
-TEMPLATE_SIZE = (380, 260)  # 見本の幅・高さ（四隅を写すのに使う）
+# 店の最初の画面の見本（レイアウトは同じ。文字だけが違う）。日本語の見本は英語とまったく
+# 同じ枠に揃えて作ってあるので、BUTTONS も窓の大きさの定数も共通。
+# ログで日本語と確定したら日本語だけを試す（_templates_to_try）
+TEMPLATE_EN = "assets/templates/shop/shop_main.png"     # 英語（1920x1080 の x760〜1140・y245〜505）
+TEMPLATE_JA = "assets/templates/shop/shop_main_ja.png"  # 日本語（2560x1440 の実画面から同じ枠へ揃えた）
+TEMPLATE_FILES = (TEMPLATE_EN, TEMPLATE_JA)             # 言語が分からないうちに試す順
+TEMPLATE_SIZE = (380, 260)  # 見本の幅・高さ（四隅を写すのに使う。2 枚とも同じ）
 # 見本の中のボタンの位置（切り出しの左上が 0,0）。Equip は店を開いた後の画面にあるが、
 # 見本のタイトル・枠・色見本の帯で位置が決まる（実機で3店とも1回で合った）
 BUTTONS = {
@@ -139,7 +145,7 @@ def shop_for(item_id, items) -> str | None:
 # ── 見本と特徴点 ────────────────────────────────
 
 _lock = threading.Lock()
-_template = None            # (keypoints, descriptors)。読めなければ ()
+_templates = None           # {見本のファイル名: (keypoints, descriptors)}。読めなければ {}
 
 
 def _sift():
@@ -151,44 +157,74 @@ def _features(gray):
     return _sift().detectAndCompute(gray, None)
 
 
-def _load_template():
-    """見本を読む（1回だけ）。cv2.imread は日本語を含むパスを読めないのでバイトで読む"""
-    global _template
+def _load_templates():
+    """見本を読む（1回だけ）。cv2.imread は日本語を含むパスを読めないのでバイトで読む。
+    読めない見本は黙って飛ばす（英語だけ・日本語だけでも動く）"""
+    global _templates
     with _lock:
-        if _template is not None:
-            return _template
+        if _templates is not None:
+            return _templates
+        loaded = {}
         try:
             import cv2
             import numpy as np
-            data = np.fromfile(str(config.resource_path(TEMPLATE_FILE)), dtype=np.uint8)
-            img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
-            keypoints, descriptors = _features(img) if img is not None else (None, None)
-            _template = (keypoints, descriptors) if descriptors is not None else ()
+            for name in TEMPLATE_FILES:
+                try:
+                    data = np.fromfile(str(config.resource_path(name)), dtype=np.uint8)
+                    img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+                    keypoints, descriptors = _features(img) if img is not None else (None, None)
+                    if descriptors is not None:
+                        loaded[name] = (keypoints, descriptors)
+                except Exception:
+                    pass
         except Exception:
-            _template = ()
-        return _template
+            loaded = {}
+        _templates = loaded
+        return _templates
+
+
+def _templates_to_try() -> list:
+    """試す見本。ログで日本語と確定していれば日本語だけ（英語は当たりようがないので試さない。
+    依頼者 2026-11-17「日本語の見本が失敗したら英語も失敗します」）。
+    日本語の見本が読めていないときだけ、確定していても残りを試す"""
+    loaded = _load_templates()
+    if LogParser.japanese_seen() and TEMPLATE_JA in loaded:
+        return [loaded[TEMPLATE_JA]]
+    return [loaded[name] for name in TEMPLATE_FILES if name in loaded]
 
 
 def available() -> bool:
-    """使えるか（OpenCV の SIFT が使えて、見本が読める）"""
-    return bool(_load_template())
+    """使えるか（OpenCV の SIFT が使えて、見本が 1 枚でも読める）"""
+    return bool(_load_templates())
 
 
 def locate(bgr, point, template=None):
     """撮影（BGR）の中で、見本の point（見本の中の座標）が写っている位置と倍率と手がかりの数と写す関数
     (x, y, 横の倍率, 縦の倍率, インライアの数, project)。倍率は見本の 1px が画面で何 px か（点の
     ±SCALE_PROBE を写した距離から）。project(見本の点) は同じホモグラフィで別の点を (x, y, 横, 縦の倍率) に
-    写す（店のボタンを押す回に Equip の位置も覚えるため）。見つからなければ None"""
+    写す（店のボタンを押す回に Equip の位置も覚えるため）。見つからなければ None。
+    見本は _templates_to_try() の順に試し、先に当たった方を使う
+    （撮影の特徴点は見本の枚数に関係なく 1 回だけ計算する）。template を渡したときはそれだけを使う"""
     import cv2
-    import numpy as np
-    template = template or _load_template()
-    if not template:
+    templates = [template] if template else _templates_to_try()
+    if not templates:
         return None
-    k1, d1 = template
     k2, d2 = _features(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
     if d2 is None or len(k2) < 2:
         return None
-    pairs = cv2.BFMatcher(cv2.NORM_L2).knnMatch(d1, d2, k=2)
+    matcher = cv2.BFMatcher(cv2.NORM_L2)
+    for k1, d1 in templates:
+        found = _match_one(k1, d1, k2, d2, matcher, point)
+        if found is not None:
+            return found
+    return None
+
+
+def _match_one(k1, d1, k2, d2, matcher, point):
+    """見本 1 枚ぶんの照合。見つからなければ None"""
+    import cv2
+    import numpy as np
+    pairs = matcher.knnMatch(d1, d2, k=2)
     good = [p[0] for p in pairs if len(p) == 2 and p[0].distance < RATIO * p[1].distance]
     if len(good) < MIN_GOOD:
         return None
