@@ -2430,6 +2430,8 @@ class LogMonitor:
                                st.round_seq)
         if self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
+        if RoundDecision.selectable_round_name(st.round_type) == "Fog":
+            self._send_unknown_fog_round()
         announce_on_round_over = not self._auto_begin_active()
         if announce_on_round_over and not self._hands_free():
             round_lost_item = self._round_lost_item()
@@ -3327,6 +3329,24 @@ class LogMonitor:
             [],
             st.map_id,
             st.transformed_uid,
+            instance_key=self._db_instance_key(),
+            round_time=st.round_start_time,
+            players=st.round_players,
+            bloodthirsty=st.bloodthirsty_creature_variant,
+        )
+
+    def _send_unknown_fog_round(self):
+        """霧のテラーが分からないまま終わった: テラー無しで 1 回だけ送る（依頼者 2026-11-17）。
+        行が立たないと、そのラウンドが統計から丸ごと落ちる"""
+        st = self.st
+        if st.terror_ids or not self._claim_statistics():
+            return
+        ConnectDB.register_round(
+            st.round_type,
+            [],
+            st.map_id,
+            st.transformed_uid,
+            quiet=st.statistics_quiet,
             instance_key=self._db_instance_key(),
             round_time=st.round_start_time,
             players=st.round_players,

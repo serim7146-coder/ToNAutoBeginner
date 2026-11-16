@@ -2207,6 +2207,129 @@ class TestLogMonitorFogRound(unittest.TestCase):
 
 
 
+class TestUnknownFogRoundSent(unittest.TestCase):
+    """霧のテラーが分からないまま RoundOver を迎えたら、テラー無しで 1 回だけ送る（2026-11-17）"""
+
+    FOG_ENTRY = "This round is taking place at Facility (12) and the round type is Fog"
+    UNKNOWN = "Killers is unknown - ??? // ??? // Round type is Fog"
+    ROUND_OVER = "2026.09.21 22:07:30 Debug      -  RoundOver"
+
+    def setUp(self):
+        SharedState.set_instance_type(config.INSTANCE_PRIVATE)
+        SharedState.continue_round_reset()
+        SharedState.set_hands_free(False)
+        SharedState.set_list_source("host")
+        self.addCleanup(SharedState.continue_round_reset)
+        self.addCleanup(SharedState.set_list_source, None)
+        self.addCleanup(SharedState.set_instance_type, config.INSTANCE_PUBLIC)
+        self.send = self._start(patch.object(ConnectDB, "register_round"))
+        self._start(patch.object(LogMonitor.threading, "Thread"))
+        self._start(patch.object(PlaySound, "play_sound"))
+        self._start(patch.object(Recorder, "on_continue_start"))
+        self._start(patch.object(WindowOperator, "focus_window", return_value=True))
+        self._start(patch("builtins.print"))
+
+    def _start(self, p):
+        mock = p.start()
+        self.addCleanup(p.stop)
+        return mock
+
+    def _monitor(self):
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3")
+        monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
+        monitor.st.instance_type = config.INSTANCE_PRIVATE
+        monitor.st.in_round = True
+        return monitor
+
+    def test_an_unknown_fog_is_sent_once_without_terrors(self):
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+
+        monitor._process(self.ROUND_OVER)
+
+        self.send.assert_called_once_with("Fog", [], ANY, ANY, quiet=ANY, instance_key=ANY,
+                                          round_time=ANY, players=ANY, bloodthirsty=ANY)
+
+    def test_the_same_round_is_not_sent_twice(self):
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor._process(self.ROUND_OVER)
+
+        monitor._send_unknown_fog_round()
+
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_a_revealed_fog_sends_only_the_revealed_side(self):
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor._process("Killers have been revealed - 44 0 0 // Round type is Fog")
+        self.assertEqual(self.send.call_count, 1)
+
+        monitor._process(self.ROUND_OVER)
+
+        self.assertEqual(self.send.call_count, 1, "空の行は立たない")
+        self.assertEqual(self.send.call_args.args[1], [44])
+
+    def test_a_non_fog_round_with_unknown_terrors_sends_nothing(self):
+        monitor = self._monitor()
+        monitor._process("This round is taking place at Facility (12) and the round type is Classic")
+
+        monitor._process(self.ROUND_OVER)
+
+        self.send.assert_not_called()
+
+    def test_a_round_already_sent_is_not_sent_again(self):
+        """看破などで統計を送った回（権利を取った回）には、二重に送らない"""
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor.st.statistics_quiet = True
+        self.assertTrue(monitor._claim_statistics())
+
+        monitor._process(self.ROUND_OVER)
+
+        self.send.assert_not_called()
+
+    def test_known_terrors_not_yet_sent_are_never_replaced_by_an_empty_row(self):
+        """テラーが分かっているのに未送信の回に、空の行で権利を使い切らない"""
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor.st.terror_ids = [44]
+        self.assertFalse(monitor.st.statistics_sent)
+
+        monitor._process(self.ROUND_OVER)
+
+        self.send.assert_not_called()
+        self.assertFalse(monitor.st.statistics_sent, "権利は取らない")
+
+    def test_an_early_read_round_is_sent_once(self):
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor._on_killers([101], "Fog", revealed=False)
+        self.assertEqual(self.send.call_count, 1)
+
+        monitor._process(self.ROUND_OVER)
+
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_an_alternate_fog_with_unknown_terrors_is_picked_up(self):
+        monitor = self._monitor()
+        monitor._process(self.FOG_ENTRY)
+        monitor._process(self.UNKNOWN)
+        monitor.st.round_type = "Fog (Alternate)"
+
+        monitor._process(self.ROUND_OVER)
+
+        self.send.assert_called_once_with("Fog (Alternate)", [], ANY, ANY, quiet=ANY,
+                                          instance_key=ANY, round_time=ANY, players=ANY,
+                                          bloodthirsty=ANY)
+
+
 class TestFogJoy(unittest.TestCase):
     """霧で「JOY WILL SOON AWAKEN...」が出たらテラーは Joy（alternate 164）"""
 
