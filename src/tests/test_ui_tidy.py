@@ -458,14 +458,20 @@ class TestDv2MainScreen(_AppCase):
         row = next(w for w in _all_widgets(self.app._settings_window)
                    if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
                           for c in w.winfo_children()))
-        self.assertEqual(row.master.cget("text"), "その他")
-        items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
+        fold = row.master.master          # row → CollapsibleFrame.content → CollapsibleFrame
+        self.assertIsInstance(fold, mainGUI.CollapsibleFrame)
+        self.assertIn("その他", [w.cget("text") for w in fold.winfo_children()[0].winfo_children()
+                               if isinstance(w, tk.Label)])
+        # grid_slaves() は置いた逆順で返る。並びは row・column で見る
+        checks = sorted(row.grid_slaves(),
+                        key=lambda w: (int(w.grid_info()["row"]), int(w.grid_info()["column"])))
+        items = [(type(w).__name__, w.cget("text")) for w in checks]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
                                  ("Checkbutton", "Utilsの判断に従う"),         # EB
                                  ("Checkbutton", "Bloodthirsty を待つ"),
                                  ("Checkbutton", "Murderで AFK 回避しない")])
-        variables = [str(w.cget("variable")) for w in row.pack_slaves()
+        variables = [str(w.cget("variable")) for w in checks
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
                                                       self.app.v_continue_restore_window,
@@ -913,7 +919,8 @@ class TestSettingsWindow(_AppCase):
                 patch.object(self.app._settings_body, "winfo_reqheight", return_value=300), \
                 patch.object(win, "geometry") as geometry:
             self.app._fit_settings_window()
-        self.assertRegex(geometry.call_args.args[0], r"^\d+x300$")
+        # 高さは中身に合わせない（折りたたみが閉じていると低くて横に細長くなるため）。既定は 620
+        self.assertRegex(geometry.call_args.args[0], r"^\d+x%d$" % mainGUI.SETTINGS_DEFAULT_HEIGHT)
 
     def test_start_without_ever_opening_the_window_reads_the_voices_and_obs(self):
         """設定の窓を一度も開かずにマクロを開始しても、声のパスと OBS の設定を読める（落ちない）"""
@@ -961,6 +968,112 @@ class TestSettingsWindow(_AppCase):
                      "follow_utils", "voice_enabled", "voice_volumes", "obs_record", "obs_record_freeze",
                      "obs_host", "obs_port"):
             self.assertIn(name, stored, name)
+
+
+class TestOtherChecksWrap(_AppCase):
+    """設定の窓の「その他」: 折りたたみ（既定は開く）・チェックは枠の幅で折り返す・初めの大きさ"""
+
+    def setUp(self):
+        super().setUp()
+        self.frame = self.app._other_check_frame
+        self.checks = self.app._other_checks
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.app._other_check_columns = None
+        self.app._layout_other_checks()
+
+    def _lay_out(self, width):
+        self.app._other_check_columns = None
+        with patch.object(self.frame, "winfo_width", return_value=width):
+            self.app._layout_other_checks()
+
+    def _cells(self):
+        return [(int(c.grid_info()["row"]), int(c.grid_info()["column"])) for c in self.checks]
+
+    def _cell_width(self):
+        return max(c.winfo_reqwidth() for c in self.checks) + mainGUI.OTHER_CHECK_GAP
+
+    def test_the_fold_is_open_by_default_and_the_others_are_closed(self):
+        fold = self.frame.master.master
+        self.assertIsInstance(fold, mainGUI.CollapsibleFrame)
+        self.assertFalse(fold.collapsed, "その他は開いた状態で始まる")
+        for text in ("サウンド設定", "OBS自動録画"):
+            other = next(w for w in _all_widgets(self.app._settings_window)
+                         if isinstance(w, mainGUI.CollapsibleFrame)
+                         and any(isinstance(c, tk.Label) and c.cget("text") == text
+                                 for c in _all_widgets(w.winfo_children()[0])))
+            self.assertTrue(other.collapsed, text)
+
+    def test_the_order_of_the_checks_is_kept(self):
+        self.assertEqual([c.cget("text") for c in self.checks],
+                         ["アイテムを落とす", "窓位置リセット", "Runリスポーン", "霧即時判定",
+                          "Utilsの判断に従う", "Bloodthirsty を待つ", "Murderで AFK 回避しない"])
+
+    def test_wide_makes_one_row(self):
+        self._lay_out(self._cell_width() * len(self.checks) + 5)
+        self.assertEqual(self._cells(), [(0, i) for i in range(len(self.checks))])
+
+    def test_narrow_wraps_and_nothing_is_cut(self):
+        for columns in (3, 2, 1):
+            self._lay_out(self._cell_width() * columns + 3)
+            cells = self._cells()
+            self.assertEqual(max(c for _r, c in cells) + 1, columns, columns)
+            self.assertEqual(cells, [(i // columns, i % columns) for i in range(len(self.checks))])
+            self.assertEqual(len(set(cells)), len(self.checks), "重ならない")
+        self._lay_out(1 + 1)     # 極端に狭くても 1 列（0 にならない）
+        self.assertEqual(max(c for _r, c in self._cells()), 0)
+
+    def test_widening_goes_back_to_one_row(self):
+        self._lay_out(self._cell_width() * 2 + 3)
+        self.assertGreater(max(r for r, _c in self._cells()), 0)
+        self._lay_out(self._cell_width() * len(self.checks) + 5)
+        self.assertEqual({r for r, _c in self._cells()}, {0})
+
+    def test_the_same_width_does_not_grid_again(self):
+        width = self._cell_width() * 3 + 3
+        self._lay_out(width)
+        mocks = []
+        for check in self.checks:
+            patcher = patch.object(check, "grid")
+            mocks.append(patcher.start())
+            self.addCleanup(patcher.stop)
+        with patch.object(self.frame, "winfo_width", return_value=width):
+            self.app._layout_other_checks()
+            self.app._layout_other_checks()
+        for mock in mocks:
+            mock.assert_not_called()
+
+    def test_a_different_column_count_grids_again(self):
+        self._lay_out(self._cell_width() * 3 + 3)
+        with patch.object(self.frame, "winfo_width", return_value=self._cell_width() * 2 + 3):
+            self.app._layout_other_checks()
+        self.assertEqual(self.app._other_check_columns, 2)
+
+    def test_not_placed_yet_does_nothing(self):
+        self.app._other_check_columns = None
+        with patch.object(self.frame, "winfo_width", return_value=1),                 patch.object(self.checks[0], "grid") as grid:
+            self.app._layout_other_checks()
+        grid.assert_not_called()
+        self.assertIsNone(self.app._other_check_columns)
+
+    def test_the_default_size_is_not_a_long_thin_strip(self):
+        win = self.app._settings_window
+        with patch.object(win, "winfo_screenwidth", return_value=1920),                 patch.object(win, "winfo_screenheight", return_value=1080),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        size = geometry.call_args.args[0]
+        width, height = (int(v) for v in size.split("x"))
+        self.assertGreaterEqual(width, mainGUI.SETTINGS_MIN_WIDTH)
+        self.assertLessEqual(width, int(1920 * mainGUI.SETTINGS_MAX_WIDTH_RATIO))
+        self.assertEqual(height, mainGUI.SETTINGS_DEFAULT_HEIGHT)
+        with patch.object(win, "winfo_screenwidth", return_value=1920),                 patch.object(win, "winfo_screenheight", return_value=600),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertEqual(geometry.call_args.args[0].split("x")[1], str(int(600 * 0.8)),
+                         "高さは画面の 8 割まで")
+        with patch.object(win, "winfo_screenwidth", return_value=500),                 patch.object(win, "winfo_screenheight", return_value=1080),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertEqual(geometry.call_args.args[0].split("x")[0], str(mainGUI.SETTINGS_MIN_WIDTH),
+                         "幅は下限 560（小さい画面でも 560）")
 
 
 class TestMurderNoAfkSetting(_AppCase):

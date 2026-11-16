@@ -444,11 +444,15 @@ WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、そ
 CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
 CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
 CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（px）
-SETTINGS_BAR_WIDTH = 20            # 設定の窓の初めの幅に足す、スクロールバーの分（px）
-SETTINGS_MAX_HEIGHT_RATIO = 0.8    # 設定の窓の初めの高さの上限（画面の高さに対する割合）
 CTRL_HINT_MARGIN_Y = 4  # 案内の上端と窓のタブの枠の上端の間（px）
 CTRL_HINT_PROBE_Y = 8   # タブの右端を調べるときの高さ（タブの帯の中。px）
 CTRL_HINT_PROBE_STEP = 4  # タブの右端を調べる間隔（px）
+SETTINGS_BAR_WIDTH = 20            # 設定の窓の初めの幅に足す、スクロールバーの分（px）
+SETTINGS_MAX_HEIGHT_RATIO = 0.8    # 設定の窓の初めの高さの上限（画面の高さに対する割合）
+SETTINGS_MIN_WIDTH = 560           # 設定の窓の初めの幅の下限（px）
+SETTINGS_DEFAULT_HEIGHT = 620      # 設定の窓の初めの高さ（px。画面の 8 割を超えない）
+SETTINGS_MAX_WIDTH_RATIO = 0.8     # 初めの幅の上限（画面の幅に対する割合）
+OTHER_CHECK_GAP = 12               # 折り返すチェックの間隔（px。今の padx と同じ）
 
 STYLE_CT_DIM = "CtDim.TCombobox"   # アイテムの決まりが代わりに使われている間のドロップダウン（灰色。触れない）
 COLOR_CT_DIM = "#7f849c"
@@ -2627,47 +2631,59 @@ class App(tk.Tk):
 
         # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）。
         # 設定の窓の「その他」に入れる
-        fother = ttk.LabelFrame(self._settings_body, text="その他", padding=4)
-        fother.pack(fill="x", padx=12, pady=4)
-        fcr = ttk.Frame(fother)
-        fcr.pack(pady=(0, 4))
+        fother_wrap = CollapsibleFrame(self._settings_body, text="その他", collapsed=False)
+        fother_wrap.pack(fill="x", padx=12, pady=4)
+        fcr = ttk.Frame(fother_wrap.content)
+        fcr.pack(fill="x", pady=(0, 4))
+        # チェックは枠の幅に合わせて折り返して並べる（_layout_other_checks）。作った順がそのまま並び順
+        self._other_checks = []
+        self._other_check_columns = None
+        self._other_check_frame = fcr
+        fcr.bind("<Configure>", self._layout_other_checks)
         # アイテムを落とすのはどのラウンドの後でも（DW。保存の名前 continue_drop_item はそのまま）。
         # 窓を戻すのは続行ラウンドの後だけ（全窓共通・保存・既定 ON）
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
         # 名前は短く、詳しくは README（DV3）
-        ttk.Checkbutton(fcr, text="アイテムを落とす",
-                        variable=self.v_continue_drop_item,
-                        command=self._on_continue_after_changed).pack(side="left")
-        ttk.Checkbutton(fcr, text="窓位置リセット",
-                        variable=self.v_continue_restore_window,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="アイテムを落とす",
+            variable=self.v_continue_drop_item,
+            command=self._on_continue_after_changed))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="窓位置リセット",
+            variable=self.v_continue_restore_window,
+            command=self._on_continue_after_changed))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
         # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
         self.v_run_respawn = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="Runリスポーン",
-                        variable=self.v_run_respawn,
-                        command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Runリスポーン",
+            variable=self.v_run_respawn,
+            command=self._on_run_respawn_changed))
         # 霧看破の許可（ツール全体で1つ。既定は切る）。使えるインスタンスは README に
         self.v_fog_early_read = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="霧即時判定",
-                        variable=self.v_fog_early_read,
-                        command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="霧即時判定",
+            variable=self.v_fog_early_read,
+            command=self._on_fog_early_read_changed))
         # ToN Utils の続行の判断に従う（全窓共通・保存・既定 OFF。EB）
         self.v_follow_utils = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="Utilsの判断に従う",
-                        variable=self.v_follow_utils,
-                        command=self._on_follow_utils_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Utilsの判断に従う",
+            variable=self.v_follow_utils,
+            command=self._on_follow_utils_changed))
         # 2 枠目・3 枠目の Bloodthirsty の合図を待つ（全窓共通・保存・既定 ON）
         self.v_wait_bloodthirsty = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="Bloodthirsty を待つ",
-                        variable=self.v_wait_bloodthirsty,
-                        command=self._on_wait_bloodthirsty_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Bloodthirsty を待つ",
+            variable=self.v_wait_bloodthirsty,
+            command=self._on_wait_bloodthirsty_changed))
         # Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・保存・既定 OFF）
         self.v_murder_no_afk = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="Murderで AFK 回避しない",
-                        variable=self.v_murder_no_afk,
-                        command=self._on_murder_no_afk_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Murderで AFK 回避しない",
+            variable=self.v_murder_no_afk,
+            command=self._on_murder_no_afk_changed))
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
 
@@ -2685,6 +2701,7 @@ class App(tk.Tk):
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
         self._fit_settings_window()
+        self._layout_other_checks()     # 初めの並び（update_idletasks の後でないと幅が分からない）
 
     # ── 設定の窓 ──────────────────────────────────
     def _build_settings_window(self):
@@ -2722,16 +2739,38 @@ class App(tk.Tk):
         self._settings_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
 
     def _fit_settings_window(self):
-        """設定の窓の初めの大きさ: 幅は中身の求める幅（＋スクロールバー）、高さは中身か画面の 8 割の低い方"""
+        """設定の窓の初めの大きさ。幅は中身に合わせて 560px〜画面の 8 割、高さは 620px（画面の 8 割まで）。
+        折りたたみが閉じていると中身が低いので、高さは中身に合わせない（横に細長くなるため）"""
         win = self._settings_window
         try:
             win.update_idletasks()
+            screen_w, screen_h = win.winfo_screenwidth(), win.winfo_screenheight()
             width = self._settings_body.winfo_reqwidth() + SETTINGS_BAR_WIDTH
-            height = min(self._settings_body.winfo_reqheight(),
-                         int(win.winfo_screenheight() * SETTINGS_MAX_HEIGHT_RATIO))
+            width = max(SETTINGS_MIN_WIDTH, min(width, int(screen_w * SETTINGS_MAX_WIDTH_RATIO)))
+            height = min(SETTINGS_DEFAULT_HEIGHT, int(screen_h * SETTINGS_MAX_HEIGHT_RATIO))
             win.geometry(f"{width}x{height}")
         except tk.TclError:
             pass
+
+    def _layout_other_checks(self, _event=None):
+        """「その他」のチェックを、枠の幅に入る数だけ 1 段に並べる（入らなければ折り返す）。
+        列数が変わったときだけ並べ直す（毎回だと <Configure> がまた飛んでちらつく）"""
+        frame = self._other_check_frame
+        checks = self._other_checks
+        try:
+            width = frame.winfo_width()
+        except tk.TclError:
+            return
+        if width <= 1 or not checks:
+            return              # まだ置かれていない
+        cell = max(c.winfo_reqwidth() for c in checks) + OTHER_CHECK_GAP
+        columns = max(1, width // cell)
+        if columns == getattr(self, "_other_check_columns", None):
+            return              # 変わっていない
+        self._other_check_columns = columns
+        for i, check in enumerate(checks):
+            check.grid(row=i // columns, column=i % columns, sticky="w",
+                       padx=(0, OTHER_CHECK_GAP), pady=1)
 
     def _open_settings_window(self):
         """「⚙ 設定」: 隠してある窓を出して前に出す（二重に開かない）"""
