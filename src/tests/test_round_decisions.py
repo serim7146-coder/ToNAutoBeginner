@@ -462,6 +462,32 @@ class TestYakiimoTwilightOptIn(unittest.TestCase):
                              GroupRound.SKIP, moon)
 
 
+class TestIsFirstTimeOnlyMoon(unittest.TestCase):
+    """続行の表示が「初回のみ続行」になるラウンド（表示だけ。判定は decide）"""
+
+    HOSHIIMO = config.INSTANCE_HOSHIIMO
+    YAKIIMO = config.INSTANCE_YAKIIMO
+
+    def test_hoshiimo_every_moon_is_first_time_only(self):
+        for moon in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
+            self.assertTrue(GroupRound.is_first_time_only_moon(self.HOSHIIMO, moon), moon)
+
+    def test_yakiimo_blood_moon_is_first_time_only(self):
+        self.assertTrue(GroupRound.is_first_time_only_moon(self.YAKIIMO, "Blood Moon"))
+
+    def test_yakiimo_twilight_is_not(self):
+        self.assertFalse(GroupRound.is_first_time_only_moon(self.YAKIIMO, "Twilight"))
+
+    def test_always_continue_rounds_and_fog_are_not(self):
+        for itype in (self.HOSHIIMO, self.YAKIIMO):
+            for name in ("8 Pages", "Run", "Bloodbath EX", "Fog", "Fog (Alternate)", "Classic"):
+                self.assertFalse(GroupRound.is_first_time_only_moon(itype, name), (itype, name))
+
+    def test_not_a_group_instance_is_not(self):
+        for itype in (config.INSTANCE_PRIVATE, config.INSTANCE_PUBLIC):
+            self.assertFalse(GroupRound.is_first_time_only_moon(itype, "Solstice"), itype)
+
+
 class TestGroupMoonSkipWiring(unittest.TestCase):
     """LogMonitor から渡すのは moon だけ"""
 

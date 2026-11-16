@@ -1658,7 +1658,7 @@ class LogMonitor:
             st.is_continue_round = True
             st.open_special_continue = False     # グループの WANTED は普通の続行
             self._log(f"グループ判定: {st.round_type} "
-                      + ("【全続行 → 続行リストで続行】"
+                      + (f"【{self._all_continue_label()} → 続行リストで続行】"
                          if decision == GroupRound.CONTINUE_LISTED or self._is_all_continue_round() else "【プレイ】"))
             if not was_continue_round:
                 if not self._hands_free():
@@ -1677,11 +1677,17 @@ class LogMonitor:
             # 落としているが、張りっぱなしは全窓が止まるので念のため
             self._clear_stale_continue_round()
             if self.st.all_continue_early_seq != self.st.round_seq:     # テラー不明の時点で出した行を二度出さない
-                self._log(f"グループ判定: {self.st.round_type} 【全続行】")
+                self._log(f"グループ判定: {self.st.round_type} 【{self._all_continue_label()}】")
             self.st.all_continue_round = True     # 音量「全続行」（FG: 干し芋の Mystic Moon など）
             self._notify_phone(PhoneNotify.KIND_ALL_CONTINUE)
             return True
         return False
+
+    def _all_continue_label(self) -> str:
+        """グループの全続行の表示。1 回目だけ続行する moon は「初回のみ続行」"""
+        return ("初回のみ続行"
+                if GroupRound.is_first_time_only_moon(self.st.instance_type, self.st.round_type)
+                else "全続行")
 
     def _needs_host_list(self) -> bool:
         """主催リストが無いと判定してはいけない状態か。
@@ -2531,7 +2537,7 @@ class LogMonitor:
                     skip_moons={name for name in self.cfg.skip_rounds if name in GroupRound.MOONS},
                     continue_moons={name for name in self.cfg.continue_rounds if name in GroupRound.MOONS}):
                 return
-            text = f"グループ判定: {st.round_type} 【全続行】"
+            text = f"グループ判定: {st.round_type} 【{self._all_continue_label()}】"
         elif self._is_all_continue_round():
             text = f"ラウンド指定で続行: {st.round_type}"
         else:

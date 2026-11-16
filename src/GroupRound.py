@@ -65,6 +65,16 @@ def is_fog_alternate(killers_round_type: str) -> bool:
     return killers_round_type == FOG_ALTERNATE_ROUND_TYPE
 
 
+def is_first_time_only_moon(instance_type: str, round_type: str) -> bool:
+    """このラウンドの続行（CONTINUE）が「1 回目だけ」のものか（画面の文言を選ぶためだけに使う。
+    判定そのものは decide が決める）。moon のうち、焼き芋の YAKIIMO_OPT_IN_MOONS（Twilight。
+    指定があれば 2 回目以降も続行する）だけが外れる"""
+    if instance_type not in GROUP_INSTANCES or round_type not in MOONS:
+        return False
+    return not (instance_type == config.INSTANCE_YAKIIMO
+                and round_type in YAKIIMO_OPT_IN_MOONS)
+
+
 def decide(
     instance_type: str,
     round_type: str,
