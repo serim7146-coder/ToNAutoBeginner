@@ -1822,8 +1822,7 @@ class LogMonitor:
             return False
         if RoundDecision.is_open_special_round_target(
                 ids, st.round_type, st.open_special_round_wins,
-                self._cancel_afk(), self._after_unlock(), self._holds_plush(),
-                self._unlock_target()):
+                target=self._afk_target(), holds_plush=self._holds_plush()):
             return False        # 3クラ解放が勝つ。通常判定へ落とす
         if GroupRound.is_variant(ids):
             return False        # Variantは自爆しない。通常判定へ落とす
@@ -2948,11 +2947,9 @@ class LogMonitor:
             round_type = "Sabotage star"
         decision = RoundDecision.decide_killers(
             keep_on, ids, round_type,
-            st.open_special_round_wins, self._cancel_afk(),
-            bloodthirsty_variant=bloodthirsty,
-            after_unlock=self._after_unlock(), holds_plush=self._holds_plush(),
-            self_inserts_table_disabled=self._self_inserts_table_disabled(),
-            target=self._unlock_target())
+            st.open_special_round_wins, target=self._afk_target(),
+            bloodthirsty_variant=bloodthirsty, holds_plush=self._holds_plush(),
+            self_inserts_table_disabled=self._self_inserts_table_disabled())
         return ("list", decision.is_continue_round,
                 decision.is_open_special_round_target)
 
@@ -2974,22 +2971,28 @@ class LogMonitor:
             return "skip"
         return "open_special" if open_special else "continue"
 
-    def _after_unlock(self) -> bool:
-        """DTM/Waldo を3クラ解放（3勝）の後も続行する窓か"""
-        return bool(getattr(self.cfg, "cancel_afk_after_unlock", False))
+    def _afk_target(self) -> int:
+        """この窓の DTM/Waldo 続行の目標勝数（0=しない / 2 / 3 / 999=解放後も）"""
+        return int(getattr(self.cfg, "cancel_afk_wins", config.OPEN_SPECIAL_ROUND_TARGET_WINS))
 
     def _cancel_afk(self) -> bool:
-        """DTM/Waldo の続行が有効な窓か（「3クラまで」か「2クラまで」のどちらか）"""
-        return bool(self.cfg.cancel_afk or getattr(self.cfg, "cancel_afk_two", False))
+        """DTM/Waldo の続行が有効な窓か"""
+        return self._afk_target() > 0
 
     def _unlock_target(self) -> int:
-        """この窓の DTM/Waldo 続行の目標勝数（「2クラまで」なら 2、そうでなければ 3）"""
-        return RoundDecision.unlock_target(bool(getattr(self.cfg, "cancel_afk_two", False)))
+        """画面に出す「Nクラ」の N"""
+        return RoundDecision.shown_target(self._afk_target())
+
+    def _active_target(self) -> int:
+        """「まだ続行する時期か」を数えるときの目標。続行しない窓（0）は、今までどおり 3 として
+        数える（放置モードの自爆の理由を「3クラ済み」のままにするため）。
+        ここでしか使わない——判定の本筋は _afk_target() をそのまま使う"""
+        return self._afk_target() or config.OPEN_SPECIAL_ROUND_TARGET_WINS
 
     def _after_unlock_text(self, otherwise: str) -> str:
-        """3勝扱いになったときに出す続き（3クラ解放後も続行する窓なら、そう言う）"""
-        return ("3クラ解放後も続行の設定なので、DTM/Waldoは続けます" if self._after_unlock()
-                else otherwise)
+        """3勝扱いになったときに出す続き（解放後も続行する窓なら、そう言う）"""
+        return ("3クラ解放後も続行の設定なので、DTM/Waldoは続けます"
+                if self._afk_target() > config.OPEN_SPECIAL_ROUND_TARGET_WINS else otherwise)
 
     def _holds_plush(self) -> bool | None:
         """Guidance Plush を持っているか。番号が分からなければ None（Waldo は前と同じく続行）"""
@@ -3015,8 +3018,7 @@ class LogMonitor:
     def _hands_free_skip_reason(self, ids) -> str | None:
         """放置モードで即自爆するならその理由。DTM/Waldo は例外"""
         st = self.st
-        if not RoundDecision.open_special_active(st.open_special_round_wins,
-                                                 self._after_unlock(), self._unlock_target()):
+        if not RoundDecision.open_special_active(st.open_special_round_wins, self._active_target()):
             return f"放置モード({self._unlock_target()}クラ済み): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
         if not RoundDecision.open_special_round_type(st.round_type):
             return f"放置モード(複数体のラウンド): 即自爆 {format_terror_ids(ids)} / {st.round_type}"
@@ -3223,7 +3225,7 @@ class LogMonitor:
                 self._log("⏸ 続行ラウンド中 → ほかの窓のフリーズ開始")
             if (is_open_special_round_target and is_private
                     and RoundDecision.open_special_active(st.open_special_round_wins,
-                                                          self._after_unlock(), self._unlock_target())):
+                                                          self._afk_target())):
                 if not st.is_open_special_round_round:      # 判定が同じラウンドで 2 回通ってもループは 1 本
                     st.is_open_special_round_round = True
                     self._log(f"{self._unlock_target()}クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{self._unlock_target()}）")

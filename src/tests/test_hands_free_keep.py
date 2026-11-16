@@ -29,12 +29,10 @@ class _Base(unittest.TestCase):
         return mock
 
     def _monitor(self, round_type, ids, hands_free=True, wins=config.OPEN_SPECIAL_ROUND_TARGET_WINS,
-                 cancel_afk=False, plush=None, instance_type=config.INSTANCE_PRIVATE, item_id=0,
-                 cancel_afk_two=False):
+                 afk_wins=0, plush=None, instance_type=config.INSTANCE_PRIVATE, item_id=0):
         """既定は 3 クラ済み・「DTM/Waldo続行」OFF・続行リスト空・アイテム無し"""
         SharedState.set_hands_free(hands_free)
-        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", cancel_afk=cancel_afk,
-                           cancel_afk_two=cancel_afk_two)
+        cfg = WindowConfig(do_skip=True, voice_continue="continue.mp3", cancel_afk_wins=afk_wins)
         monitor = LogMonitor.LogMonitor(cfg, {}, lambda _m: None, window_idx=1)
         st = monitor.st
         st.instance_type = instance_type
@@ -122,7 +120,7 @@ class TestHandsFreeKeep(_Base):
     def test_plain_dtm_and_plain_waldo_stay_as_before_when_three_clears_are_done(self):
         for ids, plush in (([DTM], None), ([WALDO], True)):
             self.thread.reset_mock()
-            monitor = self._monitor("Classic", ids, plush=plush, cancel_afk=True, item_id=5)
+            monitor = self._monitor("Classic", ids, plush=plush, afk_wins=3, item_id=5)
             self.assertEqual(monitor._plan("Classic", ids, False)[0], "hands_free", ids)
             monitor._decide("Classic")
             self._assert_skipped(monitor)
@@ -133,7 +131,7 @@ class TestHandsFreeKeep(_Base):
             self.assertEqual(monitor._plan(rt, monitor.st.terror_ids, False)[0], "hands_free", rt)
 
     def test_plain_dtm_before_three_clears_takes_the_old_path(self):
-        monitor = self._monitor("Classic", [DTM], wins=0, cancel_afk=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=0, afk_wins=3, item_id=5)
         plan = monitor._plan("Classic", [DTM], False)
         self.assertEqual(plan, ("list", True, True), "is_open_special_round_target が True の続行")
         monitor._decide("Classic")
@@ -184,10 +182,10 @@ class TestHandsFreeKeep(_Base):
 
 
 class TestHandsFreeTwoClear(_Base):
-    """「DTM/Waldo続行 (2クラまで)」の窓の放置モード: 2 勝した窓は「2クラ済み」として以後すぐ自爆する"""
+    """「DTM/Waldo続行: 2クラまで」の窓の放置モード: 2 勝した窓は「2クラ済み」として以後すぐ自爆する"""
 
     def test_two_clear_window_at_two_wins_reports_and_suicides(self):
-        monitor = self._monitor("Classic", [DTM], wins=2, cancel_afk_two=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=2, afk_wins=2, item_id=5)
         plan = monitor._plan("Classic", [DTM], False)
         self.assertEqual(plan[0], "hands_free")
         self.assertTrue(plan[1].startswith("放置モード(2クラ済み): 即自爆"), plan[1])
@@ -197,46 +195,41 @@ class TestHandsFreeTwoClear(_Base):
 
     def test_two_clear_window_at_three_wins_also_reports_two(self):
         """数えるのは 3 まで続く。それでも言うのは窓の目標（2）"""
-        monitor = self._monitor("Classic", [DTM], wins=3, cancel_afk_two=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=3, afk_wins=2, item_id=5)
         self.assertTrue(monitor._plan("Classic", [DTM], False)[1].startswith("放置モード(2クラ済み)"))
 
     def test_two_clear_window_self_destructs_everything_after(self):
         for ids, plush in (([DTM], None), ([WALDO], True), ([OTHER], None)):
             self.thread.reset_mock()
-            monitor = self._monitor("Classic", ids, wins=2, plush=plush, cancel_afk_two=True, item_id=5)
+            monitor = self._monitor("Classic", ids, wins=2, plush=plush, afk_wins=2, item_id=5)
             monitor._decide("Classic")
             self._assert_skipped(monitor)
 
     def test_two_clear_window_below_two_takes_the_old_path(self):
-        monitor = self._monitor("Classic", [DTM], wins=1, cancel_afk_two=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=1, afk_wins=2, item_id=5)
         self.assertEqual(monitor._plan("Classic", [DTM], False), ("list", True, True))
         monitor._decide("Classic")
         loops = [a for n, a in self._started() if n == "do_open_special_round_loop"]
         self.assertEqual(loops, [()])
         self.assertTrue(monitor.st.open_special_continue)
 
-    def test_two_clear_window_with_both_checks_is_done_at_two(self):
-        monitor = self._monitor("Classic", [DTM], wins=2, cancel_afk=True, cancel_afk_two=True, item_id=5)
-        self.assertTrue(monitor._plan("Classic", [DTM], False)[1].startswith("放置モード(2クラ済み)"))
-
     def test_after_unlock_never_finishes(self):
-        monitor = self._monitor("Classic", [DTM], wins=3, cancel_afk_two=True, item_id=5)
-        monitor.cfg.cancel_afk_after_unlock = True
+        monitor = self._monitor("Classic", [DTM], wins=3, afk_wins=999, item_id=5)
         self.assertEqual(monitor._plan("Classic", [DTM], False), ("list", True, True))
 
     def test_three_clear_only_window_at_two_wins_is_as_before(self):
-        monitor = self._monitor("Classic", [DTM], wins=2, cancel_afk=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=2, afk_wins=3, item_id=5)
         self.assertEqual(monitor._plan("Classic", [DTM], False), ("list", True, True))
         monitor._decide("Classic")
         self.assertTrue(monitor.st.open_special_continue)
         self.assertFalse(any("クラ済み" in m for m in monitor.logs))
 
     def test_three_clear_only_window_at_three_wins_still_says_three(self):
-        monitor = self._monitor("Classic", [DTM], wins=3, cancel_afk=True, item_id=5)
+        monitor = self._monitor("Classic", [DTM], wins=3, afk_wins=3, item_id=5)
         self.assertTrue(monitor._plan("Classic", [DTM], False)[1].startswith("放置モード(3クラ済み): 即自爆"))
 
     def test_the_glorbo_keep_ignores_the_two_clear_target(self):
-        monitor = self._monitor("Punished", [config.GLORBO_ID], wins=2, cancel_afk_two=True)
+        monitor = self._monitor("Punished", [config.GLORBO_ID], wins=2, afk_wins=2)
         self.assertEqual(monitor._plan("Punished", monitor.st.terror_ids, False),
                          ("hands_free_keep", "Glorbo"))
 

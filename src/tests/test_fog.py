@@ -1581,9 +1581,9 @@ class TestEnrageFogAlternate(unittest.TestCase):
         LOG_TO_TNL がどちらも `Fog/霧` へ寄せているので結論は同じになる"""
         keep_on = {"Fog/霧": {own(i) for i in (137, 154, 163, 164, 168, 192, 315, 316)}}
         for tid in (167, 157, 151, 159, 137, 161, 153, 142, 162, 156, 160):
-            plain = RoundDecision.decide_killers(keep_on, [tid], "Fog", 0, True)
+            plain = RoundDecision.decide_killers(keep_on, [tid], "Fog", 0, 3)
             alt = RoundDecision.decide_killers(keep_on, [tid], self.FOG_ALT,
-                                               0, True)
+                                               0, 3)
 
             self.assertEqual(plain.is_continue_round, alt.is_continue_round, tid)
 

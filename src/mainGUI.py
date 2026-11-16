@@ -142,13 +142,18 @@ def ctrl_held() -> bool:
 BROADCAST_CHECK_LABELS = {
     "auto_begin": "自動Begin",
     "do_skip": "自動自爆",
-    "cancel_afk_two": "DTM/Waldo続行 (2クラまで)",
-    "cancel_afk": "DTM/Waldo続行 (3クラまで)",
-    "cancel_afk_after_unlock": "3クラ後もDTM/Waldo続行",
     "announce_intermission": "Intermissionアナウンス",
     "freeze_8pages": "速度検知 8 Pages",
     "freeze_punish": "速度検知 Punished",
 }
+# DTM/Waldo 続行の 4 択（窓ごと）。値はそのまま目標勝数
+AFK_WINS_CHOICES = ((0, "しない"),
+                    (config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS, "2クラまで"),
+                    (config.OPEN_SPECIAL_ROUND_TARGET_WINS, "3クラまで"),
+                    (config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS, "3クラ後も"))
+AFK_WINS_LABELS = dict(AFK_WINS_CHOICES)
+AFK_WINS_DEFAULT = config.OPEN_SPECIAL_ROUND_TARGET_WINS        # 今までの既定（cancel_afk=True）と同じ
+BROADCAST_AFK_WINS_LABEL = "DTM/Waldo続行"                      # Ctrl で写したときのログの名前
 BROADCAST_ROUND_LABELS = {"skip": "全自爆", "continue": "全続行"}
 BROADCAST_CHOICE_LABELS = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
 
@@ -509,8 +514,8 @@ class WindowTab(ttk.Frame):
     def _watch_settings(self):
         """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
         if self._on_settings_changed is not None:
-            for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk_two, self.v_cancel_afk,
-                        self.v_cancel_afk_after_unlock, self.v_announce_intermission,
+            for var in (self.v_auto_begin, self.v_do_skip, self.v_afk_wins,
+                        self.v_announce_intermission,
                         *self.v_skip_rounds.values(), *self.v_continue_rounds.values(),
                         *self._freeze_vars()):
                 var.trace_add("write", lambda *_a: self._on_settings_changed(self))
@@ -540,10 +545,37 @@ class WindowTab(ttk.Frame):
 
     def _checks(self) -> dict:
         return {"auto_begin": self.v_auto_begin, "do_skip": self.v_do_skip,
-                "cancel_afk_two": self.v_cancel_afk_two,
-                "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
                 "announce_intermission": self.v_announce_intermission,
                 "freeze_8pages": self.v_freeze_8pages, "freeze_punish": self.v_freeze_punish}
+
+    def _afk_wins(self) -> int:
+        """この窓の DTM/Waldo 続行の目標勝数（知らない値が入っていたら既定）"""
+        value = self.v_afk_wins.get()
+        return value if value in AFK_WINS_LABELS else AFK_WINS_DEFAULT
+
+    def set_afk_wins(self, value: int):
+        """全窓へ写された（または控えから戻した）目標勝数を書く"""
+        if value in AFK_WINS_LABELS:
+            self.v_afk_wins.set(value)
+
+    @staticmethod
+    def _afk_wins_from_saved(saved: dict) -> int:
+        """控えから 4 択を決める。新しいキーがあればそれ。無ければ古い真偽 3 つから。
+        古い優先順（判定と同じ）: 「後も」が入っていれば無限、「2クラ」が入っていれば 2、
+        「3クラ」だけなら 3、どれも無ければ 0"""
+        if "cancel_afk_wins" in saved:
+            value = int(saved["cancel_afk_wins"])
+            return value if value in AFK_WINS_LABELS else AFK_WINS_DEFAULT
+        two = bool(saved.get("cancel_afk_two", False))
+        three = bool(saved.get("cancel_afk", False))
+        after = bool(saved.get("cancel_afk_after_unlock", False))
+        if after and (two or three):
+            return config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS
+        if two:
+            return config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS
+        if three:
+            return config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        return 0
 
     def set_check(self, key: str, value: bool):
         """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）。
@@ -601,9 +633,7 @@ class WindowTab(ttk.Frame):
         return {
             "auto_begin": self.v_auto_begin.get(),
             "do_skip": self.v_do_skip.get(),
-            "cancel_afk_two": self.v_cancel_afk_two.get(),
-            "cancel_afk": self.v_cancel_afk.get(),
-            "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
+            "cancel_afk_wins": self._afk_wins(),
             "announce_intermission": self.v_announce_intermission.get(),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
@@ -628,13 +658,11 @@ class WindowTab(ttk.Frame):
         self._freeze_loading = True
         try:
             for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
-                             ("cancel_afk_two", self.v_cancel_afk_two),
-                             ("cancel_afk", self.v_cancel_afk),
-                             ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
                              ("announce_intermission", self.v_announce_intermission),
                              ("freeze_8pages", self.v_freeze_8pages), ("freeze_punish", self.v_freeze_punish)):
-                # 古い控えにはこのキーが無い（「2クラまで」は OFF として戻す）
-                var.set(saved.get(key, False) if key == "cancel_afk_two" else saved[key])
+                var.set(saved[key])
+            # 古い控え（真偽 3 つ）でも戻せる
+            self.set_afk_wins(self._afk_wins_from_saved(saved))
             for key, vars_ in (("skip_rounds", self.v_skip_rounds),
                                ("continue_rounds", self.v_continue_rounds),
                                ("freeze_rounds", self.v_freeze_rounds)):
@@ -697,20 +725,17 @@ class WindowTab(ttk.Frame):
         cf.pack(fill="x", padx=10)
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
-        self.v_cancel_afk_two = tk.BooleanVar(value=False)
-        self.v_cancel_afk  = tk.BooleanVar(value=True)
-        self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
+        self.v_afk_wins = tk.IntVar(value=AFK_WINS_DEFAULT)
         self.v_announce_intermission = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin,
                         command=lambda k="auto_begin", v=self.v_auto_begin: self._changed(k, v)).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip,
                         command=lambda k="do_skip", v=self.v_do_skip: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="DTM/Waldo続行 (2クラまで)", variable=self.v_cancel_afk_two,
-                        command=lambda k="cancel_afk_two", v=self.v_cancel_afk_two: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk,
-                        command=lambda k="cancel_afk", v=self.v_cancel_afk: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock,
-                        command=lambda k="cancel_afk_after_unlock", v=self.v_cancel_afk_after_unlock: self._changed(k, v)).pack(side="left", padx=(4, 0))
+        ttk.Label(cf, text="DTM/Waldo続行:").pack(side="left", padx=(12, 0))
+        for value, text in AFK_WINS_CHOICES:
+            ttk.Radiobutton(cf, text=text, variable=self.v_afk_wins, value=value,
+                            command=lambda v=value: self._broadcast_if_ctrl("afk_wins", None, v)
+                            ).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission,
                         command=lambda k="announce_intermission", v=self.v_announce_intermission: self._changed(k, v)).pack(side="left", padx=(12, 0))
 
@@ -3962,12 +3987,16 @@ class App(tk.Tk):
 
     def _broadcast_tab_setting(self, tab, kind: str, key, value):
         """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
-        kind は "check"（key=設定のキー）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
+        kind は "check"（key=設定のキー）・"afk_wins"（value=目標勝数）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
         tabs = list(getattr(self, "tabs", []))
         if kind == "check":
             for t in tabs:
                 t.set_check(key, value)
             what = f"「{BROADCAST_CHECK_LABELS.get(key, key)}」を {'ON' if value else 'OFF'} にして"
+        elif kind == "afk_wins":
+            for t in tabs:
+                t.set_afk_wins(value)
+            what = f"「{BROADCAST_AFK_WINS_LABEL}」を「{AFK_WINS_LABELS.get(value, value)}」に"
         elif kind == "round":
             which, name = key
             for t in tabs:
@@ -4394,9 +4423,8 @@ class App(tk.Tk):
                     f"[環境] 開始 窓{mon.window_idx} hwnd={int(cfg.hwnd):#x}"
                     f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
                     f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
-                    f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
-                    f"（2クラまで={getattr(cfg, 'cancel_afk_two', False)}）"
-                    f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
+                    f" 自爆={cfg.do_skip}"
+                    f" DTM/Waldo続行={AFK_WINS_LABELS.get(cfg.cancel_afk_wins, cfg.cancel_afk_wins)}"
                     f" Intermission={cfg.announce_intermission}"
                     f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}"
                     f" 8Pagesフリーズ={cfg.freeze_8pages} Punishedフリーズ={cfg.freeze_punish}"

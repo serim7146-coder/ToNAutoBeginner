@@ -216,7 +216,7 @@ class TestVolumeTargetsInRounds(unittest.TestCase):
         self.addCleanup(SharedState.set_list_source, None)
 
     def _monitor(self, keep_on=None):
-        cfg = WindowConfig(do_skip=True, cancel_afk=True, voice_continue="continue.mp3")
+        cfg = WindowConfig(do_skip=True, cancel_afk_wins=3, voice_continue="continue.mp3")
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None, window_idx=1)
         monitor.logger = lambda _m: None
         monitor.st.instance_type = config.INSTANCE_PRIVATE

@@ -1337,7 +1337,7 @@ class TestSettingsLive(unittest.TestCase):
     def _live_app(self, running=True):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app._running = running
-        self.cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk=True,
+        self.cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk_wins=3,
                                   announce_intermission=False) for _ in range(2)]
         app.monitors = []
         for idx, cfg in enumerate(self.cfgs):
@@ -1360,14 +1360,14 @@ class TestSettingsLive(unittest.TestCase):
 
         tab.v_auto_begin.set(False)
         tab.v_do_skip.set(False)
-        tab.v_cancel_afk.set(False)
+        tab.v_afk_wins.set(0)
         tab.v_announce_intermission.set(True)
         tab.v_skip_rounds["Classic"].set(True)
         tab.v_continue_rounds["Fog"].set(True)
 
         cfg = self.cfgs[1]
-        self.assertEqual((cfg.auto_begin, cfg.do_skip, cfg.cancel_afk, cfg.announce_intermission),
-                         (False, False, False, True))
+        self.assertEqual((cfg.auto_begin, cfg.do_skip, cfg.cancel_afk_wins, cfg.announce_intermission),
+                         (False, False, 0, True))
         self.assertEqual(cfg.skip_rounds, {"Classic"})
         self.assertEqual(cfg.continue_rounds, {"Fog"})
         self.assertEqual(self.cfgs[0], before, "ほかの窓は変わらない")
@@ -1556,7 +1556,7 @@ class TestGuiTweaks(unittest.TestCase):
         second = self.app.tabs[1]
         second.v_do_skip.set(False)
         second.v_auto_begin.set(False)
-        second.v_cancel_afk_after_unlock.set(True)
+        second.v_afk_wins.set(config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS)
         second.v_skip_rounds["Cracked"].set(True)
         second.v_log.set("C:/logs/output_log_2.txt")
         second.set_hwnd_choices([0x2222], selected_hwnd=0x2222)
@@ -1568,7 +1568,7 @@ class TestGuiTweaks(unittest.TestCase):
         tab = self.app.tabs[1]
         self.assertFalse(tab.v_do_skip.get())
         self.assertFalse(tab.v_auto_begin.get())
-        self.assertTrue(tab.v_cancel_afk_after_unlock.get())
+        self.assertEqual(tab.v_afk_wins.get(), config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS)
         self.assertEqual(tab.live_settings()["skip_rounds"], {"Cracked"})
         self.assertEqual(tab.v_log.get(), "C:/logs/output_log_2.txt")
         self.assertEqual(tab._get_selected_hwnd(), 0x2222)
@@ -1837,13 +1837,13 @@ class TestStartWithoutTnl(unittest.TestCase):
         """tnlが空なら、どのテラーでも続行にならない"""
         for round_type in ("Classic", "Alternate", "Midnight", "Double Trouble"):
             decision = RoundDecision.decide_killers(
-                {}, [42, 7, 3], round_type, wins=0, cancel_afk=False)
+                {}, [42, 7, 3], round_type, wins=0, target=0)
             self.assertFalse(decision.is_continue_round, round_type)
 
     def test_tnl_entries_still_continue(self):
         """読み込んだ場合は従来どおり続行する（止めすぎていないことの確認）"""
         decision = RoundDecision.decide_killers(
-            {"Classic/クラシック": {42}}, [42], "Classic", wins=0, cancel_afk=False)
+            {"Classic/クラシック": {42}}, [42], "Classic", wins=0, target=0)
 
         self.assertTrue(decision.is_continue_round)
 
@@ -3612,11 +3612,11 @@ class TestGuiClearsRoundChecks(unittest.TestCase):
         mainGUI.App._clear_tab_round_settings(app, 1)      # 落ちないこと
 
 
-class TestCancelAfkTwoCheck(unittest.TestCase):
-    """窓ごとのチェック「DTM/Waldo続行 (2クラまで)」: 位置・既定・控え・監視への受け渡し"""
+class TestAfkWinsChoice(unittest.TestCase):
+    """窓ごとの 4 択「DTM/Waldo続行:」（しない / 2クラまで / 3クラまで / 3クラ後も）:
+    位置・既定・控え・監視への受け渡し"""
 
-    TWO = "DTM/Waldo続行 (2クラまで)"
-    THREE = "DTM/Waldo続行 (3クラまで)"
+    CHOICES = [(0, "しない"), (2, "2クラまで"), (3, "3クラまで"), (999, "3クラ後も")]
 
     def setUp(self):
         self.root = tk.Tk()
@@ -3627,77 +3627,121 @@ class TestCancelAfkTwoCheck(unittest.TestCase):
         return mainGUI.WindowTab(self.root, 1, **kwargs)
 
     @staticmethod
-    def _buttons(tab):
-        def walk(widget):
-            for child in widget.winfo_children():
-                yield child
-                yield from walk(child)
-        return [w for w in walk(tab) if isinstance(w, ttk.Checkbutton)]
+    def _walk(widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from TestAfkWinsChoice._walk(child)
 
-    def test_it_sits_directly_before_the_three_clear_check_and_defaults_to_off(self):
+    def _radio(self, tab, text):
+        return [w for w in self._walk(tab) if isinstance(w, ttk.Radiobutton) and w.cget("text") == text][0]
+
+    def test_the_choices_table_is_what_the_spec_says(self):
+        self.assertEqual(list(mainGUI.AFK_WINS_CHOICES), self.CHOICES)
+        self.assertEqual(mainGUI.AFK_WINS_DEFAULT, 3)
+
+    def test_four_radios_in_one_row_after_the_label_and_no_old_checks(self):
         tab = self._tab()
-        buttons = self._buttons(tab)
-        texts = [b.cget("text") for b in buttons]
-        self.assertEqual(texts.count(self.TWO), 1)
-        two = buttons[texts.index(self.TWO)]
-        three = buttons[texts.index(self.THREE)]
-        row = two.master
-        self.assertIs(three.master, row)
+        radios = [w for w in self._walk(tab) if isinstance(w, ttk.Radiobutton)
+                  and w.cget("text") in [t for _v, t in self.CHOICES]]
+        self.assertEqual([r.cget("text") for r in radios], [t for _v, t in self.CHOICES])
+        row = radios[0].master
+        self.assertTrue(all(r.master is row for r in radios))
         siblings = row.winfo_children()
-        self.assertEqual(siblings.index(three), siblings.index(two) + 1)
-        self.assertFalse(tab.v_cancel_afk_two.get())
-        self.assertTrue(tab.v_cancel_afk.get(), "3クラまでの既定は今までどおり ON")
-        self.assertEqual(tab.live_settings()["cancel_afk_two"], False)
+        label = [w for w in siblings if isinstance(w, ttk.Label) and w.cget("text") == "DTM/Waldo続行:"]
+        self.assertEqual(len(label), 1)
+        self.assertEqual(siblings.index(radios[0]), siblings.index(label[0]) + 1)
+        checks = [w.cget("text") for w in self._walk(tab) if isinstance(w, ttk.Checkbutton)]
+        self.assertFalse([t for t in checks if "DTM/Waldo" in str(t) or "クラ" in str(t)], checks)
+
+    def test_the_default_is_three_and_live_settings_says_so(self):
+        tab = self._tab()
+        self.assertEqual(tab.v_afk_wins.get(), 3)
+        self.assertEqual(tab.live_settings()["cancel_afk_wins"], 3)
+        for old in ("cancel_afk", "cancel_afk_two", "cancel_afk_after_unlock"):
+            self.assertNotIn(old, tab.live_settings())
+
+    def test_each_choice_gives_its_number_to_live_settings(self):
+        tab = self._tab()
+        for value, text in self.CHOICES:
+            self._radio(tab, text).invoke()
+            self.assertEqual(tab.live_settings()["cancel_afk_wins"], value, text)
+
+    def test_an_unknown_value_reads_as_the_default(self):
+        tab = self._tab()
+        tab.v_afk_wins.set(7)
+        self.assertEqual(tab._afk_wins(), 3)
+        self.assertEqual(tab.live_settings()["cancel_afk_wins"], 3)
+
+    def test_set_afk_wins_writes_it_and_drops_an_unknown_value(self):
+        tab = self._tab()
+        tab.set_afk_wins(2)
+        self.assertEqual(tab.v_afk_wins.get(), 2)
+        tab.set_afk_wins(7)
+        self.assertEqual(tab.v_afk_wins.get(), 2)
 
     def test_snapshot_and_restore_round_trip(self):
         tab = self._tab()
-        tab.v_cancel_afk_two.set(True)
-        tab.v_cancel_afk.set(False)
-        saved = tab.snapshot()
-        self.assertIs(saved["cancel_afk_two"], True)
-        other = self._tab()
-        other.restore(saved)
-        self.assertTrue(other.v_cancel_afk_two.get())
-        self.assertFalse(other.v_cancel_afk.get())
-        saved["cancel_afk_two"] = False
-        other.restore(saved)
-        self.assertFalse(other.v_cancel_afk_two.get())
+        for value, _text in self.CHOICES:
+            tab.v_afk_wins.set(value)
+            saved = tab.snapshot()
+            self.assertEqual(saved["cancel_afk_wins"], value)
+            other = self._tab()
+            other.restore(saved)
+            self.assertEqual(other.v_afk_wins.get(), value)
 
-    def test_an_old_snapshot_without_the_key_loads_off(self):
+    def test_the_old_flags_in_a_saved_state_map_to_a_number(self):
+        """古い控え（真偽 3 つ）: 後も（と 2クラ／3クラのどちらか）が入っていれば 999、2クラなら 2、
+        3クラだけなら 3、どれも無ければ 0（旧 8 通りの実際の動きと同じ）"""
+        cases = {
+            (False, False, False): 0,
+            (False, False, True): 0,       # 黙った失敗（後もだけでは続行しなかった）は、しないのまま
+            (False, True, False): 3,
+            (False, True, True): 999,
+            (True, False, False): 2,
+            (True, False, True): 999,
+            (True, True, False): 2,
+            (True, True, True): 999,
+        }
+        for (two, three, after), expected in cases.items():
+            saved = {"cancel_afk_two": two, "cancel_afk": three, "cancel_afk_after_unlock": after}
+            self.assertEqual(mainGUI.WindowTab._afk_wins_from_saved(saved), expected, (two, three, after))
+
+    def test_the_new_key_wins_over_the_old_flags_and_unknown_numbers_fall_back(self):
+        from_saved = mainGUI.WindowTab._afk_wins_from_saved
+        for value, _text in self.CHOICES:
+            self.assertEqual(from_saved({"cancel_afk_wins": value, "cancel_afk": True}), value)
+        self.assertEqual(from_saved({"cancel_afk_wins": 7}), 3)
+
+    def test_an_old_snapshot_with_only_the_flags_loads_without_error(self):
         tab = self._tab()
-        tab.v_cancel_afk_two.set(True)
         old = tab.snapshot()
-        del old["cancel_afk_two"]
+        del old["cancel_afk_wins"]
+        old.update({"cancel_afk_two": True, "cancel_afk": True, "cancel_afk_after_unlock": False})
         tab.restore(old)                                  # 落ちない
-        self.assertFalse(tab.v_cancel_afk_two.get())
+        self.assertEqual(tab.v_afk_wins.get(), 2)
 
-    def test_the_label_is_in_the_broadcast_table_before_the_three_clear_label(self):
+    def test_the_old_labels_are_gone_from_the_broadcast_table(self):
         labels = mainGUI.BROADCAST_CHECK_LABELS
-        self.assertEqual(labels["cancel_afk_two"], self.TWO)
-        keys = list(labels)
-        self.assertEqual(keys.index("cancel_afk"), keys.index("cancel_afk_two") + 1)
+        for old in ("cancel_afk_two", "cancel_afk", "cancel_afk_after_unlock"):
+            self.assertNotIn(old, labels)
         self.assertEqual(set(labels), set(self._tab()._checks()))
-
-    def test_set_check_writes_it(self):
-        tab = self._tab()
-        tab.set_check("cancel_afk_two", True)
-        self.assertTrue(tab.v_cancel_afk_two.get())
 
     def test_it_reaches_the_window_config(self):
         tab = self._tab()
-        tab.v_cancel_afk_two.set(True)
+        tab.v_afk_wins.set(2)
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as log:
             pass
         self.addCleanup(os.unlink, log.name)
         tab.v_log.set(log.name)
         cfg, error = tab.get_config()
         self.assertIsNone(error)
-        self.assertTrue(cfg.cancel_afk_two)
-        tab.v_cancel_afk_two.set(False)
+        self.assertEqual(cfg.cancel_afk_wins, 2)
+        tab.v_afk_wins.set(0)
         cfg, _error = tab.get_config()
-        self.assertFalse(cfg.cancel_afk_two)
+        self.assertEqual(cfg.cancel_afk_wins, 0)
 
     def test_it_reaches_a_running_monitor(self):
+        """_watch_settings に v_afk_wins が入っていないと、動作中に選び直しても届かない（静かな失敗）"""
         app = type("FakeApp", (), {})()
         app._running = True
         cfg = WindowConfig()
@@ -3706,19 +3750,18 @@ class TestCancelAfkTwoCheck(unittest.TestCase):
         monitor.cfg = cfg
         app.monitors = [monitor]
         tab = self._tab(on_settings_changed=lambda t: mainGUI.App._apply_tab_settings_live(app, t))
-        self.assertFalse(cfg.cancel_afk_two)
-        tab.v_cancel_afk_two.set(True)
-        self.assertTrue(cfg.cancel_afk_two)
-        tab.v_cancel_afk_two.set(False)
-        self.assertFalse(cfg.cancel_afk_two)
+        self.assertEqual(cfg.cancel_afk_wins, 3)
+        for value, _text in self.CHOICES:
+            tab.v_afk_wins.set(value)
+            self.assertEqual(cfg.cancel_afk_wins, value)
 
     def test_the_debug_start_line_names_it(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")
-        self.assertIn("2クラまで={getattr(cfg, 'cancel_afk_two', False)}", src)
+        self.assertIn("DTM/Waldo続行={AFK_WINS_LABELS.get(cfg.cancel_afk_wins, cfg.cancel_afk_wins)}", src)
 
 
-class TestCancelAfkTwoKeptOnRebuild(unittest.TestCase):
-    """窓数を変えてタブを作り直しても、「DTM/Waldo続行 (2クラまで)」は引き継ぐ"""
+class TestAfkWinsKeptOnRebuild(unittest.TestCase):
+    """窓数を変えてタブを作り直しても、「DTM/Waldo続行」の選択は引き継ぐ"""
 
     @classmethod
     def setUpClass(cls):
@@ -3735,8 +3778,8 @@ class TestCancelAfkTwoKeptOnRebuild(unittest.TestCase):
         self.addCleanup(setattr, self.app, "_tab_memory", {})
         self.app._tab_memory = {}
         self.app._rebuild_tabs(2)
-        self.app.tabs[1].v_cancel_afk_two.set(True)
+        self.app.tabs[1].v_afk_wins.set(2)
         self.app._rebuild_tabs(3)
         self.app._rebuild_tabs(2)
-        self.assertTrue(self.app.tabs[1].v_cancel_afk_two.get())
-        self.assertFalse(self.app.tabs[0].v_cancel_afk_two.get())
+        self.assertEqual(self.app.tabs[1].v_afk_wins.get(), 2)
+        self.assertEqual(self.app.tabs[0].v_afk_wins.get(), 3)

@@ -10,11 +10,8 @@ class WindowConfig:
     active: bool = True
     auto_begin: bool = True
     do_skip: bool = True
-    cancel_afk: bool = True
-    # DTM/Waldo を2クラ（2勝）まで続行する。これだけでも続行は有効。3クラまでより優先、3クラ後もには負ける
-    cancel_afk_two: bool = False
-    # DTM/Waldo を3クラ解放（3勝）の後も続行する
-    cancel_afk_after_unlock: bool = False
+    # DTM/Waldo 続行の目標勝数。0=続行しない / 2 / 3 / OPEN_SPECIAL_ROUND_UNLIMITED_WINS=解放後も
+    cancel_afk_wins: int = 3
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     # VRChatが値を送ってくるポート。0なら従来どおり osc_port+1 を使う
     # （--osc= の送信ポートは受信+1とは限らない）

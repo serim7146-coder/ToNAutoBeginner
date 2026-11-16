@@ -1092,9 +1092,9 @@ class TestSkipRoundsByType(unittest.TestCase):
         SharedState.set_hands_free(False)
 
     def _monitor(self, *, skip_rounds=("Classic",), do_skip=True,
-                 cancel_afk=True, keep_on=None,
+                 afk_wins=3, keep_on=None,
                  instance_type=config.INSTANCE_PRIVATE):
-        cfg = WindowConfig(do_skip=do_skip, cancel_afk=cancel_afk,
+        cfg = WindowConfig(do_skip=do_skip, cancel_afk_wins=afk_wins,
                            voice_continue="continue.mp3",
                            skip_rounds=set(skip_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
@@ -1283,14 +1283,14 @@ class TestSkipRoundsByType(unittest.TestCase):
                          config.OPEN_SPECIAL_ROUND_TARGET_WINS)
 
     def test_nothing_is_said_when_the_dtm_waldo_continue_is_off(self):
-        monitor = self._monitor(cancel_afk=False)
+        monitor = self._monitor(afk_wins=0)
 
         self.assertEqual(self._special_round(monitor, "Fog"), [])
         self.assertEqual(monitor.st.open_special_round_wins,
                          config.OPEN_SPECIAL_ROUND_TARGET_WINS, "3勝扱いにはなる")
 
     def test_the_skip_applies_when_cancel_afk_is_off(self):
-        monitor = self._monitor(cancel_afk=False)
+        monitor = self._monitor(afk_wins=0)
 
         started = self._killers(monitor, [self.DTM])
 

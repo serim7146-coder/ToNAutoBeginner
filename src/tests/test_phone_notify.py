@@ -344,7 +344,7 @@ class _Rounds(unittest.TestCase):
         self.sent.append((topic, title, message))
 
     def monitor(self, keep_on=None, continue_rounds=(), instance=config.INSTANCE_PRIVATE):
-        cfg = WindowConfig(do_skip=True, cancel_afk=True, voice_continue="continue.mp3",
+        cfg = WindowConfig(do_skip=True, cancel_afk_wins=3, voice_continue="continue.mp3",
                            continue_rounds=set(continue_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, self.logs.append, window_idx=2)
         monitor.st.instance_type = instance
