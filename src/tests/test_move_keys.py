@@ -537,6 +537,7 @@ class TestKeyScreens(_ui_tidy._AppCase):
         super().setUp()
         for target in TARGETS:
             self.app._move_key_var(target).set("")
+        self.app._refresh_move_key_labels()     # 行は起動時から 1 つを使い回すので、表示も合わせる
         for target, kwargs in ((mainGUI.threading, {"Thread": RunNow}),
                                (self.app, {"after": lambda _ms, fn, *a: fn(*a)})):
             for name, value in kwargs.items():
@@ -552,12 +553,10 @@ class TestKeyScreens(_ui_tidy._AppCase):
         self.addCleanup(self.app._refresh_move_key_labels)
 
     def _capture(self, target, key):
-        self._dialog()
         with patch.object(HotKey, "capture", return_value=key):
             getattr(self.app, mainGUI.App.KEY_BUTTONS[target]["capture"]).invoke()
 
     def _clear(self, target):
-        self._dialog()
         getattr(self.app, mainGUI.App.KEY_BUTTONS[target]["clear"]).invoke()
 
     def _moves(self):
@@ -565,7 +564,6 @@ class TestKeyScreens(_ui_tidy._AppCase):
 
     # ── 画面 ──────────────────────────────
     def test_the_dialog_has_four_rows_below_the_chase_rows(self):
-        self._dialog()
         grid = self.app.lbl_start_key.master
         labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
                         for w in grid.grid_slaves() if isinstance(w, ttk.Label))

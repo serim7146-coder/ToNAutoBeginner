@@ -1,4 +1,4 @@
-"""画面の整理（DV・DV2）: 開始・停止を1つのボタン／キーの設定を「⌨ キーバインド」の画面へ／フリーズを1つの枠へ。
+"""画面の整理（DV・DV2）: 開始・停止を1つのボタン／キーの設定を設定の窓の「キーバインド」へ／フリーズを1つの枠へ。
 本物の Tk で App を1つ立てて見る（本物のキー・フック・窓には触らない）"""
 from tests.support import *  # noqa: F401,F403
 
@@ -29,6 +29,11 @@ class _AppCase(unittest.TestCase):
         self.app.v_suicide_cancel_key.set(config.SUICIDE_CANCEL_KEY)
         self.app.v_chase_cw_key.set(config.CHASE_CW_KEY)
         self.app.v_chase_ccw_key.set(config.CHASE_CCW_KEY)
+        # キーバインドの行は起動時から 1 つを使い回すので、表示も変数に合わせる
+        self.app._refresh_start_key_label()
+        self.app._refresh_emergency_key_label()
+        self.app._refresh_suicide_cancel_key_label()
+        self.app._refresh_chase_key_labels()
         self.app.logs = []
         p = patch.object(mainGUI.App, "_log", lambda _s, m: self.app.logs.append(m))
         p.start()
@@ -36,18 +41,7 @@ class _AppCase(unittest.TestCase):
         p = patch.object(self.app, "_schedule_settings_save")
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._close_dialog)
         self.addCleanup(SharedState.set_chase_enabled, True)
-
-    def _close_dialog(self):
-        dialog = getattr(self.app, "_keybind_dialog", None)
-        if dialog is not None and dialog.winfo_exists():
-            dialog.destroy()
-
-    def _dialog(self):
-        self.app._open_keybind_dialog()
-        self.app._keybind_dialog.withdraw()
-        return self.app._keybind_dialog
 
 
 class TestStartStopButton(_AppCase):
@@ -217,13 +211,12 @@ class TestKeybindDialog(_AppCase):
             self.app._begin_capture_key(target)
 
     def test_the_main_screen_has_no_key_buttons(self):
-        texts = [w.cget("text") for w in _all_widgets(self.app)
-                 if isinstance(w, (tk.Button, ttk.Button))]
-        for text in ("キーを押して設定", "解除", "変更"):
+        main = [w for w in _all_widgets(self.app) if w.winfo_toplevel() is self.app]   # 設定の窓は含めない
+        texts = [w.cget("text") for w in main if isinstance(w, (tk.Button, ttk.Button))]
+        for text in ("キーを押して設定", "解除", "変更", "⌨ キーバインド"):
             self.assertNotIn(text, texts)
-        self.assertEqual(texts.count("⌨ キーバインド"), 1)
         row = self.app.btn_start_stop.master
-        self.assertIn("⌨ キーバインド", [w.cget("text") for w in row.pack_slaves()])
+        self.assertNotIn("⌨ キーバインド", [w.cget("text") for w in row.pack_slaves()])
         self.assertEqual(row.pack_slaves()[-1].cget("text"), "報告", "報告は行の最後のまま")
 
     def test_the_main_screen_shows_the_keys_in_one_line(self):
@@ -232,19 +225,19 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.lbl_keys.cget("text"),
                          "マクロ開始: 未設定   停止: Ctrl+P   自爆キャンセル: ^   チェイス: F1/F2   移動: 未設定")
 
-    def test_the_button_opens_the_dialog_once(self):
-        button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
-                      if w.cget("text") == "⌨ キーバインド")
-        button.invoke()
-        dialog = self.app._keybind_dialog
-        dialog.withdraw()
-        self.assertEqual(dialog.title(), "キーバインド")
-        button.invoke()
-        self.assertIs(self.app._keybind_dialog, dialog, "開いていれば同じ画面")
+    def test_the_keybind_fold_is_in_the_settings_window_once_and_closed(self):
+        """メイン画面のボタンは無い。設定の窓の中に折りたたみが 1 つだけあり、既定は閉じている"""
+        folds = [w for w in _all_widgets(self.app._settings_window)
+                 if isinstance(w, mainGUI.CollapsibleFrame)
+                 and any(isinstance(c, tk.Label) and c.cget("text") == "キーバインド"
+                         for c in _all_widgets(w.winfo_children()[0]))]
+        self.assertEqual(folds, [self.app._keybind_fold])
+        self.assertTrue(self.app._keybind_fold.collapsed, "既定は閉じた状態")
+        self.assertIs(self.app.lbl_start_key.winfo_toplevel(), self.app._settings_window)
+        self.assertFalse(hasattr(self.app, "_open_keybind_dialog"), "別窓は無い")
 
     def test_the_rows(self):
         """5つのキー。どれも「変更」と「解除」がある（DV2）"""
-        self._dialog()
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"),
                          f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}")
@@ -259,7 +252,6 @@ class TestKeybindDialog(_AppCase):
                              (row, row), target)
 
     def test_change_and_clear_the_start_key(self):
-        self._dialog()
         with patch.object(HotKey, "capture", return_value="f9"):
             self.app.btn_capture_start_key.invoke()          # 画面の「変更」
         self.assertEqual(self.app.v_start_key.get(), "f9")
@@ -273,7 +265,6 @@ class TestKeybindDialog(_AppCase):
         self.assertIn("マクロ開始: 未設定", self.app.lbl_keys.cget("text"))
 
     def test_change_the_stop_and_cancel_keys(self):
-        self._dialog()
         self._capture("stop", "f8")
         self._capture("cancel", "f7")
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
@@ -282,13 +273,11 @@ class TestKeybindDialog(_AppCase):
                          "マクロ開始: 未設定   停止: F8   自爆キャンセル: F7   チェイス: F1/F2   移動: 未設定")
 
     def test_the_overlap_check_is_the_same(self):
-        self._dialog()
         self._capture("start", config.EMERGENCY_STOP_KEY)
         self.assertEqual(self.app.v_start_key.get(), "")
         self.assertTrue(any("緊急停止キーと同じ" in m for m in self.app.logs), self.app.logs)
 
     def test_the_keys_are_saved_under_the_same_names(self):
-        self._dialog()
         self._capture("start", "f9")
         self._capture("stop", "f8")
         self._capture("cancel", "f7")
@@ -298,19 +287,39 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual((stored["start_key"], stored["emergency_stop_key"],
                           stored["suicide_cancel_key"]), ("f9", "f8", "f7"))
 
-    def test_a_closed_dialog_still_updates_the_main_line(self):
-        """変更の途中で画面を閉じても落ちない。メインの1行は合う"""
-        self._dialog()
-        self.app._capturing_key = True
-        self._close_dialog()
-        self.app._finish_capture_key("f9", "start")
+    def test_a_closed_fold_still_captures_and_updates_the_main_line(self):
+        """折りたたみを閉じたままでも、キーの取り込み（_begin_capture_key）が動き、メインの 1 行も合う。
+        停止のキーが変えられなくなると実害が大きい"""
+        self.app._keybind_fold.set_collapsed(True)
+        self.assertTrue(self.app._keybind_fold.collapsed)
+        self._capture("start", "f9")
         self.assertEqual(self.app.v_start_key.get(), "f9")
         self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
+        self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: F9", "行の表示も合う")
+        self._capture("stop", "f8")
+        self.assertEqual(self.app.v_emergency_key.get(), "f8")
+        self.assertIn("停止: F8", self.app.lbl_keys.cget("text"))
+        self.assertEqual(self.app.btn_capture_key.cget("text"), "変更", "ボタンが戻る")
+        self.assertEqual(str(self.app.btn_capture_key.cget("state")), "normal")
+        # 取り込みの途中で完了が来ても落ちない
+        self.app._capturing_key = True
+        self.app._finish_capture_key("f7", "cancel")
+        self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
+        self.assertTrue(self.app._keybind_fold.collapsed, "勝手に開かない")
+
+    def test_clearing_the_stop_key_asks_with_the_settings_window_as_parent(self):
+        self.app.v_emergency_key.set("f8")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=False) as ask:
+            self.app._clear_key("stop")
+        self.assertEqual(ask.call_args.kwargs["parent"], self.app._settings_window)
+        self.assertEqual(self.app.v_emergency_key.get(), "f8", "「いいえ」なら消さない")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=True):
+            self.app._clear_key("stop")
+        self.assertEqual(self.app.v_emergency_key.get(), "")
 
     def test_the_chase_check_is_here(self):
-        """「チェイスを使う」のチェックはキーバインドの画面だけ（DV2 で名前を短く）"""
-        self._dialog()
-        checks = [w for w in _all_widgets(self.app._keybind_dialog)
+        """「チェイスを使う」のチェックはキーバインドの折りたたみの中だけ（DV2 で名前を短く）"""
+        checks = [w for w in _all_widgets(self.app._keybind_fold)
                   if isinstance(w, ttk.Checkbutton) and w.cget("text") == "チェイスを使う"]
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0].winfo_manager(), "pack", "画面に置かれている")
@@ -437,7 +446,7 @@ class TestDv2MainScreen(_AppCase):
 
     def test_the_button_order(self):
         self.assertEqual([w.cget("text") for w in self._row()],
-                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⚙ 設定", "⌨ キーバインド", "報告"])
+                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⚙ 設定", "報告"])
 
     def test_the_start_button_is_the_biggest_and_keeps_its_size(self):
         self.app.update_idletasks()
@@ -501,7 +510,6 @@ class TestDv2Keys(_AppCase):
         p = patch.object(self.app, "_hook_chase_keys")
         self.hook_chase = p.start()
         self.addCleanup(p.stop)
-        self._dialog()
 
     def _capture(self, target, key):
         with patch.object(HotKey, "capture", return_value=key):
@@ -663,7 +671,6 @@ class TestDv2Keys(_AppCase):
 class TestDv3(_AppCase):
     def test_the_dialog_rows_have_no_notes(self):
         """キーバインドの画面: マクロ開始 → 停止 → 自爆キャンセル → チェイス2つ → 移動4つ（GV）。右の説明文は無い"""
-        self._dialog()
         grid = self.app.lbl_start_key.master
         labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
                         for w in grid.grid_slaves() if isinstance(w, ttk.Label))
@@ -676,7 +683,7 @@ class TestDv3(_AppCase):
                                   ((6, 0), "移動（左）: 未設定"),
                                   ((7, 0), "移動（右）: 未設定"),
                                   ((8, 0), "ジャンプ: 未設定")])
-        texts = [w.cget("text") for w in _all_widgets(self.app._keybind_dialog)
+        texts = [w.cget("text") for w in _all_widgets(self.app._keybind_fold)
                  if isinstance(w, ttk.Label)]
         self.assertFalse(any("緊急" in t for t in texts), texts)
 
@@ -692,8 +699,7 @@ class TestDv3(_AppCase):
                         self.app.lbl_keys.cget("text"))
 
     def test_no_emergency_word_on_the_screens(self):
-        self._dialog()
-        for top in (self.app, self.app._keybind_dialog):
+        for top in (self.app, self.app._settings_window):
             texts = [w.cget("text") for w in _all_widgets(top)
                      if isinstance(w, (ttk.Label, ttk.Checkbutton, ttk.Button, tk.Button))]
             self.assertFalse(any("緊急停止" in t for t in texts), texts)

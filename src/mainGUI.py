@@ -1863,15 +1863,15 @@ class App(tk.Tk):
         return "マクロ開始: 未設定" if not key else f"マクロ開始: {HotKey.display(key)}"
 
     def _set_key_label(self, name: str, text: str):
-        """キーバインドの画面の行（開いていれば）と、メインの画面の1行を今のキーに合わせる"""
+        """キーバインドの行と、メインの画面の1行を今のキーに合わせる"""
         try:
             getattr(self, name).config(text=text)
         except (tk.TclError, AttributeError):
-            pass                    # キーバインドの画面を開いていない・閉じた
+            pass                    # まだ作っていない（起動の途中）・壊した後
         self._refresh_key_summary()
 
     def _refresh_key_summary(self):
-        """メインの画面の1行（表示だけ。変えるのは「⌨ キーバインド」の画面）"""
+        """メインの画面の1行（表示だけ。変えるのは設定の窓の「キーバインド」）"""
         try:
             # 並びはマクロ開始 → 停止 → 自爆キャンセル → チェイス（DV3）
             self.lbl_keys.config(text="   ".join((self._start_key_text(),
@@ -1958,24 +1958,15 @@ class App(tk.Tk):
     def _refresh_start_key_label(self):
         self._set_key_label("lbl_start_key", self._start_key_text())
 
-    # ── キーバインドの画面（DV）──────────────────────
-    def _open_keybind_dialog(self):
-        """キーの変更・解除をまとめた画面。変更のやり方・重なりの確認・保存は今までのまま。
-        開いていれば前に出すだけ"""
-        dialog = getattr(self, "_keybind_dialog", None)
-        try:
-            if dialog is not None and dialog.winfo_exists():
-                dialog.lift()
-                return
-        except tk.TclError:
-            pass
-        dialog = tk.Toplevel(self)
-        self._keybind_dialog = dialog
-        dialog.title("キーバインド")
-        dialog.configure(bg=config.GUI_BG)
-        dialog.resizable(False, False)
-        body = ttk.Frame(dialog, padding=10)
-        body.pack(fill="both", expand=True)
+    # ── キーバインド（DV。設定の窓の折りたたみ） ─────────────────
+    def _build_keybind_section(self, parent):
+        """キーの変更・解除をまとめた折りたたみ（設定の窓の中。既定は閉じた状態）。
+        変更のやり方・重なりの確認・保存は今までのまま。ラベルとボタンは起動時から常にある
+        （折りたたみを閉じたままでもキーの取り込みは動く）"""
+        fold = CollapsibleFrame(parent, text="キーバインド", collapsed=True)
+        fold.pack(fill="x", padx=12, pady=4)
+        self._keybind_fold = fold
+        body = fold.content
         grid = ttk.Frame(body)
         grid.pack(fill="x")
 
@@ -2006,7 +1997,6 @@ class App(tk.Tk):
         ttk.Checkbutton(body, text="チェイスを使う",
                         variable=self.v_chase_enabled,
                         command=self._on_chase_enabled_changed).pack(anchor="w", pady=(8, 0))
-        ttk.Button(body, text="閉じる", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
         self._refresh_start_key_label()
         self._refresh_emergency_key_label()
         self._refresh_suicide_cancel_key_label()
@@ -2040,7 +2030,7 @@ class App(tk.Tk):
                     "停止のキーの解除",
                     "停止のキーがなくなります。止めるのは「■ 停止」のボタンだけになります。"
                     "よろしいですか？",
-                    parent=getattr(self, "_keybind_dialog", None) or self):
+                    parent=self._settings_window):
                 return
             self.v_emergency_key.set("")
             self._emergency_stop_key_pressed = False
@@ -2574,19 +2564,17 @@ class App(tk.Tk):
             padx=10, pady=6, disabledforeground="#6c7086", command=self._on_start_stop_button)
         self.btn_start_stop.pack(side="left", padx=6)
         self._refresh_start_stop_button()
-        # 並び: マクロ開始 → オーバーレイ → 統計 → 設定 → キーバインド → 報告（DV2）
+        # 並び: マクロ開始 → オーバーレイ → 統計 → 設定 → 報告（キーバインドは設定の窓の中）
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
         ttk.Button(fc, text="⚙ 設定",
                    command=self._open_settings_window, width=8).pack(side="left", padx=6)
-        ttk.Button(fc, text="⌨ キーバインド",
-                   command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="報告",
                    command=self._open_report, width=8).pack(side="left", padx=6)
 
-        # 今のキーを1行で表示だけ（変えるのは「⌨ キーバインド」の画面。DV）。
+        # 今のキーを1行で表示だけ（変えるのは設定の窓の「キーバインド」。DV）。
         # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
         fsk = ttk.Frame(self)
         fsk.pack(pady=(0, 4))
@@ -2684,8 +2672,10 @@ class App(tk.Tk):
             fcr, text="Murderで AFK 回避しない",
             variable=self.v_murder_no_afk,
             command=self._on_murder_no_afk_changed))
-        # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
+        # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの折りたたみの中（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
+        # キーバインド（設定の窓の「その他」の下）。v_chase_enabled を使うのでこのあと
+        self._build_keybind_section(self._settings_body)
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)

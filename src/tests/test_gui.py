@@ -2116,8 +2116,6 @@ class TestEmergencyKeyGui(unittest.TestCase):
     def setUpClass(cls):
         cls.app = mainGUI.App()
         cls.app.withdraw()
-        cls.app._open_keybind_dialog()
-        cls.app._keybind_dialog.withdraw()
 
     @classmethod
     def tearDownClass(cls):
@@ -2425,8 +2423,6 @@ class TestStartKeyGui(unittest.TestCase):
     def setUpClass(cls):
         cls.app = mainGUI.App()
         cls.app.withdraw()
-        cls.app._open_keybind_dialog()
-        cls.app._keybind_dialog.withdraw()
 
     @classmethod
     def tearDownClass(cls):
@@ -2659,11 +2655,11 @@ class TestStartKeyGui(unittest.TestCase):
         self.assertEqual(self.app.v_start_key.get(), "")
 
     # ── 窓の幅 ────────────────────────────────
-    def test_the_keys_are_in_the_keybind_dialog(self):
-        """キーの設定はキーバインドの画面だけ。メインの画面には置かない（DV）。
+    def test_the_keys_are_in_the_keybind_fold(self):
+        """キーの設定は設定の窓の「キーバインド」だけ。メインの画面には置かない（DV）。
         並びはマクロ開始が先・緊急停止・自爆キャンセル"""
         grid = self.app.lbl_start_key.master
-        self.assertIs(grid.winfo_toplevel(), self.app._keybind_dialog)
+        self.assertIs(grid.winfo_toplevel(), self.app._settings_window)
         self.assertIs(self.app.lbl_emergency.master, grid)
         rows = [(int(w.grid_info()["row"]), int(w.grid_info()["column"])) for w in
                 (self.app.lbl_start_key, self.app.btn_capture_start_key, self.app.btn_clear_start_key,

@@ -810,7 +810,6 @@ class TestMouseKeysInTheApp(_ui_tidy._AppCase):
                 "ccw": self.app.v_chase_ccw_key}.get(target) or self.app._move_key_var(target)
 
     def _capture(self, target, key):
-        self._dialog()
         with patch.object(HotKey, "capture", return_value=key):
             getattr(self.app, mainGUI.App.KEY_BUTTONS[target]["capture"]).invoke()
 
