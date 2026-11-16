@@ -685,6 +685,12 @@ TON_ENTRY_MIN_SIDE_RATIO  = 0.008  # 窓の高さに対する四角の最小辺
 TON_ENTRY_ROW_TOL         = 0.6    # 同じ行とみなす y のずれ（四角の高さ比）
 TON_ENTRY_SIZE_TOL        = 0.25   # 同じ大きさとみなす幅・高さのずれ
 TON_ENTRY_CLICK_SEC       = 0.15   # ボタンを押している長さ
+# Tab を押してからカーソルを置くまで（入室の選択画面・コード欄）。CLICK_TAB_LEAD_SEC（0.03）ではない——
+# あちらは「カーソルを動かさずに押す」ときの、Tab とクリックが同じフレームにならないための待ち。
+# こちらは VRChat が Tab を読んでカーソルを真ん中へ戻し終えるのを待つ必要があり、短いと
+# 置いた後に戻されてクリックが照準へ飛ぶ（依頼者 2026-11-16 の報告）。ItemFetch の
+# FETCH_TAB_SETTLE_SEC と同じ値から始める。重い窓で足りなければここを伸ばす
+TON_ENTRY_TAB_SETTLE_SEC = 0.1
 TON_ENTRY_STEP_FIND_SEC   = 20.0   # 1 画面ぶん、四角が出るのを待つ上限
 
 # 選択画面を抜けた後、ロビーのBeginまで移動する量（実測）

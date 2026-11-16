@@ -47,7 +47,7 @@ class _Rig:
                 (WindowOperator, "mouse_click", lambda sec, pause=False: self.events.append(("click", sec))),
                 (ToNEntry.DebugLog, "write", lambda *a: None),
                 (ToNEntry.DebugLog, "exception", lambda *a: None),
-                (ToNEntry.time, "sleep", lambda *a: None),
+                (ToNEntry.time, "sleep", lambda sec=0, *a: self.events.append(("sleep", sec))),
         ):
             p = patch.object(target, name, side_effect=fake)
             p.start()
@@ -138,6 +138,21 @@ class TestClickPoint(unittest.TestCase):
         self.assertEqual(rig.events[names.index("set_cursor")], ("set_cursor", (300, 400)))
         self.assertLess(names.index("set_cursor"), names.index("click"))
         self.assertLess(names.index("click"), names.index("release_tab"))
+
+    def test_waits_settle_after_tab_before_placing_cursor(self):
+        """Tab → TON_ENTRY_TAB_SETTLE_SEC 待つ → カーソルを置く → クリック → Tab を離す。
+        待ちが短い（CLICK_TAB_LEAD_SEC）と、置いた後に VRChat がカーソルを真ん中へ戻す"""
+        rig = _Rig(self)
+        self.assertEqual(config.TON_ENTRY_TAB_SETTLE_SEC, 0.1)
+        self.assertNotEqual(config.TON_ENTRY_TAB_SETTLE_SEC, config.CLICK_TAB_LEAD_SEC)
+        self.assertTrue(rig.entry._click_point((300, 400), "テスト"))
+        seq = [e for e in rig.events if e[0] in ("press_tab", "set_cursor", "click", "release_tab")
+               or e == ("sleep", config.TON_ENTRY_TAB_SETTLE_SEC)]
+        self.assertEqual([e[0] for e in seq],
+                         ["press_tab", "sleep", "set_cursor", "click", "release_tab", "set_cursor"])
+        self.assertEqual(seq[1], ("sleep", config.TON_ENTRY_TAB_SETTLE_SEC))
+        self.assertEqual(seq[2], ("set_cursor", (300, 400)))
+        self.assertNotIn(("sleep", config.CLICK_TAB_LEAD_SEC), rig.events)
 
     def test_takes_the_global_lock(self):
         rig = _Rig(self)

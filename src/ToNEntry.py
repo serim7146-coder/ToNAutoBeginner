@@ -188,7 +188,8 @@ class ToNEntry:
     def _click_point(self, point, label: str) -> bool:
         """鍵の中で前面を借りて: Tab を押したまま → カーソルを point（画面の座標）へ → クリック。
         どの終わり方でも Tab を離し、前面とカーソルを返す。Tab を押すとカーソルが照準へ戻るので、
-        置くのは必ず Tab の後"""
+        置くのは必ず Tab の後。Tab を押してから TON_ENTRY_TAB_SETTLE_SEC 待つのは、VRChat が
+        カーソルを真ん中へ戻し終えてから置くため"""
         with SharedState._GLOBAL_ACTION_LOCK:
             if not self._is_running() or not self._can_operate():
                 return False
@@ -201,8 +202,8 @@ class ToNEntry:
             try:
                 WindowOperator.press_tab()
                 tab = True
-                if config.CLICK_TAB_LEAD_SEC > 0:
-                    time.sleep(config.CLICK_TAB_LEAD_SEC)
+                if config.TON_ENTRY_TAB_SETTLE_SEC > 0:
+                    time.sleep(config.TON_ENTRY_TAB_SETTLE_SEC)
                 if not self._place_cursor(point):
                     return False
                 if not self._still_ours():
@@ -463,8 +464,8 @@ class ToNEntry:
                 point = (int(round(found[0] + origin[0])), int(round(found[1] + origin[1])))
                 WindowOperator.press_tab()
                 tab = True
-                if config.CLICK_TAB_LEAD_SEC > 0:
-                    time.sleep(config.CLICK_TAB_LEAD_SEC)
+                if config.TON_ENTRY_TAB_SETTLE_SEC > 0:
+                    time.sleep(config.TON_ENTRY_TAB_SETTLE_SEC)
                 if not self._place_cursor(point):
                     return "カーソルを置けない"
                 if not self._still_ours():
