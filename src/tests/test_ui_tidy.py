@@ -463,7 +463,8 @@ class TestDv2MainScreen(_AppCase):
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
                                  ("Checkbutton", "Utilsの判断に従う"),         # EB
-                                 ("Checkbutton", "Bloodthirsty を待つ")])
+                                 ("Checkbutton", "Bloodthirsty を待つ"),
+                                 ("Checkbutton", "Murderで AFK 回避しない")])
         variables = [str(w.cget("variable")) for w in row.pack_slaves()
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
@@ -471,7 +472,8 @@ class TestDv2MainScreen(_AppCase):
                                                       self.app.v_run_respawn,
                                                       self.app.v_fog_early_read,
                                                       self.app.v_follow_utils,
-                                                      self.app.v_wait_bloodthirsty)])
+                                                      self.app.v_wait_bloodthirsty,
+                                                      self.app.v_murder_no_afk)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
         title = self.app.tabs[0].freeze_box.grid_slaves(row=0, column=0)[0]       # FG: grid
@@ -959,3 +961,58 @@ class TestSettingsWindow(_AppCase):
                      "follow_utils", "voice_enabled", "voice_volumes", "obs_record", "obs_record_freeze",
                      "obs_host", "obs_port"):
             self.assertIn(name, stored, name)
+
+
+class TestMurderNoAfkSetting(_AppCase):
+    """設定の窓の「Murderで AFK 回避しない」: 全窓共通・保存・既定 OFF"""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_murder_no_afk, False)
+        self.addCleanup(self.app.v_murder_no_afk.set, False)
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def test_the_default_is_off_and_the_check_is_in_the_window(self):
+        self.assertFalse(SharedState.get_murder_no_afk())
+        self.assertFalse(self.app.v_murder_no_afk.get())
+        check = next(w for w in _all_widgets(self.app._settings_window)
+                     if isinstance(w, ttk.Checkbutton) and w.cget("text") == "Murderで AFK 回避しない")
+        self.assertEqual(str(check.cget("variable")), str(self.app.v_murder_no_afk))
+
+    def test_the_check_sets_the_shared_state_and_schedules_a_save(self):
+        self.app.v_murder_no_afk.set(True)
+        with patch.object(self.app, "_schedule_settings_save") as save:
+            self.app._on_murder_no_afk_changed()
+        self.assertIs(SharedState.get_murder_no_afk(), True)
+        save.assert_called_once()
+
+    def test_saved_under_murder_no_afk_and_restored(self):
+        SharedState.set_murder_no_afk(True)
+        stored = self._save()
+        self.assertIs(stored["murder_no_afk"], True)
+        SharedState.set_murder_no_afk(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_murder_no_afk(), True)
+        self.assertIs(self.app.v_murder_no_afk.get(), True, "チェックの表示も戻る")
+        self._load(dict(stored, murder_no_afk=False))
+        self.assertIs(SharedState.get_murder_no_afk(), False)
+        self.assertIs(self.app.v_murder_no_afk.get(), False)
+
+    def test_a_missing_or_broken_value_is_off(self):
+        SharedState.set_murder_no_afk(True)
+        self._load({})
+        self.assertIs(SharedState.get_murder_no_afk(), False, "無い（古い settings.json）")
+        for broken in ("yes", 1, "true", None, [], {"a": 1}):
+            SharedState.set_murder_no_afk(True)
+            self._load({"murder_no_afk": broken})
+            self.assertIs(SharedState.get_murder_no_afk(), False, repr(broken))

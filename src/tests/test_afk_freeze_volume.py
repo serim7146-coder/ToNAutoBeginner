@@ -106,6 +106,36 @@ class TestTheAfkWatch(_Afk):
                                                            setattr(st, "suicide_cancelled_round", 8)))
         self.assertEqual(len(moves), 2, "自爆をキャンセルした（生き残る）")
 
+    def _murder(self, on, murder, private):
+        """「Murderで AFK 回避しない」を on にして、自分がマーダー（murder）の回を 70 秒止まる"""
+        SharedState.set_murder_no_afk(on)
+        self.addCleanup(SharedState.set_murder_no_afk, False)
+        return self._watch(private=private,
+                           setup=lambda st, ex: setattr(st, "sabotage_murder_this_round", murder))
+
+    def test_the_murder_check_stops_both_the_move_and_the_warning(self):
+        """チェック ON・自分がマーダーの回は、private の微移動も private でない警告音も出ない"""
+        moves, sounds, logs = self._murder(True, True, private=True)
+        self.assertEqual((moves, sounds), ([], []), "private: 微移動も警告音も出ない")
+        moves, sounds, logs = self._murder(True, True, private=False)
+        self.assertEqual((moves, sounds), ([], []), "private でない: 警告音も微移動も出ない")
+        self.assertFalse([m for m in logs if "AFK 回避" in m])
+
+    def test_the_murder_check_on_but_not_the_murder_works_as_before(self):
+        """チェック ON でも、マーダーでない回（Sabotage star など）は今までどおり"""
+        moves, _s, _l = self._murder(True, False, private=True)
+        self.assertEqual([round(t) for t, *_ in moves], [70, 140])
+        _m, sounds, _l = self._murder(True, False, private=False)
+        self.assertEqual([round(t) for t, *_ in sounds], [70, 140])
+
+    def test_the_murder_check_off_works_as_before_even_for_the_murder(self):
+        """チェック OFF（既定）なら、マーダーの回でも今までどおり"""
+        moves, _s, _l = self._murder(False, True, private=True)
+        self.assertEqual([round(t) for t, *_ in moves], [70, 140])
+        _m, sounds, _l = self._murder(False, True, private=False)
+        self.assertEqual([round(t) for t, *_ in sounds], [70, 140])
+        self.assertFalse(SharedState.get_murder_no_afk() is True, "既定は OFF")
+
     def test_the_values(self):
         self.assertEqual((config.AFK_STILL_SEC, config.AFK_POLL_SEC, config.AFK_MOVING_SPEED), (70.0, 1.0, 0.1))
         self.assertTrue(config.VOICE_AFK.endswith("AFK.mp3"))

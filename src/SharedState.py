@@ -169,6 +169,10 @@ get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set
 _WAIT_BLOODTHIRSTY = _Setting(True, bool)
 get_wait_bloodthirsty, set_wait_bloodthirsty = _WAIT_BLOODTHIRSTY.get, _WAIT_BLOODTHIRSTY.set
 
+# Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・既定 OFF）
+_MURDER_NO_AFK = _Setting(False, bool)
+get_murder_no_afk, set_murder_no_afk = _MURDER_NO_AFK.get, _MURDER_NO_AFK.set
+
 # スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
 _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set

@@ -2663,6 +2663,11 @@ class App(tk.Tk):
         ttk.Checkbutton(fcr, text="Bloodthirsty を待つ",
                         variable=self.v_wait_bloodthirsty,
                         command=self._on_wait_bloodthirsty_changed).pack(side="left", padx=(12, 0))
+        # Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・保存・既定 OFF）
+        self.v_murder_no_afk = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fcr, text="Murderで AFK 回避しない",
+                        variable=self.v_murder_no_afk,
+                        command=self._on_murder_no_afk_changed).pack(side="left", padx=(12, 0))
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
 
@@ -3266,6 +3271,17 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
+    def _on_murder_no_afk_changed(self):
+        SharedState.set_murder_no_afk(self.v_murder_no_afk.get())
+        self._schedule_settings_save()
+
+    def _refresh_murder_no_afk_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_murder_no_afk.set(SharedState.get_murder_no_afk())
+        except (tk.TclError, AttributeError):
+            pass
+
     def _on_wait_bloodthirsty_changed(self):
         SharedState.set_wait_bloodthirsty(self.v_wait_bloodthirsty.get())
         self._schedule_settings_save()
@@ -3854,6 +3870,8 @@ class App(tk.Tk):
         self._refresh_run_respawn_check()
         SharedState.set_wait_bloodthirsty(data.get("wait_bloodthirsty") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_wait_bloodthirsty_check()
+        SharedState.set_murder_no_afk(data.get("murder_no_afk") is True)   # 無い・壊れた値は OFF（既定）
+        App._refresh_murder_no_afk_check(self)
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_chase_check()
         SharedState.set_follow_utils(data.get("follow_utils") is True)    # 無い・壊れた値は OFF（EB）
@@ -5168,6 +5186,7 @@ class App(tk.Tk):
             "continue_restore_window": SharedState.get_continue_restore_window(),
             "run_respawn":             SharedState.get_run_respawn(),
             "wait_bloodthirsty":       SharedState.get_wait_bloodthirsty(),
+            "murder_no_afk":           SharedState.get_murder_no_afk(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "follow_utils":            SharedState.get_follow_utils(),

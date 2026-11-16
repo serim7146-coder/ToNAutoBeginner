@@ -3270,6 +3270,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
             "wait_bloodthirsty",                                  # Bloodthirsty を待つチェック
+            "murder_no_afk",                                      # Murder で AFK 回避しないチェック
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した
             "window_layout",                                     # DX で足した

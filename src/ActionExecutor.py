@@ -3225,10 +3225,11 @@ class ActionExecutor:
 
     def _afk_not_mine(self, round_seq: int) -> bool:
         """AFK 回避の見張りが手を出さない: このラウンドを自爆する（キャンセルしていない）・DTM/Waldo や Glorbo の
-        AFK 解除ループが動いている（二重にしない）"""
+        AFK 解除ループが動いている（二重にしない）・Sabotage で自分がマーダーで、設定で止めている"""
         st = self._st
         suicide = st.suicide_seq == round_seq and st.suicide_cancelled_round != round_seq
-        return suicide or st.glorbo_afk or st.is_open_special_round_round
+        murder = st.sabotage_murder_this_round and SharedState.get_murder_no_afk()
+        return suicide or st.glorbo_afk or st.is_open_special_round_round or murder
 
     def _afk_speed_note(self, speed, peak, now) -> str:
         """AFK 回避で動かす・鳴らすときの速さの記録（FG: 動いているのに鳴った件を追うため）"""
