@@ -441,6 +441,9 @@ PHONE_NOTIFY_NOTE = ("続行ラウンド・全続行・待機列に入れるよ�
 WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。\n"
                       "マクロを停止すると元の音量に戻ります。")
 
+BEGIN_USE_SPAM_ONLY_NOTE = ("カーソルも前面も触らず、UseRight を送り続けるだけにします。\n"
+                            "前面の窓か、カーソルが乗っている窓でしか Begin は押されません。")
+
 CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
 CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
 CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（px）
@@ -2672,6 +2675,14 @@ class App(tk.Tk):
             fcr, text="Murderで AFK 回避しない",
             variable=self.v_murder_no_afk,
             command=self._on_murder_no_afk_changed))
+        # Begin は UseRight の連打だけにする（カーソルも前面も触らない。全窓共通・保存・既定 OFF）
+        self.v_begin_use_spam_only = tk.BooleanVar(value=False)
+        check = ttk.Checkbutton(
+            fcr, text="Beginは連打だけ（カーソルを動かさない）",
+            variable=self.v_begin_use_spam_only,
+            command=self._on_begin_use_spam_only_changed)
+        check.tooltip = Tooltip(check, lambda: BEGIN_USE_SPAM_ONLY_NOTE)
+        self._other_checks.append(check)
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの折りたたみの中（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
         # キーバインド（設定の窓の「その他」の下）。v_chase_enabled を使うのでこのあと
@@ -3311,6 +3322,17 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
+    def _on_begin_use_spam_only_changed(self):
+        SharedState.set_begin_use_spam_only(self.v_begin_use_spam_only.get())
+        self._schedule_settings_save()
+
+    def _refresh_begin_use_spam_only_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_begin_use_spam_only.set(SharedState.get_begin_use_spam_only())
+        except (tk.TclError, AttributeError):
+            pass
+
     def _on_wait_bloodthirsty_changed(self):
         SharedState.set_wait_bloodthirsty(self.v_wait_bloodthirsty.get())
         self._schedule_settings_save()
@@ -3901,6 +3923,8 @@ class App(tk.Tk):
         self._refresh_wait_bloodthirsty_check()
         SharedState.set_murder_no_afk(data.get("murder_no_afk") is True)   # 無い・壊れた値は OFF（既定）
         App._refresh_murder_no_afk_check(self)
+        SharedState.set_begin_use_spam_only(data.get("begin_use_spam_only") is True)   # 無い・壊れた値は OFF（既定）
+        App._refresh_begin_use_spam_only_check(self)
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_chase_check()
         SharedState.set_follow_utils(data.get("follow_utils") is True)    # 無い・壊れた値は OFF（EB）
@@ -5216,6 +5240,7 @@ class App(tk.Tk):
             "run_respawn":             SharedState.get_run_respawn(),
             "wait_bloodthirsty":       SharedState.get_wait_bloodthirsty(),
             "murder_no_afk":           SharedState.get_murder_no_afk(),
+            "begin_use_spam_only":     SharedState.get_begin_use_spam_only(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "follow_utils":            SharedState.get_follow_utils(),

@@ -173,6 +173,10 @@ get_wait_bloodthirsty, set_wait_bloodthirsty = _WAIT_BLOODTHIRSTY.get, _WAIT_BLO
 _MURDER_NO_AFK = _Setting(False, bool)
 get_murder_no_afk, set_murder_no_afk = _MURDER_NO_AFK.get, _MURDER_NO_AFK.set
 
+# Begin は /input/UseRight の連打だけにする（カーソルも前面も触らない。全窓共通・既定 OFF）
+_BEGIN_USE_SPAM_ONLY = _Setting(False, bool)
+get_begin_use_spam_only, set_begin_use_spam_only = _BEGIN_USE_SPAM_ONLY.get, _BEGIN_USE_SPAM_ONLY.set
+
 # スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
 _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set

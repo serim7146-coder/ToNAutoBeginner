@@ -1894,6 +1894,21 @@ class ActionExecutor:
         st = self._st
         return bool(SharedState.get_item_begin_mode() and st.waiting_for_equip and self._auto_begin_active())
 
+    def _wait_use_spam_only(self, round_seq: int, spam):
+        """設定「Begin は連打だけ」: 差し込みもクリックもせず、連打が効くのを待つ（依頼者 2026-11-16）。
+        UseRight が Begin に届くのは、その窓が前面か、カーソルがその窓の中にあるときだけ
+        （_use_right_reaches_begin）。背面でカーソルも外の窓は押されないまま終わる。
+        受理（st.begin_done）でも戻る: 通常の流れも受理で _confirm_begin が戻るので、
+        そのあとの装備待ち・アイテム取得（begin_done を条件にする）へ同じタイミングで進める"""
+        st = self._st
+        if spam is None:
+            self._log("Begin: この窓は OSC が使えないので、連打だけの設定では押せません")
+            return
+        self._log("Begin: 連打だけで押します（前面かカーソルがこの窓の上のときに押せます）")
+        while (self._is_running() and not st.in_round and not st.begin_done
+               and st.round_seq == round_seq):
+            time.sleep(config.BEGIN_USE_PULSE_SEC)
+
     def do_after_round(self):
         """
         ラウンド終了後: 待機 → [Begin前移動] → Beginクリック
@@ -1974,6 +1989,9 @@ class ActionExecutor:
                     return      # 他窓を待つ間にインスタンスを抜けた・窓が消えた。押さずに黙って終わる
                 time.sleep(0.1)
                 if not st.in_round and st.round_seq == round_seq:
+                    if SharedState.get_begin_use_spam_only():
+                        self._wait_use_spam_only(round_seq, spam)
+                        return                  # finally が連打を止める
                     clicked = self._press_begin()
 
             if clicked:

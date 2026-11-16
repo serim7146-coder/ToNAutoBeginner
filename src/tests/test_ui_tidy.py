@@ -479,7 +479,8 @@ class TestDv2MainScreen(_AppCase):
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
                                  ("Checkbutton", "Utilsの判断に従う"),         # EB
                                  ("Checkbutton", "Bloodthirsty を待つ"),
-                                 ("Checkbutton", "Murderで AFK 回避しない")])
+                                 ("Checkbutton", "Murderで AFK 回避しない"),
+                                 ("Checkbutton", "Beginは連打だけ（カーソルを動かさない）")])
         variables = [str(w.cget("variable")) for w in checks
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
@@ -488,7 +489,8 @@ class TestDv2MainScreen(_AppCase):
                                                       self.app.v_fog_early_read,
                                                       self.app.v_follow_utils,
                                                       self.app.v_wait_bloodthirsty,
-                                                      self.app.v_murder_no_afk)])
+                                                      self.app.v_murder_no_afk,
+                                                      self.app.v_begin_use_spam_only)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
         title = self.app.tabs[0].freeze_box.grid_slaves(row=0, column=0)[0]       # FG: grid
@@ -1014,7 +1016,8 @@ class TestOtherChecksWrap(_AppCase):
     def test_the_order_of_the_checks_is_kept(self):
         self.assertEqual([c.cget("text") for c in self.checks],
                          ["アイテムを落とす", "窓位置リセット", "Runリスポーン", "霧即時判定",
-                          "Utilsの判断に従う", "Bloodthirsty を待つ", "Murderで AFK 回避しない"])
+                          "Utilsの判断に従う", "Bloodthirsty を待つ", "Murderで AFK 回避しない",
+                          "Beginは連打だけ（カーソルを動かさない）"])
 
     def test_wide_makes_one_row(self):
         self._lay_out(self._cell_width() * len(self.checks) + 5)
@@ -1135,3 +1138,73 @@ class TestMurderNoAfkSetting(_AppCase):
             SharedState.set_murder_no_afk(True)
             self._load({"murder_no_afk": broken})
             self.assertIs(SharedState.get_murder_no_afk(), False, repr(broken))
+
+
+class TestBeginUseSpamOnlySetting(_AppCase):
+    """設定の窓の「Beginは連打だけ（カーソルを動かさない）」: 全窓共通・保存・既定 OFF・ツールチップ付き"""
+
+    TEXT = "Beginは連打だけ（カーソルを動かさない）"
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_begin_use_spam_only, False)
+        self.addCleanup(self.app.v_begin_use_spam_only.set, False)
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def _check(self):
+        return next(w for w in _all_widgets(self.app._settings_window)
+                    if isinstance(w, ttk.Checkbutton) and w.cget("text") == self.TEXT)
+
+    def test_the_default_is_off_and_the_check_is_last_in_the_other_section(self):
+        self.assertFalse(SharedState.get_begin_use_spam_only())
+        self.assertFalse(self.app.v_begin_use_spam_only.get())
+        check = self._check()
+        self.assertEqual(str(check.cget("variable")), str(self.app.v_begin_use_spam_only))
+        self.assertIs(self.app._other_checks[-1], check, "Murder の次（末尾）")
+        self.assertEqual(self.app._other_checks[-2].cget("text"), "Murderで AFK 回避しない")
+        self.assertIn(check, self.app._other_check_frame.winfo_children())
+
+    def test_the_check_has_the_tooltip(self):
+        check = self._check()
+        self.assertIsInstance(check.tooltip, mainGUI.Tooltip)
+        self.assertEqual(check.tooltip.text(),
+                         "カーソルも前面も触らず、UseRight を送り続けるだけにします。\n"
+                         "前面の窓か、カーソルが乗っている窓でしか Begin は押されません。")
+
+    def test_the_check_sets_the_shared_state_and_schedules_a_save(self):
+        self.app.v_begin_use_spam_only.set(True)
+        with patch.object(self.app, "_schedule_settings_save") as save:
+            self.app._on_begin_use_spam_only_changed()
+        self.assertIs(SharedState.get_begin_use_spam_only(), True)
+        save.assert_called_once()
+
+    def test_saved_under_begin_use_spam_only_and_restored(self):
+        SharedState.set_begin_use_spam_only(True)
+        stored = self._save()
+        self.assertIs(stored["begin_use_spam_only"], True)
+        SharedState.set_begin_use_spam_only(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_begin_use_spam_only(), True)
+        self.assertIs(self.app.v_begin_use_spam_only.get(), True, "チェックの表示も戻る")
+        self._load(dict(stored, begin_use_spam_only=False))
+        self.assertIs(SharedState.get_begin_use_spam_only(), False)
+        self.assertIs(self.app.v_begin_use_spam_only.get(), False)
+
+    def test_a_missing_or_broken_value_is_off(self):
+        SharedState.set_begin_use_spam_only(True)
+        self._load({})
+        self.assertIs(SharedState.get_begin_use_spam_only(), False, "無い（古い settings.json）")
+        for broken in ("yes", 1, "true", None, [], {"a": 1}):
+            SharedState.set_begin_use_spam_only(True)
+            self._load({"begin_use_spam_only": broken})
+            self.assertIs(SharedState.get_begin_use_spam_only(), False, repr(broken))
