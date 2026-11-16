@@ -143,6 +143,21 @@ class TestDoAfterRoundWithTheSettingOn(_Case):
         self.assertEqual(self.st.round_seq, 8)
         self.assertFalse(self.st.in_round)
 
+    def test_the_work_after_begin_still_runs(self):
+        """連打だけで受理されたあとも、finally の後ろへ進む（放置モードのアイテム取得・Plush の
+        再試行・アイテムロストの装備待ちは、どれも st.begin_done を条件にここに置かれている）。
+        ここで do_after_round を抜けてしまうと、連打だけの設定にした窓だけ全部動かなくなる"""
+        ex, st = self.ex, self.st
+        st.item_id = ""
+        fetch = MagicMock(return_value=None)
+        press_begin = MagicMock(return_value=True)
+        with patch.object(ex, "_hands_free", lambda: True),                 patch.object(ex, "item_fetch_target", lambda: ("item", 1)),                 patch.object(ex, "_fetch_item", fetch),                 patch.object(ex, "_press_begin", press_begin):
+            self._run_until(ex, lambda: True, lambda: setattr(st, "begin_done", True))
+        self.assertTrue(st.begin_done)
+        self.assertIn(self.WAITING, self.logs, "連打だけの待ちを通った（空振りのテストにしない）")
+        fetch.assert_called_once_with(7, "item", 1)
+        press_begin.assert_not_called()
+
     def test_the_confirm_and_retry_paths_are_not_taken(self):
         ex = self.ex
         confirm, giveup = MagicMock(), MagicMock(return_value=False)

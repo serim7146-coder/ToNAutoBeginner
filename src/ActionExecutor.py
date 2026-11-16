@@ -1991,8 +1991,8 @@ class ActionExecutor:
                 if not st.in_round and st.round_seq == round_seq:
                     if SharedState.get_begin_use_spam_only():
                         self._wait_use_spam_only(round_seq, spam)
-                        return                  # finally が連打を止める
-                    clicked = self._press_begin()
+                    else:
+                        clicked = self._press_begin()
 
             if clicked:
                 self._confirm_begin(round_seq)
