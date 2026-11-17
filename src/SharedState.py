@@ -177,6 +177,11 @@ get_murder_no_afk, set_murder_no_afk = _MURDER_NO_AFK.get, _MURDER_NO_AFK.set
 _BEGIN_USE_SPAM_ONLY = _Setting(False, bool)
 get_begin_use_spam_only, set_begin_use_spam_only = _BEGIN_USE_SPAM_ONLY.get, _BEGIN_USE_SPAM_ONLY.set
 
+# OBS の録画の間だけツール専用のシーンへ切り替え、続行中の窓だけを格子に並べる（全窓共通・既定 OFF。
+# OFF なら OBS へ GetRecordStatus・StartRecord・StopRecord しか送らない）
+_RECORD_SPLIT_WINDOWS = _Setting(False, bool)
+get_record_split_windows, set_record_split_windows = _RECORD_SPLIT_WINDOWS.get, _RECORD_SPLIT_WINDOWS.set
+
 # スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
 _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set

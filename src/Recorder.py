@@ -5,11 +5,14 @@
 - 録画終了: 最後の窓の RoundOver から OBS_RECORD_TAIL_SEC 秒後（どちらで始めても同じ。
   フリーズの解除では止めない）
 - このツールが始めた録画だけ止める。利用者が手で始めた録画は絶対に止めない
-- 録画の間だけ、ツール専用のシーン（config.OBS_SCENE_NAME）へ切り替え、続行中の窓だけを
+- 設定「続行中の窓だけを録画する」が ON のときだけ（既定 OFF）、録画の間だけ、
+  ツール専用のシーン（config.OBS_SCENE_NAME）へ切り替え、続行中の窓だけを
   並べる（1 窓は画面いっぱい・2 窓は左右・3 窓は横 3 分割・4 窓は 2×2）。窓の指定は
   ディスプレイキャプチャを窓の矩形で切り出す（クロップはシーンアイテムの変換）。
   録画の前のシーンは覚えておき、録画が終わったら必ず戻す。利用者が手で録画しているときは
-  シーンの命令を 1 つも送らない。シーンやソースの操作が失敗しても録画は止めない
+  シーンの命令を 1 つも送らない。シーンやソースの操作が失敗しても録画は止めない。
+  OFF のときは OBS へ GetRecordStatus・StartRecord・StopRecord しか送らない
+  （シーンもソースも作らない・切り替えない・触らない）
 
 OBS との通信はすべて専用のワーカースレッドで行う。LogMonitor のスレッドからは
 キューに投げるだけで待たない（OBS が落ちていても自爆・Begin・フリーズを遅らせない）。
@@ -87,7 +90,8 @@ class RecordPlan:
                  tail_sec: float = config.OBS_RECORD_TAIL_SEC,
                  max_sec: float = config.OBS_RECORD_MAX_SEC,
                  hide_windows: Callable[[bool], None] = None,
-                 window_source: Callable[[int], tuple] = None):
+                 window_source: Callable[[int], tuple] = None,
+                 split_windows: Callable[[], bool] = None):
         self._client_factory = client_factory
         self._log = log
         self._clock = clock
@@ -103,6 +107,9 @@ class RecordPlan:
         # 窓の番号 → (モニタの矩形, 窓の矩形) か None（窓の操作はこのファイルでは行わない）。
         # 渡されていなければシーンには一切触らない
         self._window_source = window_source
+        # 録画の開始のたびに呼んで、続行中の窓だけを録画する機能が ON かを知る。
+        # 渡されていなければ OFF（シーンには一切触らない）
+        self._split_windows = split_windows
         self._previous_scene: Optional[str] = None   # 録画の前のシーン。録画が終わったら戻す
         self._in_scene = False                       # ツール専用のシーンへ切り替えているか
         self._scene_warned = False                   # この録画でシーンの警告を出したか（1 回だけ）
@@ -127,7 +134,11 @@ class RecordPlan:
             self._note(f"[窓{window}] OBSはすでに録画中です → 手動の録画とみなし、開始も停止もしません")
             return
         self._scene_warned = False
-        self._enter_scene()
+        if self._split_enabled():
+            self._enter_scene()
+            # 先に並べておく。録画の最初の一瞬に空のシーンが写らないように
+            # （並べるのは今のシーンでなくても効く。失敗しても録画は始める）
+            self._apply_layout()
         ok, _data, reason = self._call("StartRecord")
         if not ok:
             self._leave_scene()                  # 録画できなかったのに別のシーンに残さない
@@ -138,7 +149,6 @@ class RecordPlan:
         self._warned = ""
         self._hide_own_windows(True)
         self._log(f"[窓{window}] 🎥 OBS録画を開始しました（{label}）")
-        self._apply_layout()
 
     def round_over(self, window: int):
         if window in self.active:
@@ -207,6 +217,16 @@ class RecordPlan:
             pass                # 付随機能なので、失敗しても録画は続ける
 
     # ── 録画用のシーン ─────────────────────────
+    def _split_enabled(self) -> bool:
+        """続行中の窓だけを録画する機能が ON か。取れない・例外のときは OFF"""
+        if self._split_windows is None:
+            return False
+        try:
+            return self._split_windows() is True
+        except Exception:
+            DebugLog.exception("Recorder._split_enabled")
+            return False
+
     def _collect_windows(self) -> list:
         """続行中の窓の [(窓の番号, モニタの矩形, 窓の矩形)]。窓の番号の小さい順。
         矩形が取れない窓（最小化・消えた）は入れない"""
@@ -486,12 +506,14 @@ class Recorder:
         self._thread: Optional[threading.Thread] = None
         self._record_continue = False       # 続行ラウンドを録画する
         self._record_freeze = False         # 突入フリーズのラウンドを録画する
+        self._split_windows_on = False      # 続行中の窓だけを録画する（シーンを切り替える）。既定 OFF
         self._log: Callable[[str], None] = lambda _m: None
         self._hide_windows: Optional[Callable[[bool], None]] = None
         self._window_source: Optional[Callable[[int], tuple]] = None
         self._plan = RecordPlan(self._make_client, self._emit, clock,
                                 hide_windows=self._call_hide_windows,
-                                window_source=self._call_window_source)
+                                window_source=self._call_window_source,
+                                split_windows=self._get_split_windows)
         self._host = config.OBS_DEFAULT_HOST
         self._port = config.OBS_DEFAULT_PORT
         self._password = ""
@@ -512,6 +534,10 @@ class Recorder:
             source = self._window_source
         return source(window) if source is not None else None
 
+    def _get_split_windows(self) -> bool:
+        with self._lock:
+            return self._split_windows_on
+
     def _call_hide_windows(self, hidden: bool):
         with self._lock:
             hider = self._hide_windows
@@ -520,9 +546,12 @@ class Recorder:
 
     def configure(self, enabled: bool, host: str = config.OBS_DEFAULT_HOST,
                   port: int = config.OBS_DEFAULT_PORT, password: str = "",
-                  log: Callable[[str], None] = None, record_freeze: bool = False):
-        """enabled は続行ラウンドの録画、record_freeze は突入フリーズの録画（別々のスイッチ）"""
+                  log: Callable[[str], None] = None, record_freeze: bool = False,
+                  split_windows: bool = False):
+        """enabled は続行ラウンドの録画、record_freeze は突入フリーズの録画（別々のスイッチ）。
+        split_windows は、録画の間だけシーンを切り替えて続行中の窓だけを並べるか（既定 OFF）"""
         with self._lock:
+            self._split_windows_on = split_windows is True
             self._record_continue = bool(enabled)
             self._record_freeze = bool(record_freeze)
             self._host = host or config.OBS_DEFAULT_HOST

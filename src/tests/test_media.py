@@ -544,10 +544,11 @@ class TestRecordScene(unittest.TestCase):
         rect = self.rects.get(idx)
         return None if rect is None else (SUB_MONITOR, rect)
 
-    def _plan(self, obs, source="default"):
+    def _plan(self, obs, source="default", split=True):
         return Recorder.RecordPlan(
             obs.factory, self.logs.append, clock=lambda: self.now, tail_sec=3.0,
-            window_source=self._source if source == "default" else source)
+            window_source=self._source if source == "default" else source,
+            split_windows=(lambda: split) if split is not None else None)
 
     def _advance(self, plan, sec):
         self.now += sec
@@ -946,6 +947,53 @@ class TestRecordScene(unittest.TestCase):
         self.assertEqual(obs.scene_requests(), [])
         self.assertEqual(obs.calls, ["GetRecordStatus", "StartRecord", "StopRecord"])
 
+    def test_the_layout_is_applied_before_the_recording_starts(self):
+        """並べてから録画を始める。並べに失敗しても録画は始める"""
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        names = [r[0] for r in obs.requests]
+        self.assertLess(names.index("SetSceneItemEnabled"), names.index("StartRecord"))
+        self.assertLess(names.index("SetCurrentProgramScene"), names.index("StartRecord"))
+        self.assertEqual(names.count("StartRecord"), 1)
+
+        obs = FakeSceneOBS()
+        obs.fail_on.add("SetSceneItemTransform")
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        self.assertEqual(obs.count("StartRecord"), 1, "並べに失敗しても録画は始める")
+
+    def test_when_the_setting_is_off_only_the_three_record_requests_are_sent(self):
+        for split in (False, None):             # 偽を返す・渡されていない
+            with self.subTest(split=split):
+                obs = FakeSceneOBS()
+                plan = self._plan(obs, split=split)
+
+                plan.continue_start(1)
+                plan.continue_start(2)          # 窓が増えても
+                plan.round_over(1)
+                plan.round_over(2)
+                self._advance(plan, 3.0)
+
+                self.assertEqual([r[0] for r in obs.requests],
+                                 ["GetRecordStatus", "StartRecord", "StopRecord"])
+                self.assertEqual(obs.current, "ゲーム")
+                self.assertEqual(obs.scenes, ["ゲーム"])
+                self.assertEqual(obs.inputs, {})
+
+    def test_a_broken_setting_getter_means_off(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs, split=None)
+
+        def boom():
+            raise RuntimeError("boom")
+        plan._split_windows = boom
+        plan.continue_start(1)
+
+        self.assertEqual([r[0] for r in obs.requests], ["GetRecordStatus", "StartRecord"])
+
     def test_the_layout_is_logged_when_it_changes(self):
         obs = FakeSceneOBS()
         plan = self._plan(obs)
@@ -966,10 +1014,12 @@ class TestRecordScene(unittest.TestCase):
         plan.continue_start(2)
 
         names = [r[0] for r in obs.requests]
+        # 並べてから録画を始める（録画の最初の一瞬に空のシーンが写らない）
         self.assertEqual(names[:9], [
             "GetRecordStatus", "GetSceneList", "CreateScene", "GetCurrentProgramScene",
-            "SetCurrentProgramScene", "StartRecord", "GetVideoSettings", "GetSceneItemList",
-            "GetInputList"])
+            "SetCurrentProgramScene", "GetVideoSettings", "GetSceneItemList",
+            "GetInputList", "GetInputKindList"])
+        self.assertLess(names.index("SetSceneItemEnabled"), names.index("StartRecord"))
         self.assertEqual(names.count("SetSceneItemTransform"), 3, "窓1 を 1 回、窓1・窓2 を 1 回ずつ")
 
 
@@ -986,10 +1036,32 @@ class TestRecorderSceneWiring(unittest.TestCase):
 
         self.assertEqual(obs.scene_requests(), [])
 
+    def test_a_recorder_with_the_default_setting_sends_only_the_three_record_requests(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=lambda _m: None)         # split_windows を渡さない＝既定 OFF
+        rec.set_window_source(lambda idx: (SUB_MONITOR, REAL_WINDOW_RECTS[idx]))
+
+        rec.on_continue_start(1)
+        rec.on_round_over(1)
+        rec.stop_all(wait_sec=3)
+
+        self.assertEqual([r[0] for r in obs.requests],
+                         ["GetRecordStatus", "StartRecord", "StopRecord"])
+
+    def test_the_setting_can_be_turned_off_again(self):
+        rec = Recorder.Recorder(client_factory=FakeSceneOBS().factory)
+        rec.configure(True, split_windows=True)
+        self.assertTrue(rec._get_split_windows())
+        rec.configure(True, split_windows=False)
+        self.assertFalse(rec._get_split_windows())
+        rec.configure(True)
+        self.assertFalse(rec._get_split_windows())
+
     def test_the_worker_places_the_window_through_the_injected_source(self):
         obs = FakeSceneOBS(user_scene="ゲーム")
         rec = Recorder.Recorder(client_factory=obs.factory)
-        rec.configure(True, log=lambda _m: None)
+        rec.configure(True, log=lambda _m: None, split_windows=True)
         rec.set_window_source(lambda idx: (SUB_MONITOR, REAL_WINDOW_RECTS[idx]))
 
         rec.on_continue_start(1)

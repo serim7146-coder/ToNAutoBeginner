@@ -1085,6 +1085,59 @@ class TestOtherChecksWrap(_AppCase):
                          "幅は下限 560（小さい画面でも 560）")
 
 
+class TestRecordSplitSetting(_AppCase):
+    """設定の窓の OBS 自動録画の「続行中の窓だけを録画する」: 全窓共通・保存・既定 OFF"""
+    LABEL = "続行中の窓だけを録画する（OBS のシーンを切り替える）"
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_record_split_windows, False)
+        self.addCleanup(self.app.v_record_split.set, False)
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update),                 patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data),                 patch.object(self.app, "_apply_obs_settings"):
+            self.app._load_saved_settings()
+
+    def test_the_default_is_off_and_the_check_is_in_the_window(self):
+        self.assertFalse(SharedState.get_record_split_windows())
+        self.assertFalse(self.app.v_record_split.get())
+        check = next(w for w in _all_widgets(self.app._settings_window)
+                     if isinstance(w, ttk.Checkbutton) and w.cget("text") == self.LABEL)
+        self.assertEqual(str(check.cget("variable")), str(self.app.v_record_split))
+
+    def test_the_check_sets_the_shared_state_tells_the_recorder_and_schedules_a_save(self):
+        self.app.v_record_split.set(True)
+        with patch.object(self.app, "_schedule_settings_save") as save,                 patch.object(self.app, "_apply_obs_settings") as apply:
+            self.app._on_record_split_changed()
+        self.assertIs(SharedState.get_record_split_windows(), True)
+        apply.assert_called_once()
+        save.assert_called_once()
+
+    def test_saved_under_obs_record_split_and_restored(self):
+        SharedState.set_record_split_windows(True)
+        stored = self._save()
+        self.assertIs(stored["obs_record_split"], True)
+        SharedState.set_record_split_windows(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_record_split_windows(), True)
+        self.assertIs(self.app.v_record_split.get(), True, "チェックの表示も戻る")
+        self._load(dict(stored, obs_record_split=False))
+        self.assertIs(SharedState.get_record_split_windows(), False)
+        self.assertIs(self.app.v_record_split.get(), False)
+
+    def test_a_missing_or_broken_value_is_off(self):
+        for data in ({}, {"obs_record_split": "yes"}, {"obs_record_split": 1}):
+            SharedState.set_record_split_windows(True)
+            self._load(data)
+            self.assertIs(SharedState.get_record_split_windows(), False, data)
+
+
 class TestMurderNoAfkSetting(_AppCase):
     """設定の窓の「Murderで AFK 回避しない」: 全窓共通・保存・既定 OFF"""
 
