@@ -1,4 +1,4 @@
-"""手に持っている物と、その間の手のクリックの記録（ItemUse）。消費系・Maxwell のロストは test_item_consumed.py。
+"""手に持っている物と、その間の利用者のクリックの記録（ItemUse）。消費系・Maxwell のロストは test_item_consumed.py。
 本物の OSC・入力・マウスフック・窓は使わない（support の偽物と、このファイルの偽のソケットだけ）"""
 import ctypes
 import types

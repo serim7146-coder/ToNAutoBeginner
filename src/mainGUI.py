@@ -1470,8 +1470,8 @@ class App(tk.Tk):
         mouse_hook_ok = MouseButtons.start()
         if not mouse_hook_ok:
             self._log("[キー] ⚠ マウスのサイドボタンは使えません（フックを張れませんでした）")
-            DebugLog.write("[アイテム] 手のクリックは使用に数えません（マウスフックを張れませんでした）")
-        # 手に持ったアイテムの使用の判定（ItemUse）の、手のクリック。張れていなければ通知が来ないだけ
+            DebugLog.write("[アイテム] 利用者のクリックは使用に数えません（マウスフックを張れませんでした）")
+        # 手に持ったアイテムの使用の判定（ItemUse）の、利用者のクリック。張れていなければ通知が来ないだけ
         self._hand_click_hook = MouseButtons.hook_left(_on_hand_left_down)
         self._hook_chase_keys()
         self._hook_move_keys()

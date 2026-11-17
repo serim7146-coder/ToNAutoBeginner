@@ -258,7 +258,7 @@ class TestOSCPortsFromAssignment(unittest.TestCase):
         return app
 
     def test_start_fills_only_the_empty_tabs(self):
-        """手で選んだログは上書きしない"""
+        """利用者が選んだログは上書きしない"""
         tabs = [self.FakeTab(0, hwnd=0xA, log=r"C:\mine\chosen.txt"),
                 self.FakeTab(1, hwnd=0xB)]
         app = self._start_paths(tabs, [self._assignment(0xA, "a.txt", 9000, 9001),
@@ -1008,7 +1008,7 @@ class TestLaunchWidgetsStillReachable(unittest.TestCase):
 class TestWindowCountIsRemembered(unittest.TestCase):
     """窓数を保存する。起動時は 開いている窓の数 → 保存値 → 4 の順で決める。
 
-    保存するのは手で変えた値だけ。自動検出の値を保存すると、3窓だけ開いていた
+    保存するのは利用者が変えた値だけ。自動検出の値を保存すると、3窓だけ開いていた
     日の次に、VRChat を開かずに起動したとき3が出てしまう。
     """
 

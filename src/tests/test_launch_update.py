@@ -359,7 +359,7 @@ class TestOSCLogBinding(unittest.TestCase):
 
     # ── 道具 ────────────────────────────────
     def _log(self, stamp: str, osc_in: int = None, filler: int = 0) -> Path:
-        """ログを1本作る。osc_in=None は手動起動（--osc が入らない）"""
+        """ログを1本作る。osc_in=None は利用者が立ち上げた窓（--osc が入らない）"""
         arg = ("2026.08.05 12:00:01 Debug      -  "
                f"Arg: --osc={osc_in}:127.0.0.1:{osc_in + 1}\n") if osc_in else ""
         path = Path(self._dir.name) / f"output_log_{stamp}.txt"
@@ -415,9 +415,9 @@ class TestOSCLogBinding(unittest.TestCase):
         self.assertEqual([a.osc_in for a in assigned], [9000, 9003, 9010])
         self.assertEqual([a.hwnd for a in assigned], [0xA, 0xE, 0xB])
 
-    # ── ③ 手動起動（--osc 無し） ─────────────────
+    # ── ③ 利用者が立ち上げた窓（--osc 無し） ─────────────────
     def test_a_log_without_the_osc_arg_counts_as_the_default_port(self):
-        """手動起動のログに --osc は入らないが、VRChatは既定で9000を掴む"""
+        """利用者が立ち上げた窓のログに --osc は入らないが、VRChatは既定で9000を掴む"""
         manual = self._log("2026-08-05_12-00-00")
         ours = self._log("2026-08-05_12-00-10", 9010)
         windows = [self._window(0xB, pid=20), self._window(0xA, pid=10)]
@@ -447,7 +447,7 @@ class TestOSCLogBinding(unittest.TestCase):
 
     # ── ⑤⑥ 9000 を名乗るログが並ぶとき ────────────
     def test_the_nearest_launch_time_wins_among_logs_on_the_same_port(self):
-        """手動起動を繰り返すと9000のログが並ぶ。ここを外すといちばん危ない"""
+        """利用者が立ち上げるのを繰り返すと9000のログが並ぶ。ここを外すといちばん危ない"""
         old = self._log("2026-08-05_09-00-00")
         new = self._log("2026-08-05_12-00-00")
         windows = [self._window(0xA, "2026-08-05_09-00-03", pid=10)]
@@ -559,7 +559,7 @@ class TestOSCLogBinding(unittest.TestCase):
             (9003, 9004))
         self.assertEqual(
             VRChatDiscovery.read_log_osc_ports(self._log("2026-08-05_12-00-01")),
-            VRChatDiscovery.VRCHAT_DEFAULT_OSC_PORTS, "--osc無し＝手動起動")
+            VRChatDiscovery.VRCHAT_DEFAULT_OSC_PORTS, "--osc無し＝利用者が立ち上げた窓")
         self.assertIsNone(
             VRChatDiscovery.read_log_osc_ports(Path(self._dir.name) / "nope.txt"),
             "読めないログは既定ポート扱いにしない")

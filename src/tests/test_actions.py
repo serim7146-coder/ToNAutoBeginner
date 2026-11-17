@@ -495,7 +495,7 @@ class TestHideOwnWindowsWhileRecording(unittest.TestCase):
         self.assertEqual(calls, [True, False], "停止で戻す")
 
     def test_a_recording_we_did_not_start_changes_nothing(self):
-        """手動の録画には触らない（隠しもしない）"""
+        """利用者が始めた録画には触らない（隠しもしない）"""
         calls = []
         client = MagicMock()
         client.connect.return_value = (True, "")

@@ -2074,7 +2074,7 @@ class TestCursorGiveUpReasons(unittest.TestCase):
 
     # ── 1〜2. 読み返しの順番 ─────────────────────
     def test_the_readback_comes_before_the_dwell(self):
-        """待ってから読むと、その間に手でマウスを動かされて誤判定する"""
+        """待ってから読むと、その間に利用者がマウスを動かして誤判定する"""
         order = []
         user32 = FakeUser32()
         real_set, real_get = user32.SetCursorPos, user32.GetCursorPos
@@ -2334,7 +2334,7 @@ class TestDipRetry(unittest.TestCase):
             calls["n"] += 1
             real(x, y)
             if calls["n"] == 1:
-                user32.cursor = (7, 9)        # 置いた瞬間に手でマウスを動かされた
+                user32.cursor = (7, 9)        # 置いた瞬間に利用者がマウスを動かした
             return 1
 
         user32.SetCursorPos = moved_by_hand

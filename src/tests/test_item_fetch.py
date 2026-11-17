@@ -1090,7 +1090,7 @@ class TestItemFetch(unittest.TestCase):
         ex, st, _ = self._executor()
 
         def move(fetcher):
-            st.item_id = 29                     # 手で装備した（ログの流れが解除した）
+            st.item_id = 29                     # 利用者が装備した（ログの流れが解除した）
             fetcher._check()
             return True
         outcome, calls = self._fetch(ex, st, move=move)

@@ -383,7 +383,7 @@ class ActionExecutor:
     def move(self, direction: str, seconds: float):
         """移動する。フォーカスは奪わない。
 
-        OSCが使える窓はOSCで送る。使えない窓（手動起動の2窓目以降など）は
+        OSCが使える窓はOSCで送る。使えない窓（利用者が立ち上げた 2 窓目以降など）は
         背面へのキー送信（自爆と同じ経路）で送る。キーはメッセージでも
         読まれるので、前面化しなくても前進できる（WindowOperator.click() の
         docstring の実測を参照）。

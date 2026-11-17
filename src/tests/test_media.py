@@ -257,7 +257,7 @@ class TestRecordPlan(unittest.TestCase):
 
         self.assertEqual(obs.calls, [])
 
-    # ── 10 手動の録画 ────────────────────────────
+    # ── 10 利用者が始めた録画 ────────────────────────────
     def test_a_recording_started_by_hand_is_left_alone(self):
         obs = FakeOBS(recording=True)
         plan = self._plan(obs)
@@ -900,7 +900,7 @@ class TestWindowVolumeController(unittest.TestCase):
         self.ctl.tick()
         self.assertEqual(self.audio.calls, [], "OFF のあいだは触らない")
 
-        self.audio.volumes[11] = 0.5                # OFF のあいだに手で変えた
+        self.audio.volumes[11] = 0.5                # OFF のあいだに利用者が変えた
         self.ctl.set_enabled(True)
         self.ctl.tick()
         self.ctl.set_enabled(False)

@@ -1,7 +1,6 @@
-"""文言の決まり: 「手で」「手動」の比喩を使わない・画面に出る文言と README に「利用者」と書かない"""
+"""文言の決まり: 操作の主体をぼかす「手で」と、同じ意味の語を使わない・画面に出る文言と README に「利用者」と書かない"""
 from tests.support import *  # noqa: F401,F403
 import ast
-import re
 from pathlib import Path
 
 SRC = Path(mainGUI.__file__).parent
@@ -12,7 +11,10 @@ _SCREEN_CALLS = {"_log", "_note", "showinfo", "showwarning", "showerror",
 
 
 def _sources():
-    return sorted(SRC.glob("*.py")) + [README]
+    """走査の対象: src/*.py・src/tests/*.py・README.md。この中に探す語そのものが書いてあるので、このファイル自身は除く"""
+    me = Path(__file__).resolve()
+    tests = [p for p in sorted((SRC / "tests").glob("*.py")) if p.resolve() != me]
+    return sorted(SRC.glob("*.py")) + tests + [README]
 
 
 def _screen_strings(path):
@@ -34,17 +36,19 @@ def _screen_strings(path):
 
 class TestWording(unittest.TestCase):
     def test_no_hand_metaphor_in_the_sources(self):
-        """「手で」は、誰が・どの画面の・どの操作かが決まらない。具体語で書く"""
+        """「手で」は、誰が・どの画面の・どの操作かが決まらない。具体語で書く。
+        対象は操作の主体をぼかす「手で」だけ。「手に持った」はドメイン用語（ToN の Pickup）なので対象外"""
         hits = [f"{p.name}:{n}" for p in _sources()
                 for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
                 if "手で" in line]
         self.assertEqual(hits, [])
 
-    def test_manual_is_only_the_launch_term(self):
-        """「手動」は「手動起動」（利用者が立ち上げた VRChat の窓の呼び名）の形でだけ残る"""
+    def test_no_manual_in_the_sources(self):
+        """操作の主体をぼかす語「手」＋「動」は 1 件も使わない。誰が操作するのかを具体語で書く"""
+        word = "手" + "動"   # このファイル自身にその語を書かない
         hits = [f"{p.name}:{n}" for p in _sources()
                 for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
-                if re.search(r"手動(?!起動)", line)]
+                if word in line]
         self.assertEqual(hits, [])
 
     def test_the_screen_text_has_no_third_person(self):

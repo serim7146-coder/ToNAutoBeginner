@@ -168,7 +168,7 @@ class TestTheFetchingWindow(_Case):
 
 
 class TestTheManualWindow(_Case):
-    """取りに行かない窓（人が手で装備する）: Verified Round End では張らず、Begin が通ったときに張る"""
+    """取りに行かない窓（利用者が装備する）: Verified Round End では張らず、Begin が通ったときに張る"""
 
     def _round(self, accept_on):
         ex, st = self._executor(fetch=False, accept_on=accept_on)
