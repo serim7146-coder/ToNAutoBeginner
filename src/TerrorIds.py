@@ -294,7 +294,7 @@ def from_listtool(lt, key: str, source: str = "") -> int | None:
     表に無い番号は None（番号ごとに 1 回だけ debug.log。主催リストは数秒ごとに読むため）"""
     own, state = _lookup(lt, key)
     if state == "unknown":
-        _report_once("listtool", lt, f"{source or 'ListTool'} の番号 {lt} が表にないので捨てます")
+        _report_once("listtool", lt, f"{source or 'ListTool'} の番号 {lt} が表にないので無視します")
     return own
 
 

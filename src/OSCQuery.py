@@ -331,7 +331,7 @@ class Service:
         if idle:
             if not self._idle_logged:
                 self._idle_logged = True
-                DebugLog.write("[OSCQuery] 受け取る窓がありません（監視していない）→ 届いたものは数えずに捨てます")
+                DebugLog.write("[OSCQuery] 受け取る窓がありません（監視していない）→ 届いたものは数えずに無視します")
             # 値は捨てるが、送ってきた PID は覚える（あとで監視を始めた窓がすぐ OSCQuery に決められる）。
             # 送り元が表に無いときだけ、同じ間隔（PORTS_REFRESH_SEC）を空けて netstat を取り直す
             if src_port not in self._port_pid and time.time() - self._refreshed_at >= PORTS_REFRESH_SEC:
@@ -354,7 +354,7 @@ class Service:
                 example = f"{port}（PID {pid}）" + (f"など {len(self._unknown_ports)} つ"
                                                   if len(self._unknown_ports) > 1 else "")
                 DebugLog.write(f"[OSCQuery] 窓の分からない送り元: この {UNKNOWN_LOG_SEC:.0f} 秒で "
-                               f"{self._unknown_since_log:,} 件（{example}）→ 捨てました（累計 {self.unknown:,} 件）")
+                               f"{self._unknown_since_log:,} 件（{example}）→ 無視しました（累計 {self.unknown:,} 件）")
                 self._unknown_logged_at = now
                 self._unknown_since_log = 0
                 self._unknown_ports = {}

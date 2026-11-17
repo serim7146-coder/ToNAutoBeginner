@@ -526,7 +526,7 @@ class WindowTab(ttk.Frame):
                 var.trace_add("write", lambda *_a: self._notify_freeze_changed())
 
     def _notify_freeze_changed(self):
-        """手で変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
+        """利用者が変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
         if not self._freeze_loading:
             self._on_freeze_changed()
 
@@ -542,7 +542,7 @@ class WindowTab(ttk.Frame):
         return True
 
     def _changed(self, key: str, var):
-        """窓ごとのチェックを手で変えた: Ctrl を押していれば全窓へ写す"""
+        """窓ごとのチェックを利用者が変えた: Ctrl を押していれば全窓へ写す"""
         self._broadcast_if_ctrl("check", key, bool(var.get()))
 
     def _checks(self) -> dict:
@@ -581,13 +581,13 @@ class WindowTab(ttk.Frame):
 
     def set_check(self, key: str, value: bool):
         """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）。
-        速度検知のフリーズは、手で入れたときと同じく、入れたらラウンド突入の同じラウンドも入れる"""
+        速度検知のフリーズは、利用者が入れたときと同じく、入れたらラウンド突入の同じラウンドも入れる"""
         self._checks()[key].set(bool(value))
         if key.startswith("freeze_"):
             self._link_speed_freeze(key)
 
     def _on_speed_freeze(self, key: str):
-        """速度検知のフリーズのチェックを手で変えた: 連動してから、Ctrl を押していれば全窓へ写す"""
+        """速度検知のフリーズのチェックを利用者が変えた: 連動してから、Ctrl を押していれば全窓へ写す"""
         self._link_speed_freeze(key)
         self._changed(key, self._checks()[key])
 
@@ -622,7 +622,7 @@ class WindowTab(ttk.Frame):
             self._freeze_loading = False
 
     def set_round(self, which: str, name: str, value: bool):
-        """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。手で入れたときと同じく、入れたら反対側を外す"""
+        """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。利用者が入れたときと同じく、入れたら反対側を外す"""
         own, other = ((self.v_skip_rounds, self.v_continue_rounds) if which == "skip"
                       else (self.v_continue_rounds, self.v_skip_rounds))
         if name not in own:
@@ -899,7 +899,7 @@ class WindowTab(ttk.Frame):
             self._on_open_window_table(self, which)
 
     def _round_changed(self, which, name: str, var, other):
-        """ラウンドごとのチェックを手で変えた: 排他を行い、Ctrl を押していれば全窓へ写す"""
+        """ラウンドごとのチェックを利用者が変えた: 排他を行い、Ctrl を押していれば全窓へ写す"""
         exclusive_check(var, other)
         if which is not None:
             self._broadcast_if_ctrl("round", (which, name), bool(var.get()))
@@ -1023,7 +1023,7 @@ def _remember_own_window(widget):
 
 
 def _on_hand_left_down(event=None):
-    """手で左クリックした（マウスフックのスレッドから）。前面の窓が VRChat なら、持っているアイテムの使用の合図。
+    """利用者が左クリックした（マウスフックのスレッドから）。前面の窓が VRChat なら、持っているアイテムの使用の合図。
     注入されたクリック（ツール自身）は MouseButtons が捨てている"""
     ItemUse.on_click(WindowOperator.foreground_hwnd(), ItemUse.SOURCE_HAND)
 
@@ -1372,7 +1372,7 @@ class App(tk.Tk):
         # 窓ごと（各窓の設定の行）
         ContinueTable.set_current(ContinueTable.load())
         self.v_win_count = tk.IntVar(value=4)
-        # 手で変えた窓数（settings.json の win_count）。自動検出で入った値は
+        # 利用者が変えた窓数（settings.json の win_count）。自動検出で入った値は
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
@@ -2969,7 +2969,7 @@ class App(tk.Tk):
         self._sync_launch_count()
         if len(self.tabs) == n:
             # 変わっていない。スピンボックスからフォーカスが外れただけでも
-            # ここへ来るので、自動検出の値を「手で選んだ値」として覚えない
+            # ここへ来るので、自動検出の値を「利用者が選んだ値」として覚えない
             return
         self._win_count_pref = n
         self._schedule_settings_save()   # 変えた直後に落ちても残るように
@@ -3136,7 +3136,7 @@ class App(tk.Tk):
     def _sync_launch_count(self):
         """起動する窓数を「窓数 − 既に開いているVRChat窓数」に合わせる。
 
-        手で入れ直した値は次に窓数を変えるかVRChatを起動するまで保たれる。
+        利用者が入れ直した値は次に窓数を変えるかVRChatを起動するまで保たれる。
         """
         if self._running:
             return
@@ -4080,7 +4080,7 @@ class App(tk.Tk):
                     setattr(monitor.cfg, key, value)
 
     def _broadcast_tab_setting(self, tab, kind: str, key, value):
-        """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
+        """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、利用者が変えたときと同じ副作用で写す（変えた窓も含む）。
         kind は "check"（key=設定のキー）・"afk_wins"（value=目標勝数）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
         tabs = list(getattr(self, "tabs", []))
         if kind == "check":
@@ -4178,11 +4178,11 @@ class App(tk.Tk):
         起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
         windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         if not windows:
-            # 開いている窓が無い → 前回手で選んだ窓数 → 既定値、の順
+            # 開いている窓が無い → 前回利用者が選んだ窓数 → 既定値、の順
             n = self._win_count_pref
             if n is None:
                 self._log("[起動時検出] VRChatウィンドウ未検出"
-                          "（窓数は手動で設定してください）")
+                          "（「② 窓数・ログ設定」の「窓数」で選んでください）")
                 return
             self.v_win_count.set(n)
             if len(self.tabs) != n:
@@ -4298,7 +4298,7 @@ class App(tk.Tk):
             tab.osc_in = a.osc_in if a else 0
             tab.osc_out = a.osc_out if a else 0
             if tab.v_log.get().strip() or a is None or a.log is None:
-                continue        # 手で選んだログは上書きしない
+                continue        # 利用者が選んだログは上書きしない
             tab.v_log.set(str(a.log))
             self._log(f"[窓{tab.idx+1}] ログを自動割り当て: {a.log.name}"
                       f"（{self._assign_source(a)}）")
@@ -4569,7 +4569,7 @@ class App(tk.Tk):
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
         self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)
-        # このツールが始めた録画だけ止める（手動の録画には触らない）。
+        # このツールが始めた録画だけ止める（利用者が始めた録画には触らない）。
         # 終了時はワーカーごと消えるので、送り終えるまで少しだけ待つ
         Recorder.stop_all(wait_sec=config.OBS_TIMEOUT_SEC * 2)
         self.monitors.clear()
@@ -4692,14 +4692,14 @@ class App(tk.Tk):
             self._log("[更新] ダウンロード失敗")
             messagebox.showerror(
                 "アップデート失敗",
-                "ダウンロードに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+                "ダウンロードに失敗しました。\nGitHub のリリースページから exe をダウンロードして、今の exe と置き換えてください。")
             return
         exe = AutoUpdate.current_exe_path()
         if exe is None or not AutoUpdate.apply_update(tmp, exe):
             self._log("[更新] EXE置き換え失敗")
             messagebox.showerror(
                 "アップデート失敗",
-                "ファイルの置き換えに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+                "ファイルの置き換えに失敗しました。\nGitHub のリリースページから exe をダウンロードして、今の exe と置き換えてください。")
             return
         messagebox.showinfo("アップデート完了", f"{tag} へ更新しました。再起動します。")
         AutoUpdate.restart_to_new_exe(exe)
@@ -5130,7 +5130,7 @@ class App(tk.Tk):
         if missing:
             self._log("[起動] ⚠ ToNに入れていない窓: "
                       + " / ".join(f"窓{n}" for n in missing)
-                      + " → 手動でJoinするか、その窓だけ起動し直してください")
+                      + " → その窓の VRChat で ToN に Join するか、その窓だけ起動し直してください")
         return missing
 
     def _cancel_ton_entry(self):
@@ -5427,7 +5427,7 @@ class App(tk.Tk):
                            self.v_obs_password.get(), log=self._log, record_freeze=freeze)
         if not enabled and not freeze:
             # 録画中に両方OFFにしたら、このツールが始めた録画をその場で止める
-            # （手動の録画には触らない）。GUI操作なので待たない
+            # （利用者が始めた録画には触らない）。GUI操作なので待たない
             Recorder.stop_all()
 
     def _test_obs_connection(self):

@@ -322,7 +322,7 @@ class LogMonitor:
             DebugLog.exception("LogMonitor._flush_item_use_log")
 
     def _check_item_used(self):
-        """手に持っている間に手でクリックがあったら、消費系のアイテムを装備していればアイテムロストにする。
+        """手に持っている間に利用者のクリックがあったら、消費系のアイテムを装備していればアイテムロストにする。
         クリックの印は 1 回分（ItemUse.take_use）。装備が消費系でないときのクリックは捨てる"""
         try:
             held_name = self.st.item_use.take_use()
@@ -432,9 +432,9 @@ class LogMonitor:
 
         label は何から数えたか（"死亡" か "リスポーン"。ログの文言だけに使う）。
 
-        猶予を置くのは、解除前に手動操作を挟む余地を残すため。
+        猶予を置くのは、解除前に利用者が操作する余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
-        （続行ラウンドほど手動で挟む用事がないため）。
+        （続行ラウンドほど利用者が操作する用事がないため）。
         待機中に次のラウンドが始まったら（round_seqが変わったら）何もしない。
         reborn_seq は死亡からの予約だけが渡す。待機中に猫で復活していたら（番号が変わったら）
         その死亡は取り消されているので何もしない（RoundOver からの予約は渡さない）。
@@ -2304,7 +2304,7 @@ class LogMonitor:
         st.is_open_special_round_round = False
         st.glorbo_afk = False
         # 続行ラウンドのフリーズは死亡から少し置いて解除する。
-        # 猶予中に手動で視点調整などを挟めるようにするため。
+        # 猶予中に利用者が視点を合わせられるようにするため。
         # 死亡の予約の引数は今までどおり（番号・復活番号）。ラベルは死亡でないときだけ足す
         said = () if label == "死亡" else (label,)
         if st.is_continue_round:
@@ -2719,7 +2719,7 @@ class LogMonitor:
         st.equip_seen_id = event.item_id        # アイテム自動取得が Equip の結果を待つ
         st.equip_seen_seq += 1
         if event.item_id:
-            st.last_lost_item_id = 0            # 装備した（手で別のアイテムでも）→ もう取りに行かない
+            st.last_lost_item_id = 0            # 装備した（利用者が別のアイテムを装備しても）→ もう取りに行かない
         st.item_id = event.item_id
         self._hold_item(event.item_id)
         if st.speed_freeze_kind == "8pages":

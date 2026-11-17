@@ -385,7 +385,7 @@ class StatisticsWindow(tk.Toplevel):
             ttk.Radiobutton(scope, text=text, value=value, variable=self.v_scope,
                             command=self._analyze).pack(side="left", padx=(0, 8))
         ttk.Label(scope, text="人数").pack(side="left", padx=(12, 6))
-        # 選択・矢印・チェックはラウンドの選択と同じ 0.3 秒待ち。手で打った数は Enter か「集計」で反映
+        # 選択・矢印・チェックはラウンドの選択と同じ 0.3 秒待ち。利用者が入力した数は Enter か「集計」で反映
         self.players_op_box = ttk.Combobox(scope, textvariable=self.v_players_op, values=PLAYERS_OPS,
                                            state="readonly", width=6)
         self.players_op_box.pack(side="left")

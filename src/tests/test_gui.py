@@ -1075,7 +1075,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
 
         self.assertEqual(app.v_win_count.get(), 4)
         self.assertEqual(app.rebuilt, [])
-        self.assertTrue(any("手動で設定" in m for m in app.logs), app.logs)
+        self.assertTrue(any("「窓数」で選んでください" in m for m in app.logs), app.logs)
 
     def test_the_default_is_four(self):
         src = Path(mainGUI.__file__).read_text(encoding="utf-8")

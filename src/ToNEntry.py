@@ -315,8 +315,8 @@ class ToNEntry:
             self._log("コードの読み込みをやり直します")
         self._log("⚠ コードの読み込みを確認できませんでした")
         if result == "open":
-            # Esc は押さない（閉じると貼ったコードが消えて、手で確定できなくなる）
-            self._log("⚠ 入力欄が開いたままです（手で Enter を押してください）")
+            # Esc は押さない（閉じると貼ったコードが消えて、利用者も確定できなくなる）
+            self._log("⚠ 入力欄が開いたままです（Enter キーを押してください）")
         return "unconfirmed"
 
     def _load_once(self, code: str, log_path: str) -> str:

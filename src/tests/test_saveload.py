@@ -182,7 +182,7 @@ class TestTheSequence(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertIn("⚠ コードの読み込みを確認できませんでした", world.logs)
         self.assertGreaterEqual(world.now[0], config.SAVELOAD_LOG_WAIT_SEC)
-        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs,
+        self.assertNotIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs,
                          "Enter で閉じていれば言わない")
 
     def test_the_old_loaded_line_does_not_count(self):
@@ -506,7 +506,7 @@ class TestEnterAgain(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(self._enters(world), 3, "最初の 1 回と押し直し 2 回まで")
         self.assertIn("Enter を押し直しました（2 回目）", world.logs)
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
         self.assertNotIn(("keys", "esc"), world.events, "Esc は押さない（貼ったコードが消える）")
         self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼り直さない")
 
@@ -517,7 +517,7 @@ class TestEnterAgain(unittest.TestCase):
         self.assertEqual(self._enters(world), 2, "1 回目と、やり直しの 1 回（押し直しは無い）")
         self.assertNotIn("Enter を押し直しました（1 回目）", world.logs)
         self.assertGreaterEqual(world.now[0], 2 * config.SAVELOAD_LOG_WAIT_SEC, "どちらも 8 秒までログを待つ")
-        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertNotIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_a_late_load_after_the_box_closed_counts(self):
         """入力欄は閉じた（Enter は効いた）が、ログが 3 秒より遅れて出た"""
@@ -558,7 +558,7 @@ class TestEnterAgain(unittest.TestCase):
         WindowOperator.borrow_front.side_effect = second_fails
         self.assertEqual(entry.load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(self._enters(world), 1, "前面にできなければ押さない")
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_another_window_in_front_does_not_get_enter(self):
         world = _World(self, loads_on_enter=None, closes_on_enter=None)
@@ -668,7 +668,7 @@ class TestSettleAndTryAgain(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼ったコードを消さない")
         self.assertNotIn("コードの読み込みをやり直します", world.logs)
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_a_stop_after_the_first_try_does_not_try_again(self):
         world = _World(self, loads_on_enter=None, closes_on_enter=1)

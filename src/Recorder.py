@@ -4,7 +4,7 @@
 - 録画開始（突入フリーズ）: 窓が突入フリーズに入った瞬間（round_freeze_start(st) の直後）
 - 録画終了: 最後の窓の RoundOver から OBS_RECORD_TAIL_SEC 秒後（どちらで始めても同じ。
   フリーズの解除では止めない）
-- このツールが始めた録画だけ止める。利用者が手で始めた録画は絶対に止めない
+- このツールが始めた録画だけ止める。利用者が始めた録画は絶対に止めない
 
 OBS との通信はすべて専用のワーカースレッドで行う。LogMonitor のスレッドからは
 キューに投げるだけで待たない（OBS が落ちていても自爆・Begin・フリーズを遅らせない）。
@@ -56,8 +56,8 @@ class RecordPlan:
             self._warn(window, reason)
             return
         if data.get("outputActive"):
-            # 利用者が手で録っている。触らない（止めもしない）
-            self._note(f"[窓{window}] OBSはすでに録画中です → 手動の録画とみなし、開始も停止もしません")
+            # 利用者が録っている。触らない（止めもしない）
+            self._note(f"[窓{window}] OBSはすでに録画中です → ツールが始めた録画ではないので、開始も停止もしません")
             return
         ok, _data, reason = self._call("StartRecord")
         if not ok:
@@ -103,7 +103,7 @@ class RecordPlan:
     # ── 内部 ──────────────────────────────
     def _stop(self, why: str):
         if not self.we_started:
-            return                  # 手動の録画・始められなかった録画は止めない
+            return                  # 利用者が始めた録画・始められなかった録画は止めない
         self.we_started = False
         self.started_at = None
         self._hide_own_windows(False)

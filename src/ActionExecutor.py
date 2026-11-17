@@ -1800,7 +1800,7 @@ class ActionExecutor:
                 SharedState.equip_freeze_end(st)
                 return False
             if st.in_round:
-                # 手動Begin等でラウンド開始 → ROUND_START側で解除済み
+                # 利用者の Begin などでラウンド開始 → ROUND_START側で解除済み
                 return False
             return "manual"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
         else:
@@ -2066,7 +2066,7 @@ class ActionExecutor:
                 if fetch:
                     # 自動取得: いつもの案内のタイミング（Begin が通った後）で音だけ鳴らし、取りに行く。
                     # 「音は前面化と一緒に _show_item_loss からだけ」の例外。前面化すると取りに行く
-                    # 前面化・カーソルの差し込みの邪魔になる。手で装備するならこの音で気づける。
+                    # 前面化・カーソルの差し込みの邪魔になる。利用者が装備するならこの音で気づける。
                     # アイテム取得→Begin モードで RoundOver に鳴らした回は鳴らない（1ラウンド1回）
                     self.announce_item_lost_once()
                 outcome = self._fetch_item(round_seq, *fetch) if fetch else None
@@ -2145,7 +2145,7 @@ class ActionExecutor:
             if st.item_id == want:
                 return "equipped"
         elif st.item_id and not st.waiting_for_equip:
-            return "equipped"               # 手で装備した
+            return "equipped"               # 利用者が装備した
         _eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
         if not (con_ok and spd_ok and rnd_ok):
             # ほかの窓の続行ラウンド・速度検知・突入のフリーズ。その窓を人が操作し始めるので手を引く。

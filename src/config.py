@@ -97,7 +97,7 @@ ITEM_FETCH_LIMIT_SEC = 10.0
 # 見送った回はやり直しの回数に数えない。移動（店の前まで）は毎回する。店の操作 3.8 秒＋戻し 1 秒＋余裕 2 秒 = 12 − 7
 ITEM_FETCH_FRONT_LATEST_SEC = 5.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
-# 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って手でクリックしたらアイテムロスト
+# 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って利用者がクリックしたらアイテムロスト
 CONSUMABLE_ITEM_IDS = frozenset({36, 74, 79})
 # Maxwell を手に持ったときのログの名前（空白なし・小文字で比べる）。手に持ったまま自爆したらアイテムロスト
 MAXWELL_LOG_NAME = "maxwell"
@@ -232,7 +232,7 @@ BEGIN_WAIT_SEC        = 9.0   # RoundOver から Begin移動を始めるまで�
                                # Round End を待ってから移動するので、この値はほぼ効かない。
 
 # 続行ラウンドのフリーズ解除を死亡から遅らせる。
-# 解除前に猶予を作り、手動での視点調整などを挟めるようにするため。
+# 解除前に猶予を作り、利用者が視点を合わせられるようにするため。
 # 霧ラウンドから続行になった場合は短め、ふつうの続行ラウンドは長めにする。
 # （霧そのもので全窓を止めるかは、突入フリーズ側で選ぶ別の仕組み）
 CONTINUE_FREEZE_RELEASE_DELAY_SEC = 5.0

@@ -616,7 +616,7 @@ def load_host_local_state(path: str,
                 _fold_person_wishes(person, section, name, mine, tab_data, keepOn_set)
     if dropped:
         TerrorIds._report_once("host_local_bits", dropped,
-                               f"[主催リスト] 読めない wish_bits を {dropped} 件捨てました")
+                               f"[主催リスト] 読めない wish_bits を {dropped} 件読み飛ばしました")
 
     return _finish_host_state(keepOn_set, wishes, tabs_data, participants, participant_names,
                               listed, len(tab_list), user_save_path, user_save_raw)
