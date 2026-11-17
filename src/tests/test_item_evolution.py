@@ -115,7 +115,8 @@ class TestEvolutionLabels(unittest.TestCase):
         """文字の箱の中に暗い画素が混ざっても、色は文字の画素だけで測る（箱ごとだと暗く出る）"""
         img = _page([((59, -5), (0, 148, 255))])
         cx, cy = EQUIP[0] + 59, EQUIP[1] - 5
-        img[cy - 3:cy + 4, cx - 15:cx + 15:2] = 20          # 箱の中に暗い縦線（半分近く）を入れる
+        for k in range(1, 30, 3):                           # 3 列のうち 2 列を暗くする（箱の 3 分の 2 が暗い）
+            img[cy - 3:cy + 4, cx - 15 + k:cx - 15 + k + 2] = 20
         found = _labels(img)
         self.assertEqual(len(found), 1)
         self.assertAlmostEqual(found[0][4], 255, delta=2)
