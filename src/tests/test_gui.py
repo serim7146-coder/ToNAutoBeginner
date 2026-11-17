@@ -488,7 +488,8 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
             self.assertLessEqual(imports, {"base64", "hashlib", "json", "os",
                                            "socket", "struct", "time", "queue",
                                            "threading", "typing", "config",
-                                           "OBSClient", "DebugLog", "TaskStats"}, name)   # 例外を debug.log へ・CPU の記録（FI）
+                                           "OBSClient", "DebugLog", "TaskStats",
+                                           "RecordLayout"}, name)   # 例外を debug.log へ・CPU の記録（FI）・シーンの計算（標準ライブラリだけの純粋なモジュール）
 
 
 

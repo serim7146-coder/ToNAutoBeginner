@@ -400,6 +400,611 @@ class TestRecordPlan(unittest.TestCase):
 
 
 
+class FakeSceneOBS(FakeOBS):
+    """シーン・ソースを覚えている偽の OBS（obs-websocket v5 の応答の形）。
+    本物の OBS ではないので、「正しい命令を送ったか」しか確かめられない"""
+
+    # モニタの選択肢。OBS の名前の形は「… N: 幅x高さ @ 左,上」
+    MONITORS = [
+        {"itemName": "Display 1: 2560x1440 @ 0,0 (Primary Monitor)", "itemValue": "MON_MAIN",
+         "itemEnabled": True},
+        {"itemName": "Display 2: 1920x1440 @ -1920,0", "itemValue": "MON_SUB",
+         "itemEnabled": True},
+    ]
+
+    def __init__(self, user_scene="ゲーム", scenes=None, recording=False, fail="",
+                 canvas=(1920, 1080), kinds=("image_source", "monitor_capture")):
+        super().__init__(recording=recording, fail=fail)
+        self.scenes = list(scenes if scenes is not None else [user_scene])
+        self.current = user_scene
+        self.canvas = canvas
+        self.kinds = list(kinds)
+        self.inputs = {}                   # 入力名 → {"kind", "settings"}
+        self.items = {}                    # シーン名 → [ {sourceName, sceneItemId, enabled, transform} ]
+        self.requests = []                 # (リクエスト名, データ)
+        self.fail_on = set()               # このリクエスト名は失敗させる
+        self.raise_on = set()              # このリクエスト名は例外を投げる
+        self._next_id = 1
+
+    def factory(self):
+        obs = self
+
+        class Client:
+            def connect(self):
+                return (False, obs.fail) if obs.fail else (True, "")
+
+            def request(self, request_type, data=None):
+                obs.calls.append(request_type)
+                obs.requests.append((request_type, data))
+                if request_type in obs.raise_on:
+                    raise OSError("boom")
+                if request_type in obs.fail_on:
+                    return False, {}, f"{request_type} が失敗（code 600）"
+                return obs._handle(request_type, data or {})
+
+            def close(self):
+                pass
+
+        return Client()
+
+    # ── 応答 ──────────────────────────────────
+    def _handle(self, rt, d):
+        if rt == "GetRecordStatus":
+            return True, {"outputActive": self.recording}, ""
+        if rt == "StartRecord":
+            self.recording = True
+        elif rt == "StopRecord":
+            self.recording = False
+        elif rt == "GetSceneList":
+            return True, {"scenes": [{"sceneName": n, "sceneIndex": i}
+                                     for i, n in enumerate(self.scenes)]}, ""
+        elif rt == "CreateScene":
+            self.scenes.append(d["sceneName"])
+        elif rt == "GetCurrentProgramScene":
+            return True, {"currentProgramSceneName": self.current}, ""
+        elif rt == "SetCurrentProgramScene":
+            if d["sceneName"] not in self.scenes:
+                return False, {}, "No scene"
+            self.current = d["sceneName"]
+        elif rt == "GetVideoSettings":
+            return True, {"baseWidth": self.canvas[0], "baseHeight": self.canvas[1]}, ""
+        elif rt == "GetSceneItemList":
+            return True, {"sceneItems": [
+                {"sourceName": i["sourceName"], "sceneItemId": i["sceneItemId"],
+                 "sceneItemEnabled": i["enabled"]}
+                for i in self.items.get(d["sceneName"], [])]}, ""
+        elif rt == "GetInputList":
+            return True, {"inputs": [{"inputName": n, "inputKind": v["kind"]}
+                                     for n, v in self.inputs.items()]}, ""
+        elif rt == "GetInputKindList":
+            return True, {"inputKinds": list(self.kinds)}, ""
+        elif rt == "CreateInput":
+            self.inputs[d["inputName"]] = {"kind": d["inputKind"], "settings": {}}
+            return True, {"sceneItemId": self._add_item(d["sceneName"], d["inputName"],
+                                                        d.get("sceneItemEnabled", True))}, ""
+        elif rt == "CreateSceneItem":
+            return True, {"sceneItemId": self._add_item(d["sceneName"], d["sourceName"],
+                                                        d.get("sceneItemEnabled", True))}, ""
+        elif rt == "GetInputPropertiesListPropertyItems":
+            if d["propertyName"] != "monitor_id":
+                return False, {}, "No property"
+            return True, {"propertyItems": list(self.MONITORS)}, ""
+        elif rt == "SetInputSettings":
+            self.inputs[d["inputName"]]["settings"].update(d["inputSettings"])
+        elif rt == "SetSceneItemTransform":
+            self._item(d["sceneName"], d["sceneItemId"])["transform"] = d["sceneItemTransform"]
+        elif rt == "SetSceneItemEnabled":
+            self._item(d["sceneName"], d["sceneItemId"])["enabled"] = d["sceneItemEnabled"]
+        return True, {}, ""
+
+    def _add_item(self, scene, source, enabled):
+        item_id = self._next_id
+        self._next_id += 1
+        self.items.setdefault(scene, []).append(
+            {"sourceName": source, "sceneItemId": item_id, "enabled": enabled, "transform": None})
+        return item_id
+
+    def _item(self, scene, item_id):
+        return next(i for i in self.items[scene] if i["sceneItemId"] == item_id)
+
+    # ── 見る側 ─────────────────────────────────
+    def item_of(self, window_idx):
+        name = config.OBS_SOURCE_NAME.format(idx=window_idx)
+        return next((i for i in self.items.get(config.OBS_SCENE_NAME, [])
+                     if i["sourceName"] == name), None)
+
+    def enabled_windows(self):
+        return [i["sourceName"] for i in self.items.get(config.OBS_SCENE_NAME, [])
+                if i["enabled"]]
+
+    def scene_requests(self):
+        scene_ops = {"GetSceneList", "CreateScene", "GetCurrentProgramScene",
+                     "SetCurrentProgramScene", "GetVideoSettings", "GetSceneItemList",
+                     "GetInputList", "GetInputKindList", "CreateInput", "CreateSceneItem",
+                     "GetInputPropertiesListPropertyItems", "SetInputSettings",
+                     "SetSceneItemTransform", "SetSceneItemEnabled"}
+        return [r for r in self.requests if r[0] in scene_ops]
+
+
+# 実機（2026-11-17）の 4 窓の位置。モニタは仮定（x=-1920〜0 のサブモニタ）
+SUB_MONITOR = (-1920, 0, 0, 1440)
+REAL_WINDOW_RECTS = {1: (-1927, 357, -953, 880), 2: (-967, 357, 7, 880),
+                     3: (-1927, 873, -953, 1396), 4: (-967, 873, 7, 1396)}
+
+
+class TestRecordScene(unittest.TestCase):
+    """録画の間だけツール専用のシーンへ切り替え、続行中の窓だけを並べる（偽の OBS で）"""
+
+    def setUp(self):
+        self.now = 1000.0
+        self.logs = []
+        self.rects = dict(REAL_WINDOW_RECTS)       # 窓の番号 → 窓の矩形。消すと「取れない窓」
+
+    def _source(self, idx):
+        rect = self.rects.get(idx)
+        return None if rect is None else (SUB_MONITOR, rect)
+
+    def _plan(self, obs, source="default"):
+        return Recorder.RecordPlan(
+            obs.factory, self.logs.append, clock=lambda: self.now, tail_sec=3.0,
+            window_source=self._source if source == "default" else source)
+
+    def _advance(self, plan, sec):
+        self.now += sec
+        plan.tick()
+
+    # ── 6 開始 ───────────────────────────────
+    def test_a_recording_creates_the_scene_switches_to_it_and_remembers_the_old_one(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertIn(config.OBS_SCENE_NAME, obs.scenes)
+        self.assertEqual(obs.current, config.OBS_SCENE_NAME)
+        self.assertEqual(plan._previous_scene, "ゲーム")
+        self.assertEqual(obs.count("CreateScene"), 1)
+        self.assertTrue(obs.recording)
+
+    def test_an_existing_tool_scene_is_not_created_again(self):
+        obs = FakeSceneOBS(scenes=["ゲーム", config.OBS_SCENE_NAME])
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertEqual(obs.count("CreateScene"), 0)
+        self.assertEqual(obs.current, config.OBS_SCENE_NAME)
+
+    def test_the_scene_is_switched_before_recording_starts(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertLess(obs.calls.index("SetCurrentProgramScene"), obs.calls.index("StartRecord"))
+
+    # ── 7 終了 ───────────────────────────────
+    def test_the_old_scene_comes_back_when_the_recording_stops(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.round_over(1)
+
+        self._advance(plan, 3.0)
+
+        self.assertEqual(obs.current, "ゲーム")
+        self.assertFalse(obs.recording)
+        self.assertGreater(obs.calls.index("SetCurrentProgramScene", obs.calls.index("StopRecord")),
+                           obs.calls.index("StopRecord"), "StopRecord の後に戻す")
+        self.assertIsNone(plan._previous_scene)
+
+    def test_the_old_scene_comes_back_even_when_stopping_the_recording_fails(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        obs.raise_on.add("StopRecord")                  # 例外が出ても戻す
+
+        plan.stop_all()
+
+        self.assertEqual(obs.current, "ゲーム")
+
+    def test_stop_all_and_the_time_limit_also_restore_the_scene(self):
+        for how in ("stop_all", "limit"):
+            obs = FakeSceneOBS(user_scene="ゲーム")
+            plan = self._plan(obs)
+            plan.continue_start(1)
+
+            if how == "stop_all":
+                plan.stop_all()
+            else:
+                self._advance(plan, config.OBS_RECORD_MAX_SEC)
+
+            self.assertEqual(obs.current, "ゲーム", how)
+
+    def test_the_old_scene_is_restored_when_the_recording_cannot_start(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        obs.fail_on.add("StartRecord")
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertFalse(plan.we_started)
+        self.assertEqual(obs.current, "ゲーム")
+
+    def test_the_users_own_scene_and_sources_are_never_touched(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.continue_start(2)
+        plan.round_over(1)
+        plan.round_over(2)
+        self._advance(plan, 3.0)
+
+        for name, data in obs.requests:
+            if name in ("CreateInput", "CreateSceneItem", "SetSceneItemTransform",
+                        "SetSceneItemEnabled", "GetSceneItemList"):
+                self.assertEqual(data["sceneName"], config.OBS_SCENE_NAME, name)
+            self.assertNotIn(name, ("RemoveInput", "RemoveSceneItem", "RemoveScene"))
+        self.assertNotIn("ゲーム", obs.items)
+
+    # ── 8 / 9 並べる ─────────────────────────
+    def test_one_window_fills_the_canvas(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        t = obs.item_of(1)["transform"]
+        self.assertEqual((t["positionX"], t["positionY"], t["boundsWidth"], t["boundsHeight"]),
+                         (0.0, 0.0, 1920.0, 1080.0))
+        self.assertEqual((t["cropLeft"], t["cropTop"], t["cropRight"], t["cropBottom"]),
+                         (0, 357, 953, 560))
+        self.assertTrue(obs.item_of(1)["enabled"])
+
+    def test_two_windows_are_split_left_and_right_in_window_number_order(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(2)                  # 続行になった順は 2 → 1。並べる順は番号の小さい順
+        self._advance(plan, 5)
+        plan.continue_start(1)
+
+        left, right = obs.item_of(1), obs.item_of(2)
+        self.assertEqual(sorted(obs.enabled_windows()),
+                         sorted(config.OBS_SOURCE_NAME.format(idx=i) for i in (1, 2)))
+        self.assertEqual((left["transform"]["positionX"], left["transform"]["boundsWidth"]),
+                         (0.0, 960.0))
+        self.assertEqual((right["transform"]["positionX"], right["transform"]["boundsWidth"]),
+                         (960.0, 960.0))
+        self.assertEqual(left["transform"]["boundsHeight"], 1080.0)
+        self.assertEqual((right["transform"]["cropLeft"], right["transform"]["cropRight"]),
+                         (953, 0), "窓2 は右半分。モニタの外へ 7px はみ出した分は 0")
+
+    def test_each_source_is_set_to_the_monitor_the_window_is_on(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        name = config.OBS_SOURCE_NAME.format(idx=1)
+        self.assertEqual(obs.inputs[name]["settings"], {"monitor_id": "MON_SUB"})
+        self.assertEqual(obs.inputs[name]["kind"], "monitor_capture")
+
+    def test_the_input_kind_and_monitor_list_are_asked_not_assumed(self):
+        obs = FakeSceneOBS(kinds=("image_source", "monitor_capture"))
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertEqual(obs.count("GetInputKindList"), 1)
+        self.assertEqual(obs.count("GetInputPropertiesListPropertyItems"), 1)
+
+    def test_four_windows_make_a_two_by_two_grid(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        for idx in (1, 2, 3, 4):
+            plan.continue_start(idx)
+
+        cells = [(obs.item_of(i)["transform"]["positionX"], obs.item_of(i)["transform"]["positionY"],
+                  obs.item_of(i)["transform"]["boundsWidth"], obs.item_of(i)["transform"]["boundsHeight"])
+                 for i in (1, 2, 3, 4)]
+        self.assertEqual(cells, [(0.0, 0.0, 960.0, 540.0), (960.0, 0.0, 960.0, 540.0),
+                                 (0.0, 540.0, 960.0, 540.0), (960.0, 540.0, 960.0, 540.0)])
+
+    def test_when_one_window_is_released_the_other_fills_the_canvas(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.continue_start(2)
+        self._advance(plan, 10)
+
+        plan.round_over(1)
+        self._advance(plan, 3.0)                # 窓1 が外れる。窓2 は続行中
+
+        self.assertTrue(plan.we_started)
+        t = obs.item_of(2)["transform"]
+        self.assertEqual((t["positionX"], t["boundsWidth"], t["boundsHeight"]),
+                         (0.0, 1920.0, 1080.0))
+        self.assertTrue(obs.item_of(2)["enabled"])
+        self.assertFalse(obs.item_of(1)["enabled"], "隠す")
+        self.assertIsNotNone(obs.item_of(1), "消さない")
+        self.assertEqual(obs.current, config.OBS_SCENE_NAME, "録画は続いている")
+
+    def test_a_source_is_reused_not_created_again(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.continue_start(2)
+        plan.round_over(2)
+        self._advance(plan, 3.0)
+        plan.continue_start(2)                  # 窓2 がまた続行
+
+        self.assertEqual(obs.count("CreateInput"), 2, "窓1・窓2 の 1 回ずつ")
+        self.assertEqual(len(obs.items[config.OBS_SCENE_NAME]), 2)
+        self.assertTrue(obs.item_of(2)["enabled"])
+
+    def test_an_input_that_exists_elsewhere_is_added_to_the_scene_not_recreated(self):
+        obs = FakeSceneOBS()
+        obs.inputs[config.OBS_SOURCE_NAME.format(idx=1)] = {"kind": "monitor_capture",
+                                                            "settings": {}}
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertEqual(obs.count("CreateInput"), 0)
+        self.assertEqual(obs.count("CreateSceneItem"), 1)
+        self.assertTrue(obs.item_of(1)["enabled"])
+
+    def test_leftover_tool_sources_from_an_earlier_run_are_hidden(self):
+        obs = FakeSceneOBS(scenes=["ゲーム", config.OBS_SCENE_NAME])
+        obs.items[config.OBS_SCENE_NAME] = [
+            {"sourceName": config.OBS_SOURCE_NAME.format(idx=3), "sceneItemId": 90,
+             "enabled": True, "transform": None},
+            {"sourceName": "利用者のソース", "sceneItemId": 91, "enabled": True, "transform": None}]
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        by_name = {i["sourceName"]: i["enabled"] for i in obs.items[config.OBS_SCENE_NAME]}
+        self.assertFalse(by_name[config.OBS_SOURCE_NAME.format(idx=3)])
+        self.assertTrue(by_name["利用者のソース"], "利用者のものは触らない")
+
+    def test_the_canvas_size_comes_from_obs(self):
+        obs = FakeSceneOBS(canvas=(2560, 1440))
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        t = obs.item_of(1)["transform"]
+        self.assertEqual((t["boundsWidth"], t["boundsHeight"]), (2560.0, 1440.0))
+
+    def test_a_canvas_that_cannot_be_read_uses_the_fallback(self):
+        obs = FakeSceneOBS()
+        obs.fail_on.add("GetVideoSettings")
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        t = obs.item_of(1)["transform"]
+        self.assertEqual((t["boundsWidth"], t["boundsHeight"]), config.OBS_CANVAS_FALLBACK)
+
+    # ── 10 手動の録画 ────────────────────────
+    def test_a_recording_started_by_hand_gets_no_scene_request_at_all(self):
+        obs = FakeSceneOBS(recording=True)
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.continue_start(2)
+        plan.round_over(1)
+        plan.round_over(2)
+        self._advance(plan, 5)
+        plan.stop_all()
+
+        self.assertEqual(obs.scene_requests(), [])
+        self.assertEqual(obs.calls, ["GetRecordStatus", "GetRecordStatus"])
+        self.assertEqual(obs.current, "ゲーム")
+
+    # ── 11 OBS が落ちた ──────────────────────
+    def test_layout_never_raises_and_warns_once_when_obs_is_down(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        self.logs.clear()
+        obs.fail = "OBSに接続できません"
+
+        for _ in range(3):
+            plan._apply_layout()                # 例外が出ないこと
+
+        warnings = [m for m in self.logs if "シーン" in m]
+        self.assertEqual(len(warnings), 1, self.logs)
+        self.assertTrue(plan.we_started, "録画は止めない")
+
+    def test_a_scene_error_warns_once_and_the_recording_goes_on(self):
+        obs = FakeSceneOBS()
+        obs.fail_on.add("SetSceneItemTransform")
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.continue_start(2)
+        self._advance(plan, 5)
+
+        self.assertTrue(plan.we_started)
+        self.assertTrue(obs.recording)
+        self.assertEqual(len([m for m in self.logs if "シーン" in m]), 1, self.logs)
+
+    def test_an_unexpected_exception_in_the_layout_does_not_escape(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        obs.raise_on.add("GetSceneItemList")
+
+        plan._apply_layout()
+
+        self.assertTrue(plan.we_started)
+
+    def test_when_the_scene_cannot_be_made_the_recording_still_starts_in_the_users_scene(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        obs.fail_on.add("CreateScene")
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.continue_start(2)                  # シーンに入れなかったので並べ直しもしない
+        plan.stop_all()
+
+        self.assertEqual(obs.count("StartRecord"), 1)
+        self.assertEqual(obs.current, "ゲーム")
+        self.assertEqual(obs.count("SetSceneItemTransform"), 0)
+        self.assertEqual(len([m for m in self.logs if "シーン" in m]), 1, self.logs)
+
+    def test_a_scene_that_cannot_be_switched_back_is_reported(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        obs.scenes.remove("ゲーム")             # 録画中に利用者が消した
+
+        plan.stop_all()
+
+        self.assertTrue(any("元に戻せませんでした" in m for m in self.logs), self.logs)
+
+    # ── 12 矩形が取れない窓 ──────────────────
+    def test_a_window_whose_rect_cannot_be_read_is_not_placed(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        del self.rects[2]                       # 窓2 は最小化された
+
+        plan.continue_start(2)
+
+        self.assertIsNone(obs.item_of(2))
+        t = obs.item_of(1)["transform"]
+        self.assertEqual((t["boundsWidth"], t["boundsHeight"]), (1920.0, 1080.0),
+                         "残りの 1 窓で画面いっぱい")
+
+    def test_a_window_that_goes_missing_is_dropped_at_the_next_layout(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.continue_start(2)
+        del self.rects[2]
+
+        plan._apply_layout()
+
+        self.assertFalse(obs.item_of(2)["enabled"])
+        self.assertEqual(obs.item_of(1)["transform"]["boundsWidth"], 1920.0)
+
+    def test_no_scene_switch_when_no_window_rect_is_available(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        self.rects.clear()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertEqual(obs.scene_requests(), [])
+        self.assertEqual(obs.current, "ゲーム")
+        self.assertTrue(obs.recording)
+
+    def test_a_window_on_an_unlisted_monitor_is_not_placed(self):
+        obs = FakeSceneOBS()
+        self.rects[1] = (9000, 100, 9900, 700)
+        plan = self._plan(obs, source=lambda idx: ((9000, 0, 10920, 1080), self.rects[idx]))
+
+        plan.continue_start(1)
+
+        self.assertFalse(obs.item_of(1)["enabled"])
+        self.assertTrue(plan.we_started)
+        self.assertEqual(len([m for m in self.logs if "シーン" in m]), 1, self.logs)
+
+    def test_an_obs_without_a_screen_capture_kind_warns_and_records_on(self):
+        obs = FakeSceneOBS(kinds=("image_source",))
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+
+        self.assertTrue(obs.recording)
+        self.assertEqual(obs.count("CreateInput"), 0)
+        self.assertEqual(len([m for m in self.logs if "シーン" in m]), 1, self.logs)
+
+    # ── 境界 ─────────────────────────────────
+    def test_an_empty_active_set_is_not_laid_out(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+        plan.continue_start(1)
+        plan.active.clear()
+        before = len(obs.requests)
+
+        plan._apply_layout()
+
+        self.assertEqual(len(obs.requests), before)
+
+    def test_without_a_window_source_no_scene_request_is_sent(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs, source=None)
+
+        plan.continue_start(1)
+        plan.round_over(1)
+        self._advance(plan, 3.0)
+
+        self.assertEqual(obs.scene_requests(), [])
+        self.assertEqual(obs.calls, ["GetRecordStatus", "StartRecord", "StopRecord"])
+
+    def test_the_layout_is_logged_when_it_changes(self):
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.continue_start(2)
+        plan.continue_start(2)                  # 同じ並びでは出さない
+
+        lines = [m for m in self.logs if "録画の画面" in m]
+        self.assertEqual(lines, ["🎥 録画の画面: 窓1（1×1）", "🎥 録画の画面: 窓1・窓2（2×1）"])
+
+    def test_the_request_order_for_two_windows(self):
+        """実機で確かめるときの手引き。2 窓が続行になったときの OBS への命令の並び"""
+        obs = FakeSceneOBS()
+        plan = self._plan(obs)
+
+        plan.continue_start(1)
+        plan.continue_start(2)
+
+        names = [r[0] for r in obs.requests]
+        self.assertEqual(names[:9], [
+            "GetRecordStatus", "GetSceneList", "CreateScene", "GetCurrentProgramScene",
+            "SetCurrentProgramScene", "StartRecord", "GetVideoSettings", "GetSceneItemList",
+            "GetInputList"])
+        self.assertEqual(names.count("SetSceneItemTransform"), 3, "窓1 を 1 回、窓1・窓2 を 1 回ずつ")
+
+
+class TestRecorderSceneWiring(unittest.TestCase):
+    """Recorder（ワーカー）に窓の矩形の取り方を差し込める"""
+
+    def test_a_recorder_without_a_window_source_never_touches_scenes(self):
+        obs = FakeSceneOBS()
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=lambda _m: None)
+
+        rec.on_continue_start(1)
+        rec.stop_all(wait_sec=3)
+
+        self.assertEqual(obs.scene_requests(), [])
+
+    def test_the_worker_places_the_window_through_the_injected_source(self):
+        obs = FakeSceneOBS(user_scene="ゲーム")
+        rec = Recorder.Recorder(client_factory=obs.factory)
+        rec.configure(True, log=lambda _m: None)
+        rec.set_window_source(lambda idx: (SUB_MONITOR, REAL_WINDOW_RECTS[idx]))
+
+        rec.on_continue_start(1)
+        deadline = time.monotonic() + 3
+        while obs.item_of(1) is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(obs.item_of(1)["enabled"])
+        rec.stop_all(wait_sec=3)
+
+        self.assertEqual(obs.current, "ゲーム")
+
+    def test_the_module_exposes_the_setter(self):
+        self.assertTrue(callable(Recorder.set_window_source))
+
+
 class TestRecorderThread(unittest.TestCase):
     """窓のスレッドからは投げるだけ。OBS がどうなっていても待たない"""
 

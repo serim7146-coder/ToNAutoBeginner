@@ -741,12 +741,16 @@ OSC_MAX_IN_PORT  = 9990   # 空きの受信ポートを探す上限（HK。9000 
 OSC_ENABLED      = True   # 起動時に --osc= を付けるか
 
 # ── OBS 自動録画（obs-websocket v5） ──
-# 続行アナウンスが鳴る種類の続行ラウンドを録る。シーンは切り替えない
+# 続行アナウンスが鳴る種類の続行ラウンドを録る。録画の間だけツール専用のシーンへ切り替えて続行中の窓を並べ、
+# 終わったら元のシーンへ戻す（利用者のシーンには触らない）
 OBS_DEFAULT_HOST    = "127.0.0.1"
 OBS_DEFAULT_PORT    = 4455     # OBS 28 以降の既定
 OBS_RECORD_TAIL_SEC = 3.0      # RoundOver から録画を止めるまで
 OBS_RECORD_MAX_SEC  = 900      # 1本の上限。RoundOver が来ないときの録りっぱなし防止
 OBS_TIMEOUT_SEC     = 2.0      # 接続・送受信のタイムアウト
+OBS_SCENE_NAME      = "ToNAutoBeginner"   # ツールが作って使うシーン。利用者のシーンは触らない
+OBS_SOURCE_NAME     = "ToNAuto 窓{idx}"   # 窓ごとの映像ソースの名前
+OBS_CANVAS_FALLBACK = (1920, 1080)        # 画布の大きさが取れなかったときに使う値
 
 # ── 霧の看破（--enable-sdk-log-levels 付きのログの [NetworkProcessing]） ──
 # 公開前にオブジェクト名からテラーを特定する。判定・表示に使うのは、画面の「霧を即時判定する」が

@@ -454,6 +454,25 @@ def window_rect(hwnd: int) -> tuple | None:
         return None
 
 
+def monitor_of_window(hwnd: int) -> tuple | None:
+    """その窓が載っているモニタと窓の矩形を返す ((モニタの左, 上, 右, 下), (窓の左, 上, 右, 下))。
+    どちらもデスクトップ全体の座標（サブモニタは負になる）。いちばん重なっているモニタを使う。
+    窓が無い・最小化・非表示・取れないときは None。OBS のディスプレイキャプチャを
+    窓の矩形で切り出すのに使う"""
+    try:
+        if not hwnd or not win32gui.IsWindow(hwnd):
+            return None
+        if win32gui.IsIconic(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            return None
+        monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+        area = tuple(int(v) for v in win32api.GetMonitorInfo(monitor)["Monitor"])
+        rect = tuple(int(v) for v in win32gui.GetWindowRect(hwnd))
+        return area, rect
+    except Exception:
+        DebugLog.exception("WindowOperator.monitor_of_window")
+        return None
+
+
 def window_cursor_point(hwnd: int) -> tuple | None:
     """その窓の Begin ボタンの上に当たる点。置けないなら None。
 

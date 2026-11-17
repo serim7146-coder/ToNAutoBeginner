@@ -1443,6 +1443,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _remember_own_window(self)       # 録画中だけキャプチャから外すため
         Recorder.set_window_hider(self._set_own_windows_hidden)
+        Recorder.set_window_source(self._record_window_source)
         self._start_emergency_stop_polling()
         self._start_host_save_polling()
         self._debug_environment()
@@ -5442,6 +5443,17 @@ class App(tk.Tk):
             self._capture_warned = True
             self._log("⚠ 録画からツールの窓を隠せませんでした"
                       "（Windows 10 2004 以降が必要です）。録画は続けます")
+
+    def _record_window_source(self, window_idx: int):
+        """OBS の録画で並べる窓の (モニタの矩形, 窓の矩形)。取れない窓（最小化・消えた）は None。
+
+        Recorder のワーカースレッドから呼ばれるので Tk には触らない
+        （monitors のコピーから hwnd を引くだけ）
+        """
+        for mon in list(self.monitors):
+            if mon.window_idx == window_idx:
+                return WindowOperator.monitor_of_window(mon.cfg.hwnd)
+        return None
 
     def _show_own_windows_again(self):
         """録画中に隠したままにしない。止めたら必ず戻す"""
