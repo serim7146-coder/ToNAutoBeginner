@@ -1540,13 +1540,13 @@ class TestSuicideCancel(unittest.TestCase):
         return ex, st, logs
 
     def _skip(self, ex, during=None):
-        """長押しの回数を返す。during(n, stop) は n 回目の長押しの最中に呼ぶ（死なない）"""
+        """長押しの回数を返す。during(n, wake) は n 回目の長押しの最中に呼ぶ（死なない）"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(key)
             if during:
-                during(len(sent), stop)
+                during(len(sent), wake)
             return True
         with patch.object(WindowOperator, "hold_key_background", side_effect=hold):
             ex.do_skip()
@@ -1557,10 +1557,10 @@ class TestSuicideCancel(unittest.TestCase):
         ex, st, logs = self._executor()
         seen = []
 
-        def during(n, stop):
-            seen.append(stop())                 # 押す前は止めない
+        def during(n, wake):
+            seen.append(wake.is_set())          # 押す前は起こさない
             self.assertEqual(ex.cancel_suicide(), "stopped")
-            seen.append(stop())                 # 押した後は止める（その場で離す）
+            seen.append(wake.is_set())          # 押した後は合図が立つ（その場で離す）
         with patch.object(ex, "_died_after_skip", return_value=False) as wait:
             self.assertEqual(self._skip(ex, during), 1, "やり直さない")
         wait.assert_not_called()                # 死亡を待たずに終わる

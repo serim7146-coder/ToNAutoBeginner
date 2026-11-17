@@ -143,15 +143,23 @@ def _background_key(hwnd: int, key: str):
     return target_tid, vk, lparam_down, lparam_up
 
 
-def hold_key_background(hwnd: int, key: str, sec: float, stop=None) -> bool:
+def hold_key_background(hwnd: int, key: str, sec: float, stop=None, wake=None) -> bool:
     DebugLog.write(f"[操作] 背面キー {key} {sec:.2f}秒 hwnd={int(hwnd):#x}")
-    if stop is None:
-        return _hold_key_background(hwnd, key, sec)
-    return _hold_key_background(hwnd, key, sec, stop)
+    return _hold_key_background(hwnd, key, sec, stop, wake)
 
 
-def _wait_holding(sec: float, stop) -> None:
-    """長押しの間待つ。stop（呼ぶと True で止める）があれば、待つ間に見て早めに抜ける"""
+def _wait_holding(sec: float, stop=None, wake=None) -> None:
+    """長押しの間待つ。
+
+    wake（threading.Event）は目覚まし。立てられた瞬間に起きる。見に行かない。
+    stop（呼ぶと True で止める）は条件。起きたときにこれで判断する。
+      ・自爆    … wake だけ（条件は合図を立てる側が持っている）
+      ・ジャンプ・移動 … stop と wake の両方（条件は stop、wake は目覚まし）
+      ・どちらも無い … ただ寝る
+    合図を立て忘れても、起きるのは「sec ぶん押し切る」＝邪魔されずに終わったのと同じ"""
+    if wake is not None and stop is None:
+        wake.wait(sec)
+        return
     if stop is None:
         time.sleep(sec)
         return
@@ -160,13 +168,16 @@ def _wait_holding(sec: float, stop) -> None:
         left = deadline - time.time()
         if left <= 0:
             return
-        time.sleep(min(HOLD_STOP_POLL_SEC, left))
+        if wake is not None:
+            wake.wait(left)                     # 合図で起きる。来なければ時間切れ
+        else:
+            time.sleep(min(HOLD_STOP_POLL_SEC, left))
 
 
 HOLD_STOP_POLL_SEC = 0.05       # 長押しの途中で止める合図を見る間隔
 
 
-def _hold_key_background(hwnd: int, key: str, sec: float, stop=None) -> bool:
+def _hold_key_background(hwnd: int, key: str, sec: float, stop=None, wake=None) -> bool:
     """フォーカスを奪わずにキーを押しっぱなしにする。送り切れたら True。
 
     PostMessage だけでは足りない。Unityは GetKeyState / GetKeyboardState でも
@@ -211,7 +222,7 @@ def _hold_key_background(hwnd: int, key: str, sec: float, stop=None) -> bool:
             user32.SetKeyboardState(ctypes.byref(state))
 
         user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam_down)
-        _wait_holding(sec, stop)        # 止める合図が来たらその場で離す
+        _wait_holding(sec, stop, wake)  # 止める合図が来たらその場で離す
         user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam_up)
 
         if saved is not None:

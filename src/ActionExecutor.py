@@ -111,6 +111,10 @@ class ActionExecutor:
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
+        # 長押しを起こす合図。待っている側は clear しない（下ろすのは条件が戻った側の仕事）
+        self._skip_wake = threading.Event()   # 自爆: 死亡・リスポーン・自爆キャンセル・ツール停止
+        self._stop_wake = threading.Event()   # ジャンプ: ツール停止（_stopped の写し）
+        self._move_wake = threading.Event()   # 移動: ツール停止・private でなくなった（_move_stopped の写し）
         self._chase_lock = threading.Lock()
         self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
         self._chase_stop = None           # 送り直しのスレッドを止める合図
@@ -338,13 +342,29 @@ class ActionExecutor:
 
     def _run_jump(self):
         if self._osc is not None:
-            ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC, stop=self._stopped)
+            ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC,
+                                 stop=self._stopped, wake=self._stop_wake)
         else:
             # _background_key は 1 文字しか受けないので、スペースは空白 1 文字で渡す（"space" は弾かれる）
             ok = WindowOperator.hold_key_background(self._cfg.hwnd, " ", config.JUMP_PRESS_SEC,
-                                                    stop=self._stopped)
+                                                    stop=self._stopped, wake=self._stop_wake)
         if ok is False:
             self._log("⚠ ジャンプを送れません（最小化中など）")
+
+    def wake_skip_hold(self):
+        """自爆の長押し・死亡待ちをその場で起こす（死亡・リスポーン・自爆キャンセル・ツール停止）"""
+        self._skip_wake.set()
+
+    def refresh_hold_blocks(self):
+        """ジャンプ・移動の「もう押さない条件」の今の状態を合図に映す。
+        条件が変わりうる所（監視の開始・停止・インスタンス移動・ワールド移動）から呼ぶ。
+        立てっぱなしにしない（private に戻ったら下ろす）"""
+        for event, blocked in ((self._stop_wake, self._stopped()),
+                               (self._move_wake, self._move_stopped())):
+            if blocked:
+                event.set()
+            else:
+                event.clear()
 
     def _stopped(self) -> bool:
         """マクロが止められたか。押している最中の移動・長押しはこれでその場で離す"""
@@ -382,12 +402,14 @@ class ActionExecutor:
                        "left": "/input/MoveLeft",
                        "right": "/input/MoveRight"}.get(direction)
             if address:
-                ok = self._osc.press(address, seconds, stop=self._move_stopped)
+                ok = self._osc.press(address, seconds,
+                                     stop=self._move_stopped, wake=self._move_wake)
                 self._osc.stop_all(repeat=1)
                 return ok is not False
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
         if key and not WindowOperator.hold_key_background(
-                self._cfg.hwnd, key, seconds, stop=self._move_stopped):
+                self._cfg.hwnd, key, seconds,
+                stop=self._move_stopped, wake=self._move_wake):
             self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
             return False
         return True
@@ -683,6 +705,7 @@ class ActionExecutor:
         if st.suicide_seq == round_seq:
             return          # このラウンドの自爆はもう走っている。流れは1本
         st.suicide_seq = round_seq
+        self._skip_wake.clear()     # このラウンドの頭で 1 回だけ（やり直しの各回では下ろさない）
         try:
             self._skip_until_dead(round_seq)
         finally:
@@ -703,19 +726,22 @@ class ActionExecutor:
             if attempt > 1:
                 self._log(f"自爆が効いていません → やり直し（{attempt}/{limit}回目）")
             key = SharedState.get_suicide_key()
+            hold = SharedState.get_suicide_hold_sec()
             st._skip_time = time.time()
             if self._holding_maxwell():
                 # 一度立てたら、このラウンドの間は下ろさない（長押しの途中でゲームが手から外すことがあり、
                 # やり直しの長押しの時点ではもう持っていない）
                 st.skip_maxwell_seq = round_seq
-            self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
+            self._log(f"自爆実行中 ({hold:g}秒・背面)…")
             if not WindowOperator.hold_key_background(
-                    self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
-                    stop=lambda: self._suicide_cancelled(round_seq) or self._stopped()):
+                    self._cfg.hwnd, key, hold, wake=self._skip_wake):
                 # 送れないもの（最小化・Shift併用キー）はやり直しても送れない
                 st._skip_time = 0.0
                 self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
                 return
+            if st.died_this_round:
+                DebugLog.write(f"[操作] [窓{st.window_idx}] 自爆: 死亡の合図で長押しを中断"
+                               f"（押していた時間 {time.time() - st._skip_time:.2f}秒 / 設定 {hold:g}秒）")
             if self._suicide_cancelled(round_seq):
                 return              # 長押しの途中で離した。やり直さない
             if self._died_after_skip(round_seq):
@@ -760,20 +786,28 @@ class ActionExecutor:
             return None
         round_seq = st.round_seq
         st.suicide_cancelled_round = round_seq
+        self._skip_wake.set()           # 長押し・死亡待ちをその場で起こす
         self._log("自爆キャンセル → このラウンドは自爆しません")
         return "stopped" if st.suicide_seq == round_seq else "marked"
 
     def _died_after_skip(self, round_seq: int) -> bool:
-        """長押しが終わってから、死亡を少し待つ。死ねば True"""
+        """長押しが終わってから、死亡を最大 SUICIDE_CONFIRM_SEC 待つ。死ねば True。
+
+        死亡・自爆キャンセル・ツール停止は合図で起こされるので、刻んで見に行かない。
+        合図を立てる 3 つを全部ここで受けて抜ける（受けないと、立った合図で
+        wait() が即返り続けて空回りする）"""
         st = self._st
         deadline = time.time() + config.SUICIDE_CONFIRM_SEC
         while True:
             if st.died_this_round:
                 return True
-            if (time.time() >= deadline or not self._is_running()
+            if self._suicide_cancelled(round_seq):
+                return False        # 待っている間にキャンセル（今までは 1.5 秒待ち切っていた）
+            left = deadline - time.time()
+            if (left <= 0 or not self._is_running()
                     or st.round_seq != round_seq or not st.in_round):
                 return False
-            time.sleep(0.1)
+            self._skip_wake.wait(left)
 
     def _confirm_begin(self, round_seq: int):
         """1回目を押した後。受理されなければ押し直す。1ラウンドで押すのは

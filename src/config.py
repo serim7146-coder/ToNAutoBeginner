@@ -460,7 +460,9 @@ FOCUS_RETURN_AFTER_RELEASE_SEC = 0.3
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 # 自爆キーはいつも背面へ送る（前面化しない）。送れない窓（最小化中など）では自爆せずに知らせる
-SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間（既定。設定の窓で変えられる）
+SUICIDE_HOLD_MIN    = 0.5     # 設定できる下限
+SUICIDE_HOLD_MAX    = 10.0    # 設定できる上限
 # 自爆が効かなかったらやり直す。背面送信で長押ししている間に他の窓が
 # 前面を奪うと、VRChat はキーを離したことにする（実例: 窓4が80秒後に死亡）
 SUICIDE_RETRY_MAX     = 3     # 1回目を含めた回数

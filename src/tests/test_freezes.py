@@ -3009,7 +3009,7 @@ class TestRoundFreeze(unittest.TestCase):
         held = []
 
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda h, k, sec, stop=None: held.append(k) or True):
+                          side_effect=lambda h, k, sec, stop=None, wake=None: held.append(k) or True):
             ex.do_skip()
 
         self.assertTrue(held, "自窓は待たずに自爆すること")

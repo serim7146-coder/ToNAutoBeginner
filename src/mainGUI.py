@@ -2756,6 +2756,17 @@ class App(tk.Tk):
             command=self._on_begin_use_spam_only_changed)
         check.tooltip = Tooltip(check, lambda: BEGIN_USE_SPAM_ONLY_NOTE)
         self._other_checks.append(check)
+        # 自爆の長押しの秒数（全窓共通・保存）。チェックの折り返し（fcr）とは別の行に置く
+        fhold = ttk.Frame(fother_wrap.content)
+        fhold.pack(fill="x", pady=(6, 0))
+        ttk.Label(fhold, text="自爆の長押し:").pack(side="left")
+        self.v_suicide_hold = tk.StringVar(value=f"{config.SUICIDE_HOLD_SEC:g}")
+        self.ent_suicide_hold = ttk.Entry(fhold, textvariable=self.v_suicide_hold, width=6)
+        self.ent_suicide_hold.pack(side="left", padx=(4, 2))
+        for event in ("<Return>", "<FocusOut>"):
+            self.ent_suicide_hold.bind(event, lambda _e: self._on_suicide_hold_changed())
+        ttk.Label(fhold,
+                  text=f"秒（{config.SUICIDE_HOLD_MIN:g}〜{config.SUICIDE_HOLD_MAX:g}）").pack(side="left")
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの折りたたみの中（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
         # キーバインド（設定の窓の「その他」の下）。v_chase_enabled を使うのでこのあと
@@ -3388,6 +3399,19 @@ class App(tk.Tk):
         SharedState.set_murder_no_afk(self.v_murder_no_afk.get())
         self._schedule_settings_save()
 
+    def _on_suicide_hold_changed(self):
+        """入れた値を SharedState へ。範囲の外・数でない値は丸めて、欄にも丸めた値を書き戻す"""
+        SharedState.set_suicide_hold_sec(self.v_suicide_hold.get())
+        self._refresh_suicide_hold_entry()
+        self._schedule_settings_save()
+
+    def _refresh_suicide_hold_entry(self):
+        """欄の表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_suicide_hold.set(f"{SharedState.get_suicide_hold_sec():g}")
+        except (tk.TclError, AttributeError):
+            pass
+
     def _refresh_murder_no_afk_check(self):
         """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
         try:
@@ -3996,6 +4020,9 @@ class App(tk.Tk):
         self._refresh_wait_bloodthirsty_check()
         SharedState.set_murder_no_afk(data.get("murder_no_afk") is True)   # 無い・壊れた値は OFF（既定）
         App._refresh_murder_no_afk_check(self)
+        # 無い・壊れた値は既定 3.0（SharedState 側で丸める）
+        SharedState.set_suicide_hold_sec(data.get("suicide_hold_sec", config.SUICIDE_HOLD_SEC))
+        App._refresh_suicide_hold_entry(self)
         SharedState.set_begin_use_spam_only(data.get("begin_use_spam_only") is True)   # 無い・壊れた値は OFF（既定）
         App._refresh_begin_use_spam_only_check(self)
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
@@ -5336,6 +5363,7 @@ class App(tk.Tk):
             "run_respawn":             SharedState.get_run_respawn(),
             "wait_bloodthirsty":       SharedState.get_wait_bloodthirsty(),
             "murder_no_afk":           SharedState.get_murder_no_afk(),
+            "suicide_hold_sec":        SharedState.get_suicide_hold_sec(),
             "begin_use_spam_only":     SharedState.get_begin_use_spam_only(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),

@@ -193,6 +193,7 @@ class LogMonitor:
         self.st.run_id = SharedState.current_run()      # この回の窓（止めた後に張るフリーズは数えない）
         self.st.continue_hook = self._on_continue_freeze
         self._running = True
+        self._action.refresh_hold_blocks()  # 前回の停止で立った合図を下ろす
         self._stop_event.clear()
         self.early_read_capable = bool(
             self.cfg.log_path
@@ -210,6 +211,8 @@ class LogMonitor:
             self._log("チェイス停止（監視の停止）")
         self._action.move_keys_release_all()     # 移動のキーも離す（画面のログは出さない。debug.log だけ）
         self._running = False
+        self._action.wake_skip_hold()       # 自爆の長押し
+        self._action.refresh_hold_blocks()  # ジャンプ・移動の長押し
         self._stop_event.set()
         self._action.stop_velocity_receiver()
         ItemUse.unregister(self.cfg.hwnd, self.st.item_use)
@@ -750,10 +753,12 @@ class LogMonitor:
                     found_instance = True
                     self.st.instance_id = event.instance
                     self.st.instance_type = self._parse_instance_type(event.suffix)
+                    self._action.refresh_hold_blocks()
                     self.st.instance_access = LogParser.instance_access(event.suffix)
                     self._log(f"インスタンスタイプ検出: {self._instance_label(self.st.instance_type, event.suffix)}")
                     if event.world:
                         self.st.in_ton_world = event.world == config.TON_WORLD_ID
+                        self._action.refresh_hold_blocks()
                         if not self.st.in_ton_world:
                             self._log("ToN 以外のワールドにいます → この窓は操作しません")
                     # マクロを途中で始めても人数が分かるように。積み上げないと
@@ -2241,7 +2246,7 @@ class LogMonitor:
         st = self.st
         # 長押しの終わり際の死亡も拾う（_skip_time は長押しの開始時）
         if st._skip_time > 0 and (time.time() - st._skip_time) <= (
-                config.SUICIDE_HOLD_SEC + config.SUICIDE_CONFIRM_SEC):
+                SharedState.get_suicide_hold_sec() + config.SUICIDE_CONFIRM_SEC):
             self._log("✅ 自爆成功")
             st._skip_time = 0.0
             if st.skip_maxwell_seq == st.round_seq:
@@ -2260,6 +2265,7 @@ class LogMonitor:
         続行フリーズとラウンド突入フリーズの解除を予約する。label は何から数えたか（"死亡" か "リスポーン"）"""
         st = self.st
         st.died_this_round = True
+        self._action.wake_skip_hold()       # 自爆の長押しをその場で離す（2026-11-17）
         st.item_equipped_after_death = False
         st.is_open_special_round_round = False
         st.glorbo_afk = False
@@ -2599,6 +2605,7 @@ class LogMonitor:
         st.instance_type = self._parse_instance_type(event.suffix)
         st.instance_access = LogParser.instance_access(event.suffix)
         self._enter_world(event.world)
+        self._action.refresh_hold_blocks()
         if not self._action.can_operate() and self._action.chase_stop():
             self._log("チェイス停止（プライベートのインスタンスではなくなりました）")
         # 別インスタンスに入った。ラウンドの並びもmoonの消化状況も分からない
@@ -2641,6 +2648,7 @@ class LogMonitor:
         if in_ton == st.in_ton_world:
             return
         st.in_ton_world = in_ton
+        self._action.refresh_hold_blocks()
         if in_ton:
             self._log("ToN のワールドに入りました → この窓の操作を再開します")
         else:

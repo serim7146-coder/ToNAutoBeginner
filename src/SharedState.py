@@ -1,3 +1,4 @@
+import math
 import threading
 
 import DebugLog
@@ -107,6 +108,23 @@ get_instance_type, set_instance_type = _INSTANCE_TYPE.get, _INSTANCE_TYPE.set
 # 自爆キー（config の既定値。テストから差し替え可能）
 _SUICIDE_KEY = _Setting(config.SELF_SUICIDE_KEY)
 get_suicide_key, set_suicide_key = _SUICIDE_KEY.get, _SUICIDE_KEY.set
+
+
+def _hold_sec(value) -> float:
+    """自爆の長押しの秒数。数でない値は既定へ、範囲の外は丸める
+    （設定ファイルが壊れていても落とさない。NaN・inf も既定へ）"""
+    try:
+        sec = float(value)
+    except (TypeError, ValueError):
+        return config.SUICIDE_HOLD_SEC
+    if not math.isfinite(sec):
+        return config.SUICIDE_HOLD_SEC
+    return min(config.SUICIDE_HOLD_MAX, max(config.SUICIDE_HOLD_MIN, sec))
+
+
+# 自爆の長押しの秒数（全窓共通・保存。既定は config）
+_SUICIDE_HOLD = _Setting(config.SUICIDE_HOLD_SEC, _hold_sec)
+get_suicide_hold_sec, set_suicide_hold_sec = _SUICIDE_HOLD.get, _SUICIDE_HOLD.set
 
 # 放置モード
 _HANDS_FREE = _Setting(False)

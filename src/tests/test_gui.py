@@ -3268,6 +3268,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "continue_drop_item", "continue_restore_window", "run_respawn", "chase_enabled",
             "wait_bloodthirsty",                                  # Bloodthirsty を待つチェック
             "murder_no_afk",                                      # Murder で AFK 回避しないチェック
+            "suicide_hold_sec",                                   # 自爆の長押しの秒数
             "begin_use_spam_only",                                # Begin は連打だけのチェック
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した

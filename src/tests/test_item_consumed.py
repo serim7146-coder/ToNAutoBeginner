@@ -77,7 +77,7 @@ class _Case(unittest.TestCase):
         before(n) は n 回目の長押しの直前。戻り値は長押しした回数"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             if before:
                 before(len(sent) + 1)
             sent.append(hwnd)

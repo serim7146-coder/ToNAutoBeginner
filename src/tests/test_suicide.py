@@ -48,7 +48,7 @@ class TestSuicideRetry(unittest.TestCase):
         """die_on 回目の長押しで死ぬ。before(n) は n 回目の長押しの直前に呼ぶ"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(hwnd)
             if before:
                 before(len(sent))
@@ -133,7 +133,7 @@ class TestSuicideRetry(unittest.TestCase):
         with patch.object(config, "SUICIDE_CONFIRM_SEC", 5.0), \
              patch.object(WindowOperator, "hold_key_background",
                           side_effect=lambda *a, **_: sent.append(1) or True), \
-             patch.object(ActionExecutor.time, "sleep", side_effect=nap):
+             patch.object(ex._skip_wake, "wait", side_effect=nap):
             ex.do_skip()
 
         self.assertEqual(len(sent), 1)
@@ -155,7 +155,7 @@ class TestSuicideRetry(unittest.TestCase):
         ex, st, _logs = self._executor()
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(1)
             if len(sent) == 1:
                 ex.do_skip()             # 1本目の最中に2本目が来た
@@ -601,7 +601,7 @@ class TestSuicideBackgroundRouting(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_skip()
 
-        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC, stop=ANY)
+        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC, wake=ANY)
         mock_focus.assert_not_called()
         mock_hold.assert_not_called()
         self.assertGreater(st._skip_time, 0, "死亡判定用の時刻は残すこと")
@@ -657,7 +657,7 @@ class TestSuicideIsolation(unittest.TestCase):
         """別スレッドで回す。止まってしまったら False"""
         sent = []
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda h, k, sec, stop=None: sent.append(h) or True):
+                          side_effect=lambda h, k, sec, stop=None, wake=None: sent.append(h) or True):
             t = threading.Thread(target=ex.do_skip, daemon=True)
             t.start()
             t.join(timeout)
@@ -753,7 +753,7 @@ class TestSuicideIsolation(unittest.TestCase):
         gate = threading.Barrier(2, timeout=2.0)
         lock = threading.Lock()
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             with lock:
                 inside.append(hwnd)
                 peak.append(len(inside))
@@ -815,7 +815,7 @@ class TestActionExecutorSkip(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep") as mock_sleep:
             executor.do_skip()
 
-        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC, stop=ANY)
+        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC, wake=ANY)
         mock_focus.assert_not_called()
         mock_sleep.assert_not_called()
 
