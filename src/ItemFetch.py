@@ -305,6 +305,160 @@ def color_area(bgr, pos, scale, ranges, window=GREEN_WINDOW) -> int:
         return 0
 
 
+# ── 進化アイテム（依頼者 2026-11-17。実機の全画面 16 枚から測った） ──
+# 失くしたのが進化アイテムなら、Equip（装備する）ではなく、その右に並ぶ小さな色文字を押す。
+# 番号 → (色相, 彩度, 同じページで一番明るい文字を 1.0 としたときの明るさ)。
+# 位置も個数も持たない——アップデートで色文字が増減しても壊れないため。
+# 表に無い番号は今までどおり「装備する」を押す（知らないものが来ても害が無い）。
+# 明るさの比は、同じ元アイテムの色文字の中で一番明るい V を 1.0 にして出した
+EVOLUTIONS = {
+    93: (0, 155, 1.00),     # Scanner（レーダー）
+    46: (0, 173, 1.00),     # Red Medkit（メッドキット）
+    87: (25, 117, 1.00),    # Slots（Haveの酒）
+    45: (119, 148, 1.00),   # Psycho Coil（グローコイル）
+    33: (0, 154, 1.00),     # Bloody Coil（スピードコイル）
+    76: (90, 76, 1.00),     # Pale Regen（リジェネコイル・蒼白）
+    80: (67, 136, 0.96),    # Life Coil（リジェネコイル・緑）
+    31: (0, 148, 1.00),     # Bloody Bat（金属バット）★ Ghost Bat と色相が 2 しか違わない
+    43: (135, 169, 0.85),   # Color Bat（金属バット）
+    42: (93, 104, 1.00),    # Justitia（金属バット）
+    49: (109, 25, 0.80),    # Metal Pipe（金属バット・白い文字）
+    82: (178, 172, 0.22),   # Ghost Bat（金属バット）★ 明るさの比で見分ける
+    18: (0, 154, 1.00),     # Bloody Kat Charm（シルバーキャットチャーム）
+    72: (126, 98, 0.96),    # Luna Charm（シルバーキャットチャーム）
+    44: (24, 61, 1.00),     # Twilight Coil（カオスコイル。彩度 61 なので白い文字の側）
+    85: (0, 184, 1.00),     # Destroyer Coil（コルクスクリュー）
+    66: (0, 155, 0.89),     # Bloody Pistol（アンティークリボルバー）
+    38: (90, 80, 1.00),     # Pale Pistol（アンティークリボルバー）
+    69: (90, 74, 1.00),     # Pale Teleporter（テレポーター）
+    32: (0, 155, 0.91),     # Bloody Teleporter（テレポーター）
+    91: (140, 163, 0.96),   # Broken Teleporter（テレポーター）
+    39: (75, 143, 0.83),    # Thorn Hacker（テレポーター）
+    86: (25, 117, 0.82),    # Soul Visitor（テレポーター）
+    74: (109, 25, 1.00),    # Haunted Burger（ハンバーガー・白い文字）
+    11: (143, 140, 1.00),   # Nora Plush（Beyond人形）
+    73: (109, 25, 1.00),    # Roblander Plush（DarkGrey人形・白い文字）
+    75: (20, 146, 1.00),    # Observation Plush（Have人形）
+}
+HUE_TOLERANCE = 14          # 色相の許容（同じページの最小の差は 15）
+SAT_WHITE = 70              # これ未満は「白い文字」。白どうしは同じページに無い
+VREL_TOLERANCE = 0.35       # 相対の明るさの許容（1.00 と 0.22 を分けるのに十分）
+# 色文字を探す範囲（見本の px。Equip の中心から）。実測: +56.9〜+139.0・上下 ±7.3
+EVOLUTION_BAND = (40, 160, -14, 14)     # 左, 右, 上, 下
+EVOLUTION_MIN_PIXELS = 25               # 文字と認める画素数（見本の px²。倍率で掛ける）
+EVOLUTION_TOP_PERCENT = 12              # 帯の明るい方から数えて、この割合の値を閾値にする
+EVOLUTION_V_FLOOR = 30                  # 閾値の下限（帯がほぼ真っ暗でも背景を拾わない）
+EVOLUTION_ROUNDS = 6                    # 明るい方から剥がす回数の上限（色文字は最大 5 つ）
+EVOLUTION_GAP_PX = 3                    # 同じ文字の字と字の隙間を繋ぐ幅（見本の px。横だけ）
+EVOLUTION_HEIGHT_PX = (3, 12)           # 1 つの色文字の高さの範囲（見本の px）
+EVOLUTION_WIDTH_PX = (4, 60)            # 1 つの色文字の幅の範囲（見本の px）
+
+
+def evolution_labels(bgr, equip_pos, scale) -> list:
+    """Equip（装備する）の右に並ぶ色文字を返す [(x, y, 色相, 彩度, 明るさ)]。画面の px。
+    見つからない・撮影が無い・例外は空。
+
+    明るさの閾値は**固定で持たない**。帯の中の明るい方から数えて決める
+    （ゴーストは 56・ほかは 200 超で、固定だとゴーストが落ちる）。
+    彩度では絞らない（白い文字が落ちる）。色は閾値を超えた画素だけで測る
+    （文字の箱ごと測ると、暗い内側を数えて暗く出る）"""
+    try:
+        import cv2
+        import numpy as np
+        if not hasattr(bgr, "shape"):
+            return []
+        sx, sy = scale
+        h, w = bgr.shape[:2]
+        left, right, top, bottom = EVOLUTION_BAND
+        x0 = max(0, int(round(equip_pos[0] + left * sx)))
+        x1 = min(w, int(round(equip_pos[0] + right * sx)) + 1)
+        y0 = max(0, int(round(equip_pos[1] + top * sy)))
+        y1 = min(h, int(round(equip_pos[1] + bottom * sy)) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return []
+        hsv = cv2.cvtColor(np.ascontiguousarray(bgr[y0:y1, x0:x1]), cv2.COLOR_BGR2HSV)
+        value = hsv[:, :, 2]
+        # 1 つの文字は字ごとに分かれているので、横に少し太らせて 1 つに繋ぐ（縦は太らせない。2 段が混ざる）
+        half = max(1, int(round(EVOLUTION_GAP_PX * sx / 2)))
+        kernel = np.ones((1, 2 * half + 1), np.uint8)
+        least = max(1.0, EVOLUTION_MIN_PIXELS * sx * sy)
+        pad_x, pad_y = int(math.ceil(2 * sx)), int(math.ceil(sy))
+        claimed = np.zeros(value.shape, bool)       # もう数えた所（縁の薄い画素を次の回で拾い直さない）
+        found = []
+        # 明るい方から剥がしていく。1 回で全部拾おうとすると、明るい文字が帯の 12% を超えたとき、
+        # 閾値が明るい文字の中に入ってしまい、暗い文字（ゴースト）が落ちる
+        for _ in range(EVOLUTION_ROUNDS):
+            free = ~claimed
+            if not free.any():
+                break
+            threshold = max(EVOLUTION_V_FLOOR, int(np.percentile(value[free], 100 - EVOLUTION_TOP_PERCENT)))
+            ink = (value >= threshold) & free
+            if not ink.any():
+                break
+            count, labeled = cv2.connectedComponents(cv2.dilate(ink.astype(np.uint8), kernel), connectivity=8)
+            for i in range(1, count):
+                ys, xs = np.nonzero((labeled == i) & ink)
+                if len(xs) == 0:
+                    continue
+                if len(xs) < least:
+                    # 暗めの文字の、閾値を超えた散らばりだけ。その画素だけ外して、残りを次の回で拾う
+                    # （箱ごと外すと、文字が丸ごと落ちる）
+                    claimed[ys, xs] = True
+                    continue
+                claimed[max(0, ys.min() - pad_y):ys.max() + pad_y + 1,
+                        max(0, xs.min() - pad_x):xs.max() + pad_x + 1] = True
+                width = int(xs.max() - xs.min()) + 1
+                height = int(ys.max() - ys.min()) + 1
+                if not (EVOLUTION_WIDTH_PX[0] * sx <= width <= EVOLUTION_WIDTH_PX[1] * sx):
+                    continue
+                if not (EVOLUTION_HEIGHT_PX[0] * sy <= height <= EVOLUTION_HEIGHT_PX[1] * sy):
+                    continue
+                pixels = hsv[ys, xs]            # 閾値を超えた画素だけで色を測る
+                hues = pixels[:, 0].astype(float)
+                # 赤は 0 と 179 の両側に割れる。円の平均を中心にずらしてから中央値を取る
+                angle = hues * (2 * math.pi / 180.0)
+                center = (math.atan2(np.sin(angle).mean(), np.cos(angle).mean()) * 180.0 / (2 * math.pi)) % 180.0
+                hue = (center + float(np.median(((hues - center + 90.0) % 180.0) - 90.0))) % 180.0
+                found.append((x0 + (int(xs.min()) + int(xs.max())) / 2.0,
+                              y0 + (int(ys.min()) + int(ys.max())) / 2.0,
+                              hue, float(np.median(pixels[:, 1])), float(np.median(pixels[:, 2]))))
+        return sorted(found, key=lambda t: (t[0], t[1]))
+    except Exception:
+        return []
+
+
+def _hue_gap(a, b) -> float:
+    d = abs(a - b) % 180.0
+    return min(d, 180.0 - d)
+
+
+def pick_evolution(labels, want):
+    """色が合う文字を 1 つ返す（evolution_labels の 1 件）。want は EVOLUTIONS の値
+    (色相, 彩度, 相対の明るさ)。合うものが無い・2 つ以上に割れたときは None
+    （呼ぶ側が Equip に落ちる。間違えて押すより押さない）"""
+    if not labels:
+        return None
+    want_hue, want_sat, want_rel = want
+    brightest = max(label[4] for label in labels)
+    if brightest <= 0:
+        return None
+    white = want_sat < SAT_WHITE
+    fits = []
+    for label in labels:
+        _x, _y, hue, sat, val = label
+        if white:
+            if sat >= SAT_WHITE:
+                continue
+        elif sat < SAT_WHITE or _hue_gap(hue, want_hue) > HUE_TOLERANCE:
+            continue
+        # 色相が近い 2 つ（金属バットの 血濡れ・ゴースト）は、ここの明るさの比だけで分かれる
+        if abs(val / brightest - want_rel) > VREL_TOLERANCE:
+            continue
+        fits.append(label)
+    # 2 つ以上残る（同じ色が 2 つ）なら決められない。押さない
+    return fits[0] if len(fits) == 1 else None
+
+
 def row_order_ok(bgr, center, scale) -> tuple:
     """緑の重心 center の上 PLUSH_ROW_PITCH に赤・下に黄があるか。(合ったか, ログの文字) を返す。
     合えば '赤／黄'、違えば '上 黄・下 黄' のように上下の色の名前（赤・黄・緑・なし のうち画素が一番多いもの）。
@@ -793,10 +947,35 @@ class Fetcher:
             self.sleep(EQUIP_POLL_SEC)
         return None
 
+    def _evolution_spot(self, target_id: int, equip_pos):
+        """失くしたのが進化アイテム（EVOLUTIONS）なら、Equip の右に並ぶ色文字のうち、その色の 1 つの点
+        （画面の px）。表に無い番号は撮らずに None（今までどおり Equip）。色文字が見つからない・色が合わない・
+        割れたときも None（間違ったものを押すより、Equip に落ちて失敗で終わる方がまし）"""
+        want = EVOLUTIONS.get(target_id)
+        if want is None:
+            return None
+        self._check()
+        shot = self.capture()
+        if shot is None:
+            return None
+        labels = evolution_labels(shot[0], equip_pos, self.equip_point[1])
+        picked = pick_evolution(labels, want)
+        if picked is None:
+            self.log(f"アイテム取得: 進化 {target_id}: 色文字 {len(labels)} 個から色が合う 1 つを選べません"
+                     "（Equip を押します）")
+            return None
+        self.log(f"アイテム取得: 進化 {target_id}: 色文字 {len(labels)} 個から選んだ（色相 {picked[2]:.0f}・"
+                 f"彩度 {picked[3]:.0f}・明るさ {picked[4]:.0f}）")
+        return picked[0], picked[1]
+
     def equip(self, target_id: int) -> bool:
         for attempt in range(1, EQUIP_TRIES + 1):
             seq_before = self.equip_seen()[0]
             (x, y), how = self._equip_target(first=attempt == 1)
+            spot = self._evolution_spot(target_id, (x, y))
+            if spot is not None:
+                x, y = spot
+                how += "・進化"
             self._check()
             ok = self.mouse.click_at(x, y)
             self.log(f"アイテム取得: Equip: 点 ({x:.1f}, {y:.1f})（撮影・{how}）・Tab＋カーソルで"
