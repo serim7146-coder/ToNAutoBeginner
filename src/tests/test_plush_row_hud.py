@@ -106,31 +106,33 @@ class TestFramePanelPlushRow(_FetchCase):
         self.assertEqual(panel.moves, [])
 
     def test_the_buttons_come_first(self):
-        # 行の点も Equip の箱も HUD に掛かる配置。先に決めるのはボタン（板の真ん中を照準へ）で、行の点の量ではない
-        panel = _Panel(left=700.0, top=500.0)
-        f = self._fetcher(panel)
+        # 行の点も Equip の箱も HUD に掛かる配置。先に決めるのはボタン（Equip を BUTTON_SAFE_X へ横にずらす）で、
+        # 行の点の量ではない（2026-11-17 までは板の真ん中を照準へ寄せていた）
+        panel = _Panel(left=700.0, top=500.0, gain=(1.5, 0.55))
+        f = self._fetcher(panel, saved_gain=(1.5, 0.55))
         f.frame_panel("Event", plush_row=True)
         first = self._hud_log()[0]
         self.assertIn("HUD に重なる点 Equip・Plush の行・", first)
-        dx = (700 + ItemFetch.TEMPLATE_SIZE[0] / 2) - AIM[0]
+        equip_shift = ((700 + ItemFetch.BUTTONS["Equip"][0] - AIM[0]) - ItemFetch.BUTTON_SAFE_X * H) / 1.5
         moves = [m for m in self.logs if m.startswith("アイテム取得: 店の画面: 視点を動かす")]
-        self.assertTrue(moves[0].startswith(f"アイテム取得: 店の画面: 視点を動かす 横 {dx / panel.gain[0]:.1f}・縦 0.0"),
-                        (moves[0], dx))
-        row_only = (700 + ROW[0] - AIM[0] - ItemFetch.PLUSH_ROW_SAFE_X * H) / panel.gain[0]
-        self.assertNotAlmostEqual(dx / panel.gain[0], row_only, delta=1.0, msg="2 つの量は違う")
+        self.assertTrue(moves[0].startswith(f"アイテム取得: 店の画面: 視点を動かす 横 {equip_shift:.1f}・縦 0.0"),
+                        (moves[0], equip_shift))
+        row_only = (700 + ROW[0] - AIM[0] - ItemFetch.PLUSH_ROW_SAFE_X * H) / 1.5
+        self.assertNotAlmostEqual(equip_shift, max(-ItemFetch.MOVE_CAP, row_only), delta=1.0, msg="2 つの量は違う")
 
-    def test_a_button_in_the_hud_without_the_row_is_the_old_behavior(self):
-        # Equip の箱だけが HUD に掛かる（行の点は HUD の縦の範囲より上）。今までと同じに板の真ん中を照準へ寄せる
-        panel = _Panel(left=672.0, top=430.0)
-        f = self._fetcher(panel)
+    def test_a_button_in_the_hud_without_the_row_is_shifted_sideways(self):
+        # Equip の箱だけが HUD に掛かる（行の点は HUD の縦の範囲より上）。2026-11-17 から、板の真ん中ではなく
+        # Equip を BUTTON_SAFE_X へ横にずらす（縦は動かさない）
+        panel = _Panel(left=672.0, top=430.0, gain=(1.5, 0.55))
+        f = self._fetcher(panel, saved_gain=(1.5, 0.55))
         f.frame_panel("Event", plush_row=True)
         first = self._hud_log()[0]
         self.assertIn("HUD に重なる点 Equip・", first)
         self.assertNotIn("Plush の行・", first)
-        dx = (672 + ItemFetch.TEMPLATE_SIZE[0] / 2) - AIM[0]
+        shift = ((672 + ItemFetch.BUTTONS["Equip"][0] - AIM[0]) - ItemFetch.BUTTON_SAFE_X * H) / 1.5
         moves = [m for m in self.logs if m.startswith("アイテム取得: 店の画面: 視点を動かす")]
-        self.assertTrue(moves[0].startswith(f"アイテム取得: 店の画面: 視点を動かす 横 {dx / panel.gain[0]:.1f}・縦 0.0"),
-                        (moves[0], dx))
+        self.assertTrue(moves[0].startswith(f"アイテム取得: 店の画面: 視点を動かす 横 {shift:.1f}・縦 0.0"),
+                        (moves[0], shift))
 
     def test_the_move_count_is_shared_with_the_panel_tries(self):
         panel = _panel_with_row_at(-0.095, 0.04, gain=(0.0, 0.0))   # 動かしても板が動かない

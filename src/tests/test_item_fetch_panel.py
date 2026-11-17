@@ -790,11 +790,15 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
         self.assertTrue(all(not ItemFetch.in_hud(c, panel.aim, 1080) for c in panel.clicks))
 
     def test_still_in_the_hud_when_centred_fails(self):
-        panel = _Panel(left=960 - 190, top=540 - 130)               # 真ん中が照準の上
+        # 細い窓（500 幅）: 真ん中は照準の上。横へずらすと板がはみ出す → 新しい横ずらしには入らず、今までどおり
+        # 真ん中へ寄せようとして、寄せても重なるので失敗する
+        panel = _Panel(left=250 - 190, top=540 - 130, size=(500, 1080))
+        self.assertTrue(panel.inside())
         with patch.object(ItemFetch, "HUD_X", (-0.05, 0.05)), patch.object(ItemFetch, "HUD_Y", (0.0, 0.1)):
             f = self._fetcher(panel)
             self.assertFalse(f.buy("Survival", 29))
         self.assertEqual(panel.clicks, [])
+        self.assertEqual(panel.moves, [])
         self.assertIn("アイテム取得: 押す点が HUD に重なります（真ん中に寄せても Equip）", self.logs)
 
     def test_it_gives_up_after_6_moves_like_the_overflow(self):
@@ -806,19 +810,20 @@ class TestKeepTheButtonsOffTheHud(_FetchCase):
             self.assertFalse(f.buy("Survival", 29))
         self.assertIn("アイテム取得: 店の画面が入りきりません（6 回動かした）", self.logs)
 
-    def test_up_and_down_when_sideways_is_already_centred(self):
-        """横は照準に合っていても、Enkephalin（真ん中から左へ 84）が HUD に入る → 縦だけ寄せる。
-        動かした縦は、今どおり後で戻す"""
+    def test_enkephalin_centred_is_moved_sideways_not_down(self):
+        """横は照準に合っていても、Enkephalin（真ん中から左へ 84）が HUD に入る。2026-11-17 から、縦ではなく
+        横にずらして帯の外へ出す（下を見ない・戻さない）"""
         panel = _Panel(left=960 - 190, top=540 + 108 - 130)       # 真ん中が照準の真下 0.1×高さ
         self.assertTrue(panel.inside())
         self.assertTrue(ItemFetch.in_hud((770 + 106, 518 + 129), panel.aim, 1080))
         f = self._fetcher(panel, answers=(70,))
         self.assertTrue(f.buy("Enkephalin", 70))
         self.assertTrue(panel.moves)
-        self.assertTrue(all(dx == 0 for dx, _dy in panel.moves), "横はもう合っている")
+        self.assertTrue(all(dy == 0 for _dx, dy in panel.moves), "縦は動かさない")
+        self.assertTrue(all(dx < 0 for dx, _dy in panel.moves), "視点を左へ（板が右へ）")
         self.assertFalse(ItemFetch.in_hud(panel.clicks[0], panel.aim, 1080))
         f.restore_view()
-        self.assertEqual(sum(dy for _dx, dy in panel.moves), 0, "縦は戻す")
+        self.assertFalse([m for m in self.logs if "視点を戻しました" in m], "縦は動かしていないので戻さない")
 
     def test_the_window_height_is_asked_from_the_window(self):
         ex = ActionExecutor.ActionExecutor(WindowConfig(hwnd=0x55, osc_port=9000),

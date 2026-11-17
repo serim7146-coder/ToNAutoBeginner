@@ -59,6 +59,11 @@ PANEL_SETTLE_PX = 2.0       # 見本の真ん中が照準からこれ以内な�
 # （EI）。両方を包むように、上下左右に 0.02 ほどの余白を足した
 HUD_X = (-0.27, -0.03)
 HUD_Y = (0.02, 0.21)
+# 店のボタン・Equip が HUD に掛かるとき、下を見るのではなく横にずらして帯の外へ出す（2026-11-17）。
+# 寄せ先は Survival・Event のボタンが実際に居る位置（見本で (266-190)/1080）。
+# 「帯の右端 −0.03 のすぐ外」ではなくここにするのは、HUD_X が撮影からの推定で余白込みの値だから。
+# +0.070 は Survival 117 回・Event 434 回の実クリックが成功している位置（2026-11-17 の debug.log）
+BUTTON_SAFE_X = 0.070
 SCALE_PROBE = 10            # 倍率を測るのに、点の ±この px を写す
 # gain（画面px ／ マウス1）は視点の感度で人によって違う（依頼者の PC で 横0.81・縦0.59）。決め打ちに
 # しない: 視点を動かすのが要るときだけ、横・縦それぞれ小さく動かして測る（calibrate）
@@ -563,6 +568,24 @@ def in_hud(point, aim, height) -> bool:
     return HUD_X[0] <= rx <= HUD_X[1] and HUD_Y[0] <= ry <= HUD_Y[1]
 
 
+def hud_shift_x(boxes, names, aim, height) -> float:
+    """HUD に掛かっている押す点（boxes の中の names）を、まとめて BUTTON_SAFE_X まで右へ出すのに要る量（画面 px）。
+
+    返すのは frame_panel の want と同じ向き（負 ＝ 視点を左へ ＝ 板が右へ）。
+    掛かっている点が無ければ 0.0。いちばん左の点を基準にする（全部が帯の外に出る）。
+    boxes は [(名前, button_box の 2 点)]、names は HUD に掛かっている名前、aim は照準、height はクライアントの高さ"""
+    xs = [x for name, box in boxes if name in names for x, _y in box]
+    if not xs:
+        return 0.0
+    return min(0.0, (min(xs) - aim[0]) - BUTTON_SAFE_X * height)
+
+
+def shifted_outside(corners, shift, size) -> tuple:
+    """四隅を横に shift（hud_shift_x と同じ向き。負 ＝ 板が右へ）だけ動かしたら、撮影からはみ出すか (横, 縦)。
+    panel_outside と同じ形。視点を横に回すのは画面上のほぼ平行移動なので、動かす前に当たりを付けるのに使う"""
+    return panel_outside([(x - shift, y) for x, y in corners], size)
+
+
 def row_blocked(point, aim, height) -> bool:
     """Have Plush の行の点（撮影）が、HUD にクリックを止められる位置か（照準から横 PLUSH_ROW_HUD_X_MAX より左・
     縦が HUD_Y の中。一覧の道だけ見る）"""
@@ -865,6 +888,14 @@ class Fetcher:
                         if plush_row else ""))
             if not (out_x or out_y or hud or blocked):
                 return img, aim, found
+            shift = 0.0
+            if hud and not (out_x or out_y):
+                # 板は全部見えていて HUD に当たるだけ → 下を見ず、横にずらして帯の外へ（2026-11-17）。
+                # ずらすと板がはみ出す・ずらす量が PANEL_SETTLE_PX 以下なら、今までの枝へ落とす
+                want_x = hud_shift_x(boxes, hud, aim, height)
+                if abs(want_x) > PANEL_SETTLE_PX and not any(
+                        shifted_outside(panel_corners(project), want_x, (img.shape[1], img.shape[0]))):
+                    shift = want_x
             # はみ出している・押す点が HUD に重なる → 店の画面の真ん中を照準へ寄せる（横が先。縦は要るときだけ）
             if not (out_x or out_y or hud):
                 # 行の点だけが HUD に重なる（ボタンの扱いが先）→ 視点を横だけ動かして、行の点を SAFE へ寄せる（板が右へ動く）
@@ -872,6 +903,8 @@ class Fetcher:
                 if abs(want[0]) <= PANEL_SETTLE_PX:
                     self.log("アイテム取得: 押す点が HUD に重なります（Plush の行）")
                     return None
+            elif shift:
+                want = (shift, 0.0)             # 店のボタン・Equip だけが HUD → 横に 1 回ずらす（縦は動かさない）
             elif (out_x or (hud and not out_y)) and abs(dx) > PANEL_SETTLE_PX:
                 want = (dx, 0.0)                # 横が先
             elif (out_y or hud) and abs(dy) > PANEL_SETTLE_PX:
