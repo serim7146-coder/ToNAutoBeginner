@@ -558,6 +558,12 @@ class TestStatisticsSelectButtons(unittest.TestCase):
             self.window._select_only_rounds(StatisticsGUI.ROUND_SELECT_PRESETS[0][1])
         self.assertIn("Punish", self.window._selected_rounds())
 
+    def test_punished_shows_its_real_name(self):
+        """統計の表示名は Punished（依頼者 2026-11-18。前は Punish だった）。
+        DB に古い `Punish` で入っている回も、同じ枠に集める"""
+        for name in ("Punished", "Punish"):
+            self.assertEqual(StatisticsGUI._round_display_name(name), "Punished", name)
+
     def test_the_presets(self):
         self.assertEqual([(label, set(names)) for label, names in StatisticsGUI.ROUND_SELECT_PRESETS],
                          [("Classicテラー", self.CLASSIC), ("Alternateテラー", self.ALTERNATE)])
@@ -600,7 +606,7 @@ class TestStatisticsColors(unittest.TestCase):
     def test_the_table(self):
         expected = {"Bloodbath": "#ff4d4d", "Midnight": "#a8102a", "Bloodbath EX": "#e8607a",
                     "Double Trouble": "#ff7a7a", "Fog": "#9a9a9a", "Fog(Alternate)": "#5f5f5f",
-                    "Alternate": "#ffffff", "8 Pages": "#d4d4d4", "Punish": "#ffd43b", "Twilight": "#d9b44a",
+                    "Alternate": "#ffffff", "8 Pages": "#d4d4d4", "Punished": "#ffd43b", "Twilight": "#d9b44a",
                     "Ghost": "#7fdcff", "Ghost(Alternate)": "#2e8fbf", "Run": "#ff9900", "Unbound": "#ff8c1a",
                     "Blood Moon": "#7a1e1e", "Mystic Moon": "#2f55c8", "Solstice": "#4caf50",
                     "Classic": "#efe3c2", "Cracked": "#cba6f7", "Sabotage": "#a6e3a1",
