@@ -2068,6 +2068,13 @@ class ActionExecutor:
                 return
 
     # ── アイテム自動取得 ──────────────────
+    @staticmethod
+    def _fetch_label(shop: str, item_id) -> str:
+        """画面のログに出す、取りに行くものの名前（依頼者 2026-11-17。「#29」では何か分からない）。
+        item.json に無い番号のときだけ「#29」のように番号で出す"""
+        name = ItemCatalog.item_name(item_id, config.ITEMS)
+        return f"{shop} Shop の {name or f'#{item_id}'}"
+
     def item_fetch_target(self) -> tuple | None:
         """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
         押さない窓・このラウンドにロストしたアイテムが分からない・Others や
@@ -2148,7 +2155,7 @@ class ActionExecutor:
             client_height=lambda: WindowOperator.client_height(self._cfg.hwnd),
             speed=self._receiver_speed if receiver is not None else None,
             on_miss=lambda shot, why: FetchMiss.save(shot, st.window_idx, why))
-        name = f"{shop} Shop の #{item_id}"
+        name = self._fetch_label(shop, item_id)
         self._fetched_round = st.round_seq          # 柵を越えて店へ行く（EY: 押し直しは Begin の前へ戻ってから）
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
