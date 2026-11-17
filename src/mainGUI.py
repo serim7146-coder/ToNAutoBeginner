@@ -1443,7 +1443,6 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         _remember_own_window(self)       # 録画中だけキャプチャから外すため
         Recorder.set_window_hider(self._set_own_windows_hidden)
-        Recorder.set_window_source(self._record_window_source)
         self._start_emergency_stop_polling()
         self._start_host_save_polling()
         self._debug_environment()
@@ -2613,15 +2612,8 @@ class App(tk.Tk):
         of1n = ttk.Frame(f5)
         of1n.pack(fill="x", pady=2)
         ttk.Label(of1n, text="※ OBSの「ツール → WebSocketサーバー設定」で有効にしてください。"
-                             "シーンは、下のチェックを入れたときだけ切り替えます",
+                             "シーンは切り替えません",
                   foreground=config.GUI_YLW).pack(side="left")
-        # 録画の間だけツール専用のシーンへ切り替え、続行中の窓だけを並べる（全窓共通・保存・既定 OFF）
-        of1s = ttk.Frame(f5)
-        of1s.pack(fill="x", pady=2)
-        self.v_record_split = tk.BooleanVar(value=False)
-        ttk.Checkbutton(of1s, text="続行中の窓だけを録画する（OBS のシーンを切り替える）",
-                        variable=self.v_record_split,
-                        command=self._on_record_split_changed).pack(side="left")
         of2 = ttk.Frame(f5)
         of2.pack(fill="x", pady=2)
         ttk.Label(of2, text="ホスト:").pack(side="left")
@@ -3403,18 +3395,6 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
-    def _on_record_split_changed(self):
-        SharedState.set_record_split_windows(self.v_record_split.get())
-        self._apply_obs_settings()             # 録画係へ渡す
-        self._schedule_settings_save()
-
-    def _refresh_record_split_check(self):
-        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
-        try:
-            self.v_record_split.set(SharedState.get_record_split_windows())
-        except (tk.TclError, AttributeError):
-            pass
-
     def _on_begin_use_spam_only_changed(self):
         SharedState.set_begin_use_spam_only(self.v_begin_use_spam_only.get())
         self._schedule_settings_save()
@@ -4003,8 +3983,6 @@ class App(tk.Tk):
         elif state == "migrate":
             # 旧形式の平文をその場で暗号化して書き直す（タブの有無に関係なく）
             save_settings(with_obs_password(load_settings(), password))
-        SharedState.set_record_split_windows(data.get("obs_record_split") is True)   # 無い・壊れた値は OFF（既定）
-        App._refresh_record_split_check(self)
         self._apply_obs_settings()
         self._load_window_volume_settings(data)    # 古い settings.json でも既定値
         self._load_fog_early_read_setting(data)
@@ -5349,7 +5327,6 @@ class App(tk.Tk):
             "window_freezes": self._window_freeze_setting(),
             "obs_record":    self.v_obs_enabled.get(),
             "obs_record_freeze": self.v_obs_freeze.get(),
-            "obs_record_split": SharedState.get_record_split_windows(),
             "obs_host":      self.v_obs_host.get().strip(),
             "obs_port":      self.v_obs_port.get().strip(),
             **self._window_volume_settings(),
@@ -5398,8 +5375,7 @@ class App(tk.Tk):
         enabled = self.v_obs_enabled.get()
         freeze = self.v_obs_freeze.get()
         Recorder.configure(enabled, host, port,
-                           self.v_obs_password.get(), log=self._log, record_freeze=freeze,
-                           split_windows=SharedState.get_record_split_windows())
+                           self.v_obs_password.get(), log=self._log, record_freeze=freeze)
         if not enabled and not freeze:
             # 録画中に両方OFFにしたら、このツールが始めた録画をその場で止める
             # （手動の録画には触らない）。GUI操作なので待たない
@@ -5466,17 +5442,6 @@ class App(tk.Tk):
             self._capture_warned = True
             self._log("⚠ 録画からツールの窓を隠せませんでした"
                       "（Windows 10 2004 以降が必要です）。録画は続けます")
-
-    def _record_window_source(self, window_idx: int):
-        """OBS の録画で並べる窓の (モニタの矩形, 窓の矩形)。取れない窓（最小化・消えた）は None。
-
-        Recorder のワーカースレッドから呼ばれるので Tk には触らない
-        （monitors のコピーから hwnd を引くだけ）
-        """
-        for mon in list(self.monitors):
-            if mon.window_idx == window_idx:
-                return WindowOperator.monitor_of_window(mon.cfg.hwnd)
-        return None
 
     def _show_own_windows_again(self):
         """録画中に隠したままにしない。止めたら必ず戻す"""

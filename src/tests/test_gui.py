@@ -349,15 +349,6 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
         self.assertEqual(args.args[:4], (True, "127.0.0.1", 4455, "hunter2"))
 
     # ── 録画中にOFF ───────────────────────────
-    def test_the_split_setting_reaches_the_recorder_and_defaults_to_off(self):
-        self.addCleanup(SharedState.set_record_split_windows, False)
-        app = self._app()
-        for value in (False, True):
-            SharedState.set_record_split_windows(value)
-            with patch.object(Recorder, "configure") as mock_configure:
-                mainGUI.App._apply_obs_settings(app)
-            self.assertIs(mock_configure.call_args.kwargs["split_windows"], value)
-
     def test_turning_it_off_stops_without_waiting(self):
         app = self._app(enabled=False)
         with patch.object(Recorder, "configure"),              patch.object(Recorder, "stop_all") as mock_stop:
@@ -497,8 +488,7 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
             self.assertLessEqual(imports, {"base64", "hashlib", "json", "os",
                                            "socket", "struct", "time", "queue",
                                            "threading", "typing", "config",
-                                           "OBSClient", "DebugLog", "TaskStats",
-                                           "RecordLayout"}, name)   # 例外を debug.log へ・CPU の記録（FI）・シーンの計算（標準ライブラリだけの純粋なモジュール）
+                                           "OBSClient", "DebugLog", "TaskStats"}, name)   # 例外を debug.log へ・CPU の記録（FI）
 
 
 
@@ -3279,7 +3269,6 @@ class TestSettingsArePersisted(unittest.TestCase):
             "wait_bloodthirsty",                                  # Bloodthirsty を待つチェック
             "murder_no_afk",                                      # Murder で AFK 回避しないチェック
             "begin_use_spam_only",                                # Begin は連打だけのチェック
-            "obs_record_split",                                   # 続行中の窓だけを録画するチェック
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した
             "window_layout",                                     # DX で足した
