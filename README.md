@@ -70,7 +70,7 @@
     | インスタンス | 全自爆 | 全続行 |
     |---|---|---|
     | プライベート・Seer's Apostle（メンバーのみ）・実績・アイテム集会 | 全部 | 全部 |
-    | 焼き芋 | Mystic Moon・Blood Moon・Solstice | Twilight だけ |
+    | 焼き芋 | Blood Moon だけ | Twilight だけ |
     | 干し芋 | Mystic Moon・Blood Moon・Twilight・Solstice だけ | 効きません |
     | パブリック・ほかのグループ・Emerald City | 効きません | 効きません |
 

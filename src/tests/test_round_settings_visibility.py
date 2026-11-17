@@ -43,14 +43,46 @@ class TestSettingApplies(unittest.TestCase):
             for which in (SKIP, CONT):
                 self.assertEqual(self._names(itype, which), list(NAMES), (itype, which))
 
-    def test_yakiimo_skips_three_moons_and_continues_only_twilight(self):
-        self.assertEqual(self._names(config.INSTANCE_YAKIIMO, SKIP),
-                         ["Mystic Moon", "Blood Moon", "Solstice"])
+    def test_yakiimo_skips_only_blood_moon_and_continues_only_twilight(self):
+        # Mystic Moon・Solstice は YAKIIMO_SKIP_FIRST_MOONS で 1 回目から自爆（指定しても同じ結果）なので False
+        self.assertEqual(self._names(config.INSTANCE_YAKIIMO, SKIP), ["Blood Moon"])
         self.assertEqual(self._names(config.INSTANCE_YAKIIMO, CONT), ["Twilight"])
 
     def test_yakiimo_twilight_only_continue_is_read(self):
         self.assertTrue(GroupRound.setting_applies(config.INSTANCE_YAKIIMO, CONT, "Twilight"))
         self.assertFalse(GroupRound.setting_applies(config.INSTANCE_YAKIIMO, SKIP, "Twilight"))
+
+    def test_yakiimo_first_time_skip_moons_do_not_apply(self):
+        for moon in ("Mystic Moon", "Solstice"):
+            self.assertFalse(GroupRound.setting_applies(config.INSTANCE_YAKIIMO, SKIP, moon), moon)
+            self.assertFalse(GroupRound.setting_applies(config.INSTANCE_YAKIIMO, CONT, moon), moon)
+
+    def test_non_moon_names_never_apply_to_groups(self):
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            for which in (SKIP, CONT):
+                for name in NAMES:
+                    if name not in MOONS:
+                        self.assertFalse(GroupRound.setting_applies(itype, which, name), (itype, which, name))
+
+    def test_the_whole_table(self):
+        """結果の表を丸ごと書き写したもの。setting_applies は decide を呼んで決める（手書きの表が無い）ので、
+        decide を変えるとここが落ちる。落ちたら、画面の表示が変わるということ。差分を見て、変わってよいか確かめること"""
+        Y, H = config.INSTANCE_YAKIIMO, config.INSTANCE_HOSHIIMO
+        table = {
+            (Y, SKIP): ["Blood Moon"],
+            (Y, CONT): ["Twilight"],
+            (H, SKIP): ["Mystic Moon", "Blood Moon", "Twilight", "Solstice"],
+            (H, CONT): [],
+        }
+        for itype in PRIVATE_LIKE:
+            for which in (SKIP, CONT):
+                table[(itype, which)] = list(NAMES)
+        for itype in NOTHING:
+            for which in (SKIP, CONT):
+                table[(itype, which)] = []
+        self.assertEqual(len(table), len(ALL_TYPES) * 2)
+        for (itype, which), want in table.items():
+            self.assertEqual(self._names(itype, which), want, (itype, which))
 
     def test_hoshiimo_skips_four_moons_and_continues_nothing(self):
         self.assertEqual(self._names(config.INSTANCE_HOSHIIMO, SKIP), list(MOONS))
@@ -99,12 +131,6 @@ class TestMatchesTheRealDecision(unittest.TestCase):
                 return True
         return False
 
-    # 焼き芋の Mystic Moon・Solstice は、decide が 1 回目から必ず SKIP（YAKIIMO_SKIP_FIRST_MOONS）。
-    # 全自爆を入れても結果は変わらない（読まれるが、入れなくても同じ）。仕様書の表では「押せる」（入れた意図どおりに動く）。
-    # 結果が変わらないのに True を返してよい組は、この 2 つだけ。ほかで増えたら、画面が嘘をついている
-    REDUNDANT_BUT_HONOURED = {(config.INSTANCE_YAKIIMO, SKIP, "Mystic Moon"),
-                              (config.INSTANCE_YAKIIMO, SKIP, "Solstice")}
-
     def test_groups_every_name_every_side(self):
         for itype in self.GROUPS:
             for which in (SKIP, CONT):
@@ -112,13 +138,9 @@ class TestMatchesTheRealDecision(unittest.TestCase):
                     with self.subTest(itype=itype, which=which, name=name):
                         effective = self._effective(itype, which, name)
                         applies = GroupRound.setting_applies(itype, which, name)
-                        if (itype, which, name) in self.REDUNDANT_BUT_HONOURED:
-                            self.assertFalse(effective, "この組は結果が変わらないはず（表の前提）")
-                            self.assertTrue(applies)
-                        else:
-                            self.assertEqual(
-                                applies, effective,
-                                "画面の押せる・押せないが、本物の判定と食い違っている")
+                        self.assertEqual(
+                            applies, effective,
+                            "画面の押せる・押せないが、本物の判定と食い違っている")
 
     def test_a_disabled_item_never_hides_a_working_setting(self):
         """押せないと言うものを入れても、結果は絶対に変わらない（押せないせいで効く指定が使えなくなることは無い）"""
@@ -197,7 +219,7 @@ class TestTabDisablesWhatDoesNotApply(_TabCase):
     def test_yakiimo_example(self):
         tab = self._tab()
         tab.apply_instance_type(config.INSTANCE_YAKIIMO)
-        self.assertEqual(self._disabled(tab, SKIP), set(NAMES) - {"Mystic Moon", "Blood Moon", "Solstice"})
+        self.assertEqual(self._disabled(tab, SKIP), set(NAMES) - {"Blood Moon"})
         self.assertEqual(self._disabled(tab, CONT), set(NAMES) - {"Twilight"})
 
     def test_disabled_ones_are_unchecked(self):
@@ -273,7 +295,7 @@ class TestRuleLabel(_TabCase):
     def test_the_four_kinds(self):
         self.assertEqual(
             self._text(config.INSTANCE_YAKIIMO),
-            "インスタンス: 焼き芋 → 全自爆は Mystic Moon / Blood Moon / Solstice だけ効きます、"
+            "インスタンス: 焼き芋 → 全自爆は Blood Moon だけ効きます、"
             "全続行は Twilight だけ効きます")
         self.assertEqual(
             self._text(config.INSTANCE_HOSHIIMO),

@@ -81,21 +81,26 @@ SETTING_CONTINUE = "continue"
 
 def setting_applies(instance_type: str, which: str, round_name: str) -> bool:
     """窓ごとの全自爆（which="skip"）・全続行（which="continue"）の指定が、このインスタンスで効くか。
-    画面がチェックを押せなくするのに使う。判定そのものは decide / is_all_continue_regardless_of_terror
-    が決めるので、ここを変えても動きは変わらない（食い違わせないこと）。
+    画面がチェックを押せなくするのに使う。
 
-    - JUDGE_LIKE_INSTANCES（private 相当）: 全部効く
-    - グループ（干し芋・焼き芋）: moon だけ。ただし焼き芋の Twilight は decide が
-      continue_moons で決めるので、全続行だけが効き、全自爆は読まれない
-    - ほか（public・その他のグループ・Emerald City）: 効かない
+    グループでは、判定そのもの（decide）を「指定あり」「指定なし」で呼び比べて、
+    結果が変わるかどうかで決める。手書きの表を持たないので、decide を変えても
+    画面の表示が勝手に追従する（2026-11-17: 手書きだったときに実際にずれていた）。
+    1 回目（moon_repeat=False）で見る。2 回目以降はどの moon も自爆固定で、
+    どの指定も効かないため。
+
+    private 相当（JUDGE_LIKE_INSTANCES）は decide を通らない（LogMonitor の
+    ラウンド指定が直に効く）ので、全部効く。
     """
     if instance_type in config.JUDGE_LIKE_INSTANCES:
         return True
-    if instance_type not in GROUP_INSTANCES or round_name not in MOONS:
+    if instance_type not in GROUP_INSTANCES:
         return False
-    opt_in = (instance_type == config.INSTANCE_YAKIIMO
-              and round_name in YAKIIMO_OPT_IN_MOONS)
-    return opt_in if which == SETTING_CONTINUE else not opt_in
+    key = "skip_moons" if which == SETTING_SKIP else "continue_moons"
+    without = decide(instance_type, round_name, (), moon_repeat=False)
+    with_it = decide(instance_type, round_name, (), moon_repeat=False,
+                     **{key: {round_name}})
+    return without != with_it
 
 
 def decide(
