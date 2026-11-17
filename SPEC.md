@@ -18,7 +18,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
               │     ├─ VerifiedTracker    : `Verified` が Begin の受理か定期シグナルか
               │     ├─ RoundDecision / GroupRound / RoundSequence / TerrorReplacement : 判定
               │     ├─ FogEarlyRead       : 霧の看破
-              │     ├─ UtilsWatch         : ToN Utils の続行・自爆の判断を読む（設定で ON のとき）
+              │     ├─ UtilsWatch         : ToN Utils の続行・自爆の判定を読む（設定で ON のとき）
               │     ├─ ActionExecutor     : 自爆・Begin・AFK 対策・速度検知・チェイス・アイテム自動取得・Run リスポーン（実操作）
               │     │     ├─ WindowOperator : 前面に出す・キー・クリック・カーソル・窓の矩形（Win32）
               │     │     ├─ OSCClient / OSCReceiver / OSCQuery : OSC の送信・速度の受信
@@ -114,7 +114,7 @@ main.py ──▶ mainGUI.App (Tkinter。Tk のスレッド)
 | 主催リスト・外部ツールの確認 | 3秒ごとに裏のスレッドで読み、結果だけを Tk のスレッドで当てる（`_poll_host_save`・`_poll_tool_buttons`）。 |
 | keyboard のフック | 停止・開始・自爆キャンセル・チェイスのキー。押した・離した通知のたびに見る（ポーリングしない）。 |
 | LogMonitor（窓ごと） | `LOG_POLL_INTERVAL`（0.3秒）ごとにログの追記を読み、行ごとに `_process`。 |
-| 操作のデーモン | 自爆・Begin・AFK 対策（DTM/Waldo・Glorbo のループと、ラウンド開始ごとの AFK 回避の見張り `do_afk_watch`）・フリーズの遅延解除・Utils の判断待ち（`_wait_utils`）・Run のリスポーンなど（§5.1）。`LogMonitor._start_daemon`。UtilsWatch は自分のスレッドを持たず、ここから読む。 |
+| 操作のデーモン | 自爆・Begin・AFK 対策（DTM/Waldo・Glorbo のループと、ラウンド開始ごとの AFK 回避の見張り `do_afk_watch`）・フリーズの遅延解除・Utils の判定待ち（`_wait_utils`）・Run のリスポーンなど（§5.1）。`LogMonitor._start_daemon`。UtilsWatch は自分のスレッドを持たず、ここから読む。 |
 | OSC の受信（窓ごと） | 速度を受け続ける（監視中ずっと）。OSCQuery で届かなければ固定ポートへ切り替える待ちのスレッドもある。 |
 | OSCQuery のサービス | HTTP・UDP の受け口・mDNS での公開（ツールに1つ。最初の監視か VRChat の起動で立て、ツールを閉じるまで出したまま）。 |
 | 音量の見張り | `WindowVolume`。窓の状態に合わせて音量を変え続け、止めると元に戻して COM を片付ける。 |
@@ -144,7 +144,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面に出す・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判断に従う（`follow_utils`）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）
@@ -185,7 +185,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 | `ActionExecutor.do_skip` | 判定・放置モード・グループ・指定ラウンド・Utils の hold | そのラウンド中 | 起動される側。`round_seq` で自己判定 |
 | `ActionExecutor.do_open_special_round_loop` | DTM/Waldo・Glorbo の続行 | そのラウンド中 | 起動される側。ラウンド終了で自己停止 |
 | `LogMonitor._delayed_decision` | テラー確定（置き換えの合図待ち。通常 0.3 秒、枠で待つときは最大 11 秒） | 通常は数百ミリ秒、枠で待つときは最大 11 秒 | 起動される側。`round_seq` で自己判定 |
-| `LogMonitor._wait_utils` | Utils の判断に従う窓のテラー確定 | そのラウンド中（最大 `UTILS_WAIT_SEC`） | `round_seq` で自己判定 |
+| `LogMonitor._wait_utils` | Utils の判定に従う窓のテラー確定 | そのラウンド中（最大 `UTILS_WAIT_SEC`） | `round_seq` で自己判定 |
 | `ActionExecutor.do_run_respawn` | Run のラウンドの開始 | そのラウンド中 | ラウンドが変わったら移動をやめる |
 | `ActionExecutor.do_after_round` / `do_begin_again` | RoundOver ／ 定期の Verified と分かったとき | ラウンド**間** | **畳んでよい** |
 | `ActionExecutor.do_speed_detect` / `do_speed_strafe` | Verified Round End ／ 受理した Verified | ラウンド**間** | **畳んでよい**。`in_round`/`round_seq` で自己停止 |
@@ -212,7 +212,7 @@ LogMonitor._process(line)
 
 主なイベント:
 - **ラウンド開始**: ラウンドごとの状態を落とす。Moon の何回目か（`RoundSequence`）、突入フリーズ（開始した瞬間に録画の開始も知らせる。上の `Recorder.py`）、ラウンド開始でのアイテムロスト、Run ならリスポーン（§9）。テラーを持たないラウンド（Moon・Run・Special）はここで統計を送る。
-- **テラー確定**（Killers set / revealed・Enrage・Stunned・Joy・Evil Purple Foxy・看破）→ `_on_killers` → `_plan()` で手順を決めて `_decide()`。置き換えで結論が変わるときだけ合図を待つ。Utils の判断に従う窓は Utils を待つ（§9）。
+- **テラー確定**（Killers set / revealed・Enrage・Stunned・Joy・Evil Purple Foxy・看破）→ `_on_killers` → `_plan()` で手順を決めて `_decide()`。置き換えで結論が変わるときだけ合図を待つ。Utils の判定に従う窓は Utils を待つ（§9）。
 - **置き換えの合図**（`EVENT_REPLACEMENT`）: 知らせる → `TerrorReplacement.TABLE` で差し替える。
 - **RoundOver**: チェイス停止・録画の終了予約・続行フリーズの解除予約・アイテムロストの案内・`do_after_round`。
 - **死亡（You died.）・生存（Lived in round.）**: そのラウンドで先に来た方で 1 回、アイテムを落とす（`_drop_when_round_ends`）。
@@ -270,7 +270,7 @@ LogMonitor._process(line)
 - **続行ラウンドの後に窓を戻す**（「窓位置リセット」）: 続行フリーズを開始したときに窓の矩形を覚え（最大化なら通常の矩形。全画面・最小化は覚えない）、解いたら位置を戻す（全画面は一時的に前面にして Alt+Enter で窓に、最大化は前面を取らずに戻す）。設定で切れる。
 - **チェイス**: キー（デフォルト F1 時計回り・F2 反時計回り）で前面の窓が回り続ける（OSC の移動＋視点）。同じキーでもう一度押すと止まり、反対のキーで向きを変える。設定で使わないようにできる（キーを拾わない）。private の窓だけ。
 - **Run のリスポーン**（「Runリスポーン」）: Run のラウンドに入ったら、ほかの窓のフリーズがないときに一時的に前面にして Esc のメニューからリスポーンし（`RespawnButton`。鍵と前面を持つのは「メニューを開く → ボタンを探す → 押す」の間だけで、「Player respawned」の行は前面を元の窓に戻してから鍵の外で待つ。来なければ一時的に前面にし直して 1 回押し直す）、背面の OSC で後ろへ 2.85 秒（動き出しから数える。上限 `RUN_EXTEND_MAX_SEC` 1.0 秒・押し直しは Begin と同じ。Punished の後は足が遅い＝最高速度 4.0 ので 3.85 秒＝`RUN_RESPAWN_BACK_SEC_LATER`）→ 左へ 0.9 秒 → 撮影で目印（`RunFace`）を探して向きを直す（`RUN_FACE_TRIES` まで。ずれが大きくなったら戻して止める）。目印が真ん中から撮影の幅の 1%（`RUN_FACE_TOL`）以内なら正面とし、3% 以下の細かいずれはボタンでは 1 回 1.45% 刻みで詰められないので軸 `/input/LookHorizontal` の ±0.55（0.5 以下は回らない。0.02・0.05・0.10 秒で幅の 0.16%・0.47%・0.90%＝2026-10-22 の実機の測り）で回し、3% より大きいずれは今までのボタンで回す。**前後の位置は直さない**（`RUN_DEPTH_ENABLED = False`。目印の倍率は debug.log に書くだけ。理由は §13）。全続行（ラウンド指定 `continue_rounds`）で Run を選んだ private 系の窓は、Run でリスポーンしない（`LogMonitor._on_round_start` が判定より前に決める。ログは「Round: Run 【全続行（リスポーンしない）】」・`all_continue_round = True`。音量は Run のまま「その他」（`WindowVolume._live_category` が Run を先に返す）。アナウンス・ほかの窓のフリーズ・録画はなし。Run は続行リストの対象外）。「Runリスポーン」が OFF の窓は全続行に関係なくリスポーンしない。
-- **ToN Utils の判断に従う**（「Utilsの判断に従う」）: Utils が判断している窓では、このツールは自爆の判断をせず、Utils の press（自爆する）・hold（その窓では自爆しない → このツールが判定）・何もない（続行）に従う。起点は VRChat のログの killers_set・killers_revealed の行の時刻。数えるのは Utils の行の時刻が 起点 − `UTILS_EARLY_SEC` 以後のもの（理由は §13）。待つ上限は `UTILS_WAIT_SEC`。Utils が動いていない・窓が対応づかないときは、このツールが判定する（理由を画面に1回）。
+- **ToN Utils の判定に従う**（「Utilsの判定に従う」）: Utils が判定している窓では、このツールは自爆の判定をせず、Utils の press（自爆する）・hold（その窓では自爆しない → このツールが判定）・何もない（続行）に従う。起点は VRChat のログの killers_set・killers_revealed の行の時刻。数えるのは Utils の行の時刻が 起点 − `UTILS_EARLY_SEC` 以後のもの（理由は §13）。待つ上限は `UTILS_WAIT_SEC`。Utils が動いていない・窓が対応づかないときは、このツールが判定する（理由を画面に1回）。
 - **VRChat の起動**: 窓ごとに `--profile=N`・`--osc=<受信>:127.0.0.1:<送信>`（空いている組を選ぶ（HK）。候補は 9000 から 10 刻みで 9990 まで・送信は受信+1。使用中は netstat の全 UDP ポート・全タブの `osc_in`/`osc_out`・今回選んだ組。`assign_windows` が受信ポートの昇順で窓を並べるので、探し始めは全タブの `osc_in` の最大+10で、上に空きがないときだけ 9000 から探し直す。netstat が失敗・空きが足りないときは、タブ番号の決め打ち（窓 i は 9000+10i と +1）にしてログに 1 行）。窓が出てから `LAUNCH_STAGGER_SEC` 置いて次を起動する（VRChat API の 429 を避けるため）。
 - **入室操作**（`ToNEntry`）: 入室後の選択画面を自動で進める。OSC はその窓の実際のポート（タブの `osc_in`、0 ならログの `--osc` の受信。どちらも分からない窓は飛ばして 1 行ログ）へ送る（HK）。設定で、Begin の前に Save/Load のコード欄へクリップボードのセーブコードを貼る（`SaveLoad`。貼った後 1 秒置いて Enter、入力欄が開いたままなら Enter を押し直す）。Begin の受理の後に Guidance Plush を取りに行く（窓ごとのスレッド）。「入室後の選択画面を自動で進める」と「自動でBeginを押す」が両方 ON でマクロが止まっていれば、ログを割り当てた後・入室の前にマクロを自動で開始する（Guidance Plush の取得にマクロの速度の受信が要るため。開始したばかりの監視は入室の Begin の Verified を受理と扱わない）。**セーブコードは画面のログ・debug.log・撮影・テストの出力のどこにも出さない（長さも出さない）。**
 - **窓の整列**（「窓を整列」「配置を覚える」「✕」）: 掴んでいる VRChat の窓を作業領域に升で並べる（`WindowArrange`。全画面・最小化の窓も戻してから並べる）。覚えた配置（`window_layout`）があればその窓はそこへ。
