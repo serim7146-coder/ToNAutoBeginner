@@ -236,6 +236,20 @@ class TestKeybindDialog(_AppCase):
         self.assertIs(self.app.lbl_start_key.winfo_toplevel(), self.app._settings_window)
         self.assertFalse(hasattr(self.app, "_open_keybind_dialog"), "別窓は無い")
 
+    def test_the_keybinds_come_before_the_other_section(self):
+        """設定の窓の並びは サウンド設定 → OBS自動録画 → キーバインド → その他（依頼者 2026-11-17）"""
+        def title(frame):
+            return next(c.cget("text") for c in frame.winfo_children()[0].winfo_children()
+                        if isinstance(c, tk.Label) and c.cget("text"))
+        slaves = self.app._settings_body.pack_slaves()
+        self.assertTrue(all(isinstance(w, mainGUI.CollapsibleFrame) for w in slaves), slaves)
+        titles = [title(w) for w in slaves]
+        self.assertEqual(titles, ["サウンド設定", "OBS自動録画", "キーバインド", "その他"])
+        self.assertLess(titles.index("キーバインド"), titles.index("その他"))
+        self.assertIs(slaves[2], self.app._keybind_fold)
+        self.assertIs(slaves[3], self.app._other_wrap)
+        self.assertTrue(self.app._keybind_fold.collapsed, "既定は閉じた状態のまま")
+
     def test_the_rows(self):
         """5つのキー。どれも「変更」と「解除」がある（DV2）"""
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")

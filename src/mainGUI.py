@@ -2035,12 +2035,13 @@ class App(tk.Tk):
         self._set_key_label("lbl_start_key", self._start_key_text())
 
     # ── キーバインド（DV。設定の窓の折りたたみ） ─────────────────
-    def _build_keybind_section(self, parent):
+    def _build_keybind_section(self, parent, before=None):
         """キーの変更・解除をまとめた折りたたみ（設定の窓の中。既定は閉じた状態）。
         変更のやり方・重なりの確認・保存は今までのまま。ラベルとボタンは起動時から常にある
-        （折りたたみを閉じたままでもキーの取り込みは動く）"""
+        （折りたたみを閉じたままでもキーの取り込みは動く）。
+        before を渡すと、その枠の手前に差し込む（作る順と並びを分ける）"""
         fold = CollapsibleFrame(parent, text="キーバインド", collapsed=True)
-        fold.pack(fill="x", padx=12, pady=4)
+        fold.pack(fill="x", padx=12, pady=4, **({"before": before} if before is not None else {}))
         self._keybind_fold = fold
         body = fold.content
         grid = ttk.Frame(body)
@@ -2697,6 +2698,7 @@ class App(tk.Tk):
         # 設定の窓の「その他」に入れる
         fother_wrap = CollapsibleFrame(self._settings_body, text="その他", collapsed=False)
         fother_wrap.pack(fill="x", padx=12, pady=4)
+        self._other_wrap = fother_wrap          # キーバインドをこの上に差し込むため
         fcr = ttk.Frame(fother_wrap.content)
         fcr.pack(fill="x", pady=(0, 4))
         # チェックは枠の幅に合わせて折り返して並べる（_layout_other_checks）。作った順がそのまま並び順
@@ -2769,8 +2771,8 @@ class App(tk.Tk):
                   text=f"秒（{config.SUICIDE_HOLD_MIN:g}〜{config.SUICIDE_HOLD_MAX:g}）").pack(side="left")
         # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの折りたたみの中（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
-        # キーバインド（設定の窓の「その他」の下）。v_chase_enabled を使うのでこのあと
-        self._build_keybind_section(self._settings_body)
+        # キーバインドは「その他」の上（依頼者 2026-11-17）。v_chase_enabled を使うので、作るのはここ
+        self._build_keybind_section(self._settings_body, before=fother_wrap)
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
