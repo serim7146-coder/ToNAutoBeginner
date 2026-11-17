@@ -258,7 +258,7 @@ class TestRecordPlan(unittest.TestCase):
         self.assertEqual(obs.calls, [])
 
     # ── 10 利用者が始めた録画 ────────────────────────────
-    def test_a_recording_started_by_hand_is_left_alone(self):
+    def test_a_recording_we_did_not_start_is_left_alone(self):
         obs = FakeOBS(recording=True)
         plan = self._plan(obs)
 
