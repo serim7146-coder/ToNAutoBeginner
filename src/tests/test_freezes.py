@@ -2879,14 +2879,15 @@ class TestRoundFreezeVoice(unittest.TestCase):
 
         self.assertEqual(self._enter(monitor, "Ghost"), [])
 
-    def test_punished_and_eight_pages_are_not_announced(self):
-        """依頼の5つに入っていない（その音声は速度検知用）"""
-        for round_type in ("Punished", "8 Pages"):
+    def test_punished_and_eight_pages_are_announced_when_the_speed_check_is_off(self):
+        """2026-11-17: 8 Pages・Punished も鳴らす（速度検知のチェックが OFF の窓。ON の窓は
+        tests/test_round_entry_speed_voice.py）"""
+        for round_type, voice in (("Punished", "punish.mp3"), ("8 Pages", "8pages.mp3")):
             self._reset()
             monitor = self._monitor([round_type])
 
-            self.assertEqual(self._enter(monitor, round_type), [], round_type)
-            self.assertTrue(monitor.st.round_freeze_held, "フリーズ自体は張る")
+            self.assertEqual(self._enter(monitor, round_type), [voice], round_type)
+            self.assertTrue(monitor.st.round_freeze_held, "フリーズも張る")
 
     def test_hands_free_is_silent(self):
         SharedState.set_hands_free(True)

@@ -457,10 +457,21 @@ class LogMonitor:
     ROUND_ENTRY_VOICE_KINDS = {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
                                "Alternate": "alternate", "Ghost": "ghost",
                                "Sabotage murder": "murder", "Sabotage star": "sabotage", "Cracked": "cracked",
-                               "Double Trouble": "double_trouble"}
+                               "Double Trouble": "double_trouble",
+                               "8 Pages": "8pages", "Punished": "punish"}
+
+    # 速度検知でも鳴る 2 つ。名前 → その種別の速度検知フリーズのチェック
+    SPEED_FREEZE_FLAGS = {"8 Pages": "freeze_8pages", "Punished": "freeze_punish"}
 
     def _round_entry_voice(self, round_type: str) -> str:
-        """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字"""
+        """ラウンド突入でフリーズを選んだラウンドに入ったときの音声。対象外なら空文字。
+
+        8 Pages・Punished は速度検知でも鳴る（ラウンド開始より前）。速度検知が働いていて、
+        その種別の速度検知フリーズのチェックが ON の窓では、ここでは鳴らさない
+        （二重にしない。依頼者 2026-11-17）"""
+        flag = self.SPEED_FREEZE_FLAGS.get(round_type)
+        if flag and SharedState.get_speed_detect() and getattr(self.cfg, flag):
+            return ""
         return {"Fog": self.cfg.voice_fog,
                 "Unbound": self.cfg.voice_unbound,
                 "Midnight": self.cfg.voice_midnight,
@@ -469,7 +480,9 @@ class LogMonitor:
                 "Sabotage murder": self.cfg.voice_murder,
                 "Sabotage star": self.cfg.voice_sabotage,
                 "Cracked": self.cfg.voice_cracked,
-                "Double Trouble": self.cfg.voice_double_trouble}.get(round_type, "")
+                "Double Trouble": self.cfg.voice_double_trouble,
+                "8 Pages": self.cfg.voice_8pages,
+                "Punished": self.cfg.voice_punish}.get(round_type, "")
 
     def _round_freeze_name(self) -> str:
         """ラウンド突入フリーズの名前。Sabotage は Sus player の行で murder／star に分ける（EZ。行はラウンド開始より
@@ -491,7 +504,8 @@ class LogMonitor:
         Recorder.on_round_freeze_start(self.window_idx)     # 録画は別スイッチ（RoundOver+tail で止まる）
         self._log(f"⏸ {name} 突入 → 全窓フリーズ"
                   f"（死亡・生存{config.FOG_FREEZE_RELEASE_DELAY_SEC}秒後に解除）")
-        # 音声は選べるラウンドのもの。Punished / 8 Pages の音声は速度検知用
+        # 音声は選べるラウンドのもの。8 Pages / Punished は速度検知でも鳴るので、二重にならないよう
+        # _round_entry_voice が止める（速度検知が働き、その種別のチェックが ON の窓では鳴らさない）
         voice = self._round_entry_voice(name)
         if voice:
             PlaySound.play_sound(voice, kind=self.ROUND_ENTRY_VOICE_KINDS[name])
