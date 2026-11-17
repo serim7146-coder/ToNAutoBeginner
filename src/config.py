@@ -362,6 +362,7 @@ FETCH_CURSOR_TOL_PX     = 2      # 読み直した位置が置いた点からこ
 CONTINUE_DROP_PRESS_SEC   = 0.1   # 落とす操作を押している長さ
 CONTINUE_WINDOWED_WAIT_SEC = 2.0  # Alt+Enter の後、窓に戻るのを待つ上限
 CONTINUE_WINDOWED_POLL_SEC = 0.1
+CONTINUE_RESTORE_DELAY_SEC = 5.0  # その窓の RoundOver から窓位置リセットまで（依頼者 2026-11-18）
 # 速さの受信（DS）: まず OSCQuery で待ち、この秒数でその窓から届かなければ固定ポート（VRChat の送信ポート）を開く
 OSCQUERY_CONNECT_WAIT_SEC = 15.0
 # mDNS（OSCQuery の名乗り）は全インターフェースで開く。True（127.0.0.1 だけ。GB 2026-10-18）だと VRChat が

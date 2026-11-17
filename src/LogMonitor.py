@@ -165,7 +165,8 @@ class LogMonitor:
 
     def _on_continue_freeze(self, started: bool):
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
-        始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりはアイテムを落として窓を戻す（待つので別スレッド）"""
+        始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりは窓を戻す（待つので別スレッド）。
+        「窓位置リセットはラウンド終了」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
         if started:
             self.st.continue_freeze_round = self.st.round_seq
             self._action.remember_continue_window()
@@ -2357,6 +2358,9 @@ class LogMonitor:
         self._clear_stale_continue_round()
         if had_continue_freeze:
             self._log(f"{label} → 続行ラウンドのフリーズ解除")
+        # RoundOver が来ないまま終わった（インスタンス移動・窓が消えた）ので、窓はここで戻す
+        if SharedState.get_continue_restore_at_round_end():
+            self._start_daemon(self._action.restore_continue_window_now)
         self._release_speed_and_round_freezes(label)
         equip_held = st.equip_freeze_held
         st.waiting_for_equip = False
@@ -2440,6 +2444,10 @@ class LogMonitor:
         st.fog_no_object_deadline = 0.0
         # 録画は RoundOver から少し後で止める（続行中でなければ何もしない）
         Recorder.on_round_over(self.window_idx)
+        # 続行ラウンドの窓位置リセットは RoundOver から数える（依頼者 2026-11-18。
+        # OFF の窓は今まで通り、続行フリーズが外れた瞬間＝死亡から数えて戻す）
+        if SharedState.get_continue_restore_at_round_end():
+            self._start_daemon(self._action.restore_continue_window_at_round_end, st.round_seq)
         # Begin待ちの起点。実処理は Verified Round End 側で走るが、
         # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
         st.round_over_time = time.time()

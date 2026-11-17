@@ -171,6 +171,8 @@ get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MOD
 _CONTINUE_DROP_ITEM = _Setting(True, bool)
 get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTINUE_DROP_ITEM.set
 _CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
+# 窓位置リセットの時点。True = ラウンド終了（RoundOver）から、False = 続行フリーズが外れた瞬間（＝死亡から）
+_CONTINUE_RESTORE_AT_ROUND_END = _Setting(True, bool)
 # チェイス（F1・F2）を使う（全窓共通・既定 ON。OFF ならキーを拾わない）
 _CHASE_ENABLED = _Setting(True, bool)
 get_chase_enabled, set_chase_enabled = _CHASE_ENABLED.get, _CHASE_ENABLED.set
@@ -205,6 +207,8 @@ _QUEUE_VOICE = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_queue_voice, set_queue_voice = _QUEUE_VOICE.get, _QUEUE_VOICE.set
 get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
                                                             _CONTINUE_RESTORE_WINDOW.set)
+get_continue_restore_at_round_end, set_continue_restore_at_round_end = (
+    _CONTINUE_RESTORE_AT_ROUND_END.get, _CONTINUE_RESTORE_AT_ROUND_END.set)
 
 
 # ═══════════════════════════════════════════════

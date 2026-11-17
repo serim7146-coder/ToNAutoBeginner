@@ -142,6 +142,8 @@ class ActionExecutor:
         self._speed_ready = threading.Event()
         self._receiver = None             # 監視中ずっと生かす速度受信器
         self._continue_rect = None        # 続行ラウンドの始まりの窓の矩形（窓を戻す先）
+        # 覚えた同じ矩形を 2 つのスレッドが取るのを防ぐ。RoundOver からの予約・ラウンドの片づけ・フリーズ解除の 3 か所から取りに来る
+        self._continue_lock = threading.Lock()
         # Run のリスポーン（後ろへ・正面へまで）が終わっているか。動き出すこの窓のほかの操作
         # （Begin 前の移動・アイテム取得・押し直し）は、終わるまで待つ
         self._run_respawn_idle = threading.Event()
@@ -2972,13 +2974,38 @@ class ActionExecutor:
 
     def after_continue_round(self):
         """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）: 窓を始まりの位置へ戻す
-        （覚えた矩形があるときだけ。どのインスタンスでも）。アイテムはここでは落とさない（EU: 死んだ・
-        生き残ったときに落とす。drop_at_round_end）"""
-        rect, self._continue_rect = self._continue_rect, None
-        if not self._is_running():
+        （覚えた矩形があるときだけ。どのインスタンスでも）。
+
+        「窓位置リセットはラウンド終了」が ON のときは何もしない（RoundOver から戻すので。依頼者 2026-11-18。
+        OFF のときは今まで通り、ここ＝死亡から 5 秒後に戻す）。
+        アイテムはここでは落とさない（EU: 死んだ・生き残ったときに落とす。drop_at_round_end）"""
+        if SharedState.get_continue_restore_at_round_end():
             return
-        if rect is not None and SharedState.get_continue_restore_window():
-            self._restore_continue_window(rect)
+        self.restore_continue_window_now()
+
+    def _take_continue_rect(self):
+        """覚えた矩形を取り出して忘れる。3 か所から来るので、1 回しか戻さないよう鍵の中で"""
+        with self._continue_lock:
+            rect, self._continue_rect = self._continue_rect, None
+        return rect
+
+    def restore_continue_window_at_round_end(self, round_seq: int):
+        """この窓のラウンド終了（RoundOver）から CONTINUE_RESTORE_DELAY_SEC 後に、続行ラウンドの始まりの
+        位置へ窓を戻す（依頼者 2026-11-18。前は続行フリーズが外れた瞬間＝死亡から 5 秒後で、
+        ラウンドが続いているうちに戻っていた）。別スレッド。
+        待っている間に次のラウンドが始まったら何もしない"""
+        time.sleep(config.CONTINUE_RESTORE_DELAY_SEC)
+        if self._st.round_seq != round_seq:
+            return
+        self.restore_continue_window_now()
+
+    def restore_continue_window_now(self):
+        """覚えた矩形へ窓を戻す（覚えていなければ何もしない）。待たない。
+        RoundOver が来ないまま終わったとき（インスタンス移動・窓が消えた）はここから"""
+        rect = self._take_continue_rect()
+        if rect is None or not self._is_running() or not SharedState.get_continue_restore_window():
+            return
+        self._restore_continue_window(rect)
 
     def drop_at_round_end(self, round_seq: int, why: str):
         """死んだ・生き残った行が来たラウンドで 1 回（EU。LogMonitor._drop_when_round_ends が 1 回にする）:

@@ -375,6 +375,7 @@ def setUpModule():
     # 動かさない（OSC・窓の移動を送らない）。確かめるテストだけが ON にする
     SharedState.set_continue_drop_item(False)
     SharedState.set_continue_restore_window(False)
+    SharedState.set_continue_restore_at_round_end(False)   # 既定 ON だが、既存のテストは今までの時点で見る
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
     SharedState.set_wait_bloodthirsty(True)     # 前のテストの OFF を残さない（既定は ON）
     SharedState.set_suicide_hold_sec(config.SUICIDE_HOLD_SEC)   # 前のテストの秒数を残さない
