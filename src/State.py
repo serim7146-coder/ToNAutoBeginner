@@ -131,6 +131,9 @@ class WindowState:
     utils_source_logged: str = ""
     # RoundOver で落とすと決めたラウンドの round_seq（-1 = 無し）と、落としたラウンドの round_seq
     dropped_round_seq: int = -1         # アイテムを落としたラウンド（死んだ・生き残ったときに 1 回。EU）
+    # 続行の後なので Begin を押さないと決めたラウンドの round_seq（-1 = 無し）。
+    # RoundOver の頭で決めて、同じラウンドの装備の行でも見る
+    begin_skipped_seq: int = -1
     # 続行フリーズを張った・外した瞬間に呼ぶ（引数 True / False。LogMonitor が入れる）
     continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0

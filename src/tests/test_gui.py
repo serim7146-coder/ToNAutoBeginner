@@ -3266,7 +3266,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "emergency_stop_key", "start_key",
             "suicide_cancel_key", "item_fetch", "item_fetch_gain",
             "continue_drop_item", "continue_restore_window", "continue_restore_at_round_end",
-            "run_respawn", "chase_enabled",
+            "no_begin_after_continue", "run_respawn", "chase_enabled",
             "wait_bloodthirsty",                                  # Bloodthirsty を待つチェック
             "murder_no_afk",                                      # Murder で AFK 回避しないチェック
             "suicide_hold_sec",                                   # 自爆の長押しの秒数

@@ -491,6 +491,7 @@ class TestDv2MainScreen(_AppCase):
         items = [(type(w).__name__, w.cget("text")) for w in checks]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
                                  ("Checkbutton", "窓位置リセットはラウンド終了"),
+                                 ("Checkbutton", "続行の後はBeginしない"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
                                  ("Checkbutton", "Utilsの判断に従う"),         # EB
                                  ("Checkbutton", "Bloodthirsty を待つ"),
@@ -501,6 +502,7 @@ class TestDv2MainScreen(_AppCase):
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
                                                       self.app.v_continue_restore_window,
                                                       self.app.v_continue_restore_at_round_end,
+                                                      self.app.v_no_begin_after_continue,
                                                       self.app.v_run_respawn,
                                                       self.app.v_fog_early_read,
                                                       self.app.v_follow_utils,
@@ -727,7 +729,7 @@ class TestDv3(_AppCase):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('self._log(f"[緊急停止] {HotKey.display(key)} が押されました")', gui)
         for name in ("emergency_stop_key", "continue_drop_item", "continue_restore_window",
-                     "continue_restore_at_round_end", "run_respawn", "fog_early_read_enabled"):
+                     "continue_restore_at_round_end", "no_begin_after_continue", "run_respawn", "fog_early_read_enabled"):
             self.assertIn(f'"{name}"', gui, name)
 
 
@@ -989,7 +991,7 @@ class TestSettingsWindow(_AppCase):
                 patch.object(mainGUI, "load_settings", return_value={}):
             self.app._save_launch_settings()
         for name in ("continue_drop_item", "continue_restore_window", "continue_restore_at_round_end",
-                     "run_respawn", "wait_bloodthirsty",
+                     "no_begin_after_continue", "run_respawn", "wait_bloodthirsty",
                      "follow_utils", "voice_enabled", "voice_volumes", "obs_record", "obs_record_freeze",
                      "obs_host", "obs_port"):
             self.assertIn(name, stored, name)
@@ -1033,7 +1035,7 @@ class TestOtherChecksWrap(_AppCase):
     def test_the_order_of_the_checks_is_kept(self):
         self.assertEqual([c.cget("text") for c in self.checks],
                          ["アイテムを落とす", "窓位置リセット", "窓位置リセットはラウンド終了",
-                          "Runリスポーン", "霧即時判定",
+                          "続行の後はBeginしない", "Runリスポーン", "霧即時判定",
                           "Utilsの判断に従う", "Bloodthirsty を待つ", "Murderで AFK 回避しない",
                           "Beginは連打だけ（カーソルを動かさない）"])
 

@@ -182,6 +182,25 @@ class LogMonitor:
         return bool(self.cfg.auto_begin
                     and self.st.instance_type in config.PRIVATE_LIKE_INSTANCES)
 
+    def _skip_begin_after_continue(self) -> bool:
+        """このラウンドの後、自動 Begin を押さないか（依頼者 2026-11-18）。
+
+        対象は普通の続行（ほかの窓を止める続行＝continue_freeze_round）と全続行
+        （all_continue_round。ラウンド指定・グループ判定・Run 全続行の 4 経路すべて）。
+        DTM/Waldo 続行は対象外（ほかの窓を止めない続行で、よく起きるため）。
+        完全放置モードの窓では止めない（人が見ていない前提なので、そこで進まなくなる）。
+        RoundOver の頭で 1 回だけ見る（全続行の印はそのすぐ下で消えるため）"""
+        st = self.st
+        if not self.cfg.auto_begin or self._hands_free():
+            return False
+        if not SharedState.get_no_begin_after_continue():
+            return False
+        return st.continue_freeze_round == st.round_seq or st.all_continue_round
+
+    def _begin_skipped(self) -> bool:
+        """このラウンドの Begin を押さないと決めてあるか"""
+        return self.st.begin_skipped_seq == self.st.round_seq
+
     def _item_begin_mode_active(self) -> bool:
         """アイテム取得→Begin モードが、この窓で効いているか。
 
@@ -2430,6 +2449,9 @@ class LogMonitor:
     def _on_round_over(self, event):
         """RoundOver"""
         st = self.st
+        # 続行の後に Begin を押さないかは、印を消す前に決める（全続行の印はこの 4 行下で消える）
+        if self._skip_begin_after_continue():
+            st.begin_skipped_seq = st.round_seq
         st.in_round = False
         st.begin_move_done = False      # 次の Begin 前の移動はこれから
         # 音量の分類は RoundOver で今の決まりに戻す（FH）。全続行も Verified Round End まで待たない
@@ -2464,8 +2486,11 @@ class LogMonitor:
             self._send_round_statistics_once()
         if RoundDecision.selectable_round_name(st.round_type) == "Fog":
             self._send_unknown_fog_round()
-        announce_on_round_over = not self._auto_begin_active()
-        if announce_on_round_over and not self._hands_free():
+        # 押さないラウンドは、ツールが Begin を押さない窓（自動Begin OFF など）と同じ経路で案内する
+        # （依頼者 2026-11-18。RoundOver で前面化・音声・全窓フリーズ、解除は装備だけ）
+        announce_on_round_over = not self._auto_begin_active() or self._begin_skipped()
+        if (announce_on_round_over and not self._hands_free()
+                and not self._item_begin_mode_active()):
             round_lost_item = self._round_lost_item()
             if self._round_item_warning():
                 if round_lost_item:
@@ -2473,8 +2498,9 @@ class LogMonitor:
                 st.waiting_for_equip = True
             elif not st.item_id:
                 st.waiting_for_equip = True
-        if st.waiting_for_equip and announce_on_round_over and not self._hands_free():
-            # ツールが Begin を押さない窓（グループ・public・自動Begin OFF）でも装備待ちで
+        if (st.waiting_for_equip and announce_on_round_over and not self._hands_free()
+                and not self._item_begin_mode_active()):
+            # ツールが Begin を押さない窓（グループ・public・自動Begin OFF・続行の後）でも装備待ちで
             # 全窓を止める（前面化・音声1回）。解除は装備（猶予の後）かラウンド開始の早い方
             self._action._attend_to_item_loss()
             self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
@@ -2492,8 +2518,10 @@ class LogMonitor:
         # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
         # Verified Round End を待ってから行う（RoundOver時点だと
         # 続行ラウンド中の可能性があり、音声が邪魔になるため）。
-        if self.cfg.auto_begin:
+        if self.cfg.auto_begin and not self._begin_skipped():
             self._start_daemon(self._action.do_after_round)
+        elif self._begin_skipped():
+            self._log("続行ラウンドの後 → Begin は押しません（設定「続行の後はBeginしない」）")
 
     def _on_verified_end(self, event):
         """Verified Round End（Begin を押せる）"""
@@ -2709,7 +2737,7 @@ class LogMonitor:
             self._log("アイテムを外しました")
             return
         self._log(f"✅ アイテム装備: {ItemCatalog.label(st.item_id, config.ITEMS)}")
-        if (not self._auto_begin_active() and st.equip_freeze_held):
+        if ((not self._auto_begin_active() or self._begin_skipped()) and st.equip_freeze_held):
             # ツールが Begin を押さない窓: Begin の受理は来ないことがあるので待たない
             st.waiting_for_equip = False
             self._start_daemon(self._release_equip_freeze_after_equip)

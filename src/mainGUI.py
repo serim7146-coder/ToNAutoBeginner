@@ -2711,6 +2711,7 @@ class App(tk.Tk):
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
         self.v_continue_restore_at_round_end = tk.BooleanVar(value=True)
+        self.v_no_begin_after_continue = tk.BooleanVar(value=False)
         # 名前は短く、詳しくは README（DV3）
         self._other_checks.append(ttk.Checkbutton(
             fcr, text="アイテムを落とす",
@@ -2723,6 +2724,11 @@ class App(tk.Tk):
         self._other_checks.append(ttk.Checkbutton(
             fcr, text="窓位置リセットはラウンド終了",
             variable=self.v_continue_restore_at_round_end,
+            command=self._on_continue_after_changed))
+        # 続行ラウンドの後は自動 Begin を押さない（全窓共通・保存・既定 OFF）。詳しくは README
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="続行の後はBeginしない",
+            variable=self.v_no_begin_after_continue,
             command=self._on_continue_after_changed))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
         # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
@@ -3355,6 +3361,7 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
         SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
         SharedState.set_continue_restore_at_round_end(self.v_continue_restore_at_round_end.get())
+        SharedState.set_no_begin_after_continue(self.v_no_begin_after_continue.get())
         self._schedule_settings_save()
 
     def _on_follow_utils_changed(self):
@@ -3455,6 +3462,7 @@ class App(tk.Tk):
             self.v_continue_drop_item.set(SharedState.get_continue_drop_item())
             self.v_continue_restore_window.set(SharedState.get_continue_restore_window())
             self.v_continue_restore_at_round_end.set(SharedState.get_continue_restore_at_round_end())
+            self.v_no_begin_after_continue.set(SharedState.get_no_begin_after_continue())
         except (tk.TclError, AttributeError):
             pass
 
@@ -4023,6 +4031,7 @@ class App(tk.Tk):
         SharedState.set_continue_drop_item(data.get("continue_drop_item") is not False)
         SharedState.set_continue_restore_window(data.get("continue_restore_window") is not False)
         SharedState.set_continue_restore_at_round_end(data.get("continue_restore_at_round_end") is not False)
+        SharedState.set_no_begin_after_continue(data.get("no_begin_after_continue") is True)
         self._refresh_continue_after_checks()
         SharedState.set_run_respawn(data.get("run_respawn") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_run_respawn_check()
@@ -5371,6 +5380,7 @@ class App(tk.Tk):
             "continue_drop_item":      SharedState.get_continue_drop_item(),
             "continue_restore_window": SharedState.get_continue_restore_window(),
             "continue_restore_at_round_end": SharedState.get_continue_restore_at_round_end(),
+            "no_begin_after_continue": SharedState.get_no_begin_after_continue(),
             "run_respawn":             SharedState.get_run_respawn(),
             "wait_bloodthirsty":       SharedState.get_wait_bloodthirsty(),
             "murder_no_afk":           SharedState.get_murder_no_afk(),

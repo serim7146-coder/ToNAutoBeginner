@@ -173,6 +173,8 @@ get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTI
 _CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
 # 窓位置リセットの時点。True = ラウンド終了（RoundOver）から、False = 続行フリーズが外れた瞬間（＝死亡から）
 _CONTINUE_RESTORE_AT_ROUND_END = _Setting(True, bool)
+# 続行ラウンド（普通の続行・全続行）の後は自動 Begin を押さない（全窓共通・保存・既定 OFF）
+_NO_BEGIN_AFTER_CONTINUE = _Setting(False, bool)
 # チェイス（F1・F2）を使う（全窓共通・既定 ON。OFF ならキーを拾わない）
 _CHASE_ENABLED = _Setting(True, bool)
 get_chase_enabled, set_chase_enabled = _CHASE_ENABLED.get, _CHASE_ENABLED.set
@@ -209,6 +211,8 @@ get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WI
                                                             _CONTINUE_RESTORE_WINDOW.set)
 get_continue_restore_at_round_end, set_continue_restore_at_round_end = (
     _CONTINUE_RESTORE_AT_ROUND_END.get, _CONTINUE_RESTORE_AT_ROUND_END.set)
+get_no_begin_after_continue, set_no_begin_after_continue = (
+    _NO_BEGIN_AFTER_CONTINUE.get, _NO_BEGIN_AFTER_CONTINUE.set)
 
 
 # ═══════════════════════════════════════════════
