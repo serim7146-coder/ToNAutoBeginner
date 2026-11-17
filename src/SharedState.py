@@ -180,7 +180,7 @@ _CHASE_ENABLED = _Setting(True, bool)
 get_chase_enabled, set_chase_enabled = _CHASE_ENABLED.get, _CHASE_ENABLED.set
 
 # Run のラウンドに入ったらリスポーンして正面を向く（全窓共通・既定 ON）
-# ToN Utils の続行の判断に従う（全窓共通・既定 OFF。EB）
+# ToN Utils の続行の判定に従う（全窓共通・既定 OFF。EB）
 _FOLLOW_UTILS = _Setting(False, bool)
 get_follow_utils, set_follow_utils = _FOLLOW_UTILS.get, _FOLLOW_UTILS.set
 

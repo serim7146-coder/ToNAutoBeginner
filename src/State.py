@@ -121,7 +121,7 @@ class WindowState:
     # 続行フリーズを張ったラウンドの round_seq。そのラウンドのアイテムは続行の終わり
     # （after_continue_round）で落とすので、RoundOver では落とさない（DW: 二重にしない）
     continue_freeze_round: int = -1
-    # ToN Utils の判断に従う（EB）: 起点（killers_set・killers_revealed）が来たラウンド・待ち始めたラウンド・
+    # ToN Utils の判定に従う（EB）: 起点（killers_set・killers_revealed）が来たラウンド・待ち始めたラウンド・
     # 看破などで先に分かって明かされるのを待っているラウンド。最後に画面へ出した「読めない理由」・窓の対応
     utils_anchor_seq: int = -1
     utils_anchor_time: float = 0.0      # 起点の行の時刻（epoch 秒。VRChat のログはローカル時刻・秒まで。EB2）

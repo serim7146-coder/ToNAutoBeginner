@@ -171,7 +171,7 @@ class TestHandsFreeKeep(_Base):
         self.assertEqual(loops, [(True,)])
 
     def test_following_utils_with_no_signal_continues_the_same_way(self):
-        """Utils の判断を待って何も無かったとき（続行）も、同じ形で続行する"""
+        """Utils の判定を待って何も無かったとき（続行）も、同じ形で続行する"""
         monitor = self._monitor(EX, [DTM] * 3)
         plan = monitor._plan(EX, monitor.st.terror_ids, False)
         watch = MagicMock()

@@ -539,7 +539,7 @@ class TestDelayedDecisionLoop(_Base):
 
 
 class TestWaitBloodthirstyCheck(_Base):
-    """チェック「Bloodthirsty を待つ」（全窓共通・保存・既定 ON）。OFF なら 2 枠目・3 枠目の合図を待たない"""
+    """チェック「2, 3枠目のBloodthirstyを待つ」（全窓共通・保存・既定 ON）。OFF なら 2 枠目・3 枠目の合図を待たない"""
 
     PRIVATE = config.INSTANCE_PRIVATE
 
@@ -652,7 +652,7 @@ class TestWaitBloodthirstyCheck(_Base):
     def test_the_check_is_in_the_row_and_on_by_default(self):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_wait_bloodthirsty = tk.BooleanVar(value=True)", gui)
-        self.assertIn('text="Bloodthirsty を待つ"', gui)
+        self.assertIn('text="2, 3枠目のBloodthirstyを待つ"', gui)
         src = Path(SharedState.__file__).read_text(encoding="utf-8")
         self.assertIn("_WAIT_BLOODTHIRSTY = _Setting(True, bool)", src)
 

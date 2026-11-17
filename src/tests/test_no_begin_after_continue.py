@@ -12,7 +12,7 @@ ROUND_OVER = P + "RoundOver"
 VERIFIED_END = P + "Verified Round End"
 EQUIP = P + "Equipping 29."
 ROUND_START = P + "This round is taking place at Sewers (12) and the round type is Classic"
-SKIP_LOG = "続行ラウンドの後 → Begin は押しません（設定「続行の後はBeginしない」）"
+SKIP_LOG = "続行ラウンドの後 → Begin は押しません（設定「続行の後は自動Beginしない」）"
 LOST_LOG = "RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】"
 MODE_LOG = "RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】"
 KEY = "Classic/クラシック"
@@ -344,7 +344,7 @@ class TestTheSettingAndTheText(unittest.TestCase):
 
     def test_the_readme(self):
         readme = (Path(LogMonitor.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        self.assertIn("**続行の後はBeginしない**（デフォルト OFF）", readme)
+        self.assertIn("**続行の後は自動Beginしない**（デフォルト OFF）", readme)
         self.assertIn("アイテムの自動取得は動きません", readme)
 
 

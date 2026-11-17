@@ -1,4 +1,4 @@
-"""ToN Utils の続行の判断を読む（EB）。
+"""ToN Utils の続行の判定を読む（EB）。
 
 - Utils のログ（%APPDATA%\\ton-syncskip\\ton-utils.log）の後ろに増えた分を読む（ファイルが小さくなったら最初から）
   - `auto self-destruct evaluated source=<32桁> … action="press"` … Utils が自爆する
@@ -183,7 +183,7 @@ class UtilsWatch:
         return {normalize_started(started): str(source) for source, started in rows if source and started}
 
     def window_reason(self, log_path):
-        """(source, 理由)。Utils がこの窓を判断するなら (source, None)"""
+        """(source, 理由)。Utils がこの窓を判定するなら (source, None)"""
         if not self.running():
             return None, REASON_NOT_RUNNING
         source = self.source_for(log_path)

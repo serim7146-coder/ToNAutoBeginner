@@ -2722,12 +2722,12 @@ class App(tk.Tk):
             variable=self.v_continue_restore_window,
             command=self._on_continue_after_changed))
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="窓位置リセットはラウンド終了",
+            fcr, text="窓位置リセットはラウンド終了後",
             variable=self.v_continue_restore_at_round_end,
             command=self._on_continue_after_changed))
         # 続行ラウンドの後は自動 Begin を押さない（全窓共通・保存・既定 OFF）。詳しくは README
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="続行の後はBeginしない",
+            fcr, text="続行の後は自動Beginしない",
             variable=self.v_no_begin_after_continue,
             command=self._on_continue_after_changed))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
@@ -2743,16 +2743,16 @@ class App(tk.Tk):
             fcr, text="霧即時判定",
             variable=self.v_fog_early_read,
             command=self._on_fog_early_read_changed))
-        # ToN Utils の続行の判断に従う（全窓共通・保存・既定 OFF。EB）
+        # ToN Utils の続行の判定に従う（全窓共通・保存・既定 OFF。EB）
         self.v_follow_utils = tk.BooleanVar(value=False)
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="Utilsの判断に従う",
+            fcr, text="Utilsの判定に従う",
             variable=self.v_follow_utils,
             command=self._on_follow_utils_changed))
         # 2 枠目・3 枠目の Bloodthirsty の合図を待つ（全窓共通・保存・既定 ON）
         self.v_wait_bloodthirsty = tk.BooleanVar(value=True)
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="Bloodthirsty を待つ",
+            fcr, text="2, 3枠目のBloodthirstyを待つ",
             variable=self.v_wait_bloodthirsty,
             command=self._on_wait_bloodthirsty_changed))
         # Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・保存・既定 OFF）
@@ -3367,8 +3367,8 @@ class App(tk.Tk):
     def _on_follow_utils_changed(self):
         on = bool(self.v_follow_utils.get())
         SharedState.set_follow_utils(on)
-        self._log("[Utils] " + ("Utils の判断に従います（Utils が判断できない窓は、このツールで判定）" if on
-                               else "Utils の判断に従いません（このツールで判定）"))
+        self._log("[Utils] " + ("Utils の判定に従います（Utils が判定できない窓は、このツールで判定）" if on
+                               else "Utils の判定に従いません（このツールで判定）"))
         self._schedule_settings_save()
 
     def _refresh_follow_utils_check(self):

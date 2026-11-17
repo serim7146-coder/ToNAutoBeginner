@@ -415,7 +415,7 @@ class TestTheSettings(unittest.TestCase):
             self.assertEqual(SharedState.get_continue_restore_at_round_end(), expected, data)
 
     def test_no_begin_after_continue_is_off_by_default_and_restored(self):
-        """続行の後はBeginしない: 無い・None・壊れた値は OFF。True だけが ON"""
+        """続行の後は自動Beginしない: 無い・None・壊れた値は OFF。True だけが ON"""
         for data, expected in (({}, False), ({"no_begin_after_continue": None}, False),
                                ({"no_begin_after_continue": "x"}, False),
                                ({"no_begin_after_continue": 1}, False),
@@ -439,8 +439,8 @@ class TestTheSettings(unittest.TestCase):
         # DV3: 見出しを無くして短い名前（詳しくは README）
         self.assertIn('text="アイテムを落とす"', gui)
         self.assertIn('text="窓位置リセット"', gui)
-        self.assertIn('text="窓位置リセットはラウンド終了"', gui)
-        self.assertIn('text="続行の後はBeginしない"', gui)
+        self.assertIn('text="窓位置リセットはラウンド終了後"', gui)
+        self.assertIn('text="続行の後は自動Beginしない"', gui)
 
     def test_the_checks_change_the_setting(self):
         app = type("FakeApp", (), {})()
@@ -485,8 +485,8 @@ class TestTheSettings(unittest.TestCase):
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("アイテムを落とす・窓位置リセット", readme)
-        self.assertIn("**窓位置リセットはラウンド終了**（デフォルト ON）", readme)
-        self.assertIn("**続行の後はBeginしない**（デフォルト OFF）", readme)
+        self.assertIn("**窓位置リセットはラウンド終了後**（デフォルト ON）", readme)
+        self.assertIn("**続行の後は自動Beginしない**（デフォルト OFF）", readme)
         self.assertIn("死んだとき・生き残ったときに、1 回だけ", readme)  # EU（前は DW の「どのラウンドでも、終わったら」）
         self.assertNotIn("どのラウンドでも、終わったら", readme)
 

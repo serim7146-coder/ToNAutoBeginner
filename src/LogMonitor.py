@@ -166,7 +166,7 @@ class LogMonitor:
     def _on_continue_freeze(self, started: bool):
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
         始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりは窓を戻す（待つので別スレッド）。
-        「窓位置リセットはラウンド終了」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
+        「窓位置リセットはラウンド終了後」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
         if started:
             self.st.continue_freeze_round = self.st.round_seq
             self._action.remember_continue_window()
@@ -2261,7 +2261,7 @@ class LogMonitor:
             st.open_special_round_wins = config.OPEN_SPECIAL_ROUND_TARGET_WINS
         if not (st.round_type == "Alternate" and event.round_type == "Classic"):  # AF期間中は極まれに偽Classicがある
             st.round_type = event.round_type
-        st.utils_anchor_seq = st.round_seq          # Utils の判断を待ち始めてよい（EB）
+        st.utils_anchor_seq = st.round_seq          # Utils の判定を待ち始めてよい（EB）
         st.fog_early_seq = -1                       # Killers の行が来た。前倒しの待ちは終わり
         st.utils_anchor_time = st.log_now or time.time()
         self._on_killers(self._own_killer_ids(event.terror_ids or [], st.round_type), st.round_type, revealed=False)
@@ -2521,7 +2521,7 @@ class LogMonitor:
         if self.cfg.auto_begin and not self._begin_skipped():
             self._start_daemon(self._action.do_after_round)
         elif self._begin_skipped():
-            self._log("続行ラウンドの後 → Begin は押しません（設定「続行の後はBeginしない」）")
+            self._log("続行ラウンドの後 → Begin は押しません（設定「続行の後は自動Beginしない」）")
 
     def _on_verified_end(self, event):
         """Verified Round End（Begin を押せる）"""
@@ -2629,7 +2629,7 @@ class LogMonitor:
         st = self.st
         st.fog_reading = False
         st.fog_no_object_deadline = 0.0
-        st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判断する（EB）
+        st.utils_anchor_seq = st.round_seq          # 本当に明かされた。Utils はここから判定する（EB）
         st.fog_early_seq = -1                       # 公開の行が来た。前倒しの待ちは終わり
         st.utils_anchor_time = st.log_now or time.time()
         own = self._own_killer_ids(event.terror_ids or [], event.round_type)
@@ -3166,9 +3166,9 @@ class LogMonitor:
             return              # 焼き芋の霧の自爆は公開の行まで（オルタネイトでリストに無いとき）
         self._decide_with_keep_on_set(round_type, plan)
 
-    # ── ToN Utils の続行の判断に従う（EB）────────────────
+    # ── ToN Utils の続行の判定に従う（EB）────────────────
     def _follow_utils(self, round_type: str, plan: tuple) -> bool:
-        """Utils が判断する窓なら、その判断を待つ（True）。この窓はこのツールが判定するなら False。
+        """Utils が判定する窓なら、その判定を待つ（True）。この窓はこのツールが判定するなら False。
         起点（killers_set・killers_revealed）の前に分かったとき（看破・Enrage・Joy・スタン・Evil Purple Foxy）は、
         自爆も続行フリーズもせずに明かされるのを待つ"""
         if not SharedState.get_follow_utils():
@@ -3179,7 +3179,7 @@ class LogMonitor:
         if reason:
             if st.utils_reason != reason:
                 st.utils_reason = reason
-                self._log(f"Utils の判断が読めないため、このツールで判定します（{reason}）")
+                self._log(f"Utils の判定が読めないため、このツールで判定します（{reason}）")
             return False
         st.utils_reason = None
         if st.utils_source_logged != source:
@@ -3188,13 +3188,13 @@ class LogMonitor:
         if st.utils_anchor_seq != st.round_seq:
             if st.utils_deferred_seq != st.round_seq:
                 st.utils_deferred_seq = st.round_seq
-                self._log("Utils: 明かされるまで判断を待ちます")
+                self._log("Utils: 明かされるまで判定を待ちます")
             return True
         if st.utils_wait_seq == st.round_seq:
             return True                 # もう待っている
         st.utils_wait_seq = st.round_seq
         self._log(f"判定: {format_terror_ids(st.terror_ids)} / {round_type}"
-                  f"（このツールの判定: {self._outcome(plan)}）→ Utils の判断を待ちます")
+                  f"（このツールの判定: {self._outcome(plan)}）→ Utils の判定を待ちます")
         # 数えるのは Utils の時刻が「起点の行の時刻 − UTILS_EARLY_SEC」以後の行（すでにファイルにある行も。EB2）
         anchor = st.utils_anchor_time or time.time()
         self._start_daemon(self._wait_utils, round_type, plan, st.round_seq, source,

@@ -490,11 +490,11 @@ class TestDv2MainScreen(_AppCase):
                         key=lambda w: (int(w.grid_info()["row"]), int(w.grid_info()["column"])))
         items = [(type(w).__name__, w.cget("text")) for w in checks]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
-                                 ("Checkbutton", "窓位置リセットはラウンド終了"),
-                                 ("Checkbutton", "続行の後はBeginしない"),
+                                 ("Checkbutton", "窓位置リセットはラウンド終了後"),
+                                 ("Checkbutton", "続行の後は自動Beginしない"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
-                                 ("Checkbutton", "Utilsの判断に従う"),         # EB
-                                 ("Checkbutton", "Bloodthirsty を待つ"),
+                                 ("Checkbutton", "Utilsの判定に従う"),         # EB
+                                 ("Checkbutton", "2, 3枠目のBloodthirstyを待つ"),
                                  ("Checkbutton", "Murderで AFK 回避しない"),
                                  ("Checkbutton", "Beginは連打だけ（カーソルを動かさない）")])
         variables = [str(w.cget("variable")) for w in checks
@@ -883,7 +883,7 @@ class TestSettingsWindow(_AppCase):
             self.assertIn(title, inside, title)
         main = self._texts(self._main_widgets())
         for text in ("サウンド設定", "OBS自動録画", "その他", "アイテムを落とす", "窓位置リセット",
-                     "Runリスポーン", "霧即時判定", "Utilsの判断に従う", "Bloodthirsty を待つ",
+                     "Runリスポーン", "霧即時判定", "Utilsの判定に従う", "2, 3枠目のBloodthirstyを待つ",
                      "続行ラウンドを録画する", "ツールの音量:"):
             self.assertNotIn(text, main, text)
         self.assertFalse([t for t in main if t.startswith(("③ サウンド", "⑤", "④"))], main)
@@ -1034,9 +1034,9 @@ class TestOtherChecksWrap(_AppCase):
 
     def test_the_order_of_the_checks_is_kept(self):
         self.assertEqual([c.cget("text") for c in self.checks],
-                         ["アイテムを落とす", "窓位置リセット", "窓位置リセットはラウンド終了",
-                          "続行の後はBeginしない", "Runリスポーン", "霧即時判定",
-                          "Utilsの判断に従う", "Bloodthirsty を待つ", "Murderで AFK 回避しない",
+                         ["アイテムを落とす", "窓位置リセット", "窓位置リセットはラウンド終了後",
+                          "続行の後は自動Beginしない", "Runリスポーン", "霧即時判定",
+                          "Utilsの判定に従う", "2, 3枠目のBloodthirstyを待つ", "Murderで AFK 回避しない",
                           "Beginは連打だけ（カーソルを動かさない）"])
 
     def test_wide_makes_one_row(self):

@@ -1,4 +1,4 @@
-"""ToN Utils の続行の判断に従う（EB）。本物の Utils のログ・sqlite・入力は使わない（偽物の行・一時ファイル）"""
+"""ToN Utils の続行の判定に従う（EB）。本物の Utils のログ・sqlite・入力は使わない（偽物の行・一時ファイル）"""
 from tests.support import *  # noqa: F401,F403
 import datetime
 import UtilsWatch
@@ -92,7 +92,7 @@ class TestTheDecision(_Case):
         monitor = self._monitor()
         self._set(monitor)
         self.assertEqual(self.names(), ["_wait_utils"], "起点では自爆しない")
-        self.assertTrue(any("Utils の判断を待ちます" in m and "skip" in m for m in monitor.logs),
+        self.assertTrue(any("Utils の判定を待ちます" in m and "skip" in m for m in monitor.logs),
                         "このツールの判定も残す")
 
     def test_press_skips_without_this_tool_pressing(self):
@@ -177,7 +177,7 @@ class TestTheAnchor(_Case):
         monitor.st.round_type = "Fog"
         monitor._identify_fog_terror(99, "Enrage", "x")
         self.assertEqual(self.started, [], "自爆も待ちもしない")
-        self.assertIn("[窓2] Utils: 明かされるまで判断を待ちます", monitor.logs)
+        self.assertIn("[窓2] Utils: 明かされるまで判定を待ちます", monitor.logs)
         self.assertFalse(monitor.st.continue_freeze_held)
         monitor._on_killers_revealed(self._event(
             "2026.10.12 10:00:30 Debug      -  Killers have been revealed - 99 0 0 // Round type is Fog"))
@@ -203,7 +203,7 @@ class TestWhenUtilsCannotDecide(_Case):
             monitor.st.round_seq += 1
             self._set(monitor)
             self.assertEqual(self.names(), ["do_skip", "do_skip"], reason)
-            text = f"[窓2] Utils の判断が読めないため、このツールで判定します（{reason}）"
+            text = f"[窓2] Utils の判定が読めないため、このツールで判定します（{reason}）"
             self.assertEqual(monitor.logs.count(text), 1, "理由が変わらなければ 1 回")
 
     def test_a_new_reason_is_logged_again(self):
@@ -213,7 +213,7 @@ class TestWhenUtilsCannotDecide(_Case):
         self.watch.reason = UtilsWatch.REASON_NO_SOURCE
         monitor.st.round_seq += 1
         self._set(monitor)
-        self.assertEqual(len([m for m in monitor.logs if "Utils の判断が読めない" in m]), 2)
+        self.assertEqual(len([m for m in monitor.logs if "Utils の判定が読めない" in m]), 2)
 
 
 # ── UtilsWatch（一時ファイル・偽のプロセス）──────────────────────
@@ -499,7 +499,7 @@ class TestTheCheckAndSettings(unittest.TestCase):
                 yield child
                 yield from widgets(child)
         row = next(w for w in widgets(app._settings_window)
-                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "Utilsの判断に従う"
+                   if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "Utilsの判定に従う"
                           for c in w.winfo_children()))
         self.assertIn("霧即時判定", [c.cget("text") for c in row.winfo_children()], "チェックの行")
         self.assertFalse(app.v_follow_utils.get())
@@ -520,7 +520,7 @@ class TestTheCheckAndSettings(unittest.TestCase):
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
-        section = readme[readme.index("### Utilsの判断に従う"):]
+        section = readme[readme.index("### Utilsの判定に従う"):]
         section = section[:section.index("\n### ", 1)]
         for word in ("自爆を許可した窓だけ", "このツールが判定", "明かされてから", "読み取り専用"):
             self.assertIn(word, section, word)
