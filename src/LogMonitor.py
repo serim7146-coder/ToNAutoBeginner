@@ -2093,20 +2093,23 @@ class LogMonitor:
         st.begin_accepted_at = time.time()      # 壁時計（log_now は読み取りの遅れが乗る。FR）
         self._debug_verified("受理（予定の外）" if off_schedule else "受理")
         self._log("✅ Connecting")
+        # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
+        if st.waiting_for_equip and st.item_id:
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
         # 速度検知そのものは Verified Round End 側で始めている（Verified は
         # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
         # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
-        # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
+        # Begin を押し損ねない。インマスでなければ来ないので判定も要らない。
+        # 装備待ちの印は上で先に落とす。アイテム取得→Begin モードでは利用者が装備して
+        # Begin を押すので、後に落とすと横移動が「アイテムロスト後」と見なされて見送られる
+        # （依頼者 2026-11-19）。未装備のときは印が立ったままなので、今までどおり動かない
         if (st.instance_type in config.PRIVATE_LIKE_INSTANCES
                 and SharedState.get_speed_detect()
                 and not self._hands_free()
                 and not st.speed_strafe_done):
             st.speed_strafe_done = True
             self._start_daemon(self._action.do_speed_strafe)
-        # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
-        if st.waiting_for_equip and st.item_id:
-            st.waiting_for_equip = False
-            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
 
     def _on_round_start(self, event):
         """ラウンド開始"""

@@ -82,6 +82,64 @@ class TestHandsFreeSpeedDetect(unittest.TestCase):
 
 
 
+class TestStrafeAfterUserBegin(unittest.TestCase):
+    """アイテム取得→Begin モードで利用者が装備して Begin を押した回は、横移動が走る。
+
+    Verified の受理で、装備待ちの印を落とすのを横移動の起動より先にする。
+    後だと do_speed_strafe の「アイテムロスト後」のガードに引っかかって動かなかった
+    （依頼者 2026-11-19）。未装備（ツールが取りに行く回）は印が立ったままで動かさない。
+    """
+
+    def setUp(self):
+        SharedState.set_speed_detect(True)
+        self.addCleanup(SharedState.set_speed_detect, config.SPEED_DETECT_ENABLED)
+        self.addCleanup(SharedState.set_hands_free, False)
+        SharedState.set_hands_free(False)
+
+    def _verified(self, item_id):
+        """Verified の行を流す。戻り値は (move の呼ばれ方, ログ, 監視の状態)"""
+        logs = []
+        monitor = LogMonitor.LogMonitor(WindowConfig(hwnd=123, osc_port=9000), {},
+                                        logs.append, window_idx=1)
+        st = monitor.st
+        st.instance_type = config.INSTANCE_PRIVATE
+        st.in_ton_world = True
+        st.round_end_seen = True
+        monitor._verified.on_round_end_verified(0)
+        st.last_begin_press_at = time.time()
+        st.waiting_for_equip = True
+        st.item_id = item_id
+        action = monitor._action
+        action._speed_ready.set()
+        action._receiver = MagicMock(ever_received=True)
+        action._plush_retries = 0
+        moves = []
+
+        def run_now(target, *args):
+            # 横移動だけ今の場で動かす。遅延フリーズ解除などの待つ処理は動かさない
+            if getattr(target, "__name__", "") == "do_speed_strafe":
+                target(*args)
+            return MagicMock()
+
+        with patch.object(monitor, "_start_daemon", side_effect=run_now),              patch.object(action, "move", side_effect=lambda d, sec: moves.append((d, sec))),              patch.object(action, "_is_running", return_value=True):
+            monitor._process("Verified")
+        return moves, logs, st
+
+    def test_equipped_user_begin_moves(self):
+        moves, _logs, st = self._verified(item_id=5)
+        self.assertFalse(st.waiting_for_equip)
+        self.assertEqual(moves, [("right", config.SPEED_PROBE_RIGHT_SEC),
+                                 ("left", config.SPEED_PROBE_LEFT_SEC)])
+
+    def test_unequipped_keeps_the_guard(self):
+        moves, logs, st = self._verified(item_id=0)
+        self.assertTrue(st.waiting_for_equip)
+        self.assertEqual(moves, [])
+        self.assertTrue(any("横移動はしません" in m for m in logs))
+
+
+
+
 class TestSpeedDetectNeedsOsc(unittest.TestCase):
     """速度を受け取れるのは OSC の窓だけ。
 
