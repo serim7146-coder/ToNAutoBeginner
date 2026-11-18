@@ -17,7 +17,7 @@ import time
 from collections import deque
 
 # クリックの元（debug.log の表記）
-SOURCE_HAND = "手"
+SOURCE_HAND = "クリック"
 
 _DEBUG_LINES_MAX = 100          # 溜めておく debug.log の行の上限（書かれないまま増え続けないように）
 

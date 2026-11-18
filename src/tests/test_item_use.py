@@ -203,7 +203,7 @@ class TestUseTracker(unittest.TestCase):
         self.assertIsNone(self.tr.take_use())
 
     def test_the_constants(self):
-        self.assertEqual(ItemUse.SOURCE_HAND, "手")
+        self.assertEqual(ItemUse.SOURCE_HAND, "クリック")
 
 
 # ── C 登録表 ───────────────────────────────────
