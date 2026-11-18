@@ -888,6 +888,22 @@ class TestAnswerCheck(_AnswerEnv):
         self.lone_get()
         self.assertEqual(len(self.sent), 2)
 
+    def test_queuing_again_drops_the_earlier_wait_so_the_old_remove_keeps_the_new_record(self):
+        """Delete を挟まずに入れ直したとき（実例あり）、前の通知の Remove で新しい記録を忘れない"""
+        self.fire()
+        self.pass_time(10)
+        self.write(LOG_A, post(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.assertIn(inst(39837), QueueWatch._queued, "新しい記録が入る")
+        self.assertEqual(QueueWatch._awaiting, {}, "前の答え合わせ待ちは捨てる")
+        self.write(LOG_A, remove("19:50:51", made=at(self.GET_AT) + 1))      # 前の通知が消えた
+        self.pass_time(1)
+        self.poll()
+        self.assertIn(inst(39837), QueueWatch._queued, "前の通知の Remove では新しい記録を忘れない")
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 2, "入れ直した待機列でも合図が出る")
+
     def test_a_second_signal_is_not_given_while_awaiting_the_answer(self):
         self.fire()
         self.pass_time(10)

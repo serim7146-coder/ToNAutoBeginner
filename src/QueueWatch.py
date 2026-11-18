@@ -120,11 +120,14 @@ _awaiting: dict = {}        # インスタンスの印 → _Awaiting（_lock で
 
 
 def note_post(key: str, at: float):
-    """待機列に入れた。同じインスタンスを入れ直したら、新しい方で置き換える（10 秒は新しい POST から数える）"""
+    """待機列に入れた。同じインスタンスを入れ直したら、新しい方で置き換える（10 秒は新しい POST から数える）。
+    前の待機列の答え合わせ待ちは捨てる（新しい待機列なので、前の通知の Remove で新しい記録を
+    忘れてはいけない。Delete を挟まずに入れ直すことがある）"""
     with _lock:
         for old in [k for k, p in _queued.items() if at - p.at >= config.QUEUE_FORGET_SEC]:
             del _queued[old]
         _queued[key] = Post(at)
+        _awaiting.pop(key, None)
 
 
 def note_delete(key: str):
