@@ -144,7 +144,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面に出す・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・窓位置リセットはラウンド終了後（`continue_restore_at_round_end`。既定 ON。OFF なら続行フリーズが外れた瞬間から数える）・続行の後は自動Beginしない（`no_begin_after_continue`。既定 OFF）・2, 3枠目のBloodthirstyを待つ（`wait_bloodthirsty`。既定 ON）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・フリーズと窓位置はラウンド終了まで（`continue_restore_at_round_end`。既定 ON。続行フリーズの解除と窓位置リセットを RoundOver から数える。OFF なら死亡から数え、窓位置は続行フリーズが外れた瞬間から数える）・続行の後は自動Beginしない（`no_begin_after_continue`。既定 OFF）・2, 3枠目のBloodthirstyを待つ（`wait_bloodthirsty`。既定 ON）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）
@@ -155,12 +155,12 @@ LogMonitor が1窓に1つ持つ。主なもの:
 
 | 種類 | 開始 | 解く |
 |---|---|---|
-| 続行 | 続行ラウンド（アナウンスが鳴るもの）が決まったとき。DTM/Waldo の続行は開始しない | 死亡・RoundOver から猶予の後（`_release_continue_freeze_after_delay`）／次のラウンド開始 |
+| 続行 | 続行ラウンド（アナウンスが鳴るもの）が決まったとき。DTM/Waldo の続行は開始しない | `continue_restore_at_round_end` が ON（既定）の窓は RoundOver から猶予の後、OFF の窓は死亡から猶予の後（どちらも `_release_continue_freeze_after_delay`。DTM/Waldo は常に死亡から）／次のラウンド開始 |
 | 装備待ち | アイテムロストの窓。自動で取りに行かない窓は Begin が通ったとき（通らなければ開始しない）、取りに行く窓は店で一時的に前面にしてボタンを押す間だけ、アイテム取得→Begin モードは Begin の前（ロストした回はツールは移動もしないし押さない。装備も Begin も利用者がして、その Begin の受理で解く。FY・FZ）。開始した順に並び、先頭の窓だけが前面に出る＋音声 | 装備＋Begin の受理から猶予の後（Begin を押さない窓は装備から猶予の後）・取りに行く窓は店の操作の後（取れた・取れない・時間切れとも）／ラウンド開始 |
 | 速度検知 | 速度で 8 Pages / Punished と分かったとき（その窓の設定で選ぶ） | 8 Pages はアイテムを取ったら猶予の後／ラウンド開始で必ず |
 | 突入 | その窓で選んだ種類のラウンドに入ったとき（Sabotage は Sus player の行で murder／star に分ける。行は開始の行より前に来る） | 死亡から猶予の後／ラウンド開始で必ず |
 
-- 続行フリーズの死亡による解除は、待っている間に猫（Maxwell）で復活した（「LOL JK, REBORN!」の行）ら、死亡を取り消してしない（復活の後に本当に死んだら、その死亡から数え直す。RoundOver からの解除の予約は今のまま）。突入フリーズの死亡による解除も同じ。
+- 続行フリーズの死亡による解除は、待っている間に猫（Maxwell）で復活した（「LOL JK, REBORN!」の行）ら、死亡を取り消してしない（復活の後に本当に死んだら、その死亡から数え直す）。`continue_restore_at_round_end` が ON の窓は死亡からは予約しないので、取り消す対象が無く、フリーズは RoundOver から猶予の後まで保たれる。突入フリーズの死亡による解除も同じ。
 - どれも `_Freeze`: フリーズ中の窓の数で管理し、0 になったら解除。窓ごとの保持（`*_held`）で多重登録・多重解除を防ぐ（足していない窓が引くと、別の窓の本物のフリーズを解いてしまう）。
 - 前面を要する操作（Begin のクリックなど）の前に `ActionExecutor._wait_other_windows()` で待つ。自分が開始した分は待たない。移動（OSC・背面のキー）は前面を奪わないので待たない。自爆も背面送信なので待たない。
 - フリーズのために前面にした窓は、その窓のフリーズが全部解けたら元の窓に戻す（`FrontLoan`）。

@@ -2725,7 +2725,7 @@ class App(tk.Tk):
             variable=self.v_continue_restore_window,
             command=self._on_continue_after_changed))
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="窓位置リセットはラウンド終了後",
+            fcr, text="フリーズと窓位置はラウンド終了まで",
             variable=self.v_continue_restore_at_round_end,
             command=self._on_continue_after_changed))
         # 続行ラウンドの後は自動 Begin を押さない（全窓共通・保存・既定 OFF）。詳しくは README

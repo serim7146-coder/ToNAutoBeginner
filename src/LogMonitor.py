@@ -166,7 +166,7 @@ class LogMonitor:
     def _on_continue_freeze(self, started: bool):
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
         始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりは窓を戻す（待つので別スレッド）。
-        「窓位置リセットはラウンド終了後」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
+        「フリーズと窓位置はラウンド終了まで」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
         if started:
             self.st.continue_freeze_round = self.st.round_seq
             self._action.remember_continue_window()
@@ -428,9 +428,12 @@ class LogMonitor:
                 self._log(f"⚠ 前面に出せませんでした（{label}は継続）")
 
     def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None, label: str = "死亡"):
-        """死亡から一定時間後に続行ラウンドのフリーズを解除する。
+        """死亡またはラウンド終了から一定時間後に、続行ラウンドのフリーズを解除する。
 
-        label は何から数えたか（"死亡" か "リスポーン"。ログの文言だけに使う）。
+        label は何から数えたか（"死亡"・"リスポーン"・"ラウンド終了"。ログの文言だけに使う）。
+        設定「フリーズと窓位置はラウンド終了まで」が ON の窓（続行フリーズを張っている窓）は、
+        死亡からは予約せず、RoundOver から数える（依頼者 2026-11-19）。OFF の窓と、
+        フリーズを張らない続行（DTM/Waldo）は、今までどおり死亡から数える。
 
         猶予を置くのは、解除前に利用者が操作する余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
@@ -2314,7 +2317,11 @@ class LogMonitor:
         # 猶予中に利用者が視点を合わせられるようにするため。
         # 死亡の予約の引数は今までどおり（番号・復活番号）。ラベルは死亡でないときだけ足す
         said = () if label == "死亡" else (label,)
-        if st.is_continue_round:
+        # 続行フリーズを張っている窓は、設定 ON なら RoundOver まで保つ（依頼者 2026-11-19）。
+        # ほかの窓を止めない続行（DTM/Waldo）は、今までどおり死亡から数えて落とす
+        hold_to_round_end = (st.continue_freeze_held
+                             and SharedState.get_continue_restore_at_round_end())
+        if st.is_continue_round and not hold_to_round_end:
             self._start_daemon(self._release_continue_freeze_after_delay,
                                st.round_seq, st.reborn_seq, *said)
         if st.round_freeze_held:
@@ -2480,15 +2487,15 @@ class LogMonitor:
         # Begin待ちの起点。実処理は Verified Round End 側で走るが、
         # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
         st.round_over_time = time.time()
-        # 続行フリーズの解除を予約する。死亡側だけだと、生き残ったときに
-        # 予約が入らず Verified Round End の保険まで残り、他窓が
-        # RoundOver から13〜14秒も余計に止まっていた。RoundOver は
-        # 死亡・生存のどちらでも来るので、ここなら取りこぼさない。
-        # 死亡は RoundOver より先に来るので、死亡から数える動きは保たれる
-        # （解除は冪等なので二重予約は無害）
+        # 続行フリーズの解除を予約する。
+        # - RoundOver は死亡・生存のどちらでも来るので、ここで予約すれば取りこぼさない
+        #   （生き残ったときに予約が無いと、Verified Round End の保険まで他窓が止まる）
+        # - 設定「フリーズと窓位置はラウンド終了まで」が ON の窓では、死亡側は予約しないので、ここが本番になる
+        #   （依頼者 2026-11-19）
+        # - OFF の窓では死亡側が先に解除しているので、ここでは continue_freeze_held が偽になっていて何もしない
         if st.continue_freeze_held:
             self._start_daemon(self._release_continue_freeze_after_delay,
-                               st.round_seq)
+                               st.round_seq, None, "ラウンド終了")
         if self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
         if RoundDecision.selectable_round_name(st.round_type) == "Fog":
