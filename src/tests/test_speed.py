@@ -121,7 +121,9 @@ class TestStrafeAfterUserBegin(unittest.TestCase):
                 target(*args)
             return MagicMock()
 
-        with patch.object(monitor, "_start_daemon", side_effect=run_now),              patch.object(action, "move", side_effect=lambda d, sec: moves.append((d, sec))),              patch.object(action, "_is_running", return_value=True):
+        with patch.object(monitor, "_start_daemon", side_effect=run_now), \
+             patch.object(action, "move", side_effect=lambda d, sec: moves.append((d, sec))), \
+             patch.object(action, "_is_running", return_value=True):
             monitor._process("Verified")
         return moves, logs, st
 

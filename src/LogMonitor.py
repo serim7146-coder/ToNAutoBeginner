@@ -2288,7 +2288,7 @@ class LogMonitor:
             st._skip_time = 0.0
         # Maxwell は、手に持ったまま死ぬと無くなる（復活しても消費される）。自爆かどうかは見ない。
         # 自爆の前や最中に手放せば無くならないので、死亡の行を読んだ時点で手に持っているかで決める
-        # （利用者 2026-11-19。追跡がまだ無い間は何もしない）
+        # （依頼者 2026-11-19。追跡がまだ無い間は何もしない）
         tracker = st.item_use
         if (st.in_round and tracker is not None
                 and ItemUse.norm(tracker.held_name()) == config.MAXWELL_LOG_NAME):
