@@ -182,7 +182,7 @@ class TestTheSequence(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertIn("⚠ コードの読み込みを確認できませんでした", world.logs)
         self.assertGreaterEqual(world.now[0], config.SAVELOAD_LOG_WAIT_SEC)
-        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs,
+        self.assertNotIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs,
                          "Enter で閉じていれば言わない")
 
     def test_the_old_loaded_line_does_not_count(self):
@@ -352,7 +352,8 @@ class TestClipboard(unittest.TestCase):
 class _Entry:
     made = []
 
-    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None):
+    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None,
+                 flavor=None, music=None):
         self.hwnd, self.calls = hwnd, []
         _Entry.made.append(self)
 
@@ -505,7 +506,7 @@ class TestEnterAgain(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(self._enters(world), 3, "最初の 1 回と押し直し 2 回まで")
         self.assertIn("Enter を押し直しました（2 回目）", world.logs)
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
         self.assertNotIn(("keys", "esc"), world.events, "Esc は押さない（貼ったコードが消える）")
         self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼り直さない")
 
@@ -516,7 +517,7 @@ class TestEnterAgain(unittest.TestCase):
         self.assertEqual(self._enters(world), 2, "1 回目と、やり直しの 1 回（押し直しは無い）")
         self.assertNotIn("Enter を押し直しました（1 回目）", world.logs)
         self.assertGreaterEqual(world.now[0], 2 * config.SAVELOAD_LOG_WAIT_SEC, "どちらも 8 秒までログを待つ")
-        self.assertNotIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertNotIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_a_late_load_after_the_box_closed_counts(self):
         """入力欄は閉じた（Enter は効いた）が、ログが 3 秒より遅れて出た"""
@@ -557,7 +558,7 @@ class TestEnterAgain(unittest.TestCase):
         WindowOperator.borrow_front.side_effect = second_fails
         self.assertEqual(entry.load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(self._enters(world), 1, "前面にできなければ押さない")
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_another_window_in_front_does_not_get_enter(self):
         world = _World(self, loads_on_enter=None, closes_on_enter=None)
@@ -667,7 +668,7 @@ class TestSettleAndTryAgain(unittest.TestCase):
         self.assertEqual(world.entry().load_code(CODE, world.log_path), "unconfirmed")
         self.assertEqual(world.events.count(("keys", "ctrl+v")), 1, "貼ったコードを消さない")
         self.assertNotIn("コードの読み込みをやり直します", world.logs)
-        self.assertIn("⚠ 入力欄が開いたままです（手で Enter を押してください）", world.logs)
+        self.assertIn("⚠ 入力欄が開いたままです（Enter キーを押してください）", world.logs)
 
     def test_a_stop_after_the_first_try_does_not_try_again(self):
         world = _World(self, loads_on_enter=None, closes_on_enter=1)
@@ -699,3 +700,61 @@ class TestSettleAndTryAgain(unittest.TestCase):
             text = "\n".join(map(str, world.logs + world.written + world.events))
             self.assertNotIn(CODE, text, kwargs)
             self.assertNotIn(str(len(CODE)), text, ("長さも出さない", kwargs))
+
+
+class _Var:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class TestQueueNotifyIsSaved(unittest.TestCase):
+    """「待機列に入れるようになったら知らせる」の保存キー queue_notify の往復（保存に入る・読み戻せる・キーが無ければ ON）"""
+
+    def setUp(self):
+        self.addCleanup(SharedState.set_queue_notify, True)
+        self.addCleanup(SharedState.set_phone_topic, "")
+        self.addCleanup(SharedState.set_phone_notify, False)
+
+    def saved_settings(self) -> dict:
+        app = _with_cancel_key(type("FakeApp", (), {})())
+        app.tabs = []
+        app.tool_rows = []
+        app._win_count_pref = None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port",
+                     "v_obs_password"):
+            setattr(app, name, _Var(""))
+        app._window_volume_settings = lambda: {}
+        app._fog_early_read_setting = lambda: {}
+        app._launch_options_setting = lambda: {}
+        app._window_freeze_setting = lambda: {}
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+        return saved
+
+    def load(self, data: dict):
+        app = type("FakeApp", (), {})()
+        app.v_phone_notify, app.v_queue_notify, app.v_phone_topic = MagicMock(), MagicMock(), MagicMock()
+        mainGUI.App._load_phone_notify(app, data)
+        self.addCleanup(DebugLog._secrets.discard, SharedState.get_phone_topic())
+
+    def test_queue_notify_round_trips_and_a_missing_key_is_on(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                SharedState.set_queue_notify(value)
+                saved = self.saved_settings()
+                self.assertIs(saved["queue_notify"], value)
+                SharedState.set_queue_notify(not value)
+                self.load(saved)
+                self.assertIs(SharedState.get_queue_notify(), value)
+        SharedState.set_queue_notify(False)
+        self.load({})
+        self.assertIs(SharedState.get_queue_notify(), True)

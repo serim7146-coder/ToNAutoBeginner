@@ -1,3 +1,4 @@
+import math
 import threading
 
 import DebugLog
@@ -108,6 +109,23 @@ get_instance_type, set_instance_type = _INSTANCE_TYPE.get, _INSTANCE_TYPE.set
 _SUICIDE_KEY = _Setting(config.SELF_SUICIDE_KEY)
 get_suicide_key, set_suicide_key = _SUICIDE_KEY.get, _SUICIDE_KEY.set
 
+
+def _hold_sec(value) -> float:
+    """自爆の長押しの秒数。数でない値は既定へ、範囲の外は丸める
+    （設定ファイルが壊れていても落とさない。NaN・inf も既定へ）"""
+    try:
+        sec = float(value)
+    except (TypeError, ValueError):
+        return config.SUICIDE_HOLD_SEC
+    if not math.isfinite(sec):
+        return config.SUICIDE_HOLD_SEC
+    return min(config.SUICIDE_HOLD_MAX, max(config.SUICIDE_HOLD_MIN, sec))
+
+
+# 自爆の長押しの秒数（全窓共通・保存。既定は config）
+_SUICIDE_HOLD = _Setting(config.SUICIDE_HOLD_SEC, _hold_sec)
+get_suicide_hold_sec, set_suicide_hold_sec = _SUICIDE_HOLD.get, _SUICIDE_HOLD.set
+
 # 放置モード
 _HANDS_FREE = _Setting(False)
 get_hands_free, set_hands_free = _HANDS_FREE.get, _HANDS_FREE.set
@@ -153,12 +171,16 @@ get_item_begin_mode, set_item_begin_mode = _ITEM_BEGIN_MODE.get, _ITEM_BEGIN_MOD
 _CONTINUE_DROP_ITEM = _Setting(True, bool)
 get_continue_drop_item, set_continue_drop_item = _CONTINUE_DROP_ITEM.get, _CONTINUE_DROP_ITEM.set
 _CONTINUE_RESTORE_WINDOW = _Setting(True, bool)
+# 窓位置リセットの時点。True = ラウンド終了（RoundOver）から、False = 続行フリーズが外れた瞬間（＝死亡から）
+_CONTINUE_RESTORE_AT_ROUND_END = _Setting(True, bool)
+# 続行ラウンド（普通の続行・全続行）の後は自動 Begin を押さない（全窓共通・保存・既定 OFF）
+_NO_BEGIN_AFTER_CONTINUE = _Setting(False, bool)
 # チェイス（F1・F2）を使う（全窓共通・既定 ON。OFF ならキーを拾わない）
 _CHASE_ENABLED = _Setting(True, bool)
 get_chase_enabled, set_chase_enabled = _CHASE_ENABLED.get, _CHASE_ENABLED.set
 
 # Run のラウンドに入ったらリスポーンして正面を向く（全窓共通・既定 ON）
-# ToN Utils の続行の判断に従う（全窓共通・既定 OFF。EB）
+# ToN Utils の続行の判定に従う（全窓共通・既定 OFF。EB）
 _FOLLOW_UTILS = _Setting(False, bool)
 get_follow_utils, set_follow_utils = _FOLLOW_UTILS.get, _FOLLOW_UTILS.set
 
@@ -169,16 +191,32 @@ get_run_respawn, set_run_respawn = _RUN_RESPAWN.get, _RUN_RESPAWN.set
 _WAIT_BLOODTHIRSTY = _Setting(True, bool)
 get_wait_bloodthirsty, set_wait_bloodthirsty = _WAIT_BLOODTHIRSTY.get, _WAIT_BLOODTHIRSTY.set
 
+# Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・既定 OFF）
+_MURDER_NO_AFK = _Setting(False, bool)
+get_murder_no_afk, set_murder_no_afk = _MURDER_NO_AFK.get, _MURDER_NO_AFK.set
+
+# Begin は /input/UseRight の連打だけにする（カーソルも前面も触らない。全窓共通・既定 OFF）
+_BEGIN_USE_SPAM_ONLY = _Setting(False, bool)
+get_begin_use_spam_only, set_begin_use_spam_only = _BEGIN_USE_SPAM_ONLY.get, _BEGIN_USE_SPAM_ONLY.set
+
 # スマホ通知（ntfy。全窓共通）。通知するか（デフォルト OFF）と、宛先（PhoneNotify.new_topic で作る秘密の文字）
 _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set
 _PHONE_TOPIC = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_phone_topic, set_phone_topic = _PHONE_TOPIC.get, _PHONE_TOPIC.set
+# 待機列に入れるようになったら知らせるか（全窓共通・保存・既定 ON）。OFF ならログの見張りを止める。
+# スマホへ送るかは _PHONE_NOTIFY が元栓（OFF なら声とツールのログだけ）
+_QUEUE_NOTIFY = _Setting(True, bool)
+get_queue_notify, set_queue_notify = _QUEUE_NOTIFY.get, _QUEUE_NOTIFY.set
 # 待機列の合図で鳴らす声のファイル（窓のものではない。見張りの裏のスレッドは Tk の変数を読めないので、ここに置く）。空なら鳴らさない
 _QUEUE_VOICE = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_queue_voice, set_queue_voice = _QUEUE_VOICE.get, _QUEUE_VOICE.set
 get_continue_restore_window, set_continue_restore_window = (_CONTINUE_RESTORE_WINDOW.get,
                                                             _CONTINUE_RESTORE_WINDOW.set)
+get_continue_restore_at_round_end, set_continue_restore_at_round_end = (
+    _CONTINUE_RESTORE_AT_ROUND_END.get, _CONTINUE_RESTORE_AT_ROUND_END.set)
+get_no_begin_after_continue, set_no_begin_after_continue = (
+    _NO_BEGIN_AFTER_CONTINUE.get, _NO_BEGIN_AFTER_CONTINUE.set)
 
 
 # ═══════════════════════════════════════════════

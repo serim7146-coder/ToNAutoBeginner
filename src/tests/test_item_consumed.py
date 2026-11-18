@@ -1,4 +1,4 @@
-"""消費系アイテムを手に持って手でクリックしたら、Maxwell を手に持ったまま自爆したら、アイテムロストにする。
+"""消費系アイテムを手に持って利用者がクリックしたら、Maxwell を手に持ったまま自爆したら、アイテムロストにする。
 
 LogMonitor（_check_item_used・_on_you_died）と ActionExecutor（自爆の長押しの始まり）を通す。長押しそのものは
 WindowOperator.hold_key_background の偽物で、本物のキー入力・OSC・マウス・窓は使わない。
@@ -77,7 +77,7 @@ class _Case(unittest.TestCase):
         before(n) は n 回目の長押しの直前。戻り値は長押しした回数"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             if before:
                 before(len(sent) + 1)
             sent.append(hwnd)
@@ -90,12 +90,12 @@ class _Case(unittest.TestCase):
         return len(sent)
 
 
-# ── A 消費系: 手に持っている間に手でクリックしたらアイテムロスト ──
+# ── A 消費系: 手に持っている間に利用者がクリックしたらアイテムロスト ──
 class TestConsumableClick(_Case):
     def _click(self):
         self.assertTrue(self.tracker.use(ItemUse.SOURCE_HAND))
 
-    def test_each_consumable_is_lost_by_a_hand_click_while_held(self):
+    def test_each_consumable_is_lost_by_a_user_click_while_held(self):
         for item_id, name in ((BURGER, "Burger"), (HAUNTED_BURGER, "Haunted Burger"),
                               (GLOGNUT, "Thorn Glognut")):
             with self.subTest(item_id=item_id):

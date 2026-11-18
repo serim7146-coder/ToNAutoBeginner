@@ -526,7 +526,7 @@ class TestSaveAndLoad(_AppCase):
 
 
 class TestLoadingDoesNotSave(_AppCase):
-    """読み込み・戻す書き込みでは保存を予約しない（起動しただけで settings.json を書き換えない）。手で変えた・Ctrl で写したときは予約する"""
+    """読み込み・戻す書き込みでは保存を予約しない（起動しただけで settings.json を書き換えない）。利用者が変えた・Ctrl で写したときは予約する"""
 
     def test_set_freeze_values_and_restore_do_not_call_back(self):
         tab = self.tabs[0]
@@ -583,7 +583,7 @@ class TestLoadingDoesNotSave(_AppCase):
         self.app._rebuild_tabs(3)
         self.assertFalse(self.saved.called)
 
-    def test_a_hand_change_and_a_ctrl_broadcast_do_schedule_a_save(self):
+    def test_a_change_by_the_user_and_a_ctrl_broadcast_do_schedule_a_save(self):
         self.saved.reset_mock()
         _checkbutton(self.tabs[0], "Fog", 0).invoke()
         self.assertTrue(self.saved.called, "手の変更")

@@ -160,6 +160,7 @@ import RoundStore
 import VerifiedTracker
 import DebugLog
 import MemoryWatch
+import QueueWatch
 import shutil
 import random
 import zipfile
@@ -346,7 +347,8 @@ def setUpModule():
                        rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust,
                        items=config.ITEMS,
-                       host_local=config.HOST_LOCAL_STATE_PATH)
+                       host_local=config.HOST_LOCAL_STATE_PATH,
+                       vrchat_log_dir=config.VRCHAT_LOG_DIR)
     # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
     config.ITEMS = {}
     config.SETTINGS_PATH = root / "settings.json"
@@ -356,6 +358,9 @@ def setUpModule():
     # 本物の ToN ListTool の host_local_state.bin（DPAPI で封じてある）を読まない。無いパスへ向け、
     # 確かめるテストが一時フォルダのものへ差し替える
     config.HOST_LOCAL_STATE_PATH = str(root / "no_host_local_state.bin")
+    # 「待機列に入れるようになったら知らせる」は既定 ON なので、App を作るたびに待機列の見張りが VRChat のログの
+    # フォルダを読みに行く。本物の VRChat のログを読まないよう、無いパスへ向ける
+    config.VRCHAT_LOG_DIR = root / "no_vrchat_log_dir"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
     # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい」の答え。
@@ -375,13 +380,28 @@ def setUpModule():
     # 動かさない（OSC・窓の移動を送らない）。確かめるテストだけが ON にする
     SharedState.set_continue_drop_item(False)
     SharedState.set_continue_restore_window(False)
+    SharedState.set_continue_restore_at_round_end(False)   # 既定 ON だが、既存のテストは今までの時点で見る
+    SharedState.set_no_begin_after_continue(False)   # 前のテストの ON を残さない（既定も OFF）
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
     SharedState.set_wait_bloodthirsty(True)     # 前のテストの OFF を残さない（既定は ON）
+    SharedState.set_queue_notify(True)          # 前のテストの OFF を残さない（既定は ON）
+    SharedState.set_suicide_hold_sec(config.SUICIDE_HOLD_SEC)   # 前のテストの秒数を残さない
     # App を作るたびに最大 WS の見張り（MemoryWatch）の本物のスレッドが立つと、モジュールが終わって debug.log のパスが
     # 本物に戻った後も生き残り、本物の debug.log に書きうる。立てた済みの印を入れて start() を何もしなくする。
     # 見張りを確かめるテスト（test_memory_watch）は自分で _thread を None にして使う
     _real_paths["memory_watch_thread"] = MemoryWatch._thread
     MemoryWatch._thread = "テスト中は見張りを立てない"
+    # 「待機列に入れるようになったら知らせる」は既定 ON なので、App を作るたびに待機列の見張り（QueueWatch.Watcher）の
+    # 本物のスレッドが立つ。TaskStats に載ってスレッドの数を数えるテストを狂わせ、積み上がって毎秒 poll するので遅くもなる。
+    # start() を何もしない形にする。スレッドを確かめるテスト（test_queue_watch の TestThread）は
+    # real_queue_watcher_start() で本物に戻して使う
+    _real_paths["queue_watcher_start"] = QueueWatch.Watcher.start
+    QueueWatch.Watcher.start = lambda self: None
+
+
+def real_queue_watcher_start():
+    """support が何もしない形に差し替えた QueueWatch.Watcher.start の本物（TestThread が戻して使う）"""
+    return _real_paths["queue_watcher_start"]
 
 
 def end_sound_threads(timeout: float = 3.0) -> bool:
@@ -433,6 +453,7 @@ def tearDownModule():
     ItemUse.reset_for_tests()
     MouseButtons.reset_for_tests()
     MemoryWatch._thread = _real_paths["memory_watch_thread"]
+    QueueWatch.Watcher.start = _real_paths["queue_watcher_start"]
     urllib.request.urlopen = _real_paths["urlopen"]
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
@@ -441,6 +462,7 @@ def tearDownModule():
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
     config.HOST_LOCAL_STATE_PATH = _real_paths["host_local"]
+    config.VRCHAT_LOG_DIR = _real_paths["vrchat_log_dir"]
     AccessCheck.reset_for_tests()
     AccessCheck._ask_server = _real_paths["ask_server"]
     AccessCheck.SecretStore = _real_paths["access_secret_store"]

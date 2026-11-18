@@ -142,13 +142,18 @@ def ctrl_held() -> bool:
 BROADCAST_CHECK_LABELS = {
     "auto_begin": "自動Begin",
     "do_skip": "自動自爆",
-    "cancel_afk_two": "DTM/Waldo続行 (2クラまで)",
-    "cancel_afk": "DTM/Waldo続行 (3クラまで)",
-    "cancel_afk_after_unlock": "3クラ後もDTM/Waldo続行",
     "announce_intermission": "Intermissionアナウンス",
     "freeze_8pages": "速度検知 8 Pages",
     "freeze_punish": "速度検知 Punished",
 }
+# DTM/Waldo 続行の 4 択（窓ごと）。値はそのまま目標勝数
+AFK_WINS_CHOICES = ((0, "しない"),
+                    (config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS, "2クラまで"),
+                    (config.OPEN_SPECIAL_ROUND_TARGET_WINS, "3クラまで"),
+                    (config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS, "3クラ後も"))
+AFK_WINS_LABELS = dict(AFK_WINS_CHOICES)
+AFK_WINS_DEFAULT = config.OPEN_SPECIAL_ROUND_TARGET_WINS        # 今までの既定（cancel_afk=True）と同じ
+BROADCAST_AFK_WINS_LABEL = "DTM/Waldo続行"                      # Ctrl で写したときのログの名前
 BROADCAST_ROUND_LABELS = {"skip": "全自爆", "continue": "全続行"}
 BROADCAST_CHOICE_LABELS = {ContinueTable.DISABLED: "続行無効", ContinueTable.DEFAULT: "デフォ続行"}
 
@@ -278,6 +283,13 @@ def _as_window_freezes(data) -> dict:
     old = one({key: data.get(key) for key in ("freeze_8pages", "freeze_punish", "freeze_rounds")})
     return {number: {**old, "freeze_rounds": list(old["freeze_rounds"])}
             for number in range(1, config.MAX_WINDOWS + 1)}
+
+
+# 入室後の選択画面で押すもの（GUI の値 → ToNEntry の番号。難易度 0 Casual・1 Mild・2 Spicy、音楽 0 Yeah・1 Nope）
+TON_ENTRY_FLAVORS = {"casual": 0, "mild": 1, "spicy": 2}
+TON_ENTRY_MUSICS = {"yeah": 0, "nope": 1}
+TON_ENTRY_FLAVOR_GUI_DEFAULT = "casual"
+TON_ENTRY_MUSIC_GUI_DEFAULT = "nope"
 
 
 def load_settings() -> dict:
@@ -431,8 +443,14 @@ PHONE_NOTIFY_NOTE = ("続行ラウンド・全続行・待機列に入れるよ�
                      "スマホへ通知します。スマホにntfyのアプリを入れて、\n"
                      "下の宛先を購読してください。\n"
                      "宛先を知っている人は、この通知を読めます（人に見せないでください）。")
+QUEUE_NOTIFY_NOTE = ("スマホ通知がOFFでも、ツールのログと声で知らせます。\n"
+                     "VRChatを再起動したあとにツールを起動すると、\n"
+                     "それまでの待機列には気づけません。並び直してください。")
 WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。\n"
                       "マクロを停止すると元の音量に戻ります。")
+
+BEGIN_USE_SPAM_ONLY_NOTE = ("カーソルも前面も触らず、UseRight を送り続けるだけにします。\n"
+                            "前面の窓か、カーソルが乗っている窓でしか Begin は押されません。")
 
 CTRL_HINT_TEXT = "Ctrl＋クリックで全窓まとめて変更"   # 窓のタブの右の空きに出す案内（表示だけ）
 CTRL_HINT_GAP = 12      # タブの右端と案内の間に最低限あける幅（px）
@@ -440,6 +458,12 @@ CTRL_HINT_MARGIN_X = 6  # 案内の右端と窓のタブの枠の右端の間（
 CTRL_HINT_MARGIN_Y = 4  # 案内の上端と窓のタブの枠の上端の間（px）
 CTRL_HINT_PROBE_Y = 8   # タブの右端を調べるときの高さ（タブの帯の中。px）
 CTRL_HINT_PROBE_STEP = 4  # タブの右端を調べる間隔（px）
+SETTINGS_BAR_WIDTH = 20            # 設定の窓の初めの幅に足す、スクロールバーの分（px）
+SETTINGS_MAX_HEIGHT_RATIO = 0.8    # 設定の窓の初めの高さの上限（画面の高さに対する割合）
+SETTINGS_MIN_WIDTH = 560           # 設定の窓の初めの幅の下限（px）
+SETTINGS_DEFAULT_HEIGHT = 620      # 設定の窓の初めの高さ（px。画面の 8 割を超えない）
+SETTINGS_MAX_WIDTH_RATIO = 0.8     # 初めの幅の上限（画面の幅に対する割合）
+OTHER_CHECK_GAP = 12               # 折り返すチェックの間隔（px。今の padx と同じ）
 
 STYLE_CT_DIM = "CtDim.TCombobox"   # アイテムの決まりが代わりに使われている間のドロップダウン（灰色。触れない）
 COLOR_CT_DIM = "#7f849c"
@@ -455,6 +479,7 @@ class WindowTab(ttk.Frame):
                  on_freeze_changed=None):
         super().__init__(parent)
         self.idx = idx
+        self._instance_type = None                              # この窓のインスタンスタイプ（None は分からない。効かない全自爆・全続行を押せなくするのに使う）
         self._on_freeze_changed = on_freeze_changed             # (): 全窓フリーズの設定が変わった（App が保存を予約する）
         self._freeze_loading = False                            # 読み込み・戻す書き込みの間は True（保存を予約しない）
         self._on_broadcast = on_broadcast                       # (タブ, 種類, キー, 値): Ctrl を押して変えた設定を全窓へ写す
@@ -471,6 +496,7 @@ class WindowTab(ttk.Frame):
         self._on_log_selected = on_log_selected
         self._on_settings_changed = on_settings_changed
         self._build()
+        self.apply_instance_type(None)          # 枠の先頭の 1 行を出す
         self._watch_settings()
 
     def _section(self, parent, key: str, text: str) -> "CollapsibleFrame":
@@ -493,8 +519,8 @@ class WindowTab(ttk.Frame):
     def _watch_settings(self):
         """窓ごとの設定のチェックが変わったら知らせる（動作中の監視へ渡すため）"""
         if self._on_settings_changed is not None:
-            for var in (self.v_auto_begin, self.v_do_skip, self.v_cancel_afk_two, self.v_cancel_afk,
-                        self.v_cancel_afk_after_unlock, self.v_announce_intermission,
+            for var in (self.v_auto_begin, self.v_do_skip, self.v_afk_wins,
+                        self.v_announce_intermission,
                         *self.v_skip_rounds.values(), *self.v_continue_rounds.values(),
                         *self._freeze_vars()):
                 var.trace_add("write", lambda *_a: self._on_settings_changed(self))
@@ -503,7 +529,7 @@ class WindowTab(ttk.Frame):
                 var.trace_add("write", lambda *_a: self._notify_freeze_changed())
 
     def _notify_freeze_changed(self):
-        """手で変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
+        """利用者が変えた・Ctrl で写されたときだけ保存を頼む。読み込みと戻す書き込み（_freeze_loading）では頼まない"""
         if not self._freeze_loading:
             self._on_freeze_changed()
 
@@ -519,25 +545,52 @@ class WindowTab(ttk.Frame):
         return True
 
     def _changed(self, key: str, var):
-        """窓ごとのチェックを手で変えた: Ctrl を押していれば全窓へ写す"""
+        """窓ごとのチェックを利用者が変えた: Ctrl を押していれば全窓へ写す"""
         self._broadcast_if_ctrl("check", key, bool(var.get()))
 
     def _checks(self) -> dict:
         return {"auto_begin": self.v_auto_begin, "do_skip": self.v_do_skip,
-                "cancel_afk_two": self.v_cancel_afk_two,
-                "cancel_afk": self.v_cancel_afk, "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock,
                 "announce_intermission": self.v_announce_intermission,
                 "freeze_8pages": self.v_freeze_8pages, "freeze_punish": self.v_freeze_punish}
 
+    def _afk_wins(self) -> int:
+        """この窓の DTM/Waldo 続行の目標勝数（知らない値が入っていたら既定）"""
+        value = self.v_afk_wins.get()
+        return value if value in AFK_WINS_LABELS else AFK_WINS_DEFAULT
+
+    def set_afk_wins(self, value: int):
+        """全窓へ写された（または控えから戻した）目標勝数を書く"""
+        if value in AFK_WINS_LABELS:
+            self.v_afk_wins.set(value)
+
+    @staticmethod
+    def _afk_wins_from_saved(saved: dict) -> int:
+        """控えから 4 択を決める。新しいキーがあればそれ。無ければ古い真偽 3 つから。
+        古い優先順（判定と同じ）: 「後も」が入っていれば無限、「2クラ」が入っていれば 2、
+        「3クラ」だけなら 3、どれも無ければ 0"""
+        if "cancel_afk_wins" in saved:
+            value = int(saved["cancel_afk_wins"])
+            return value if value in AFK_WINS_LABELS else AFK_WINS_DEFAULT
+        two = bool(saved.get("cancel_afk_two", False))
+        three = bool(saved.get("cancel_afk", False))
+        after = bool(saved.get("cancel_afk_after_unlock", False))
+        if after and (two or three):
+            return config.OPEN_SPECIAL_ROUND_UNLIMITED_WINS
+        if two:
+            return config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS
+        if three:
+            return config.OPEN_SPECIAL_ROUND_TARGET_WINS
+        return 0
+
     def set_check(self, key: str, value: bool):
         """全窓へ写された窓ごとのチェックを書く（Tk の変数を書くだけ。動作中の監視へは trace で届く）。
-        速度検知のフリーズは、手で入れたときと同じく、入れたらラウンド突入の同じラウンドも入れる"""
+        速度検知のフリーズは、利用者が入れたときと同じく、入れたらラウンド突入の同じラウンドも入れる"""
         self._checks()[key].set(bool(value))
         if key.startswith("freeze_"):
             self._link_speed_freeze(key)
 
     def _on_speed_freeze(self, key: str):
-        """速度検知のフリーズのチェックを手で変えた: 連動してから、Ctrl を押していれば全窓へ写す"""
+        """速度検知のフリーズのチェックを利用者が変えた: 連動してから、Ctrl を押していれば全窓へ写す"""
         self._link_speed_freeze(key)
         self._changed(key, self._checks()[key])
 
@@ -572,22 +625,56 @@ class WindowTab(ttk.Frame):
             self._freeze_loading = False
 
     def set_round(self, which: str, name: str, value: bool):
-        """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。手で入れたときと同じく、入れたら反対側を外す"""
+        """全窓へ写された全自爆（skip）・全続行（continue）のチェックを書く。利用者が入れたときと同じく、入れたら反対側を外す"""
         own, other = ((self.v_skip_rounds, self.v_continue_rounds) if which == "skip"
                       else (self.v_continue_rounds, self.v_skip_rounds))
         if name not in own:
             return
+        if not self._setting_applies(which, name):
+            return              # この窓では効かない指定。押せないチェックに入れない
         own[name].set(bool(value))
         exclusive_check(own[name], other[name])
+
+    def apply_instance_type(self, instance_type):
+        """この窓のインスタンスタイプが分かった・変わった: 効かないチェックを押せなくして外す。
+        None（分からない）なら全部押せるまま。判定の動きは変えない（押せるかどうかだけ）"""
+        self._instance_type = instance_type
+        for which, vars_, boxes in (("skip", self.v_skip_rounds, self.cb_skip_rounds),
+                                    ("continue", self.v_continue_rounds, self.cb_continue_rounds)):
+            for name, box in boxes.items():
+                ok = self._setting_applies(which, name)
+                box.state(["!disabled"] if ok else ["disabled"])
+                if not ok:
+                    vars_[name].set(False)
+        self.lbl_round_rule.configure(text=self._round_rule_text())
+
+    def _setting_applies(self, which: str, name: str) -> bool:
+        """この窓で、その指定が効くか。インスタンスタイプが分からなければ押せるままにする"""
+        return (self._instance_type is None
+                or GroupRound.setting_applies(self._instance_type, which, name))
+
+    def _round_rule_text(self) -> str:
+        """枠の先頭の 1 行。決まりそのものから作る（手書きの文言とずらさない）"""
+        if self._instance_type is None:
+            return "インスタンスがまだ分かりません（すべて押せます）"
+        parts = []
+        for which, title in (("skip", "全自爆"), ("continue", "全続行")):
+            names = [n for n in config.SKIP_ROUND_SELECTABLE
+                     if GroupRound.setting_applies(self._instance_type, which, n)]
+            if not names:
+                parts.append(f"{title}は効きません")
+            elif len(names) == len(config.SKIP_ROUND_SELECTABLE):
+                parts.append(f"{title}は全部効きます")
+            else:
+                parts.append(f"{title}は {' / '.join(names)} だけ効きます")
+        return f"インスタンス: {self._instance_type} → " + "、".join(parts)
 
     def live_settings(self) -> dict:
         """動作中の監視（WindowConfig）へ渡す、窓ごとの設定"""
         return {
             "auto_begin": self.v_auto_begin.get(),
             "do_skip": self.v_do_skip.get(),
-            "cancel_afk_two": self.v_cancel_afk_two.get(),
-            "cancel_afk": self.v_cancel_afk.get(),
-            "cancel_afk_after_unlock": self.v_cancel_afk_after_unlock.get(),
+            "cancel_afk_wins": self._afk_wins(),
             "announce_intermission": self.v_announce_intermission.get(),
             "skip_rounds": {name for name, var in self.v_skip_rounds.items() if var.get()},
             "continue_rounds": {name for name, var in self.v_continue_rounds.items() if var.get()},
@@ -605,6 +692,7 @@ class WindowTab(ttk.Frame):
             "hwnd_choices": list(self._hwnd_map.items()),
             "hwnd_sel": self.v_hwnd_sel.get(),
             "osc": (self.osc_in, self.osc_out),
+            "instance_type": self._instance_type,
         }
 
     def restore(self, saved: dict):
@@ -612,13 +700,11 @@ class WindowTab(ttk.Frame):
         self._freeze_loading = True
         try:
             for key, var in (("auto_begin", self.v_auto_begin), ("do_skip", self.v_do_skip),
-                             ("cancel_afk_two", self.v_cancel_afk_two),
-                             ("cancel_afk", self.v_cancel_afk),
-                             ("cancel_afk_after_unlock", self.v_cancel_afk_after_unlock),
                              ("announce_intermission", self.v_announce_intermission),
                              ("freeze_8pages", self.v_freeze_8pages), ("freeze_punish", self.v_freeze_punish)):
-                # 古い控えにはこのキーが無い（「2クラまで」は OFF として戻す）
-                var.set(saved.get(key, False) if key == "cancel_afk_two" else saved[key])
+                var.set(saved[key])
+            # 古い控え（真偽 3 つ）でも戻せる
+            self.set_afk_wins(self._afk_wins_from_saved(saved))
             for key, vars_ in (("skip_rounds", self.v_skip_rounds),
                                ("continue_rounds", self.v_continue_rounds),
                                ("freeze_rounds", self.v_freeze_rounds)):
@@ -632,6 +718,8 @@ class WindowTab(ttk.Frame):
         self.cb_hwnd["values"] = list(self._hwnd_map)
         self.v_hwnd_sel.set(saved["hwnd_sel"])
         self.osc_in, self.osc_out = saved["osc"]
+        # 古い控えから効かない項目が True で入ってくることがある。最後に引き直して外す
+        self.apply_instance_type(saved.get("instance_type"))
 
     def _build(self):
         p = self
@@ -681,20 +769,17 @@ class WindowTab(ttk.Frame):
         cf.pack(fill="x", padx=10)
         self.v_auto_begin  = tk.BooleanVar(value=True)
         self.v_do_skip     = tk.BooleanVar(value=True)
-        self.v_cancel_afk_two = tk.BooleanVar(value=False)
-        self.v_cancel_afk  = tk.BooleanVar(value=True)
-        self.v_cancel_afk_after_unlock = tk.BooleanVar(value=False)
+        self.v_afk_wins = tk.IntVar(value=AFK_WINS_DEFAULT)
         self.v_announce_intermission = tk.BooleanVar(value=False)
         ttk.Checkbutton(cf, text="自動Begin",                variable=self.v_auto_begin,
                         command=lambda k="auto_begin", v=self.v_auto_begin: self._changed(k, v)).pack(side="left")
         ttk.Checkbutton(cf, text="自動自爆",                 variable=self.v_do_skip,
                         command=lambda k="do_skip", v=self.v_do_skip: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="DTM/Waldo続行 (2クラまで)", variable=self.v_cancel_afk_two,
-                        command=lambda k="cancel_afk_two", v=self.v_cancel_afk_two: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="DTM/Waldo続行 (3クラまで)", variable=self.v_cancel_afk,
-                        command=lambda k="cancel_afk", v=self.v_cancel_afk: self._changed(k, v)).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(cf, text="3クラ後もDTM/Waldo続行",        variable=self.v_cancel_afk_after_unlock,
-                        command=lambda k="cancel_afk_after_unlock", v=self.v_cancel_afk_after_unlock: self._changed(k, v)).pack(side="left", padx=(4, 0))
+        ttk.Label(cf, text="DTM/Waldo続行:").pack(side="left", padx=(12, 0))
+        for value, text in AFK_WINS_CHOICES:
+            ttk.Radiobutton(cf, text=text, variable=self.v_afk_wins, value=value,
+                            command=lambda v=value: self._broadcast_if_ctrl("afk_wins", None, v)
+                            ).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(cf, text="Intermissionアナウンス",    variable=self.v_announce_intermission,
                         command=lambda k="announce_intermission", v=self.v_announce_intermission: self._changed(k, v)).pack(side="left", padx=(12, 0))
 
@@ -724,20 +809,23 @@ class WindowTab(ttk.Frame):
             self.cb_ct_choice[which] = box
         self.refresh_continue_choices()
 
-        # ── ラウンドごとの自爆設定（privateのみ） ──
-        rounds = self._section(
-            p, "rounds", text="ラウンドごとの自爆設定（プライベートインスタンスのみ）")
+        # ── ラウンドごとの自爆設定（効くかどうかはインスタンスで変わる。押せるものは apply_instance_type が決める） ──
+        rounds = self._section(p, "rounds", text="ラウンドごとの自爆設定")
         rounds.pack(fill="x", pady=(4, 0))
+        self.lbl_round_rule = ttk.Label(rounds.content, text="", foreground=config.GUI_YLW)
+        self.lbl_round_rule.pack(anchor="w", padx=10, pady=(2, 4))
         self.v_skip_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
         self.v_continue_rounds = skip_round_vars(lambda: tk.BooleanVar(value=False))
 
+        self.cb_skip_rounds = {}
+        self.cb_continue_rounds = {}
         self._round_grid(rounds.content, "■ 全自爆", self.v_skip_rounds,
-                         self.v_continue_rounds, which="skip")
+                         self.v_continue_rounds, which="skip", boxes=self.cb_skip_rounds)
         # Variant（置き換え後のテラー）はいつもリストで判定する。
         # 以前ここにあった切り替えは廃止した
         self._round_grid(rounds.content, "■ 全続行",
                          self.v_continue_rounds, self.v_skip_rounds,
-                         pady=(8, 0), which="continue")
+                         pady=(8, 0), which="continue", boxes=self.cb_continue_rounds)
 
         # ── 全窓フリーズ: この窓が当たったらほかの窓を止める。速度検知とラウンド突入。止める範囲は全窓 ──
         freeze = self._section(p, "freeze", text="全窓フリーズ")
@@ -814,29 +902,33 @@ class WindowTab(ttk.Frame):
             self._on_open_window_table(self, which)
 
     def _round_changed(self, which, name: str, var, other):
-        """ラウンドごとのチェックを手で変えた: 排他を行い、Ctrl を押していれば全窓へ写す"""
+        """ラウンドごとのチェックを利用者が変えた: 排他を行い、Ctrl を押していれば全窓へ写す"""
         exclusive_check(var, other)
         if which is not None:
             self._broadcast_if_ctrl("round", (which, name), bool(var.get()))
 
-    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0), which: str | None = None):
+    def _round_grid(self, parent, title: str, own: dict, other: dict, pady=(0, 0), which: str | None = None,
+                    boxes: dict | None = None):
         """ラウンド一覧のチェックボックスを1つ並べる。
 
         同じラウンドを両方に入れられると意味が矛盾するので、片方を入れたら
         もう片方を外す。並び順は config.SKIP_ROUND_SELECTABLE のまま。
         which（"skip" か "continue"）があれば、Ctrl を押して変えたとき全窓へ写す。
+        boxes があれば、名前 → チェックボックスを入れる（あとから押せる・押せないを切り替えるため）。
         """
         ttk.Label(parent, text=title, foreground=config.GUI_ACC).pack(
             anchor="w", padx=10, pady=pady)
         grid = ttk.Frame(parent)
         grid.pack(fill="x", padx=10)
         for i, (name, var) in enumerate(own.items()):
-            ttk.Checkbutton(
+            box = ttk.Checkbutton(
                 grid, text=name, variable=var,
-                command=lambda v=var, o=other[name], n=name: self._round_changed(which, n, v, o)
-            ).grid(row=i // config.SKIP_ROUND_COLUMNS,
-                   column=i % config.SKIP_ROUND_COLUMNS,
-                   sticky="w", padx=(0, 12), pady=1)
+                command=lambda v=var, o=other[name], n=name: self._round_changed(which, n, v, o))
+            box.grid(row=i // config.SKIP_ROUND_COLUMNS,
+                     column=i % config.SKIP_ROUND_COLUMNS,
+                     sticky="w", padx=(0, 12), pady=1)
+            if boxes is not None:
+                boxes[name] = box
 
 
     def _refresh_hwnds(self, discover=None, foreground=None):
@@ -933,8 +1025,8 @@ def _remember_own_window(widget):
         pass
 
 
-def _on_hand_left_down(event=None):
-    """手で左クリックした（マウスフックのスレッドから）。前面の窓が VRChat なら、持っているアイテムの使用の合図。
+def _on_user_left_down(event=None):
+    """利用者が左クリックした（マウスフックのスレッドから）。前面の窓が VRChat なら、持っているアイテムの使用の合図。
     注入されたクリック（ツール自身）は MouseButtons が捨てている"""
     ItemUse.on_click(WindowOperator.foreground_hwnd(), ItemUse.SOURCE_HAND)
 
@@ -1283,7 +1375,7 @@ class App(tk.Tk):
         # 窓ごと（各窓の設定の行）
         ContinueTable.set_current(ContinueTable.load())
         self.v_win_count = tk.IntVar(value=4)
-        # 手で変えた窓数（settings.json の win_count）。自動検出で入った値は
+        # 利用者が変えた窓数（settings.json の win_count）。自動検出で入った値は
         # ここに入れない——VRChat を3窓だけ開いていた日に保存すると、次に
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
@@ -1336,12 +1428,12 @@ class App(tk.Tk):
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._stop_reason: str | None = None
-        self._queue_watcher = None            # 待機列の見張り（通知する が ON のあいだだけ。マクロの開始とは別）
+        self._queue_watcher = None            # 待機列の見張り（待機列に入れるようになったら知らせる が ON のあいだだけ。マクロの開始とは別）
         DebugLog.install_hooks(self)          # 例外をトレースバックごと debug.log へ
         self._build_ui()
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
-        self._sync_queue_watcher()            # 読み込んだ「通知する」に合わせて見張りを始める
+        self._sync_queue_watcher()            # 読み込んだ「待機列に入れるようになったら知らせる」に合わせて見張りを始める
         self._auto_detect_windows()
         self._sync_launch_count()
         AutoUpdate.cleanup_old_exe()
@@ -1381,9 +1473,9 @@ class App(tk.Tk):
         mouse_hook_ok = MouseButtons.start()
         if not mouse_hook_ok:
             self._log("[キー] ⚠ マウスのサイドボタンは使えません（フックを張れませんでした）")
-            DebugLog.write("[アイテム] 手のクリックは使用に数えません（マウスフックを張れませんでした）")
-        # 手に持ったアイテムの使用の判定（ItemUse）の、手のクリック。張れていなければ通知が来ないだけ
-        self._hand_click_hook = MouseButtons.hook_left(_on_hand_left_down)
+            DebugLog.write("[アイテム] 利用者のクリックは使用に数えません（マウスフックを張れませんでした）")
+        # 手に持ったアイテムの使用の判定（ItemUse）の、利用者のクリック。張れていなければ通知が来ないだけ
+        self._user_click_hook = MouseButtons.hook_left(_on_user_left_down)
         self._hook_chase_keys()
         self._hook_move_keys()
         self._hook_suicide_cancel_key()
@@ -1850,15 +1942,15 @@ class App(tk.Tk):
         return "マクロ開始: 未設定" if not key else f"マクロ開始: {HotKey.display(key)}"
 
     def _set_key_label(self, name: str, text: str):
-        """キーバインドの画面の行（開いていれば）と、メインの画面の1行を今のキーに合わせる"""
+        """キーバインドの行と、メインの画面の1行を今のキーに合わせる"""
         try:
             getattr(self, name).config(text=text)
         except (tk.TclError, AttributeError):
-            pass                    # キーバインドの画面を開いていない・閉じた
+            pass                    # まだ作っていない（起動の途中）・壊した後
         self._refresh_key_summary()
 
     def _refresh_key_summary(self):
-        """メインの画面の1行（表示だけ。変えるのは「⌨ キーバインド」の画面）"""
+        """メインの画面の1行（表示だけ。変えるのは設定の窓の「キーバインド」）"""
         try:
             # 並びはマクロ開始 → 停止 → 自爆キャンセル → チェイス（DV3）
             self.lbl_keys.config(text="   ".join((self._start_key_text(),
@@ -1945,24 +2037,16 @@ class App(tk.Tk):
     def _refresh_start_key_label(self):
         self._set_key_label("lbl_start_key", self._start_key_text())
 
-    # ── キーバインドの画面（DV）──────────────────────
-    def _open_keybind_dialog(self):
-        """キーの変更・解除をまとめた画面。変更のやり方・重なりの確認・保存は今までのまま。
-        開いていれば前に出すだけ"""
-        dialog = getattr(self, "_keybind_dialog", None)
-        try:
-            if dialog is not None and dialog.winfo_exists():
-                dialog.lift()
-                return
-        except tk.TclError:
-            pass
-        dialog = tk.Toplevel(self)
-        self._keybind_dialog = dialog
-        dialog.title("キーバインド")
-        dialog.configure(bg=config.GUI_BG)
-        dialog.resizable(False, False)
-        body = ttk.Frame(dialog, padding=10)
-        body.pack(fill="both", expand=True)
+    # ── キーバインド（DV。設定の窓の折りたたみ） ─────────────────
+    def _build_keybind_section(self, parent, before=None):
+        """キーの変更・解除をまとめた折りたたみ（設定の窓の中。既定は閉じた状態）。
+        変更のやり方・重なりの確認・保存は今までのまま。ラベルとボタンは起動時から常にある
+        （折りたたみを閉じたままでもキーの取り込みは動く）。
+        before を渡すと、その枠の手前に差し込む（作る順と並びを分ける）"""
+        fold = CollapsibleFrame(parent, text="キーバインド", collapsed=True)
+        fold.pack(fill="x", padx=12, pady=4, **({"before": before} if before is not None else {}))
+        self._keybind_fold = fold
+        body = fold.content
         grid = ttk.Frame(body)
         grid.pack(fill="x")
 
@@ -1993,7 +2077,6 @@ class App(tk.Tk):
         ttk.Checkbutton(body, text="チェイスを使う",
                         variable=self.v_chase_enabled,
                         command=self._on_chase_enabled_changed).pack(anchor="w", pady=(8, 0))
-        ttk.Button(body, text="閉じる", command=dialog.destroy).pack(anchor="e", pady=(8, 0))
         self._refresh_start_key_label()
         self._refresh_emergency_key_label()
         self._refresh_suicide_cancel_key_label()
@@ -2027,7 +2110,7 @@ class App(tk.Tk):
                     "停止のキーの解除",
                     "停止のキーがなくなります。止めるのは「■ 停止」のボタンだけになります。"
                     "よろしいですか？",
-                    parent=getattr(self, "_keybind_dialog", None) or self):
+                    parent=self._settings_window):
                 return
             self.v_emergency_key.set("")
             self._emergency_stop_key_pressed = False
@@ -2355,6 +2438,22 @@ class App(tk.Tk):
                                                    variable=self.v_ton_entry_plush,
                                                    command=self._refresh_launch_chain)
         self.chk_ton_entry_plush.pack(side="left", padx=(12, 0))
+        # 選択画面で押すもの（難易度・音楽）。「入室後の選択画面を自動で進める」が OFF の間は灰色
+        lf2b = ttk.Frame(f2_launch)
+        lf2b.pack(fill="x", pady=(4, 0))
+        self.v_ton_flavor = tk.StringVar(value=TON_ENTRY_FLAVOR_GUI_DEFAULT)
+        self.v_ton_music = tk.StringVar(value=TON_ENTRY_MUSIC_GUI_DEFAULT)
+        self.rb_ton_entry_choice = []
+        ttk.Label(lf2b, text="難易度:").pack(side="left")
+        for text, value in (("Casual", "casual"), ("Mild", "mild"), ("Spicy", "spicy")):
+            rb = ttk.Radiobutton(lf2b, text=text, variable=self.v_ton_flavor, value=value)
+            rb.pack(side="left", padx=(6, 0))
+            self.rb_ton_entry_choice.append(rb)
+        ttk.Label(lf2b, text="音楽:").pack(side="left", padx=(24, 0))
+        for text, value in (("そのまま(Nope)", "nope"), ("切る(Yeah)", "yeah")):
+            rb = ttk.Radiobutton(lf2b, text=text, variable=self.v_ton_music, value=value)
+            rb.pack(side="left", padx=(6, 0))
+            self.rb_ton_entry_choice.append(rb)
         self._refresh_launch_chain()
 
         # 起動オプション（config.LAUNCH_OPTION の後ろに足す。空白で区切る。既定は空）
@@ -2378,8 +2477,12 @@ class App(tk.Tk):
         self._tab_sections = {key: True for key in WindowTab.SECTIONS}
         self._rebuild_tabs(self.v_win_count.get())
 
+        # 設定の窓（別窓。起動時に 1 回だけ作って隠す。中の Tk 変数は起動時から要る）。
+        # 移す枠の中身は 1 行も変えず、親だけをこの窓の中（self._settings_body）にする
+        self._build_settings_window()
+
         # 音声ファイル設定
-        fv_wrap = CollapsibleFrame(self, text="③ サウンド設定", collapsed=True)
+        fv_wrap = CollapsibleFrame(self._settings_body, text="サウンド設定", collapsed=True)
         fv_wrap.pack(fill="x", padx=12, pady=4)
         fv = fv_wrap.content
 
@@ -2457,8 +2560,8 @@ class App(tk.Tk):
                 ("Unbound", self.v_voice_unbound, "unbound"),
                 ("Fog", self.v_voice_fog, "fog"),
                 ("Ghost", self.v_voice_ghost, "ghost"),
-                ("8 Pages(速度検知)", self.v_voice_8pages, "8pages"),
-                ("Punished(速度検知)", self.v_voice_punish, "punish"),
+                ("8 Pages", self.v_voice_8pages, "8pages"),
+                ("Punished", self.v_voice_punish, "punish"),
                 ("アイテムロスト", self.v_voice_item_lost, "item_lost"),
                 ("Intermission", self.v_voice_intermission, "intermission"),
                 ("Evil Purple Foxy", self.v_voice_foxy, "foxy"),
@@ -2489,8 +2592,8 @@ class App(tk.Tk):
         self._build_window_volume(fv)
         self._build_phone_notify(fv)
 
-        # ④ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
-        f4_wrap = CollapsibleFrame(self, text="④ 外部ツール起動", collapsed=True)
+        # ③ 外部ツール起動（Appに1つだけ。窓タブの枚数とは無関係）
+        f4_wrap = CollapsibleFrame(self, text="③ 外部ツール起動", collapsed=True)
         f4_wrap.pack(fill="x", padx=12, pady=4)
         self.tool_frame = ttk.Frame(f4_wrap.content)
         self.tool_frame.pack(fill="x")
@@ -2498,8 +2601,8 @@ class App(tk.Tk):
         ttk.Button(f4_wrap.content, text="＋ 追加",
                    command=self._add_tool_row).pack(anchor="w", pady=(4, 0))
 
-        # ⑤ OBS自動録画（続行アナウンスが鳴る種類の続行ラウンドを録る）
-        f5_wrap = CollapsibleFrame(self, text="⑤ OBS自動録画", collapsed=True)
+        # OBS自動録画（設定の窓。続行アナウンスが鳴る種類の続行ラウンドを録る）
+        f5_wrap = CollapsibleFrame(self._settings_body, text="OBS自動録画", collapsed=True)
         f5_wrap.pack(fill="x", padx=12, pady=4)
         f5 = f5_wrap.content
         of1 = ttk.Frame(f5)
@@ -2541,17 +2644,17 @@ class App(tk.Tk):
             padx=10, pady=6, disabledforeground="#6c7086", command=self._on_start_stop_button)
         self.btn_start_stop.pack(side="left", padx=6)
         self._refresh_start_stop_button()
-        # 並び: マクロ開始 → オーバーレイ → 統計 → キーバインド → 報告（DV2）
+        # 並び: マクロ開始 → オーバーレイ → 統計 → 設定 → 報告（キーバインドは設定の窓の中）
         ttk.Button(fc, text="📋 オーバーレイ",
                    command=self._toggle_overlay, width=14).pack(side="left", padx=6)
         ttk.Button(fc, text="統計",
                    command=self._open_statistics, width=10).pack(side="left", padx=6)
-        ttk.Button(fc, text="⌨ キーバインド",
-                   command=self._open_keybind_dialog, width=14).pack(side="left", padx=6)
+        ttk.Button(fc, text="⚙ 設定",
+                   command=self._open_settings_window, width=8).pack(side="left", padx=6)
         ttk.Button(fc, text="報告",
                    command=self._open_report, width=8).pack(side="left", padx=6)
 
-        # 今のキーを1行で表示だけ（変えるのは「⌨ キーバインド」の画面。DV）。
+        # 今のキーを1行で表示だけ（変えるのは設定の窓の「キーバインド」。DV）。
         # ボタンの行（fc）には入れない（窓の幅を広げると別のPCで崩れる。47aefa4 / 73e577c）
         fsk = ttk.Frame(self)
         fsk.pack(pady=(0, 4))
@@ -2594,43 +2697,96 @@ class App(tk.Tk):
         self.btn_item_fetch.pack(side="left", padx=(8, 0))
         self._refresh_item_fetch_button()
 
-        # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）
-        fcr = ttk.Frame(self)
-        fcr.pack(pady=(0, 4))
+        # チェックの行（DV2: 行の頭に見出し、各チェックは短く。保存の名前・動きは今までのまま）。
+        # 設定の窓の「その他」に入れる
+        fother_wrap = CollapsibleFrame(self._settings_body, text="その他", collapsed=False)
+        fother_wrap.pack(fill="x", padx=12, pady=4)
+        self._other_wrap = fother_wrap          # キーバインドをこの上に差し込むため
+        fcr = ttk.Frame(fother_wrap.content)
+        fcr.pack(fill="x", pady=(0, 4))
+        # チェックは枠の幅に合わせて折り返して並べる（_layout_other_checks）。作った順がそのまま並び順
+        self._other_checks = []
+        self._other_check_columns = None
+        self._other_check_frame = fcr
+        fcr.bind("<Configure>", self._layout_other_checks)
         # アイテムを落とすのはどのラウンドの後でも（DW。保存の名前 continue_drop_item はそのまま）。
         # 窓を戻すのは続行ラウンドの後だけ（全窓共通・保存・既定 ON）
         self.v_continue_drop_item = tk.BooleanVar(value=True)
         self.v_continue_restore_window = tk.BooleanVar(value=True)
+        self.v_continue_restore_at_round_end = tk.BooleanVar(value=True)
+        self.v_no_begin_after_continue = tk.BooleanVar(value=False)
         # 名前は短く、詳しくは README（DV3）
-        ttk.Checkbutton(fcr, text="アイテムを落とす",
-                        variable=self.v_continue_drop_item,
-                        command=self._on_continue_after_changed).pack(side="left")
-        ttk.Checkbutton(fcr, text="窓位置リセット",
-                        variable=self.v_continue_restore_window,
-                        command=self._on_continue_after_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="アイテムを落とす",
+            variable=self.v_continue_drop_item,
+            command=self._on_continue_after_changed))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="窓位置リセット",
+            variable=self.v_continue_restore_window,
+            command=self._on_continue_after_changed))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="窓位置リセットはラウンド終了後",
+            variable=self.v_continue_restore_at_round_end,
+            command=self._on_continue_after_changed))
+        # 続行ラウンドの後は自動 Begin を押さない（全窓共通・保存・既定 OFF）。詳しくは README
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="続行の後は自動Beginしない",
+            variable=self.v_no_begin_after_continue,
+            command=self._on_continue_after_changed))
         # Run のラウンドでリスポーンして正面を向く（全窓共通・保存・既定 ON）。
         # リスポーン・後ろへ・正面を向く・向きの直し、の全部をこれ1つで ON/OFF する
         self.v_run_respawn = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="Runリスポーン",
-                        variable=self.v_run_respawn,
-                        command=self._on_run_respawn_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Runリスポーン",
+            variable=self.v_run_respawn,
+            command=self._on_run_respawn_changed))
         # 霧看破の許可（ツール全体で1つ。既定は切る）。使えるインスタンスは README に
         self.v_fog_early_read = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="霧即時判定",
-                        variable=self.v_fog_early_read,
-                        command=self._on_fog_early_read_changed).pack(side="left", padx=(12, 0))
-        # ToN Utils の続行の判断に従う（全窓共通・保存・既定 OFF。EB）
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="霧即時判定",
+            variable=self.v_fog_early_read,
+            command=self._on_fog_early_read_changed))
+        # ToN Utils の続行の判定に従う（全窓共通・保存・既定 OFF。EB）
         self.v_follow_utils = tk.BooleanVar(value=False)
-        ttk.Checkbutton(fcr, text="Utilsの判断に従う",
-                        variable=self.v_follow_utils,
-                        command=self._on_follow_utils_changed).pack(side="left", padx=(12, 0))
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Utilsの判定に従う",
+            variable=self.v_follow_utils,
+            command=self._on_follow_utils_changed))
         # 2 枠目・3 枠目の Bloodthirsty の合図を待つ（全窓共通・保存・既定 ON）
         self.v_wait_bloodthirsty = tk.BooleanVar(value=True)
-        ttk.Checkbutton(fcr, text="Bloodthirsty を待つ",
-                        variable=self.v_wait_bloodthirsty,
-                        command=self._on_wait_bloodthirsty_changed).pack(side="left", padx=(12, 0))
-        # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの画面（DV）
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="2, 3枠目のBloodthirstyを待つ",
+            variable=self.v_wait_bloodthirsty,
+            command=self._on_wait_bloodthirsty_changed))
+        # Sabotage で自分がマーダーの回は AFK 回避を働かせない（全窓共通・保存・既定 OFF）
+        self.v_murder_no_afk = tk.BooleanVar(value=False)
+        self._other_checks.append(ttk.Checkbutton(
+            fcr, text="Murderで AFK 回避しない",
+            variable=self.v_murder_no_afk,
+            command=self._on_murder_no_afk_changed))
+        # Begin は UseRight の連打だけにする（カーソルも前面も触らない。全窓共通・保存・既定 OFF）
+        self.v_begin_use_spam_only = tk.BooleanVar(value=False)
+        check = ttk.Checkbutton(
+            fcr, text="Beginは連打だけ（カーソルを動かさない）",
+            variable=self.v_begin_use_spam_only,
+            command=self._on_begin_use_spam_only_changed)
+        check.tooltip = Tooltip(check, lambda: BEGIN_USE_SPAM_ONLY_NOTE)
+        self._other_checks.append(check)
+        # 自爆の長押しの秒数（全窓共通・保存）。チェックの折り返し（fcr）とは別の行に置く
+        fhold = ttk.Frame(fother_wrap.content)
+        fhold.pack(fill="x", pady=(6, 0))
+        ttk.Label(fhold, text="自爆の長押し:").pack(side="left")
+        self.v_suicide_hold = tk.StringVar(value=f"{config.SUICIDE_HOLD_SEC:g}")
+        self.ent_suicide_hold = ttk.Entry(fhold, textvariable=self.v_suicide_hold, width=6)
+        self.ent_suicide_hold.pack(side="left", padx=(4, 2))
+        for event in ("<Return>", "<FocusOut>"):
+            self.ent_suicide_hold.bind(event, lambda _e: self._on_suicide_hold_changed())
+        ttk.Label(fhold,
+                  text=f"秒（{config.SUICIDE_HOLD_MIN:g}〜{config.SUICIDE_HOLD_MAX:g}）").pack(side="left")
+        # チェイスを使う（全窓共通・保存・既定 ON）。チェックはキーバインドの折りたたみの中（DV）
         self.v_chase_enabled = tk.BooleanVar(value=True)
+        # キーバインドは「その他」の上（依頼者 2026-11-17）。v_chase_enabled を使うので、作るのはここ
+        self._build_keybind_section(self._settings_body, before=fother_wrap)
 
         # ログ
         fl = ttk.LabelFrame(self, text="ログ出力", padding=4)
@@ -2645,6 +2801,91 @@ class App(tk.Tk):
         # クレジット表示
         tk.Label(self, text="Credit: VOICEVOX冥鳴ひまり",
                  bg=config.GUI_BG, fg=config.GUI_SUB, font=(UIFont.UI, 8)).pack(anchor="e", padx=12)
+        self._fit_settings_window()
+        self._layout_other_checks()     # 初めの並び（update_idletasks の後でないと幅が分からない）
+
+    # ── 設定の窓 ──────────────────────────────────
+    def _build_settings_window(self):
+        """設定の窓を作って隠す（起動時に 1 回）。中の Tk 変数は起動時から存在している必要があるので、
+        開くたびに作り直さない（マクロ開始が声のパスと OBS の設定を読むため）"""
+        win = tk.Toplevel(self)
+        self._settings_window = win
+        win.title("設定")
+        win.configure(bg=config.GUI_BG)
+        win.resizable(True, True)
+        win.protocol("WM_DELETE_WINDOW", self._hide_settings_window)
+        win.withdraw()
+        # 中身は縦にスクロール（ContinueTableGUI の決まりの欄と同じ作り）
+        area = ttk.Frame(win)
+        area.pack(fill="both", expand=True)
+        self._settings_canvas = tk.Canvas(area, bg=config.GUI_BG, highlightthickness=0)
+        bar = ttk.Scrollbar(area, orient="vertical", command=self._settings_canvas.yview)
+        self._settings_canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        self._settings_canvas.pack(side="left", fill="both", expand=True)
+        body = ttk.Frame(self._settings_canvas)
+        self._settings_body = body
+        self._settings_item = self._settings_canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _e: self._settings_canvas.configure(
+            scrollregion=self._settings_canvas.bbox("all")))
+        # 横は canvas の幅に合わせる（合わせないと中身が切れる）
+        self._settings_canvas.bind("<Configure>", lambda e: self._settings_canvas.itemconfigure(
+            self._settings_item, width=e.width))
+        self._settings_canvas.bind("<Enter>", lambda _e: self._settings_canvas.bind_all(
+            "<MouseWheel>", self._settings_wheel))
+        self._settings_canvas.bind("<Leave>", lambda _e: self._settings_canvas.unbind_all("<MouseWheel>"))
+        return win
+
+    def _settings_wheel(self, event):
+        self._settings_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+    def _fit_settings_window(self):
+        """設定の窓の初めの大きさ。幅は中身に合わせて 560px〜画面の 8 割、高さは 620px（画面の 8 割まで）。
+        折りたたみが閉じていると中身が低いので、高さは中身に合わせない（横に細長くなるため）"""
+        win = self._settings_window
+        try:
+            win.update_idletasks()
+            screen_w, screen_h = win.winfo_screenwidth(), win.winfo_screenheight()
+            width = self._settings_body.winfo_reqwidth() + SETTINGS_BAR_WIDTH
+            width = max(SETTINGS_MIN_WIDTH, min(width, int(screen_w * SETTINGS_MAX_WIDTH_RATIO)))
+            height = min(SETTINGS_DEFAULT_HEIGHT, int(screen_h * SETTINGS_MAX_HEIGHT_RATIO))
+            win.geometry(f"{width}x{height}")
+        except tk.TclError:
+            pass
+
+    def _layout_other_checks(self, _event=None):
+        """「その他」のチェックを、枠の幅に入る数だけ 1 段に並べる（入らなければ折り返す）。
+        列数が変わったときだけ並べ直す（毎回だと <Configure> がまた飛んでちらつく）"""
+        frame = self._other_check_frame
+        checks = self._other_checks
+        try:
+            width = frame.winfo_width()
+        except tk.TclError:
+            return
+        if width <= 1 or not checks:
+            return              # まだ置かれていない
+        cell = max(c.winfo_reqwidth() for c in checks) + OTHER_CHECK_GAP
+        columns = max(1, width // cell)
+        if columns == getattr(self, "_other_check_columns", None):
+            return              # 変わっていない
+        self._other_check_columns = columns
+        for i, check in enumerate(checks):
+            check.grid(row=i // columns, column=i % columns, sticky="w",
+                       padx=(0, OTHER_CHECK_GAP), pady=1)
+
+    def _open_settings_window(self):
+        """「⚙ 設定」: 隠してある窓を出して前に出す（二重に開かない）"""
+        self._settings_window.deiconify()
+        self._settings_window.lift()
+
+    def _hide_settings_window(self):
+        """設定の窓を隠す。ホイールの結び付け（bind_all）を必ず外す
+        （窓の上で閉じると、ほかの窓へ効きが残る。ContinueTableGUI.destroy と同じ）"""
+        try:
+            self._settings_canvas.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
+        self._settings_window.withdraw()
 
     def _tabs_right_edge(self) -> int:
         """窓のタブの並びの右端（px。self.nb の左端から）。タブが無い・調べられないときは 0"""
@@ -2731,7 +2972,7 @@ class App(tk.Tk):
         self._sync_launch_count()
         if len(self.tabs) == n:
             # 変わっていない。スピンボックスからフォーカスが外れただけでも
-            # ここへ来るので、自動検出の値を「手で選んだ値」として覚えない
+            # ここへ来るので、自動検出の値を「利用者が選んだ値」として覚えない
             return
         self._win_count_pref = n
         self._schedule_settings_save()   # 変えた直後に落ちても残るように
@@ -2898,7 +3139,7 @@ class App(tk.Tk):
     def _sync_launch_count(self):
         """起動する窓数を「窓数 − 既に開いているVRChat窓数」に合わせる。
 
-        手で入れ直した値は次に窓数を変えるかVRChatを起動するまで保たれる。
+        利用者が入れ直した値は次に窓数を変えるかVRChatを起動するまで保たれる。
         """
         if self._running:
             return
@@ -2976,12 +3217,17 @@ class App(tk.Tk):
 
     # ── スマホ通知（ntfy）──────────────────────
     def _build_phone_notify(self, parent):
-        """枠「スマホ通知（ntfy）」。全窓共通。通知する（デフォルト OFF）・宛先（ツールが作る）・コピー・テスト送信・作り直す"""
+        """枠「スマホ通知（ntfy）」。全窓共通。通知する（デフォルト OFF）・待機列に入れるようになったら知らせる
+        （デフォルト ON。スマホ通知とは別の元栓）・宛先（ツールが作る）・コピー・テスト送信・作り直す"""
         box = ttk.LabelFrame(parent, text="スマホ通知（ntfy）")
         box.pack(fill="x", pady=(6, 0))
         self.v_phone_notify = tk.BooleanVar(value=False)
         ttk.Checkbutton(box, text="通知する", variable=self.v_phone_notify,
                         command=self._on_phone_notify_changed).pack(anchor="w")
+        self.v_queue_notify = tk.BooleanVar(value=True)
+        ttk.Checkbutton(box, text="待機列に入れるようになったら知らせる", variable=self.v_queue_notify,
+                        command=self._on_queue_notify_changed).pack(anchor="w")
+        ttk.Label(box, text=QUEUE_NOTIFY_NOTE, wraplength=420).pack(anchor="w")
         ttk.Label(box, text=PHONE_NOTIFY_NOTE, wraplength=420).pack(anchor="w")
         row = ttk.Frame(box)
         row.pack(fill="x")
@@ -2998,15 +3244,21 @@ class App(tk.Tk):
         on = bool(self.v_phone_notify.get())
         SharedState.set_phone_notify(on)
         self._log("[スマホ通知] " + ("通知します" if on else "通知しません"))
+        self._schedule_settings_save()
+
+    def _on_queue_notify_changed(self):
+        on = bool(self.v_queue_notify.get())
+        SharedState.set_queue_notify(on)
+        self._log("[待機列] 入れるようになったら知らせます" if on else "[待機列] 知らせません")
         self._sync_queue_watcher()
         self._schedule_settings_save()
 
     def _sync_queue_watcher(self):
-        """待機列の見張りを「通知する」に合わせる。ON なら VRChat のログを自分で読み始め（マクロの開始とは別）、
+        """待機列の見張りを「待機列に入れるようになったら知らせる」に合わせる。ON なら VRChat のログを自分で読み始め（マクロの開始とは別）、
         OFF なら止める。ここは Tk のスレッド。見張りは裏のスレッドから _log を呼ぶ（_log は裏から呼んでよい。
         Tk の変数には触らない）"""
         watcher = getattr(self, "_queue_watcher", None)
-        if SharedState.get_phone_notify():
+        if SharedState.get_queue_notify():
             if watcher is None:
                 watcher = QueueWatch.Watcher(config.VRCHAT_LOG_DIR, lambda: QueueWatch.notify_ready(self._log),
                                              on_queued=lambda: QueueWatch.notify_queued(self._log))
@@ -3055,6 +3307,7 @@ class App(tk.Tk):
         読み込みでは保存しない（ほかの設定と同じ）。作った宛先は、通知を入れる・コピー・テスト送信の
         ときに保存する（スマホで購読するのはそのあとなので、次の起動で変わらない）"""
         SharedState.set_phone_notify(data.get("phone_notify") is True)
+        SharedState.set_queue_notify(data.get("queue_notify") is not False)     # キーが無ければ ON
         topic = data.get("phone_notify_topic")
         if not PhoneNotify.is_valid_topic(topic):
             topic = PhoneNotify.new_topic()
@@ -3066,6 +3319,7 @@ class App(tk.Tk):
         """画面の表示を SharedState（保存・読み込みの元）に合わせる"""
         try:
             self.v_phone_notify.set(SharedState.get_phone_notify())
+            self.v_queue_notify.set(SharedState.get_queue_notify())
             self.v_phone_topic.set(SharedState.get_phone_topic())
         except (tk.TclError, AttributeError):
             pass
@@ -3122,13 +3376,15 @@ class App(tk.Tk):
     def _on_continue_after_changed(self):
         SharedState.set_continue_drop_item(self.v_continue_drop_item.get())
         SharedState.set_continue_restore_window(self.v_continue_restore_window.get())
+        SharedState.set_continue_restore_at_round_end(self.v_continue_restore_at_round_end.get())
+        SharedState.set_no_begin_after_continue(self.v_no_begin_after_continue.get())
         self._schedule_settings_save()
 
     def _on_follow_utils_changed(self):
         on = bool(self.v_follow_utils.get())
         SharedState.set_follow_utils(on)
-        self._log("[Utils] " + ("Utils の判断に従います（Utils が判断できない窓は、このツールで判定）" if on
-                               else "Utils の判断に従いません（このツールで判定）"))
+        self._log("[Utils] " + ("Utils の判定に従います（Utils が判定できない窓は、このツールで判定）" if on
+                               else "Utils の判定に従いません（このツールで判定）"))
         self._schedule_settings_save()
 
     def _refresh_follow_utils_check(self):
@@ -3170,6 +3426,41 @@ class App(tk.Tk):
         except (tk.TclError, AttributeError):
             pass
 
+    def _on_murder_no_afk_changed(self):
+        SharedState.set_murder_no_afk(self.v_murder_no_afk.get())
+        self._schedule_settings_save()
+
+    def _on_suicide_hold_changed(self):
+        """入れた値を SharedState へ。範囲の外・数でない値は丸めて、欄にも丸めた値を書き戻す"""
+        SharedState.set_suicide_hold_sec(self.v_suicide_hold.get())
+        self._refresh_suicide_hold_entry()
+        self._schedule_settings_save()
+
+    def _refresh_suicide_hold_entry(self):
+        """欄の表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_suicide_hold.set(f"{SharedState.get_suicide_hold_sec():g}")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _refresh_murder_no_afk_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_murder_no_afk.set(SharedState.get_murder_no_afk())
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _on_begin_use_spam_only_changed(self):
+        SharedState.set_begin_use_spam_only(self.v_begin_use_spam_only.get())
+        self._schedule_settings_save()
+
+    def _refresh_begin_use_spam_only_check(self):
+        """チェックの表示を SharedState（保存・読み込みの元）に合わせる"""
+        try:
+            self.v_begin_use_spam_only.set(SharedState.get_begin_use_spam_only())
+        except (tk.TclError, AttributeError):
+            pass
+
     def _on_wait_bloodthirsty_changed(self):
         SharedState.set_wait_bloodthirsty(self.v_wait_bloodthirsty.get())
         self._schedule_settings_save()
@@ -3186,6 +3477,8 @@ class App(tk.Tk):
         try:
             self.v_continue_drop_item.set(SharedState.get_continue_drop_item())
             self.v_continue_restore_window.set(SharedState.get_continue_restore_window())
+            self.v_continue_restore_at_round_end.set(SharedState.get_continue_restore_at_round_end())
+            self.v_no_begin_after_continue.set(SharedState.get_no_begin_after_continue())
         except (tk.TclError, AttributeError):
             pass
 
@@ -3632,6 +3925,12 @@ class App(tk.Tk):
         self.v_ton_begin.set(bool(data.get("ton_begin", config.TON_ENTRY_BEGIN)))
         if hasattr(self, "v_ton_entry_plush"):
             self.v_ton_entry_plush.set(data.get("ton_entry_plush") is not False)    # 無い・壊れた値は ON（false を保存したときだけ OFF）
+        if hasattr(self, "v_ton_flavor"):
+            flavor = data.get("ton_entry_flavor")
+            self.v_ton_flavor.set(flavor if isinstance(flavor, str) and flavor in TON_ENTRY_FLAVORS else TON_ENTRY_FLAVOR_GUI_DEFAULT)
+        if hasattr(self, "v_ton_music"):
+            music = data.get("ton_entry_music")
+            self.v_ton_music.set(music if isinstance(music, str) and music in TON_ENTRY_MUSICS else TON_ENTRY_MUSIC_GUI_DEFAULT)
         access = data.get("ton_instance_access")
         if access not in config.TON_INSTANCE_ACCESS_CHOICES:
             access = config.TON_INSTANCE_ACCESS_DEFAULT     # 無い・壊れた値は既定
@@ -3747,11 +4046,20 @@ class App(tk.Tk):
         # 続行ラウンドの後: 無い（古い settings.json）・壊れた値は ON（既定）
         SharedState.set_continue_drop_item(data.get("continue_drop_item") is not False)
         SharedState.set_continue_restore_window(data.get("continue_restore_window") is not False)
+        SharedState.set_continue_restore_at_round_end(data.get("continue_restore_at_round_end") is not False)
+        SharedState.set_no_begin_after_continue(data.get("no_begin_after_continue") is True)
         self._refresh_continue_after_checks()
         SharedState.set_run_respawn(data.get("run_respawn") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_run_respawn_check()
         SharedState.set_wait_bloodthirsty(data.get("wait_bloodthirsty") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_wait_bloodthirsty_check()
+        SharedState.set_murder_no_afk(data.get("murder_no_afk") is True)   # 無い・壊れた値は OFF（既定）
+        App._refresh_murder_no_afk_check(self)
+        # 無い・壊れた値は既定 3.0（SharedState 側で丸める）
+        SharedState.set_suicide_hold_sec(data.get("suicide_hold_sec", config.SUICIDE_HOLD_SEC))
+        App._refresh_suicide_hold_entry(self)
+        SharedState.set_begin_use_spam_only(data.get("begin_use_spam_only") is True)   # 無い・壊れた値は OFF（既定）
+        App._refresh_begin_use_spam_only_check(self)
         SharedState.set_chase_enabled(data.get("chase_enabled") is not False)   # 無い・壊れた値は ON（既定）
         self._refresh_chase_check()
         SharedState.set_follow_utils(data.get("follow_utils") is True)    # 無い・壊れた値は OFF（EB）
@@ -3788,13 +4096,17 @@ class App(tk.Tk):
                     setattr(monitor.cfg, key, value)
 
     def _broadcast_tab_setting(self, tab, kind: str, key, value):
-        """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、手で変えたときと同じ副作用で写す（変えた窓も含む）。
-        kind は "check"（key=設定のキー）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
+        """窓の設定を Ctrl を押して変えた（HC）: 同じ値を全部の窓タブに、利用者が変えたときと同じ副作用で写す（変えた窓も含む）。
+        kind は "check"（key=設定のキー）・"afk_wins"（value=目標勝数）・"round"（key=(skip か continue, ラウンド名)）・"freeze_round"（key=ラウンド名）・"item_switch"・"choice"（key=続行無効かデフォ続行、value=プリセット名|None）"""
         tabs = list(getattr(self, "tabs", []))
         if kind == "check":
             for t in tabs:
                 t.set_check(key, value)
             what = f"「{BROADCAST_CHECK_LABELS.get(key, key)}」を {'ON' if value else 'OFF'} にして"
+        elif kind == "afk_wins":
+            for t in tabs:
+                t.set_afk_wins(value)
+            what = f"「{BROADCAST_AFK_WINS_LABEL}」を「{AFK_WINS_LABELS.get(value, value)}」に"
         elif kind == "round":
             which, name = key
             for t in tabs:
@@ -3825,6 +4137,24 @@ class App(tk.Tk):
             # 破棄後は TclError、mainloop の外なら RuntimeError。どちらも
             # 監視スレッドで投げると、そのスレッドごと黙って止まる
             pass
+
+    def _set_tab_instance_type(self, window_idx: int, instance_type):
+        """監視スレッドから呼ばれる。窓の入室でインスタンスタイプが分かった: その窓タブの押せる・押せないを引き直す。
+        Tk はメインスレッドでしか触れない（UiInbox 越し）"""
+        try:
+            UiInbox.call_soon(self, lambda: self._apply_tab_instance_type(window_idx, instance_type))
+        except (tk.TclError, RuntimeError):
+            pass        # _clear_tab_round_settings と同じ。監視スレッドで投げるとそのスレッドごと止まる
+
+    def _apply_tab_instance_type(self, window_idx: int, instance_type):
+        """メインスレッドで動く"""
+        tab = next((t for t in getattr(self, "tabs", []) if t.idx == window_idx - 1), None)
+        if tab is None:
+            return              # 窓数を減らした後などに届いた
+        try:
+            tab.apply_instance_type(instance_type)
+        except tk.TclError:
+            pass        # ウィンドウ破棄後に呼ばれた
 
     def _do_clear_tab_round_settings(self, window_idx: int):
         """インスタンスが変わった窓のチェックを外す。メインスレッドで動く。
@@ -3864,11 +4194,11 @@ class App(tk.Tk):
         起動時刻を使ってHWNDとログを全窓ぶん自動割り当てする。"""
         windows = VRChatDiscovery.get_vrchat_windows_by_start_time(config.MAX_WINDOWS)
         if not windows:
-            # 開いている窓が無い → 前回手で選んだ窓数 → 既定値、の順
+            # 開いている窓が無い → 前回利用者が選んだ窓数 → 既定値、の順
             n = self._win_count_pref
             if n is None:
                 self._log("[起動時検出] VRChatウィンドウ未検出"
-                          "（窓数は手動で設定してください）")
+                          "（「② 窓数・ログ設定」の「窓数」で選んでください）")
                 return
             self.v_win_count.set(n)
             if len(self.tabs) != n:
@@ -3984,7 +4314,7 @@ class App(tk.Tk):
             tab.osc_in = a.osc_in if a else 0
             tab.osc_out = a.osc_out if a else 0
             if tab.v_log.get().strip() or a is None or a.log is None:
-                continue        # 手で選んだログは上書きしない
+                continue        # 利用者が選んだログは上書きしない
             tab.v_log.set(str(a.log))
             self._log(f"[窓{tab.idx+1}] ログを自動割り当て: {a.log.name}"
                       f"（{self._assign_source(a)}）")
@@ -3999,6 +4329,7 @@ class App(tk.Tk):
         if not p:
             return
         itype = LogMonitor.LogMonitor.detect_instance_type_from_log(Path(p))
+        tab.apply_instance_type(itype)          # 効かない全自爆・全続行を押せなくする（分からなければ全部押せる）
         if itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
             self._log(f"[窓{tab.idx+1}] {itype}インスタンス検出 → グループ判定を適用します")
 
@@ -4079,6 +4410,7 @@ class App(tk.Tk):
                 window_idx=tab.idx + 1,
                 lists=self.lists,
                 on_round_settings_cleared=self._clear_tab_round_settings,
+                on_instance_type=self._set_tab_instance_type,
                 on_list_changed=self._on_own_list_changed,
                 on_held_item_changed=self._on_held_item_changed,
                 window_alive=lambda h=cfg.hwnd: WindowOperator.window_exists(h))
@@ -4221,9 +4553,8 @@ class App(tk.Tk):
                     f"[環境] 開始 窓{mon.window_idx} hwnd={int(cfg.hwnd):#x}"
                     f" 位置={WindowOperator.window_rect(cfg.hwnd)} ログ={cfg.log_path}"
                     f" OSC={cfg.osc_port}/{cfg.osc_out_port} 自動Begin={cfg.auto_begin}"
-                    f" 自爆={cfg.do_skip} DTM/Waldo続行={cfg.cancel_afk}"
-                    f"（2クラまで={getattr(cfg, 'cancel_afk_two', False)}）"
-                    f"（3クラ後も={cfg.cancel_afk_after_unlock}）"
+                    f" 自爆={cfg.do_skip}"
+                    f" DTM/Waldo続行={AFK_WINS_LABELS.get(cfg.cancel_afk_wins, cfg.cancel_afk_wins)}"
                     f" Intermission={cfg.announce_intermission}"
                     f" 自爆ラウンド={sorted(cfg.skip_rounds)} 全続行={sorted(cfg.continue_rounds)}"
                     f" 8Pagesフリーズ={cfg.freeze_8pages} Punishedフリーズ={cfg.freeze_punish}"
@@ -4254,7 +4585,7 @@ class App(tk.Tk):
         # 自爆の長押し中に止めると、daemon の自爆スレッドが KEYUP を送る前に
         # 終わりうる（終了時はそのままプロセスが消える）。先に離しておく
         self._release_suicide_keys(m.cfg.hwnd for m in self.monitors)
-        # このツールが始めた録画だけ止める（手動の録画には触らない）。
+        # このツールが始めた録画だけ止める（利用者が始めた録画には触らない）。
         # 終了時はワーカーごと消えるので、送り終えるまで少しだけ待つ
         Recorder.stop_all(wait_sec=config.OBS_TIMEOUT_SEC * 2)
         self.monitors.clear()
@@ -4377,14 +4708,14 @@ class App(tk.Tk):
             self._log("[更新] ダウンロード失敗")
             messagebox.showerror(
                 "アップデート失敗",
-                "ダウンロードに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+                "ダウンロードに失敗しました。\nGitHub のリリースページから exe をダウンロードして、今の exe と置き換えてください。")
             return
         exe = AutoUpdate.current_exe_path()
         if exe is None or not AutoUpdate.apply_update(tmp, exe):
             self._log("[更新] EXE置き換え失敗")
             messagebox.showerror(
                 "アップデート失敗",
-                "ファイルの置き換えに失敗しました。\nGitHubのリリースページから手動で更新してください。")
+                "ファイルの置き換えに失敗しました。\nGitHub のリリースページから exe をダウンロードして、今の exe と置き換えてください。")
             return
         messagebox.showinfo("アップデート完了", f"{tag} へ更新しました。再起動します。")
         AutoUpdate.restart_to_new_exe(exe)
@@ -4815,7 +5146,7 @@ class App(tk.Tk):
         if missing:
             self._log("[起動] ⚠ ToNに入れていない窓: "
                       + " / ".join(f"窓{n}" for n in missing)
-                      + " → 手動でJoinするか、その窓だけ起動し直してください")
+                      + " → その窓の VRChat で ToN に Join するか、その窓だけ起動し直してください")
         return missing
 
     def _cancel_ton_entry(self):
@@ -4843,6 +5174,9 @@ class App(tk.Tk):
             self._log("[入室操作] 対象の窓がありません")
             return
         press_begin = begin
+        # 選択画面で押す難易度・音楽（GUI の値 → 番号。分からなければ ToNEntry の既定）
+        flavor = TON_ENTRY_FLAVORS.get(getattr(getattr(self, "v_ton_flavor", None), "get", lambda: None)())
+        music = TON_ENTRY_MUSICS.get(getattr(getattr(self, "v_ton_music", None), "get", lambda: None)())
         # セーブコードは最初に 1 回だけ読み、全窓に同じものを貼る（DY。中身はどこにも書かない）
         save_code = SaveLoad.read_clipboard() if press_begin else ""
         self._entry_stop.clear()
@@ -4867,6 +5201,8 @@ class App(tk.Tk):
                         is_running=lambda: not self._entry_stop.is_set(),
                         # 移動・クリックは private だけ（ログの最後の入室で見る。分からなければしない）
                         can_operate=entry_can_operate(log_path),
+                        flavor=flavor,
+                        music=music,
                     )
                     try:
                         if entry.run() and press_begin and not self._entry_stop.is_set():
@@ -4900,6 +5236,8 @@ class App(tk.Tk):
             for chk, on in ((self.chk_ton_entry, join), (self.chk_ton_begin, entry),
                             (self.chk_ton_entry_plush, begin)):
                 chk.config(state="normal" if on else "disabled")
+            for rb in getattr(self, "rb_ton_entry_choice", []):      # 難易度・音楽は「選択画面を自動で進める」に従う
+                rb.config(state="normal" if entry else "disabled")
         except (tk.TclError, AttributeError):
             pass
 
@@ -5029,6 +5367,10 @@ class App(tk.Tk):
             "ton_entry":     self.v_ton_entry.get(),
             "ton_begin":     self.v_ton_begin.get(),
             "ton_entry_plush": bool(getattr(self, "v_ton_entry_plush", None) and self.v_ton_entry_plush.get()),
+            "ton_entry_flavor": getattr(getattr(self, "v_ton_flavor", None), "get",
+                                        lambda: TON_ENTRY_FLAVOR_GUI_DEFAULT)(),
+            "ton_entry_music": getattr(getattr(self, "v_ton_music", None), "get",
+                                       lambda: TON_ENTRY_MUSIC_GUI_DEFAULT)(),
             "join_world":    self.v_join_world.get(),
             "ton_instance_access": self.v_ton_access.get(),
             "profiles":      [tab.v_profile.get() for tab in self.tabs],
@@ -5053,13 +5395,19 @@ class App(tk.Tk):
             **self._fog_early_read_setting(),
             "continue_drop_item":      SharedState.get_continue_drop_item(),
             "continue_restore_window": SharedState.get_continue_restore_window(),
+            "continue_restore_at_round_end": SharedState.get_continue_restore_at_round_end(),
+            "no_begin_after_continue": SharedState.get_no_begin_after_continue(),
             "run_respawn":             SharedState.get_run_respawn(),
             "wait_bloodthirsty":       SharedState.get_wait_bloodthirsty(),
+            "murder_no_afk":           SharedState.get_murder_no_afk(),
+            "suicide_hold_sec":        SharedState.get_suicide_hold_sec(),
+            "begin_use_spam_only":     SharedState.get_begin_use_spam_only(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "follow_utils":            SharedState.get_follow_utils(),
             "phone_notify":            SharedState.get_phone_notify(),
             "phone_notify_topic":      SharedState.get_phone_topic(),
+            "queue_notify":            SharedState.get_queue_notify(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
             **{field: self._move_key_var(target).get() for target, field, _label in App.MOVE_KEY_FIELDS},
@@ -5096,7 +5444,7 @@ class App(tk.Tk):
                            self.v_obs_password.get(), log=self._log, record_freeze=freeze)
         if not enabled and not freeze:
             # 録画中に両方OFFにしたら、このツールが始めた録画をその場で止める
-            # （手動の録画には触らない）。GUI操作なので待たない
+            # （利用者が始めた録画には触らない）。GUI操作なので待たない
             Recorder.stop_all()
 
     def _test_obs_connection(self):
@@ -5186,10 +5534,10 @@ class App(tk.Tk):
         self._unhook_move_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
-        hand_hook = getattr(self, "_hand_click_hook", None)
-        if hand_hook is not None:
-            self._hand_click_hook = None
-            MouseButtons.unhook_left(hand_hook)
+        user_hook = getattr(self, "_user_click_hook", None)
+        if user_hook is not None:
+            self._user_click_hook = None
+            MouseButtons.unhook_left(user_hook)
         MouseButtons.stop()                         # マウスのサイドボタンのフック（GW）。キーのフックを外した後に
         self._show_own_windows_again()
         inbox = getattr(self, "_inbox", None)

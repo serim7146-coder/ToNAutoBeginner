@@ -404,14 +404,17 @@ class TestLogMonitorRemoval(unittest.TestCase):
         self.assertEqual(_sets(ContinueList.current()), {SPECIAL: {MOON_B}, CLASSIC: {MOON_A}})
         self.assertEqual((len(self._lines(monitor)), self.changed), (1, [1]))
 
-    def test_group_instances_do_not_edit_the_own_list_while_the_host_list_is_used(self):
+    def test_group_instances_edit_the_own_list_while_the_host_list_is_used(self):
+        """干し芋・焼き芋でも、主催リストを使っている間、ツールの中の続行リストからは外す"""
         SharedState.set_list_source("host")
         for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
-            ContinueList.set_current({CLASSIC: frozenset({7})})
+            ContinueList.set_current({CLASSIC: frozenset({7, 8})})
+            self.changed.clear()
             monitor = self._monitor(itype=itype)
             monitor._process(LIVED)
-            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {7}}, itype)
-            self.assertEqual((self._lines(monitor), self.changed), ([], []), itype)
+            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {8}}, itype)
+            self.assertEqual(len(self._lines(monitor)), 1, itype)
+            self.assertEqual(self.changed, [1], itype)
 
     def test_unknown_terrors_do_not_edit_the_own_list_while_the_host_list_is_used(self):
         ContinueList.set_current({FOG: frozenset({7})})
@@ -428,12 +431,27 @@ class TestLogMonitorRemoval(unittest.TestCase):
         monitor._process(LIVED)
         self.assertEqual(ContinueList.current(), {})
 
-    def test_group_instances_do_not_edit_the_list(self):
+    def test_group_instances_remove_the_survived_terror_from_the_list(self):
+        """干し芋・焼き芋でも、生存したら続行リストから外し、ログと GUI への通知も出す"""
         for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
-            ContinueList.set_current({CLASSIC: frozenset({7})})
+            ContinueList.set_current({CLASSIC: frozenset({7, 8}), FOG: frozenset({7})})
+            self.changed.clear()
             monitor = self._monitor(itype=itype)
             monitor._process(LIVED)
-            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {7}}, itype)
+            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {8}, FOG: {7}}, itype)
+            self.assertEqual(self._lines(monitor),
+                             [f"[続行リスト] 生存したので外しました: {LogMonitor.format_terror_ids([7])} / Classic"],
+                             itype)
+            self.assertEqual(self.changed, [1], itype)
+
+    def test_group_instances_do_nothing_when_the_terror_is_not_listed(self):
+        """干し芋・焼き芋で、リストに無いテラーを生存しても、何も外れず通知も出ない"""
+        for itype in (config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO):
+            ContinueList.set_current({CLASSIC: frozenset({8})})
+            self.changed.clear()
+            monitor = self._monitor(itype=itype)
+            monitor._process(LIVED)
+            self.assertEqual(_sets(ContinueList.current()), {CLASSIC: {8}}, itype)
             self.assertEqual((self._lines(monitor), self.changed), ([], []), itype)
 
     def test_unknown_terrors_do_not_edit_the_list(self):

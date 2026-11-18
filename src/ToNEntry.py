@@ -1,17 +1,16 @@
 """
 ToN入室直後の選択画面を自動で突破する
 
-移動はOSC、クリックはマウスで行う。
-  - OSCはフォーカスを奪わないので、移動中は他の作業を妨げない
-  - VRChatにはデスクトップ用のインタラクト入力が無いため、クリックだけは
-    フォーカスを取って実マウスを送る必要がある（OSCでは代替できない）
+選択画面の 4 つは、画面から四角（ボタンの枠。EntryPanel）を探し、Tab を押したまま
+カーソルをその上へ置いてクリックする。
+  - VRChatにはデスクトップ用のインタラクト入力が無いため、クリックはフォーカスを取って
+    実マウスを送る必要がある（OSCでは代替できない）
+  - Tab を押している間はカーソルが自由に動く（離すと照準へ戻る）
+  - 選択中は OSC で動かない。選び終わるとワールド側で共通の座標へ移される
 
-アバターを横移動させるとボタンが画面中央（クロスヘア）に来るので、
-移動量さえ決まっていれば画像認識は不要。パネルの見かけの大きさは
-プレイヤーとの距離で変わるため、画面座標を当てにする方式は使わない。
-
-パネルの出現待ちだけは画面から判定する（ロード中に操作しないため）。
+パネルの出現待ちも、四角が見つかるかで判定する（ロード画面は四隅の青で除外）。
 画面取得はEasy Anti-Cheat下でも PrintWindow で可能。
+ロビーの Begin へ向かう移動（press_begin）とセーブコードの読み込み（load_code）は別。
 """
 import time
 
@@ -19,6 +18,7 @@ import win32gui
 
 import config
 import DebugLog
+import EntryPanel
 import LogParser
 import OSCClient
 import SaveLoad
@@ -61,7 +61,8 @@ def wait_verified(path: str, offset: int, timeout: float, is_running=None,
 
 class ToNEntry:
     def __init__(self, hwnd: int, osc_port: int,
-                 log=None, is_running=None, can_operate=None):
+                 log=None, is_running=None, can_operate=None,
+                 flavor: int = None, music: int = None):
         self._hwnd = hwnd
         self._log = log or (lambda _m: None)
         self._is_running = is_running or (lambda: True)
@@ -70,16 +71,15 @@ class ToNEntry:
         self._can_operate = can_operate or (lambda: False)
         self._osc = OSCClient.OSCClient(osc_port)
         self._osc_port = osc_port
+        # 難易度（0 Casual・1 Mild・2 Spicy）と音楽（0 Yeah・1 Nope）。None なら既定
+        self._flavor = config.TON_ENTRY_FLAVOR_DEFAULT if flavor is None else flavor
+        self._music = config.TON_ENTRY_MUSIC_DEFAULT if music is None else music
 
     # ── 画面取得 ──────────────────────────────
 
     def capture(self):
         """PrintWindowでウィンドウの画素を取得する。(bits, 幅, 高さ)"""
         return ScreenCapture.capture_window(self._hwnd)
-
-    @staticmethod
-    def _is_neon_red(b, g, r) -> bool:
-        return r > 90 and g < r * 0.65 and b < r * 0.65
 
     def _is_loading_screen(self, bits, w, h) -> bool:
         """ロード画面か。ロード中は背景が青緑、ロビーはほぼ黒。
@@ -94,43 +94,25 @@ class ToNEntry:
                 blue_corners += 1
         return blue_corners >= 3
 
-    def _center_red_count(self, bits, w, h) -> int:
-        """画面中央付近の赤画素数。パネルが出ているかの目安。"""
-        n = 0
-        for y in range(int(h * 0.30), int(h * 0.60), 3):
-            base = y * w * 4
-            for x in range(int(w * 0.30), int(w * 0.72), 3):
-                i = base + x * 4
-                if self._is_neon_red(bits[i], bits[i + 1], bits[i + 2]):
-                    n += 1
-        return n
-
     def wait_for_panel(self, timeout: float = None) -> bool:
         """選択パネルが出るまで待つ。
 
-        位置や大きさは見ない（距離で変わるため）。ロード中でないことと、
-        中央に十分な赤があり安定していることだけを確認する。
+        撮って、四角（ボタンの枠）が 1 個以上見つかれば出たとみなす。ロード画面は見送る
+        （四隅の青しか見ないので、季節のロゴの色と関係しない）。
         """
         timeout = timeout or config.TON_ENTRY_PANEL_TIMEOUT
         deadline = time.time() + timeout
-        stable = 0
         while time.time() < deadline and self._is_running():
             try:
                 bits, w, h = self.capture()
-                if self._is_loading_screen(bits, w, h):
-                    stable = 0
-                else:
-                    count = self._center_red_count(bits, w, h)
-                    if count >= config.TON_ENTRY_MIN_RED_PIXELS:
-                        stable += 1
-                        if stable >= config.TON_PANEL_STABLE_COUNT:
-                            self._log(f"✅ 選択パネルを確認（中央の赤画素 {count}）")
-                            return True
-                    else:
-                        stable = 0
+                if not self._is_loading_screen(bits, w, h):
+                    bgr = self._to_bgr(bits, w, h)
+                    height = (WindowOperator.client_size(self._hwnd) or (0, h))[1]
+                    if bgr is not None and EntryPanel.pick(bgr, height, None, 0) is not None:
+                        self._log("✅ 選択パネルを確認")
+                        return True
             except Exception:
                 DebugLog.exception("ToNEntry.wait_for_panel")
-                stable = 0
             time.sleep(config.TON_ENTRY_POLL_SEC)
         self._log("⚠ 選択パネルが現れませんでした")
         return False
@@ -175,17 +157,92 @@ class ToNEntry:
 
     # ── 一連の流れ ────────────────────────────
 
+    def _find_button(self, step: dict):
+        """1 画面ぶん、四角が出るのを TON_ENTRY_STEP_FIND_SEC の間待ち、押す点（画面の座標）を返す。
+        step は label・expect・pick（押す番号。整数）。見つからなければ数字だけを debug.log に書いて None
+        （今の移動方式には戻さない）"""
+        label = step["label"]
+        deadline = time.time() + config.TON_ENTRY_STEP_FIND_SEC
+        bgr = None
+        height = 0
+        while self._is_running():
+            bgr = self._capture_bgr()
+            size = WindowOperator.client_size(self._hwnd)
+            origin = WindowOperator.window_origin(self._hwnd)
+            if size is None or origin is None:
+                return None
+            height = size[1]
+            point = (EntryPanel.pick(bgr, height, step["expect"], step["pick"])
+                     if bgr is not None else None)
+            if point is not None:
+                return (int(round(point[0] + origin[0])), int(round(point[1] + origin[1])))
+            if time.time() + config.TON_ENTRY_POLL_SEC > deadline:
+                break
+            time.sleep(config.TON_ENTRY_POLL_SEC)
+        if not self._is_running():
+            return None
+        DebugLog.write(f"[入室操作] {label}: "
+                       + (EntryPanel.miss_numbers(bgr, height, step["expect"]) if bgr is not None else "撮影なし"))
+        return None
+
+    def _click_point(self, point, label: str) -> bool:
+        """鍵の中で前面を借りて: Tab を押したまま → カーソルを point（画面の座標）へ → クリック。
+        どの終わり方でも Tab を離し、前面とカーソルを返す。Tab を押すとカーソルが照準へ戻るので、
+        置くのは必ず Tab の後。Tab を押してから TON_ENTRY_TAB_SETTLE_SEC 待つのは、VRChat が
+        カーソルを真ん中へ戻し終えてから置くため"""
+        with SharedState._GLOBAL_ACTION_LOCK:
+            if not self._is_running() or not self._can_operate():
+                return False
+            cursor = WindowOperator.cursor_position()
+            ok, loan = WindowOperator.borrow_front(self._hwnd)
+            if not ok:
+                self._log(f"⚠ {label}: フォーカス取得失敗 → 中止")
+                return False
+            tab = False
+            try:
+                WindowOperator.press_tab()
+                tab = True
+                if config.TON_ENTRY_TAB_SETTLE_SEC > 0:
+                    time.sleep(config.TON_ENTRY_TAB_SETTLE_SEC)
+                if not self._place_cursor(point):
+                    return False
+                if not self._still_ours():
+                    return False
+                WindowOperator.mouse_click(config.TON_ENTRY_CLICK_SEC)
+                self._log(f"クリック（{label}）")
+                return True
+            finally:
+                try:
+                    if tab:
+                        WindowOperator.release_tab()
+                finally:
+                    try:
+                        WindowOperator.return_front(loan)
+                    finally:
+                        if cursor is not None:
+                            WindowOperator.set_cursor_position(cursor)
+
+    def _step_index(self, step: dict) -> int:
+        """step["pick"] を番号にする。整数はそのまま・"flavor" は難易度・"music" は音楽"""
+        pick = step["pick"]
+        if pick == "flavor":
+            return self._flavor
+        if pick == "music":
+            return self._music
+        return pick
+
     def run(self) -> bool:
         """入室時の選択画面を順に突破する。
 
-        手順は config.TON_ENTRY_STEPS（実測で決めた移動量）:
-            右 → クリック（警告同意）
-            左 → クリック（難易度 Casual）
-            右 → クリック（BGM）→ クリック（LET ME PLAY）
-        最後の2回は的がほぼ同じ位置にあるため移動せず続けて押す。
+        手順は config.TON_ENTRY_STEPS（警告の了解・難易度・音楽・LET ME PLAY）。
+        各画面で四角を探し、Tab を押したままカーソルを置いてクリックする。
+        四角が見つからなければ押さずに止める。移動（OSC）はしない。
         """
         if not self._can_operate():
             self._log("入室時の自動操作はプライベートのインスタンスだけで行います → しません")
+            return False
+        if not EntryPanel.available():
+            self._log("⚠ 画像の判定が使えません → 入室操作をしません")
             return False
         if not self.wait_for_panel():
             return False
@@ -199,14 +256,12 @@ class ToNEntry:
                 self._log("入室時操作を中止しました")
                 self._osc.stop_all()
                 return False
-            direction, seconds, label = step["move"], step["sec"], step["label"]
-            if direction and seconds:
-                if not self.move(direction, seconds):
-                    self._log(f"⚠ {label}: 移動に失敗 → 中止")
-                    self._osc.stop_all()
-                    return False
-                time.sleep(config.TON_ENTRY_SETTLE_SEC)
-            if not self.click(label):
+            point = self._find_button({**step, "pick": self._step_index(step)})
+            if point is None:
+                self._log(f"⚠ {step['label']}のボタンが見つかりません → 入室操作を止めます")
+                self._osc.stop_all()
+                return False
+            if not self._click_point(point, step["label"]):
                 self._osc.stop_all()
                 return False
             time.sleep(config.TON_ENTRY_STEP_WAIT_SEC)
@@ -260,8 +315,8 @@ class ToNEntry:
             self._log("コードの読み込みをやり直します")
         self._log("⚠ コードの読み込みを確認できませんでした")
         if result == "open":
-            # Esc は押さない（閉じると貼ったコードが消えて、手で確定できなくなる）
-            self._log("⚠ 入力欄が開いたままです（手で Enter を押してください）")
+            # Esc は押さない（閉じると貼ったコードが消えて、利用者も確定できなくなる）
+            self._log("⚠ 入力欄が開いたままです（Enter キーを押してください）")
         return "unconfirmed"
 
     def _load_once(self, code: str, log_path: str) -> str:
@@ -377,6 +432,10 @@ class ToNEntry:
 
     def _capture_bgr(self):
         bits, w, h = self.capture()
+        return self._to_bgr(bits, w, h)
+
+    @staticmethod
+    def _to_bgr(bits, w, h):
         if not bits or w <= 0 or h <= 0 or len(bits) < w * h * 4:
             return None
         import numpy as np
@@ -405,8 +464,8 @@ class ToNEntry:
                 point = (int(round(found[0] + origin[0])), int(round(found[1] + origin[1])))
                 WindowOperator.press_tab()
                 tab = True
-                if config.CLICK_TAB_LEAD_SEC > 0:
-                    time.sleep(config.CLICK_TAB_LEAD_SEC)
+                if config.TON_ENTRY_TAB_SETTLE_SEC > 0:
+                    time.sleep(config.TON_ENTRY_TAB_SETTLE_SEC)
                 if not self._place_cursor(point):
                     return "カーソルを置けない"
                 if not self._still_ours():

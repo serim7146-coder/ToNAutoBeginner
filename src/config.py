@@ -12,7 +12,7 @@ VRCHAT_WINDOW_CLASS = "UnityWndClass"
 
 # ── アプリ情報・自動アップデート ──
 # APP_VERSION はリリースごとに上げ、GitHubのリリースタグと一致させること
-APP_VERSION       = "v1.4.4"
+APP_VERSION       = "v1.5.0"
 GITHUB_REPO       = "serim7146-coder/ToNAutoBeginner"
 UPDATE_ASSET_NAME = "ToNAutoBeginner.exe"
 # インストーラー（exe 単体の人はこれで入れ直す。Migration）
@@ -97,7 +97,7 @@ ITEM_FETCH_LIMIT_SEC = 10.0
 # 見送った回はやり直しの回数に数えない。移動（店の前まで）は毎回する。店の操作 3.8 秒＋戻し 1 秒＋余裕 2 秒 = 12 − 7
 ITEM_FETCH_FRONT_LATEST_SEC = 5.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
-# 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って手でクリックしたらアイテムロスト
+# 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って利用者がクリックしたらアイテムロスト
 CONSUMABLE_ITEM_IDS = frozenset({36, 74, 79})
 # Maxwell を手に持ったときのログの名前（空白なし・小文字で比べる）。手に持ったまま自爆したらアイテムロスト
 MAXWELL_LOG_NAME = "maxwell"
@@ -232,7 +232,7 @@ BEGIN_WAIT_SEC        = 9.0   # RoundOver から Begin移動を始めるまで�
                                # Round End を待ってから移動するので、この値はほぼ効かない。
 
 # 続行ラウンドのフリーズ解除を死亡から遅らせる。
-# 解除前に猶予を作り、手動での視点調整などを挟めるようにするため。
+# 解除前に猶予を作り、利用者が視点を合わせられるようにするため。
 # 霧ラウンドから続行になった場合は短め、ふつうの続行ラウンドは長めにする。
 # （霧そのもので全窓を止めるかは、突入フリーズ側で選ぶ別の仕組み）
 CONTINUE_FREEZE_RELEASE_DELAY_SEC = 5.0
@@ -362,6 +362,7 @@ FETCH_CURSOR_TOL_PX     = 2      # 読み直した位置が置いた点からこ
 CONTINUE_DROP_PRESS_SEC   = 0.1   # 落とす操作を押している長さ
 CONTINUE_WINDOWED_WAIT_SEC = 2.0  # Alt+Enter の後、窓に戻るのを待つ上限
 CONTINUE_WINDOWED_POLL_SEC = 0.1
+CONTINUE_RESTORE_DELAY_SEC = 5.0  # その窓の RoundOver から窓位置リセットまで（依頼者 2026-11-18）
 # 速さの受信（DS）: まず OSCQuery で待ち、この秒数でその窓から届かなければ固定ポート（VRChat の送信ポート）を開く
 OSCQUERY_CONNECT_WAIT_SEC = 15.0
 # mDNS（OSCQuery の名乗り）は全インターフェースで開く。True（127.0.0.1 だけ。GB 2026-10-18）だと VRChat が
@@ -460,7 +461,9 @@ FOCUS_RETURN_AFTER_RELEASE_SEC = 0.3
 # ── 自動自爆 ──
 SELF_SUICIDE_KEY    = "^"  # デフォルト値（GUIで変更可能）
 # 自爆キーはいつも背面へ送る（前面化しない）。送れない窓（最小化中など）では自爆せずに知らせる
-SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間
+SUICIDE_HOLD_SEC    = 3.0     # 自爆ボタンを押す時間（既定。設定の窓で変えられる）
+SUICIDE_HOLD_MIN    = 0.5     # 設定できる下限
+SUICIDE_HOLD_MAX    = 10.0    # 設定できる上限
 # 自爆が効かなかったらやり直す。背面送信で長押ししている間に他の窓が
 # 前面を奪うと、VRChat はキーを離したことにする（実例: 窓4が80秒後に死亡）
 SUICIDE_RETRY_MAX     = 3     # 1回目を含めた回数
@@ -570,7 +573,8 @@ DTM_ID   = ReadJson.terror_id("Don't Touch Me", TERRORS)
 WALDO_ID = ReadJson.terror_id("Waldo", TERRORS)
 OPEN_SPECIAL_ROUND_TERROR_IDS: set[int] = {DTM_ID, WALDO_ID}
 OPEN_SPECIAL_ROUND_TARGET_WINS  = 3      # 何勝したらAFK回避を終わるか（窓ごと）。窓の設定で、3勝の後も続けられる
-OPEN_SPECIAL_ROUND_TWO_TARGET_WINS = 2   # 窓の設定「DTM/Waldo続行 (2クラまで)」のときの目標。数えるのは3まで変わらない
+OPEN_SPECIAL_ROUND_TWO_TARGET_WINS = 2   # 窓の設定「2クラまで」の目標。数えるのは3まで変わらない
+OPEN_SPECIAL_ROUND_UNLIMITED_WINS = 999  # 窓の設定「3クラ後も」の目標。生存数は 3 で打ち止めなので届かない
 # Waldo を続行するのは、このアイテムを持っているときだけ（依頼者）。番号は item.json から名前で引く。
 # item.json に無い間は GUIDANCE_PLUSH_ITEM_ID（分かっていれば番号を書く）。どちらも無ければ、
 # 持っているか分からないので前と同じ（アイテムに関係なく続行）
@@ -661,21 +665,37 @@ TON_INSTANCE_ACCESS_CHOICES      = (TON_INSTANCE_ACCESS_INVITE, TON_INSTANCE_ACC
 TON_INSTANCE_ACCESS_DEFAULT      = TON_INSTANCE_ACCESS_INVITE_PLUS
 
 # ── ToN入室時の自動操作 ──
-# スポーン地点と向きが固定なので、決まった秒数の横移動で的が照準（画面中央）に来る。
-# 画面の座標は使わない（ToNEntry）
+# 選択画面の 4 つは、画面の四角（ボタンの枠）を絵で探し、Tab を押したままカーソルを置いてクリックする
+# （EntryPanel・ToNEntry）。照準（画面中央）で押す方式は、1 画面目の格子で押し分けられず、
+# 季節イベントでロゴの色が変わると待ちの判定も狂うのでやめた
 TON_ENTRY_ENABLED = True
 TON_ENTRY_BEGIN   = True   # 選択画面突破後にBeginまで押すか
 
-# 入室時の操作手順（実測で決めた移動量）
-# アバターを横移動させると的が画面中央（クロスヘア）に来る。
-# 画面座標は使わない（パネルの見かけの大きさが距離で変わるため）。
-# 最後の2つは的がほぼ同じ位置なので移動せず続けて押す。
+# 入室時の操作手順。expect は期待する四角の個数（None なら個数は見ない）、
+# pick は押す番号（x の昇順で 0 から。"flavor"・"music" は GUI の値）
 TON_ENTRY_STEPS = [
-    {"move": "right", "sec": 0.35, "label": "警告同意"},
-    {"move": "left",  "sec": 0.65, "label": "難易度(Casual)"},
-    {"move": "right", "sec": 0.55, "label": "BGM"},
-    {"move": None,    "sec": 0.0,  "label": "LET ME PLAY"},
+    {"label": "警告の了解",  "expect": None, "pick": 0},
+    {"label": "難易度",      "expect": 3,    "pick": "flavor"},
+    {"label": "音楽",        "expect": 2,    "pick": "music"},
+    {"label": "LET ME PLAY", "expect": 2,    "pick": 1},
 ]
+TON_ENTRY_FLAVOR_DEFAULT = 0   # Casual（0 Casual・1 Mild・2 Spicy）
+TON_ENTRY_MUSIC_DEFAULT  = 1   # Nope（音楽そのまま。0 Yeah・1 Nope）
+
+# 四角の探し方（EntryPanel）
+TON_ENTRY_RED_MIN         = 40     # 赤さ r - max(g, b) の下限。実測は枠 77〜98・地 16
+TON_ENTRY_RECTNESS_MIN    = 0.70   # 長方形らしさ（輪郭の面積 / 外接の四角）。実測の下限は 0.75
+TON_ENTRY_MIN_SIDE_RATIO  = 0.008  # 窓の高さに対する四角の最小辺
+TON_ENTRY_ROW_TOL         = 0.6    # 同じ行とみなす y のずれ（四角の高さ比）
+TON_ENTRY_SIZE_TOL        = 0.25   # 同じ大きさとみなす幅・高さのずれ
+TON_ENTRY_CLICK_SEC       = 0.15   # ボタンを押している長さ
+# Tab を押してからカーソルを置くまで（入室の選択画面・コード欄）。CLICK_TAB_LEAD_SEC（0.03）ではない——
+# あちらは「カーソルを動かさずに押す」ときの、Tab とクリックが同じフレームにならないための待ち。
+# こちらは VRChat が Tab を読んでカーソルを真ん中へ戻し終えるのを待つ必要があり、短いと
+# 置いた後に戻されてクリックが照準へ飛ぶ（依頼者 2026-11-16 の報告）。ItemFetch の
+# FETCH_TAB_SETTLE_SEC と同じ値から始める。重い窓で足りなければここを伸ばす
+TON_ENTRY_TAB_SETTLE_SEC = 0.1
+TON_ENTRY_STEP_FIND_SEC   = 20.0   # 1 画面ぶん、四角が出るのを待つ上限
 
 # 選択画面を抜けた後、ロビーのBeginまで移動する量（実測）
 # 入室直後は位置が違うため、ラウンド終了後の BEGIN_FORWARD_SEC とは別の値。
@@ -702,7 +722,7 @@ SAVELOAD_LOG_POLL_SEC    = 0.25
 # 入室の Begin の後に Guidance Plush を取りに行く（DZ）。押した後の最初の Verified を待つ上限
 PLUSH_VERIFIED_WAIT_SEC  = 60.0
 PLUSH_VERIFIED_POLL_SEC  = 0.25
-# ToN Utils の続行の判断に従う（EB）。起点（killers_set／killers_revealed）から Utils の press・hold を待つ上限。
+# ToN Utils の続行の判定に従う（EB）。起点（killers_set／killers_revealed）から Utils の press・hold を待つ上限。
 # 実測の press は判定から 0.2〜1.58 秒（110 回）。何も来なければ続行
 UTILS_WAIT_SEC           = 3.0
 # Utils の press・hold は、Utils のログの時刻が「起点の行の時刻 − この秒数」以後のものを数える（EB2）。
@@ -715,8 +735,6 @@ TON_ENTRY_POLL_SEC       = 2.0    # パネル確認の間隔
 TON_ENTRY_START_DELAY_SEC = 3.0   # パネル検出後、操作を始めるまでの待ち
 TON_ENTRY_SETTLE_SEC     = 1.0    # 移動後、クリックするまでの待ち
 TON_ENTRY_STEP_WAIT_SEC  = 3.0    # クリック後、次の画面が出るまでの待ち
-TON_ENTRY_MIN_RED_PIXELS = 300    # パネルが出ているとみなす赤画素の下限
-TON_PANEL_STABLE_COUNT   = 2      # 連続で検出できたら確定
 
 # ── OSC（窓ごとに別ポートを割り当てる） ──
 # VRChatは既定でUDP 9000を掴む。多重起動では --osc= で分けないと競合する。
@@ -805,7 +823,11 @@ QUEUE_READY_QUIET_SEC = 3.0                 # その Get のログで、前後�
 QUEUE_FORGET_SEC = 3 * 3600.0               # 待機列に入れてからこの秒数たったら忘れる
 QUEUE_WATCH_INTERVAL_SEC = 1.0              # ログの増えた分を読む間隔（通知する が ON のあいだ、ツールが自分で読む）
 QUEUE_WATCH_SCAN_SEC = 5.0                  # ログの一覧を見直す間隔
-QUEUE_READY_NOTICE_SEC = 60.0               # Get のログの時刻がこれ以上前の合図は黙って使い切る（VRChat の通知は 60 秒で消える）
+QUEUE_READY_NOTICE_SEC = 60.0               # VRChat の通知の寿命（実測 58〜61 秒）。ログで判定できないとき（Remove の行も、Get より
+                                            # QUEUE_READY_CONFIRM_SEC 秒後の行も無い）だけ使う最後の押さえ。Get の時刻がこれ以上前なら黙る
+QUEUE_READY_CONFIRM_SEC = 65.0              # 合図の答え合わせの待ち。通知が消えれば Remove の行が出るので、これだけたって出なければ
+                                            # 誤検出とみなす（実測の最大 61 秒＋余裕）
+QUEUE_READY_MATCH_SEC = 5.0                 # Remove の created at と、合図の Get の時刻のずれの許容（実測 0〜2 秒）
 
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする

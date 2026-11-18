@@ -879,7 +879,7 @@ class TestJudgementLabel(_MonitorCase):
         """続行無効で外れても、3クラ解放（DTM）で続行になったときは「続行無効」と書かない"""
         dtm = config.DTM_ID
         monitor = self._monitor({KEY: {dtm}}, ids=[dtm])
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
         ContinueTable.set_current(_store({KEY: [dtm]}))
         monitor._decide_with_keep_on_set("Classic")
         line = self._judgement_line(monitor)

@@ -227,7 +227,7 @@ class TestLeaveRoundResetsMarks(_Base):
         monitor = self._monitor(in_round=False)
         monitor.st.open_special_round_wins = 2
         monitor.cfg.skip_rounds = {"Fog"}
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
 
         self._line(monitor, JOIN_TON)
 
@@ -241,7 +241,7 @@ class TestLeaveRoundResetsMarks(_Base):
     def test_three_win_line_and_round_setting_line_still_come(self):
         monitor = self._monitor()
         monitor.st.open_special_round_wins = 2
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
         monitor.cfg.skip_rounds = {"Fog"}
         self._line(monitor, JOIN_TON)
         self.assertTrue(self._said(monitor, "別のインスタンスに入ったので 0/"), monitor.logs)

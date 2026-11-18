@@ -1,4 +1,4 @@
-"""画面の整理（DV・DV2）: 開始・停止を1つのボタン／キーの設定を「⌨ キーバインド」の画面へ／フリーズを1つの枠へ。
+"""画面の整理（DV・DV2）: 開始・停止を1つのボタン／キーの設定を設定の窓の「キーバインド」へ／フリーズを1つの枠へ。
 本物の Tk で App を1つ立てて見る（本物のキー・フック・窓には触らない）"""
 from tests.support import *  # noqa: F401,F403
 
@@ -29,6 +29,11 @@ class _AppCase(unittest.TestCase):
         self.app.v_suicide_cancel_key.set(config.SUICIDE_CANCEL_KEY)
         self.app.v_chase_cw_key.set(config.CHASE_CW_KEY)
         self.app.v_chase_ccw_key.set(config.CHASE_CCW_KEY)
+        # キーバインドの行は起動時から 1 つを使い回すので、表示も変数に合わせる
+        self.app._refresh_start_key_label()
+        self.app._refresh_emergency_key_label()
+        self.app._refresh_suicide_cancel_key_label()
+        self.app._refresh_chase_key_labels()
         self.app.logs = []
         p = patch.object(mainGUI.App, "_log", lambda _s, m: self.app.logs.append(m))
         p.start()
@@ -36,18 +41,7 @@ class _AppCase(unittest.TestCase):
         p = patch.object(self.app, "_schedule_settings_save")
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(self._close_dialog)
         self.addCleanup(SharedState.set_chase_enabled, True)
-
-    def _close_dialog(self):
-        dialog = getattr(self.app, "_keybind_dialog", None)
-        if dialog is not None and dialog.winfo_exists():
-            dialog.destroy()
-
-    def _dialog(self):
-        self.app._open_keybind_dialog()
-        self.app._keybind_dialog.withdraw()
-        return self.app._keybind_dialog
 
 
 class TestStartStopButton(_AppCase):
@@ -217,13 +211,12 @@ class TestKeybindDialog(_AppCase):
             self.app._begin_capture_key(target)
 
     def test_the_main_screen_has_no_key_buttons(self):
-        texts = [w.cget("text") for w in _all_widgets(self.app)
-                 if isinstance(w, (tk.Button, ttk.Button))]
-        for text in ("キーを押して設定", "解除", "変更"):
+        main = [w for w in _all_widgets(self.app) if w.winfo_toplevel() is self.app]   # 設定の窓は含めない
+        texts = [w.cget("text") for w in main if isinstance(w, (tk.Button, ttk.Button))]
+        for text in ("キーを押して設定", "解除", "変更", "⌨ キーバインド"):
             self.assertNotIn(text, texts)
-        self.assertEqual(texts.count("⌨ キーバインド"), 1)
         row = self.app.btn_start_stop.master
-        self.assertIn("⌨ キーバインド", [w.cget("text") for w in row.pack_slaves()])
+        self.assertNotIn("⌨ キーバインド", [w.cget("text") for w in row.pack_slaves()])
         self.assertEqual(row.pack_slaves()[-1].cget("text"), "報告", "報告は行の最後のまま")
 
     def test_the_main_screen_shows_the_keys_in_one_line(self):
@@ -232,19 +225,33 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual(self.app.lbl_keys.cget("text"),
                          "マクロ開始: 未設定   停止: Ctrl+P   自爆キャンセル: ^   チェイス: F1/F2   移動: 未設定")
 
-    def test_the_button_opens_the_dialog_once(self):
-        button = next(w for w in self.app.btn_start_stop.master.pack_slaves()
-                      if w.cget("text") == "⌨ キーバインド")
-        button.invoke()
-        dialog = self.app._keybind_dialog
-        dialog.withdraw()
-        self.assertEqual(dialog.title(), "キーバインド")
-        button.invoke()
-        self.assertIs(self.app._keybind_dialog, dialog, "開いていれば同じ画面")
+    def test_the_keybind_fold_is_in_the_settings_window_once_and_closed(self):
+        """メイン画面のボタンは無い。設定の窓の中に折りたたみが 1 つだけあり、既定は閉じている"""
+        folds = [w for w in _all_widgets(self.app._settings_window)
+                 if isinstance(w, mainGUI.CollapsibleFrame)
+                 and any(isinstance(c, tk.Label) and c.cget("text") == "キーバインド"
+                         for c in _all_widgets(w.winfo_children()[0]))]
+        self.assertEqual(folds, [self.app._keybind_fold])
+        self.assertTrue(self.app._keybind_fold.collapsed, "既定は閉じた状態")
+        self.assertIs(self.app.lbl_start_key.winfo_toplevel(), self.app._settings_window)
+        self.assertFalse(hasattr(self.app, "_open_keybind_dialog"), "別窓は無い")
+
+    def test_the_keybinds_come_before_the_other_section(self):
+        """設定の窓の並びは サウンド設定 → OBS自動録画 → キーバインド → その他（依頼者 2026-11-17）"""
+        def title(frame):
+            return next(c.cget("text") for c in frame.winfo_children()[0].winfo_children()
+                        if isinstance(c, tk.Label) and c.cget("text"))
+        slaves = self.app._settings_body.pack_slaves()
+        self.assertTrue(all(isinstance(w, mainGUI.CollapsibleFrame) for w in slaves), slaves)
+        titles = [title(w) for w in slaves]
+        self.assertEqual(titles, ["サウンド設定", "OBS自動録画", "キーバインド", "その他"])
+        self.assertLess(titles.index("キーバインド"), titles.index("その他"))
+        self.assertIs(slaves[2], self.app._keybind_fold)
+        self.assertIs(slaves[3], self.app._other_wrap)
+        self.assertTrue(self.app._keybind_fold.collapsed, "既定は閉じた状態のまま")
 
     def test_the_rows(self):
         """5つのキー。どれも「変更」と「解除」がある（DV2）"""
-        self._dialog()
         self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: 未設定")
         self.assertEqual(self.app.lbl_emergency.cget("text"),
                          f"停止: {HotKey.display(config.EMERGENCY_STOP_KEY)}")
@@ -259,7 +266,6 @@ class TestKeybindDialog(_AppCase):
                              (row, row), target)
 
     def test_change_and_clear_the_start_key(self):
-        self._dialog()
         with patch.object(HotKey, "capture", return_value="f9"):
             self.app.btn_capture_start_key.invoke()          # 画面の「変更」
         self.assertEqual(self.app.v_start_key.get(), "f9")
@@ -273,7 +279,6 @@ class TestKeybindDialog(_AppCase):
         self.assertIn("マクロ開始: 未設定", self.app.lbl_keys.cget("text"))
 
     def test_change_the_stop_and_cancel_keys(self):
-        self._dialog()
         self._capture("stop", "f8")
         self._capture("cancel", "f7")
         self.assertEqual(self.app.v_emergency_key.get(), "f8")
@@ -282,13 +287,11 @@ class TestKeybindDialog(_AppCase):
                          "マクロ開始: 未設定   停止: F8   自爆キャンセル: F7   チェイス: F1/F2   移動: 未設定")
 
     def test_the_overlap_check_is_the_same(self):
-        self._dialog()
         self._capture("start", config.EMERGENCY_STOP_KEY)
         self.assertEqual(self.app.v_start_key.get(), "")
         self.assertTrue(any("緊急停止キーと同じ" in m for m in self.app.logs), self.app.logs)
 
     def test_the_keys_are_saved_under_the_same_names(self):
-        self._dialog()
         self._capture("start", "f9")
         self._capture("stop", "f8")
         self._capture("cancel", "f7")
@@ -298,19 +301,39 @@ class TestKeybindDialog(_AppCase):
         self.assertEqual((stored["start_key"], stored["emergency_stop_key"],
                           stored["suicide_cancel_key"]), ("f9", "f8", "f7"))
 
-    def test_a_closed_dialog_still_updates_the_main_line(self):
-        """変更の途中で画面を閉じても落ちない。メインの1行は合う"""
-        self._dialog()
-        self.app._capturing_key = True
-        self._close_dialog()
-        self.app._finish_capture_key("f9", "start")
+    def test_a_closed_fold_still_captures_and_updates_the_main_line(self):
+        """折りたたみを閉じたままでも、キーの取り込み（_begin_capture_key）が動き、メインの 1 行も合う。
+        停止のキーが変えられなくなると実害が大きい"""
+        self.app._keybind_fold.set_collapsed(True)
+        self.assertTrue(self.app._keybind_fold.collapsed)
+        self._capture("start", "f9")
         self.assertEqual(self.app.v_start_key.get(), "f9")
         self.assertIn("マクロ開始: F9", self.app.lbl_keys.cget("text"))
+        self.assertEqual(self.app.lbl_start_key.cget("text"), "マクロ開始: F9", "行の表示も合う")
+        self._capture("stop", "f8")
+        self.assertEqual(self.app.v_emergency_key.get(), "f8")
+        self.assertIn("停止: F8", self.app.lbl_keys.cget("text"))
+        self.assertEqual(self.app.btn_capture_key.cget("text"), "変更", "ボタンが戻る")
+        self.assertEqual(str(self.app.btn_capture_key.cget("state")), "normal")
+        # 取り込みの途中で完了が来ても落ちない
+        self.app._capturing_key = True
+        self.app._finish_capture_key("f7", "cancel")
+        self.assertEqual(self.app.v_suicide_cancel_key.get(), "f7")
+        self.assertTrue(self.app._keybind_fold.collapsed, "勝手に開かない")
+
+    def test_clearing_the_stop_key_asks_with_the_settings_window_as_parent(self):
+        self.app.v_emergency_key.set("f8")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=False) as ask:
+            self.app._clear_key("stop")
+        self.assertEqual(ask.call_args.kwargs["parent"], self.app._settings_window)
+        self.assertEqual(self.app.v_emergency_key.get(), "f8", "「いいえ」なら消さない")
+        with patch.object(mainGUI.messagebox, "askyesno", return_value=True):
+            self.app._clear_key("stop")
+        self.assertEqual(self.app.v_emergency_key.get(), "")
 
     def test_the_chase_check_is_here(self):
-        """「チェイスを使う」のチェックはキーバインドの画面だけ（DV2 で名前を短く）"""
-        self._dialog()
-        checks = [w for w in _all_widgets(self.app._keybind_dialog)
+        """「チェイスを使う」のチェックはキーバインドの折りたたみの中だけ（DV2 で名前を短く）"""
+        checks = [w for w in _all_widgets(self.app._keybind_fold)
                   if isinstance(w, ttk.Checkbutton) and w.cget("text") == "チェイスを使う"]
         self.assertEqual(len(checks), 1)
         self.assertEqual(checks[0].winfo_manager(), "pack", "画面に置かれている")
@@ -396,7 +419,7 @@ class TestFreezeFrame(_AppCase):
     def test_no_freeze_checks_left_outside(self):
         outside = [w.cget("text") for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
                    and "フリーズ" in w.cget("text")
-                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # ⑤ OBS自動録画のスイッチ
+                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # OBS自動録画（設定の窓）のスイッチ
         self.assertEqual(outside, [])
 
     def test_the_checks_work_as_before(self):
@@ -437,7 +460,7 @@ class TestDv2MainScreen(_AppCase):
 
     def test_the_button_order(self):
         self.assertEqual([w.cget("text") for w in self._row()],
-                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⌨ キーバインド", "報告"])
+                         ["▶ マクロ開始", "📋 オーバーレイ", "統計", "⚙ 設定", "報告"])
 
     def test_the_start_button_is_the_biggest_and_keeps_its_size(self):
         self.app.update_idletasks()
@@ -454,22 +477,38 @@ class TestDv2MainScreen(_AppCase):
 
     def test_the_short_check_names(self):
         """DV3: 見出しを無くして短い名前だけ（詳しくは README）"""
-        row = next(w for w in self.app.pack_slaves()
+        # チェックの行は設定の窓の「その他」の中（メイン画面の直下には無い）
+        row = next(w for w in _all_widgets(self.app._settings_window)
                    if any(isinstance(c, ttk.Checkbutton) and c.cget("text") == "アイテムを落とす"
                           for c in w.winfo_children()))
-        items = [(type(w).__name__, w.cget("text")) for w in row.pack_slaves()]
+        fold = row.master.master          # row → CollapsibleFrame.content → CollapsibleFrame
+        self.assertIsInstance(fold, mainGUI.CollapsibleFrame)
+        self.assertIn("その他", [w.cget("text") for w in fold.winfo_children()[0].winfo_children()
+                               if isinstance(w, tk.Label)])
+        # grid_slaves() は置いた逆順で返る。並びは row・column で見る
+        checks = sorted(row.grid_slaves(),
+                        key=lambda w: (int(w.grid_info()["row"]), int(w.grid_info()["column"])))
+        items = [(type(w).__name__, w.cget("text")) for w in checks]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
+                                 ("Checkbutton", "窓位置リセットはラウンド終了後"),
+                                 ("Checkbutton", "続行の後は自動Beginしない"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
-                                 ("Checkbutton", "Utilsの判断に従う"),         # EB
-                                 ("Checkbutton", "Bloodthirsty を待つ")])
-        variables = [str(w.cget("variable")) for w in row.pack_slaves()
+                                 ("Checkbutton", "Utilsの判定に従う"),         # EB
+                                 ("Checkbutton", "2, 3枠目のBloodthirstyを待つ"),
+                                 ("Checkbutton", "Murderで AFK 回避しない"),
+                                 ("Checkbutton", "Beginは連打だけ（カーソルを動かさない）")])
+        variables = [str(w.cget("variable")) for w in checks
                      if isinstance(w, ttk.Checkbutton)]
         self.assertEqual(variables, [str(v) for v in (self.app.v_continue_drop_item,
                                                       self.app.v_continue_restore_window,
+                                                      self.app.v_continue_restore_at_round_end,
+                                                      self.app.v_no_begin_after_continue,
                                                       self.app.v_run_respawn,
                                                       self.app.v_fog_early_read,
                                                       self.app.v_follow_utils,
-                                                      self.app.v_wait_bloodthirsty)])
+                                                      self.app.v_wait_bloodthirsty,
+                                                      self.app.v_murder_no_afk,
+                                                      self.app.v_begin_use_spam_only)])
 
     def test_the_freeze_row_is_called_speed_detect(self):
         title = self.app.tabs[0].freeze_box.grid_slaves(row=0, column=0)[0]       # FG: grid
@@ -491,7 +530,6 @@ class TestDv2Keys(_AppCase):
         p = patch.object(self.app, "_hook_chase_keys")
         self.hook_chase = p.start()
         self.addCleanup(p.stop)
-        self._dialog()
 
     def _capture(self, target, key):
         with patch.object(HotKey, "capture", return_value=key):
@@ -653,7 +691,6 @@ class TestDv2Keys(_AppCase):
 class TestDv3(_AppCase):
     def test_the_dialog_rows_have_no_notes(self):
         """キーバインドの画面: マクロ開始 → 停止 → 自爆キャンセル → チェイス2つ → 移動4つ（GV）。右の説明文は無い"""
-        self._dialog()
         grid = self.app.lbl_start_key.master
         labels = sorted(((int(w.grid_info()["row"]), int(w.grid_info()["column"])), w.cget("text"))
                         for w in grid.grid_slaves() if isinstance(w, ttk.Label))
@@ -666,7 +703,7 @@ class TestDv3(_AppCase):
                                   ((6, 0), "移動（左）: 未設定"),
                                   ((7, 0), "移動（右）: 未設定"),
                                   ((8, 0), "ジャンプ: 未設定")])
-        texts = [w.cget("text") for w in _all_widgets(self.app._keybind_dialog)
+        texts = [w.cget("text") for w in _all_widgets(self.app._keybind_fold)
                  if isinstance(w, ttk.Label)]
         self.assertFalse(any("緊急" in t for t in texts), texts)
 
@@ -682,8 +719,7 @@ class TestDv3(_AppCase):
                         self.app.lbl_keys.cget("text"))
 
     def test_no_emergency_word_on_the_screens(self):
-        self._dialog()
-        for top in (self.app, self.app._keybind_dialog):
+        for top in (self.app, self.app._settings_window):
             texts = [w.cget("text") for w in _all_widgets(top)
                      if isinstance(w, (ttk.Label, ttk.Checkbutton, ttk.Button, tk.Button))]
             self.assertFalse(any("緊急停止" in t for t in texts), texts)
@@ -693,7 +729,7 @@ class TestDv3(_AppCase):
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn('self._log(f"[緊急停止] {HotKey.display(key)} が押されました")', gui)
         for name in ("emergency_stop_key", "continue_drop_item", "continue_restore_window",
-                     "run_respawn", "fog_early_read_enabled"):
+                     "continue_restore_at_round_end", "no_begin_after_continue", "run_respawn", "fog_early_read_enabled"):
             self.assertIn(f'"{name}"', gui, name)
 
 
@@ -705,13 +741,14 @@ class TestLaunchDetailRows(_AppCase):
 
     def test_the_second_row_has_the_four_checks_in_order(self):
         rows = self._rows()
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         self.assertEqual(rows[0].pack_slaves()[0].cget("text"), "インスタンスタイプ:")
         self.assertEqual([w.cget("text") for w in rows[1].pack_slaves()],
                          ["ToNへ自動Join", "入室後の選択画面を自動で進める", "自動でBeginを押す",
                           "Guidance Plushを自動取得"])
         self.assertIs(rows[1], self.app.chk_ton_entry_plush.master)
-        self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "起動オプション:")
+        self.assertEqual(rows[2].pack_slaves()[0].cget("text"), "難易度:")      # 選択画面で押すもの
+        self.assertEqual(rows[3].pack_slaves()[0].cget("text"), "起動オプション:")
 
     def test_no_yellow_note_labels(self):
         texts = [str(w.cget("text")) for w in _all_widgets(self.app.chk_ton_entry_plush.master.master)
@@ -804,3 +841,390 @@ class TestCarryOverToggles(_AppCase):
                 getattr(self.app, name)()
                 getattr(self.app, name)()
             self.assertEqual(save.call_count, 2, name)
+
+
+class TestSettingsWindow(_AppCase):
+    """設定の窓（別窓）: サウンド設定・OBS自動録画・その他（チェックの行）を移した。起動時に 1 回作って隠す。
+    本物の窓は出さない（deiconify・lift は偽物。ほかは隠したまま見る）"""
+
+    def _main_widgets(self):
+        """メイン画面の中のウィジェット（設定の窓の中は含めない）"""
+        return [w for w in _all_widgets(self.app) if w.winfo_toplevel() is self.app]
+
+    def _texts(self, widgets):
+        return [str(w.cget("text")) for w in widgets if "text" in w.keys()]
+
+    def test_the_window_is_built_once_and_hidden(self):
+        win = self.app._settings_window
+        self.assertEqual(win.title(), "設定")
+        self.assertEqual(win.state(), "withdrawn")
+        self.assertTrue(win.resizable()[0] and win.resizable()[1])
+
+    def test_the_button_is_after_the_statistics_and_opens_the_window_once(self):
+        row = self.app.btn_start_stop.master
+        texts = [w.cget("text") for w in row.pack_slaves()]
+        self.assertEqual(texts.index("⚙ 設定"), texts.index("統計") + 1)
+        self.assertEqual(texts[-1], "報告", "報告は行の最後のまま")
+        button = next(w for w in row.pack_slaves() if w.cget("text") == "⚙ 設定")
+        windows = lambda: [w for w in self.app.winfo_children() if isinstance(w, tk.Toplevel)]
+        before = windows()
+        with patch.object(self.app._settings_window, "deiconify") as show, \
+                patch.object(self.app._settings_window, "lift") as lift:
+            button.invoke()
+            button.invoke()
+        self.assertEqual(show.call_count, 2)
+        self.assertEqual(lift.call_count, 2)
+        self.assertEqual(windows(), before, "押しても窓は増えない（作り直さない）")
+        self.assertIn(self.app._settings_window, windows())
+
+    def test_the_three_frames_are_in_the_window_and_not_on_the_main_screen(self):
+        inside = self._texts(_all_widgets(self.app._settings_window))
+        for title in ("サウンド設定", "OBS自動録画", "その他"):
+            self.assertIn(title, inside, title)
+        main = self._texts(self._main_widgets())
+        for text in ("サウンド設定", "OBS自動録画", "その他", "アイテムを落とす", "窓位置リセット",
+                     "Runリスポーン", "霧即時判定", "Utilsの判定に従う", "2, 3枠目のBloodthirstyを待つ",
+                     "続行ラウンドを録画する", "ツールの音量:"):
+            self.assertNotIn(text, main, text)
+        self.assertFalse([t for t in main if t.startswith(("③ サウンド", "⑤", "④"))], main)
+
+    def test_the_numbers_are_moved_up(self):
+        main = self._texts(self._main_widgets())
+        self.assertIn("① 続行リスト", main)
+        self.assertIn("② 窓数・ログ設定", main)
+        self.assertIn("③ 外部ツール起動", main)
+
+    def test_the_big_buttons_stay_on_the_main_screen(self):
+        for name in ("btn_hands_free", "btn_item_get_begin", "btn_speed_detect", "btn_item_fetch"):
+            self.assertIs(getattr(self.app, name).winfo_toplevel(), self.app, name)
+        self.assertIs(self.app.log_text.winfo_toplevel(), self.app)
+
+    def test_the_moved_widgets_live_in_the_settings_window(self):
+        win = self.app._settings_window
+        for name in ("_announce_frame", "lbl_volume"):
+            self.assertIs(getattr(self.app, name).winfo_toplevel(), win, name)
+        for name in ("v_continue_drop_item", "v_run_respawn", "v_voice_continue", "v_obs_host",
+                     "v_obs_port", "v_obs_password", "v_obs_enabled", "v_obs_freeze", "v_volume"):
+            self.assertTrue(hasattr(self.app, name), name)
+
+    def test_the_contents_scroll_with_the_wheel(self):
+        canvas = self.app._settings_canvas
+        with patch.object(canvas, "yview_scroll") as scroll:
+            self.app._settings_wheel(type("E", (), {"delta": -120})())
+            self.app._settings_wheel(type("E", (), {"delta": 120})())
+        self.assertEqual(scroll.call_args_list, [call(1, "units"), call(-1, "units")])
+        self.assertIs(self.app._settings_body.master, canvas)
+        for child in self.app._settings_body.winfo_children():
+            self.assertTrue(child.winfo_manager(), "中身は body に pack されている")
+
+    def test_hiding_removes_the_wheel_binding(self):
+        """窓を隠すと bind_all の <MouseWheel> が外れる（残ると続行表・統計の窓でホイールが効かない）"""
+        self.app._settings_canvas.bind_all("<MouseWheel>", self.app._settings_wheel)
+        self.assertTrue(self.app.bind_all("<MouseWheel>"))
+        self.app._hide_settings_window()
+        self.assertEqual(self.app.bind_all("<MouseWheel>"), "")
+        self.assertEqual(self.app._settings_window.state(), "withdrawn")
+        self.assertTrue(self.app._settings_window.winfo_exists(), "壊さない（隠すだけ）")
+
+    def test_the_close_button_hides_instead_of_destroying(self):
+        win = self.app._settings_window
+        handler = win.tk.call("wm", "protocol", win, "WM_DELETE_WINDOW")
+        self.assertTrue(handler, "閉じるボタンの処理を持っている")
+        win.tk.call(handler)
+        self.assertEqual(win.state(), "withdrawn")
+        self.assertTrue(win.winfo_exists())
+
+    def test_the_first_height_is_at_most_80_percent_of_the_screen(self):
+        win = self.app._settings_window
+        with patch.object(win, "winfo_screenheight", return_value=100), \
+                patch.object(self.app._settings_body, "winfo_reqheight", return_value=5000), \
+                patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertRegex(geometry.call_args.args[0], r"^\d+x80$")
+        with patch.object(win, "winfo_screenheight", return_value=1000), \
+                patch.object(self.app._settings_body, "winfo_reqheight", return_value=300), \
+                patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        # 高さは中身に合わせない（折りたたみが閉じていると低くて横に細長くなるため）。既定は 620
+        self.assertRegex(geometry.call_args.args[0], r"^\d+x%d$" % mainGUI.SETTINGS_DEFAULT_HEIGHT)
+
+    def test_start_without_ever_opening_the_window_reads_the_voices_and_obs(self):
+        """設定の窓を一度も開かずにマクロを開始しても、声のパスと OBS の設定を読める（落ちない）"""
+        self.assertEqual(self.app._settings_window.state(), "withdrawn")
+        self.app.v_voice_continue.set("  C:/test/continue.mp3 ")
+        self.app.v_voice_afk.set("afk-test.mp3")
+        self.app.v_obs_enabled.set(True)
+        self.app.v_obs_host.set("10.0.0.5")
+        self.app.v_obs_port.set("4456")
+        self.app.v_obs_password.set("dummy")
+        cfg = WindowConfig(hwnd=0x10, log_path=Path("output_log.txt"))
+        tab = type("Tab", (), {"idx": 0, "osc_in": 0, "osc_out": 0,
+                               "get_config": lambda _s: (cfg, None)})()
+        saved_tabs = self.app.tabs
+        self.addCleanup(setattr, self.app, "tabs", saved_tabs)
+        self.addCleanup(self.app.monitors.clear)
+        self.addCleanup(setattr, self.app, "_running", False)
+        self.app.tabs = [tab]
+        with patch.object(self.app, "_resolve_tab_ports"), \
+                patch.object(self.app, "_start_window_volume"), \
+                patch.object(self.app, "_debug_start"), \
+                patch.object(self.app, "_refresh_continue_choices"), \
+                patch.object(self.app, "_refresh_start_stop_button"), \
+                patch.object(SharedState, "begin_run"), \
+                patch.object(SharedState, "register_window_hwnd"), \
+                patch.object(mainGUI.Recorder, "configure") as configure, \
+                patch.object(mainGUI.Recorder, "stop_all"), \
+                patch.object(mainGUI.LogMonitor, "LogMonitor") as monitor:
+            self.app._start()
+        self.assertEqual(cfg.voice_continue, "C:/test/continue.mp3")
+        self.assertEqual(cfg.voice_afk, "afk-test.mp3")
+        self.assertEqual(len(self.app.monitors), 1)
+        monitor.return_value.start.assert_called_once()
+        args = configure.call_args
+        self.assertEqual(args.args[:3], (True, "10.0.0.5", 4456))
+        self.assertEqual(args.args[3], "dummy")
+
+    def test_the_saved_names_are_unchanged(self):
+        """移した枠の保存の名前は 1 つも変わらない（前の版の settings.json がそのまま読める）"""
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        for name in ("continue_drop_item", "continue_restore_window", "continue_restore_at_round_end",
+                     "no_begin_after_continue", "run_respawn", "wait_bloodthirsty",
+                     "follow_utils", "voice_enabled", "voice_volumes", "obs_record", "obs_record_freeze",
+                     "obs_host", "obs_port"):
+            self.assertIn(name, stored, name)
+
+
+class TestOtherChecksWrap(_AppCase):
+    """設定の窓の「その他」: 折りたたみ（既定は開く）・チェックは枠の幅で折り返す・初めの大きさ"""
+
+    def setUp(self):
+        super().setUp()
+        self.frame = self.app._other_check_frame
+        self.checks = self.app._other_checks
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.app._other_check_columns = None
+        self.app._layout_other_checks()
+
+    def _lay_out(self, width):
+        self.app._other_check_columns = None
+        with patch.object(self.frame, "winfo_width", return_value=width):
+            self.app._layout_other_checks()
+
+    def _cells(self):
+        return [(int(c.grid_info()["row"]), int(c.grid_info()["column"])) for c in self.checks]
+
+    def _cell_width(self):
+        return max(c.winfo_reqwidth() for c in self.checks) + mainGUI.OTHER_CHECK_GAP
+
+    def test_the_fold_is_open_by_default_and_the_others_are_closed(self):
+        fold = self.frame.master.master
+        self.assertIsInstance(fold, mainGUI.CollapsibleFrame)
+        self.assertFalse(fold.collapsed, "その他は開いた状態で始まる")
+        for text in ("サウンド設定", "OBS自動録画"):
+            other = next(w for w in _all_widgets(self.app._settings_window)
+                         if isinstance(w, mainGUI.CollapsibleFrame)
+                         and any(isinstance(c, tk.Label) and c.cget("text") == text
+                                 for c in _all_widgets(w.winfo_children()[0])))
+            self.assertTrue(other.collapsed, text)
+
+    def test_the_order_of_the_checks_is_kept(self):
+        self.assertEqual([c.cget("text") for c in self.checks],
+                         ["アイテムを落とす", "窓位置リセット", "窓位置リセットはラウンド終了後",
+                          "続行の後は自動Beginしない", "Runリスポーン", "霧即時判定",
+                          "Utilsの判定に従う", "2, 3枠目のBloodthirstyを待つ", "Murderで AFK 回避しない",
+                          "Beginは連打だけ（カーソルを動かさない）"])
+
+    def test_wide_makes_one_row(self):
+        self._lay_out(self._cell_width() * len(self.checks) + 5)
+        self.assertEqual(self._cells(), [(0, i) for i in range(len(self.checks))])
+
+    def test_narrow_wraps_and_nothing_is_cut(self):
+        for columns in (3, 2, 1):
+            self._lay_out(self._cell_width() * columns + 3)
+            cells = self._cells()
+            self.assertEqual(max(c for _r, c in cells) + 1, columns, columns)
+            self.assertEqual(cells, [(i // columns, i % columns) for i in range(len(self.checks))])
+            self.assertEqual(len(set(cells)), len(self.checks), "重ならない")
+        self._lay_out(1 + 1)     # 極端に狭くても 1 列（0 にならない）
+        self.assertEqual(max(c for _r, c in self._cells()), 0)
+
+    def test_widening_goes_back_to_one_row(self):
+        self._lay_out(self._cell_width() * 2 + 3)
+        self.assertGreater(max(r for r, _c in self._cells()), 0)
+        self._lay_out(self._cell_width() * len(self.checks) + 5)
+        self.assertEqual({r for r, _c in self._cells()}, {0})
+
+    def test_the_same_width_does_not_grid_again(self):
+        width = self._cell_width() * 3 + 3
+        self._lay_out(width)
+        mocks = []
+        for check in self.checks:
+            patcher = patch.object(check, "grid")
+            mocks.append(patcher.start())
+            self.addCleanup(patcher.stop)
+        with patch.object(self.frame, "winfo_width", return_value=width):
+            self.app._layout_other_checks()
+            self.app._layout_other_checks()
+        for mock in mocks:
+            mock.assert_not_called()
+
+    def test_a_different_column_count_grids_again(self):
+        self._lay_out(self._cell_width() * 3 + 3)
+        with patch.object(self.frame, "winfo_width", return_value=self._cell_width() * 2 + 3):
+            self.app._layout_other_checks()
+        self.assertEqual(self.app._other_check_columns, 2)
+
+    def test_not_placed_yet_does_nothing(self):
+        self.app._other_check_columns = None
+        with patch.object(self.frame, "winfo_width", return_value=1),                 patch.object(self.checks[0], "grid") as grid:
+            self.app._layout_other_checks()
+        grid.assert_not_called()
+        self.assertIsNone(self.app._other_check_columns)
+
+    def test_the_default_size_is_not_a_long_thin_strip(self):
+        win = self.app._settings_window
+        with patch.object(win, "winfo_screenwidth", return_value=1920),                 patch.object(win, "winfo_screenheight", return_value=1080),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        size = geometry.call_args.args[0]
+        width, height = (int(v) for v in size.split("x"))
+        self.assertGreaterEqual(width, mainGUI.SETTINGS_MIN_WIDTH)
+        self.assertLessEqual(width, int(1920 * mainGUI.SETTINGS_MAX_WIDTH_RATIO))
+        self.assertEqual(height, mainGUI.SETTINGS_DEFAULT_HEIGHT)
+        with patch.object(win, "winfo_screenwidth", return_value=1920),                 patch.object(win, "winfo_screenheight", return_value=600),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertEqual(geometry.call_args.args[0].split("x")[1], str(int(600 * 0.8)),
+                         "高さは画面の 8 割まで")
+        with patch.object(win, "winfo_screenwidth", return_value=500),                 patch.object(win, "winfo_screenheight", return_value=1080),                 patch.object(win, "geometry") as geometry:
+            self.app._fit_settings_window()
+        self.assertEqual(geometry.call_args.args[0].split("x")[0], str(mainGUI.SETTINGS_MIN_WIDTH),
+                         "幅は下限 560（小さい画面でも 560）")
+
+
+class TestMurderNoAfkSetting(_AppCase):
+    """設定の窓の「Murderで AFK 回避しない」: 全窓共通・保存・既定 OFF"""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_murder_no_afk, False)
+        self.addCleanup(self.app.v_murder_no_afk.set, False)
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def test_the_default_is_off_and_the_check_is_in_the_window(self):
+        self.assertFalse(SharedState.get_murder_no_afk())
+        self.assertFalse(self.app.v_murder_no_afk.get())
+        check = next(w for w in _all_widgets(self.app._settings_window)
+                     if isinstance(w, ttk.Checkbutton) and w.cget("text") == "Murderで AFK 回避しない")
+        self.assertEqual(str(check.cget("variable")), str(self.app.v_murder_no_afk))
+
+    def test_the_check_sets_the_shared_state_and_schedules_a_save(self):
+        self.app.v_murder_no_afk.set(True)
+        with patch.object(self.app, "_schedule_settings_save") as save:
+            self.app._on_murder_no_afk_changed()
+        self.assertIs(SharedState.get_murder_no_afk(), True)
+        save.assert_called_once()
+
+    def test_saved_under_murder_no_afk_and_restored(self):
+        SharedState.set_murder_no_afk(True)
+        stored = self._save()
+        self.assertIs(stored["murder_no_afk"], True)
+        SharedState.set_murder_no_afk(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_murder_no_afk(), True)
+        self.assertIs(self.app.v_murder_no_afk.get(), True, "チェックの表示も戻る")
+        self._load(dict(stored, murder_no_afk=False))
+        self.assertIs(SharedState.get_murder_no_afk(), False)
+        self.assertIs(self.app.v_murder_no_afk.get(), False)
+
+    def test_a_missing_or_broken_value_is_off(self):
+        SharedState.set_murder_no_afk(True)
+        self._load({})
+        self.assertIs(SharedState.get_murder_no_afk(), False, "無い（古い settings.json）")
+        for broken in ("yes", 1, "true", None, [], {"a": 1}):
+            SharedState.set_murder_no_afk(True)
+            self._load({"murder_no_afk": broken})
+            self.assertIs(SharedState.get_murder_no_afk(), False, repr(broken))
+
+
+class TestBeginUseSpamOnlySetting(_AppCase):
+    """設定の窓の「Beginは連打だけ（カーソルを動かさない）」: 全窓共通・保存・既定 OFF・ツールチップ付き"""
+
+    TEXT = "Beginは連打だけ（カーソルを動かさない）"
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(SharedState.set_begin_use_spam_only, False)
+        self.addCleanup(self.app.v_begin_use_spam_only.set, False)
+
+    def _save(self):
+        stored = {}
+        with patch.object(mainGUI, "save_settings", stored.update), \
+                patch.object(mainGUI, "load_settings", return_value={}):
+            self.app._save_launch_settings()
+        return stored
+
+    def _load(self, data):
+        with patch.object(mainGUI, "load_settings", return_value=data):
+            self.app._load_saved_settings()
+
+    def _check(self):
+        return next(w for w in _all_widgets(self.app._settings_window)
+                    if isinstance(w, ttk.Checkbutton) and w.cget("text") == self.TEXT)
+
+    def test_the_default_is_off_and_the_check_is_last_in_the_other_section(self):
+        self.assertFalse(SharedState.get_begin_use_spam_only())
+        self.assertFalse(self.app.v_begin_use_spam_only.get())
+        check = self._check()
+        self.assertEqual(str(check.cget("variable")), str(self.app.v_begin_use_spam_only))
+        self.assertIs(self.app._other_checks[-1], check, "Murder の次（末尾）")
+        self.assertEqual(self.app._other_checks[-2].cget("text"), "Murderで AFK 回避しない")
+        self.assertIn(check, self.app._other_check_frame.winfo_children())
+
+    def test_the_check_has_the_tooltip(self):
+        check = self._check()
+        self.assertIsInstance(check.tooltip, mainGUI.Tooltip)
+        self.assertEqual(check.tooltip.text(),
+                         "カーソルも前面も触らず、UseRight を送り続けるだけにします。\n"
+                         "前面の窓か、カーソルが乗っている窓でしか Begin は押されません。")
+
+    def test_the_check_sets_the_shared_state_and_schedules_a_save(self):
+        self.app.v_begin_use_spam_only.set(True)
+        with patch.object(self.app, "_schedule_settings_save") as save:
+            self.app._on_begin_use_spam_only_changed()
+        self.assertIs(SharedState.get_begin_use_spam_only(), True)
+        save.assert_called_once()
+
+    def test_saved_under_begin_use_spam_only_and_restored(self):
+        SharedState.set_begin_use_spam_only(True)
+        stored = self._save()
+        self.assertIs(stored["begin_use_spam_only"], True)
+        SharedState.set_begin_use_spam_only(False)
+        self._load(stored)
+        self.assertIs(SharedState.get_begin_use_spam_only(), True)
+        self.assertIs(self.app.v_begin_use_spam_only.get(), True, "チェックの表示も戻る")
+        self._load(dict(stored, begin_use_spam_only=False))
+        self.assertIs(SharedState.get_begin_use_spam_only(), False)
+        self.assertIs(self.app.v_begin_use_spam_only.get(), False)
+
+    def test_a_missing_or_broken_value_is_off(self):
+        SharedState.set_begin_use_spam_only(True)
+        self._load({})
+        self.assertIs(SharedState.get_begin_use_spam_only(), False, "無い（古い settings.json）")
+        for broken in ("yes", 1, "true", None, [], {"a": 1}):
+            SharedState.set_begin_use_spam_only(True)
+            self._load({"begin_use_spam_only": broken})
+            self.assertIs(SharedState.get_begin_use_spam_only(), False, repr(broken))

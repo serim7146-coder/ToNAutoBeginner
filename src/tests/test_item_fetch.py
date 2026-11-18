@@ -656,7 +656,7 @@ class TestItemFetch(unittest.TestCase):
         import numpy as np
         if not ItemFetch.available():
             self.skipTest("SIFT か見本が使えない")
-        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_FILE)), dtype=np.uint8)
+        data = np.fromfile(str(config.resource_path(ItemFetch.TEMPLATE_EN)), dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_COLOR)
         canvas = np.zeros((1080, 1920, 3), np.uint8)
         canvas[245:505, 760:1140] = img
@@ -1086,11 +1086,11 @@ class TestItemFetch(unittest.TestCase):
     def test_the_limit_is_10_seconds(self):
         self.assertEqual(config.ITEM_FETCH_LIMIT_SEC, 10.0)
 
-    def test_equipping_by_hand_while_fetching_is_fine(self):
+    def test_equipping_by_the_user_while_fetching_is_fine(self):
         ex, st, _ = self._executor()
 
         def move(fetcher):
-            st.item_id = 29                     # 手で装備した（ログの流れが解除した）
+            st.item_id = 29                     # 利用者が装備した（ログの流れが解除した）
             fetcher._check()
             return True
         outcome, calls = self._fetch(ex, st, move=move)
@@ -1200,7 +1200,7 @@ class TestItemFetch(unittest.TestCase):
     def test_the_template_is_built_into_the_exe(self):
         build = _load_build_script()
         self.assertIn("--include-data-dir=assets/templates=assets/templates", build.BASE_ARGS)
-        self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_FILE))).is_file())
+        self.assertTrue((Path(config.resource_path(ItemFetch.TEMPLATE_EN))).is_file())
 
 
 
@@ -1540,13 +1540,13 @@ class TestSuicideCancel(unittest.TestCase):
         return ex, st, logs
 
     def _skip(self, ex, during=None):
-        """長押しの回数を返す。during(n, stop) は n 回目の長押しの最中に呼ぶ（死なない）"""
+        """長押しの回数を返す。during(n, wake) は n 回目の長押しの最中に呼ぶ（死なない）"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(key)
             if during:
-                during(len(sent), stop)
+                during(len(sent), wake)
             return True
         with patch.object(WindowOperator, "hold_key_background", side_effect=hold):
             ex.do_skip()
@@ -1557,10 +1557,10 @@ class TestSuicideCancel(unittest.TestCase):
         ex, st, logs = self._executor()
         seen = []
 
-        def during(n, stop):
-            seen.append(stop())                 # 押す前は止めない
+        def during(n, wake):
+            seen.append(wake.is_set())          # 押す前は起こさない
             self.assertEqual(ex.cancel_suicide(), "stopped")
-            seen.append(stop())                 # 押した後は止める（その場で離す）
+            seen.append(wake.is_set())          # 押した後は合図が立つ（その場で離す）
         with patch.object(ex, "_died_after_skip", return_value=False) as wait:
             self.assertEqual(self._skip(ex, during), 1, "やり直さない")
         wait.assert_not_called()                # 死亡を待たずに終わる

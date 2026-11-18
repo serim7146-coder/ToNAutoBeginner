@@ -95,7 +95,7 @@ class TestHandsFreeReasons(_Case):
         self.assertIn(f"{TerrorIds.name(7)}, {TerrorIds.name(3)}", reason)
         monitor.st.round_type = "Classic"
         monitor.st.item_id = 0
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
         reason = monitor._hands_free_skip_reason([7])
         self.assertIn(TerrorIds.name(7), reason)
         self.assertNotIn("[7]", reason)

@@ -3,6 +3,7 @@
 テラーが分かったら今までどおり（続行リストにあれば普通の続行、なければ全続行のまま・行は二度出さない）。
 本物の音・録画・窓・入力は使わない"""
 from tests.support import *  # noqa: F401,F403
+import PhoneNotify
 import Recorder
 
 HOSHI, YAKI = config.INSTANCE_HOSHIIMO, config.INSTANCE_YAKIIMO
@@ -190,6 +191,70 @@ class TestGroupWhileUnknown(_Case):
         monitor = self._monitor(config.INSTANCE_PUBLIC, "Fog", continue_rounds={"Fog"})
         self._unknown(monitor, "Fog")
         self.assertFalse(monitor.st.all_continue_round)
+
+
+class TestFirstTimeOnlyLabel(_Case):
+    """1 回目だけ続行する moon は「初回のみ続行」と出す（表示だけ。動きは変えない）"""
+
+    FIRST_ONLY = "[窓1] グループ判定: {} 【初回のみ続行】"
+
+    def test_hoshiimo_solstice_while_unknown_says_first_time_only(self):
+        monitor = self._monitor(HOSHI, "Solstice", keep_on={MOON_KEY: {LISTED}})
+        started = self._unknown(monitor, "Solstice")
+        st = monitor.st
+        self.assertEqual(monitor.logs.count(self.FIRST_ONLY.format("Solstice")), 1, monitor.logs)
+        self.assertFalse(any("【全続行】" in m for m in monitor.logs), monitor.logs)
+        self.assertTrue(st.all_continue_round, "動きは全続行のまま")
+        self.assertEqual(WindowVolume.category_of(st), WindowVolume.ALL_CONTINUE)
+        self.assertNotIn("do_skip", started)
+        self.assertEqual(GroupRound.decide(HOSHI, "Solstice", [7]), GroupRound.CONTINUE)
+
+    def test_hoshiimo_every_moon_says_first_time_only(self):
+        for moon in ("Mystic Moon", "Blood Moon", "Twilight", "Solstice"):
+            monitor = self._monitor(HOSHI, moon)
+            self._unknown(monitor, moon)
+            self.assertEqual(monitor.logs.count(self.FIRST_ONLY.format(moon)), 1, (moon, monitor.logs))
+
+    def test_the_line_from_killers_without_the_unknown_line_says_first_time_only(self):
+        """テラー不明の行が来ないラウンドは、分かった時点の行（_apply_group_decision の CONTINUE）で出る"""
+        monitor = self._monitor(HOSHI, "Solstice", keep_on={MOON_KEY: {LISTED}})
+        self._killers(monitor, [UNLISTED])
+        self.assertEqual(monitor.logs.count(self.FIRST_ONLY.format("Solstice")), 1, monitor.logs)
+        self.assertTrue(monitor.st.all_continue_round)
+
+    def test_a_listed_terror_in_a_first_time_only_moon_keeps_the_label(self):
+        monitor = self._monitor(HOSHI, "Solstice", keep_on={MOON_KEY: {LISTED}})
+        self._unknown(monitor, "Solstice")
+        self._killers(monitor, [LISTED])
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertTrue(any("【初回のみ続行 → 続行リストで続行】" in m for m in monitor.logs), monitor.logs)
+
+    def test_hoshiimo_eight_pages_and_fog_stay_all_continue(self):
+        for round_type, key in (("8 Pages", PAGES_KEY), ("Fog", FOG_KEY)):
+            monitor = self._monitor(HOSHI, round_type, keep_on={key: {LISTED}})
+            self._unknown(monitor, round_type)
+            self.assertEqual(monitor.logs.count(GROUP_LINE.format(round_type)), 1, monitor.logs)
+            self.assertFalse(any("初回のみ続行" in m for m in monitor.logs), monitor.logs)
+
+    def test_yakiimo_blood_moon_says_first_time_only(self):
+        monitor = self._monitor(YAKI, "Blood Moon")
+        self._unknown(monitor, "Blood Moon")
+        self.assertEqual(monitor.logs.count(self.FIRST_ONLY.format("Blood Moon")), 1, monitor.logs)
+
+    def test_yakiimo_twilight_checked_stays_all_continue(self):
+        monitor = self._monitor(YAKI, "Twilight", continue_rounds={"Twilight"})
+        self._unknown(monitor, "Twilight")
+        self.assertEqual(monitor.logs.count(GROUP_LINE.format("Twilight")), 1, monitor.logs)
+        self.assertFalse(any("初回のみ続行" in m for m in monitor.logs), monitor.logs)
+
+    def test_private_all_continue_line_is_unchanged(self):
+        monitor = self._monitor(config.INSTANCE_PRIVATE, "Fog", continue_rounds={"Fog"})
+        self._unknown(monitor, "Fog")
+        self.assertEqual(monitor.logs.count(PRIVATE_LINE.format("Fog")), 1, monitor.logs)
+
+    def test_the_phone_title_and_volume_name_keep_all_continue(self):
+        self.assertEqual(PhoneNotify._KIND_TITLES[PhoneNotify.KIND_ALL_CONTINUE], "全続行")
+        self.assertEqual(WindowVolume.CATEGORY_LABELS[WindowVolume.ALL_CONTINUE], "全続行")
 
 
 class TestPureFunction(unittest.TestCase):

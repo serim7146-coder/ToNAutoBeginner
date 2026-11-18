@@ -1,9 +1,9 @@
-"""手に持っている物と、その間の手のクリックの記録。
+"""手に持っている物と、その間の利用者のクリックの記録。
 
 「持っている」は VRChat のログの Pickup object / Drop object の区間（店の装備 `Equipping N.` とは別のもの）。
 名前は問わず覚える。持っている間の手の左クリックを、そのとき持っていた物の名前つきで 1 回分だけ覚える。
 使い道は 2 つ（どちらも LogMonitor / ActionExecutor が判定する）: 消費系アイテムを手に持ってクリックしたら
-アイテムロスト、Maxwell を手に持ったまま自爆したらアイテムロスト。数えるのは手のクリックだけで、ツール自身の
+アイテムロスト、Maxwell を手に持ったまま自爆したらアイテムロスト。数えるのは利用者のクリックだけで、ツール自身の
 OSC・クリックは数えない。
 
 - 状態は窓ごとの UseTracker が持つ。持っているかを書き換えるのは LogMonitor だけ。クリックの記録はマウスフックの
@@ -17,7 +17,7 @@ import time
 from collections import deque
 
 # クリックの元（debug.log の表記）
-SOURCE_HAND = "手"
+SOURCE_HAND = "クリック"
 
 _DEBUG_LINES_MAX = 100          # 溜めておく debug.log の行の上限（書かれないまま増え続けないように）
 
@@ -30,7 +30,7 @@ def norm(name) -> str:
 
 
 class UseTracker:
-    """1 つの窓の「手に持っている物」と手のクリックの記録。メソッドはどれも鍵の中で動く"""
+    """1 つの窓の「手に持っている物」と利用者のクリックの記録。メソッドはどれも鍵の中で動く"""
 
     def __init__(self, window_idx, clock=time.monotonic):
         self.window_idx = window_idx
@@ -74,7 +74,7 @@ class UseTracker:
 
     # ── クリック ────────────────────────────
     def use(self, source) -> bool:
-        """手のクリックがあった。持っていれば、そのとき持っていた物の名前を印として覚えて True（印が残っていれば
+        """利用者のクリックがあった。持っていれば、そのとき持っていた物の名前を印として覚えて True（印が残っていれば
         上書きしない）。持っていなければ False。debug.log の行は溜めない（連打で溢れさせない）"""
         with self._lock:
             if not self._held:

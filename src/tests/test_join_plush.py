@@ -254,7 +254,7 @@ class TestFetchGuidancePlush(unittest.TestCase):
         ex = self._ex()
         st = ex._st
         st.item_id = 81
-        self.assertEqual(ex._fetch_stopped(0, 1e18), "equipped", "今の取得は手で装備したら止まる")
+        self.assertEqual(ex._fetch_stopped(0, 1e18), "equipped", "今の取得は利用者が装備したら止まる")
         self.assertIsNone(ex._fetch_stopped(0, 1e18, want=PLUSH), "Guidance Plush はほかのアイテムがあっても")
         st.item_id = PLUSH
         self.assertEqual(ex._fetch_stopped(0, 1e18, want=PLUSH), "equipped")
@@ -325,7 +325,8 @@ class TestWaitVerified(unittest.TestCase):
 class _Entry:
     made = []
 
-    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None):
+    def __init__(self, hwnd, osc_port=None, log=None, is_running=None, can_operate=None,
+                 flavor=None, music=None):
         self.hwnd = hwnd
         self.calls = []
         _Entry.made.append(self)

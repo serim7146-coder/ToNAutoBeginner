@@ -103,7 +103,7 @@ def unhook(handle):
 
 
 def hook_left(callback) -> _Hook:
-    """左ボタンを押した（手で押した分だけ。注入されたクリックは除く）通知を受ける。hook() の購読には流れない"""
+    """左ボタンを押した（利用者が押した分だけ。注入されたクリックは除く）通知を受ける。hook() の購読には流れない"""
     handle = _Hook(LEFT, callback)
     with _lock:
         _left_hooks.append(handle)

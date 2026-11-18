@@ -137,8 +137,8 @@ def _index(rows, attribute: str, eight_pages: bool, label: str) -> dict:
 
 
 def parse(raw) -> Table:
-    """terror_ids.json の中身 → Table。悪い行・千の位と kind の食い違い・番号の重複した行は捨てて、
-    捨てた件数を debug.log に 1 行（読めない形なら ValueError）"""
+    """terror_ids.json の中身 → Table。悪い行・千の位と kind の食い違い・番号の重複した行は読み飛ばして、
+    読み飛ばした件数を debug.log に 1 行（読めない形なら ValueError）"""
     items = raw.get("terrors") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         raise ValueError("terror_ids.json に terrors がありません")
@@ -151,7 +151,7 @@ def parse(raw) -> Table:
             continue
         rows[row.id] = row
     if bad:
-        _debug(f"terror_ids.json の使えない行を捨てました: {bad} 行")
+        _debug(f"terror_ids.json の使えない行を読み飛ばしました: {bad} 行")
     ordered = [rows[own] for own in sorted(rows)]
     return Table(rows=rows,
                  by_listtool=_index(ordered, "listtool", False, "ListTool の番号"),
@@ -294,7 +294,7 @@ def from_listtool(lt, key: str, source: str = "") -> int | None:
     表に無い番号は None（番号ごとに 1 回だけ debug.log。主催リストは数秒ごとに読むため）"""
     own, state = _lookup(lt, key)
     if state == "unknown":
-        _report_once("listtool", lt, f"{source or 'ListTool'} の番号 {lt} が表にないので捨てます")
+        _report_once("listtool", lt, f"{source or 'ListTool'} の番号 {lt} が表にないので無視します")
     return own
 
 
@@ -307,7 +307,7 @@ def to_listtool(own) -> int | None:
 def list_from_listtool(data, source: str = "", strict: bool = False, once: bool = False) -> dict:
     """{キー: ListTool の番号の集合} → {キー: frozenset(独自の番号)}。空になったキーは持たない。
 
-    8 Pages のキーで 8 Pages に出ない番号（ListTool の枠にだけある 116 個）は捨て、件数を debug.log に 1 行
+    8 Pages のキーで 8 Pages に出ない番号（ListTool の枠にだけある 116 個）は無視し、件数を debug.log に 1 行
     （読み込みごと。once なら同じ件数の行は 1 回だけ＝主催リストのように数秒ごとに読むとき）。表に無い番号は番号ごとに
     1 回だけ debug.log（strict なら ValueError。テストが使う）"""
     result: dict = {}
@@ -327,7 +327,7 @@ def list_from_listtool(data, source: str = "", strict: bool = False, once: bool 
         if mapped:
             result[key] = frozenset(mapped)
     if not_appearing:
-        message = f"{source or 'ListTool'} の 8 Pages に出ないテラー {not_appearing} 件を捨てました"
+        message = f"{source or 'ListTool'} の 8 Pages に出ないテラー {not_appearing} 件を無視しました"
         if once:
             _report_once("not_appearing", (source, not_appearing), message)
         else:

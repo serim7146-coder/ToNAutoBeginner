@@ -397,7 +397,7 @@ class VolumeController:
             category = category_of(st)
             target = levels[category]
             if self._applied.get(pid) == target:
-                continue                  # 変わっていない（手で変えた音量も上書きしない）
+                continue                  # 変わっていない（利用者が変えた音量も上書きしない）
             original = self._original.get(pid)
             if original is None:
                 current = self._audio.read_volumes([pid])

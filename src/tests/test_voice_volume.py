@@ -92,11 +92,13 @@ class TestEveryCallerPassesItsKind(unittest.TestCase):
         self.assertEqual(kinds, {"Fog": "fog", "Unbound": "unbound", "Midnight": "midnight",
                                  "Alternate": "alternate", "Ghost": "ghost",
                                  "Sabotage murder": "murder", "Sabotage star": "sabotage", "Cracked": "cracked",
-                                 "Double Trouble": "double_trouble"})
+                                 "Double Trouble": "double_trouble",
+                                 "8 Pages": "8pages", "Punished": "punish"})
         cfg = WindowConfig(voice_fog="f", voice_unbound="u", voice_midnight="m", voice_alternate="a",
                            voice_ghost="g", voice_murder="mu", voice_sabotage="sa", voice_cracked="c",
-                           voice_double_trouble="d")
-        monitor = type("M", (), {"cfg": cfg})()
+                           voice_double_trouble="d", voice_8pages="8", voice_punish="p")
+        monitor = type("M", (), {"cfg": cfg,
+                                 "SPEED_FREEZE_FLAGS": LogMonitor.LogMonitor.SPEED_FREEZE_FLAGS})()
         for round_type, kind in kinds.items():
             self.assertEqual(LogMonitor.LogMonitor._round_entry_voice(monitor, round_type),
                              getattr(cfg, f"voice_{kind}"), round_type)

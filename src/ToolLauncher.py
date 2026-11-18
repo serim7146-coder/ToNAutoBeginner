@@ -1,6 +1,6 @@
 """登録された exe を起動する。
 
-ToN ListTool / SaveManager / Overlay のような、周回のたびに手で立ち上げて
+ToN ListTool / SaveManager / Overlay のような、周回のたびに利用者が立ち上げて
 いるツールを1クリックで起動するためのもの。どの exe を並べるかは利用者が
 決めるので、既定のパスは持たない。
 

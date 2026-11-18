@@ -175,6 +175,7 @@ class _FakeApp:
         self.logs, self.saves = [], 0
         self.clipboard = []
         self.v_phone_notify = type("V", (), {"v": False, "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
+        self.v_queue_notify = type("V", (), {"v": True, "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
         self.v_phone_topic = type("V", (), {"v": "", "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
 
     def _log(self, msg):
@@ -241,7 +242,7 @@ class TestSettings(unittest.TestCase):
         mainGUI.App._on_phone_notify_changed(app)
         self.assertTrue(SharedState.get_phone_notify())
         self.assertEqual(app.saves, 1)
-        self.assertEqual(app.syncs, 1, "見張りも「通知する」に合わせる")
+        self.assertEqual(getattr(app, "syncs", 0), 0, "見張りは「待機列に入れるようになったら知らせる」で決まる（ここでは触らない）")
         app.v_phone_notify.set(False)
         mainGUI.App._on_phone_notify_changed(app)
         self.assertFalse(SharedState.get_phone_notify())
@@ -344,7 +345,7 @@ class _Rounds(unittest.TestCase):
         self.sent.append((topic, title, message))
 
     def monitor(self, keep_on=None, continue_rounds=(), instance=config.INSTANCE_PRIVATE):
-        cfg = WindowConfig(do_skip=True, cancel_afk=True, voice_continue="continue.mp3",
+        cfg = WindowConfig(do_skip=True, cancel_afk_wins=3, voice_continue="continue.mp3",
                            continue_rounds=set(continue_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, self.logs.append, window_idx=2)
         monitor.st.instance_type = instance

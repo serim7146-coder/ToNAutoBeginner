@@ -204,7 +204,8 @@ class TestOscBranching(unittest.TestCase):
              patch.object(ex._osc, "stop_all"), \
              patch.object(WindowOperator, "hold_key") as mock_key:
             ex.move("forward", 2.1)
-        mock_press.assert_called_once_with("/input/MoveForward", 2.1, stop=ex._move_stopped)
+        mock_press.assert_called_once_with("/input/MoveForward", 2.1,
+                                          stop=ex._move_stopped, wake=ex._move_wake)
         mock_key.assert_not_called()
 
     def test_move_falls_back_to_the_background_key_without_osc(self):
@@ -214,7 +215,8 @@ class TestOscBranching(unittest.TestCase):
                           return_value=True) as mock_key,              patch.object(WindowOperator, "focus_window") as focus:
             ex.move("forward", 2.1)
 
-        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1, stop=ex._move_stopped)
+        mock_key.assert_called_once_with(ex._cfg.hwnd, "w", 2.1,
+                                         stop=ex._move_stopped, wake=ex._move_wake)
         focus.assert_not_called()
 
     def test_a_failed_background_key_is_logged(self):
@@ -238,7 +240,7 @@ class TestOscBranching(unittest.TestCase):
         ex = self._executor(9000)
         held = []
         with patch.object(ex._osc, "press",
-                          side_effect=lambda a, s, stop=None: held.append(
+                          side_effect=lambda a, s, stop=None, wake=None: held.append(
                               SharedState._GLOBAL_ACTION_LOCK.locked()) or True), \
              patch.object(ex._osc, "stop_all"):
             ex.move("forward", 1.0)
@@ -493,7 +495,7 @@ class TestHideOwnWindowsWhileRecording(unittest.TestCase):
         self.assertEqual(calls, [True, False], "停止で戻す")
 
     def test_a_recording_we_did_not_start_changes_nothing(self):
-        """手動の録画には触らない（隠しもしない）"""
+        """利用者が始めた録画には触らない（隠しもしない）"""
         calls = []
         client = MagicMock()
         client.connect.return_value = (True, "")

@@ -189,7 +189,7 @@ VRCHAT_DEFAULT_OSC_PORTS = (9000, 9001)
 def read_log_osc_ports(path) -> Optional[tuple[int, int]]:
     """ログ先頭の `Arg: --osc=<in>:<ip>:<out>` から (受信, 送信) を返す。
 
-    --osc が無いログは手動起動。VRChatは既定で9000を掴むので
+    --osc が無いログは利用者が立ち上げた窓。VRChatは既定で9000を掴むので
     VRCHAT_DEFAULT_OSC_PORTS を返す。ファイルが読めなければ None。
     「--oscが無い」と「読めない」は区別する（読めないログを既定ポートの窓へ
     結びつけると、他人のラウンドを見て自爆する）。
@@ -238,7 +238,7 @@ def match_windows_to_logs_by_osc(
         logs.append((Path(p), ports[0], ports[1], parse_log_start_time(p)))
 
     # (優先順位, 値, 窓, ログ)。同じ受信ポートを名乗るログが複数あるとき
-    # （手動起動を繰り返すと9000が並ぶ）は起動時刻の差が小さい方を採り、
+    # （利用者が立ち上げるのを繰り返すと9000が並ぶ）は起動時刻の差が小さい方を採り、
     # 起動時刻が取れない窓なら新しいログを採る。同点なら新しいログ
     # （candidate_logs は新しい順なので、並びの先の方が勝つ）
     pairs: list[tuple[int, float, int, int]] = []

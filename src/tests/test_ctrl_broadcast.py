@@ -1,5 +1,5 @@
 """HC: Ctrl を押しながら窓ごとの設定を変えると、全部の窓タブに同じ値が写る。
-本物の App を 1 つ作って（窓は作った直後に隠れる。support）、窓のタブのチェック・ドロップダウンを手で変えたことにする。
+本物の App を 1 つ作って（窓は作った直後に隠れる。support）、窓のタブのチェック・ドロップダウンを利用者が変えたことにする。
 Ctrl が押されているかは mainGUI.ctrl_held を差し替えて決める（本物のキー状態は見ない）。
 保存は一時フォルダ（config.SETTINGS_PATH の差し替え）だけ。本物の入力・OSC・窓・ネットワークは使わない"""
 from tests.support import *  # noqa: F401,F403
@@ -15,9 +15,6 @@ D, F = ContinueTable.DISABLED, ContinueTable.DEFAULT
 ROUND = config.SKIP_ROUND_SELECTABLE[0]
 CHECKS = (("auto_begin", "自動Begin"),
           ("do_skip", "自動自爆"),
-          ("cancel_afk_two", "DTM/Waldo続行 (2クラまで)"),
-          ("cancel_afk", "DTM/Waldo続行 (3クラまで)"),
-          ("cancel_afk_after_unlock", "3クラ後もDTM/Waldo続行"),
           ("announce_intermission", "Intermissionアナウンス"))
 
 
@@ -31,6 +28,12 @@ def _checkbutton(tab, text, nth=0):
     """タブの中の、文字が text の Checkbutton（nth 番目。ラウンドのチェックは全自爆の格子が 0、全続行の格子が 1）"""
     found = [w for w in _descendants(tab) if isinstance(w, ttk.Checkbutton) and w.cget("text") == text]
     return found[nth]
+
+
+def _radio(tab, text):
+    """タブの中の、文字が text の Radiobutton（DTM/Waldo続行の 4 択）"""
+    found = [w for w in _descendants(tab) if isinstance(w, ttk.Radiobutton) and w.cget("text") == text]
+    return found[0]
 
 
 def _var(tab, key):
@@ -78,8 +81,8 @@ class TestCtrlBroadcast(unittest.TestCase):
         self.assertTrue(all(ContinueTable.body_of(self._store(), t.idx + 1, F) == {} for t in others))
         self.log.assert_not_called()
 
-    # ── Ctrl あり: 6 つのチェック ─────────────────────────
-    def test_each_of_the_six_checks_reaches_every_window(self):
+    # ── Ctrl あり: 窓ごとのチェック ─────────────────────────
+    def test_each_of_the_checks_reaches_every_window(self):
         self.ctrl.return_value = True
         for key, text in CHECKS:
             for start in (False, True):
@@ -123,6 +126,16 @@ class TestCtrlBroadcast(unittest.TestCase):
             t.v_skip_rounds[ROUND].set(True)
         _checkbutton(self.tabs[0], ROUND, 0).invoke()
         self.assertFalse(any(t.v_skip_rounds[ROUND].get() for t in self.tabs))
+
+    def test_a_window_where_the_round_does_not_apply_is_not_written(self):
+        """焼き芋の窓へ Classic の全自爆は写らない（押せないチェックに入れない）。ほかの窓へは写る"""
+        self.ctrl.return_value = True
+        self.tabs[1].apply_instance_type(config.INSTANCE_YAKIIMO)
+        _checkbutton(self.tabs[0], ROUND, 0).invoke()
+        self.assertTrue(self.tabs[0].v_skip_rounds[ROUND].get())
+        self.assertFalse(self.tabs[1].v_skip_rounds[ROUND].get())
+        for t in self.tabs[2:]:
+            self.assertTrue(t.v_skip_rounds[ROUND].get())
 
     def test_other_rounds_are_left_alone(self):
         self.ctrl.return_value = True
@@ -204,8 +217,11 @@ class TestCtrlBroadcast(unittest.TestCase):
         _checkbutton(self.tabs[0], "自動自爆").invoke()
         self.log.assert_called_once_with("[設定] Ctrl: 「自動自爆」を ON にして全窓に反映しました")
         self.log.reset_mock()
-        _checkbutton(self.tabs[0], "DTM/Waldo続行 (2クラまで)").invoke()      # 既定は OFF なので ON になる
-        self.log.assert_called_once_with("[設定] Ctrl: 「DTM/Waldo続行 (2クラまで)」を ON にして全窓に反映しました")
+        _radio(self.tabs[0], "2クラまで").invoke()
+        self.log.assert_called_once_with("[設定] Ctrl: 「DTM/Waldo続行」を「2クラまで」に全窓に反映しました")
+        self.log.reset_mock()
+        _radio(self.tabs[0], "しない").invoke()
+        self.log.assert_called_once_with("[設定] Ctrl: 「DTM/Waldo続行」を「しない」に全窓に反映しました")
         self.log.reset_mock()
         self.tabs[0].chk_ct_switch.invoke()
         self.log.assert_called_once_with("[設定] Ctrl: 「アイテムで切り替える」を ON にして全窓に反映しました")
@@ -226,7 +242,7 @@ class TestCtrlBroadcast(unittest.TestCase):
         self.ctrl.return_value = True
         self.app._running = True
         self.addCleanup(setattr, self.app, "_running", False)
-        cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk=True, announce_intermission=False)
+        cfgs = [WindowConfig(auto_begin=True, do_skip=True, cancel_afk_wins=3, announce_intermission=False)
                 for _ in self.tabs]
         monitors = []
         for t, cfg in zip(self.tabs, cfgs):
@@ -245,11 +261,10 @@ class TestCtrlBroadcast(unittest.TestCase):
             self.assertEqual(cfg.skip_rounds, {ROUND})
 
 
-    def test_the_two_clear_check_reaches_every_window_and_every_running_monitor(self):
-        self.ctrl.return_value = True
+    def _running_cfgs(self, **kwargs):
         self.app._running = True
         self.addCleanup(setattr, self.app, "_running", False)
-        cfgs = [WindowConfig(cancel_afk=True) for _ in self.tabs]
+        cfgs = [WindowConfig(**kwargs) for _ in self.tabs]
         monitors = []
         for t, cfg in zip(self.tabs, cfgs):
             m = MagicMock()
@@ -258,29 +273,29 @@ class TestCtrlBroadcast(unittest.TestCase):
             monitors.append(m)
         self.app.monitors = monitors
         self.addCleanup(self.app.monitors.clear)
-        _checkbutton(self.tabs[1], "DTM/Waldo続行 (2クラまで)").invoke()
-        self.assertEqual([bool(t.v_cancel_afk_two.get()) for t in self.tabs], [True] * len(self.tabs))
-        for cfg in cfgs:
-            self.assertTrue(cfg.cancel_afk_two)
-            self.assertTrue(cfg.cancel_afk, "3クラまでは動かない")
-        _checkbutton(self.tabs[0], "DTM/Waldo続行 (2クラまで)").invoke()
-        for cfg in cfgs:
-            self.assertFalse(cfg.cancel_afk_two)
+        return cfgs
 
-    def test_without_ctrl_the_two_clear_check_reaches_only_its_own_monitor(self):
-        self.app._running = True
-        self.addCleanup(setattr, self.app, "_running", False)
-        cfgs = [WindowConfig() for _ in self.tabs]
-        monitors = []
-        for t, cfg in zip(self.tabs, cfgs):
-            m = MagicMock()
-            m.window_idx = t.idx + 1
-            m.cfg = cfg
-            monitors.append(m)
-        self.app.monitors = monitors
-        self.addCleanup(self.app.monitors.clear)
-        _checkbutton(self.tabs[0], "DTM/Waldo続行 (2クラまで)").invoke()
-        self.assertEqual([c.cancel_afk_two for c in cfgs], [True] + [False] * (len(self.tabs) - 1))
+    def test_afk_wins_reaches_every_window_and_every_running_monitor(self):
+        self.ctrl.return_value = True
+        cfgs = self._running_cfgs(cancel_afk_wins=3)
+        for text, wins in (("2クラまで", 2), ("しない", 0), ("3クラ後も", 999), ("3クラまで", 3)):
+            _radio(self.tabs[1], text).invoke()
+            self.assertEqual([t.v_afk_wins.get() for t in self.tabs], [wins] * len(self.tabs), text)
+            self.assertEqual([c.cancel_afk_wins for c in cfgs], [wins] * len(cfgs), text)
+
+    def test_without_ctrl_afk_wins_reaches_only_its_own_monitor(self):
+        cfgs = self._running_cfgs(cancel_afk_wins=3)
+        _radio(self.tabs[0], "2クラまで").invoke()
+        self.assertEqual([c.cancel_afk_wins for c in cfgs], [2] + [3] * (len(self.tabs) - 1))
+        self.assertEqual([t.v_afk_wins.get() for t in self.tabs], [2] + [3] * (len(self.tabs) - 1))
+
+    def test_afk_wins_is_a_radio_of_four_and_has_no_old_checks(self):
+        texts = [w.cget("text") for w in _descendants(self.tabs[0]) if isinstance(w, ttk.Radiobutton)
+                 and w.cget("text") in [t for _v, t in mainGUI.AFK_WINS_CHOICES]]
+        self.assertEqual(texts, ["しない", "2クラまで", "3クラまで", "3クラ後も"])
+        old = [w for w in _descendants(self.tabs[0]) if isinstance(w, ttk.Checkbutton)
+               and "DTM/Waldo" in str(w.cget("text"))]
+        self.assertEqual(old, [])
 
 
 class TestCtrlHeld(unittest.TestCase):

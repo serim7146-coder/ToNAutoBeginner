@@ -10,11 +10,8 @@ class WindowConfig:
     active: bool = True
     auto_begin: bool = True
     do_skip: bool = True
-    cancel_afk: bool = True
-    # DTM/Waldo を2クラ（2勝）まで続行する。これだけでも続行は有効。3クラまでより優先、3クラ後もには負ける
-    cancel_afk_two: bool = False
-    # DTM/Waldo を3クラ解放（3勝）の後も続行する
-    cancel_afk_after_unlock: bool = False
+    # DTM/Waldo 続行の目標勝数。0=続行しない / 2 / 3 / OPEN_SPECIAL_ROUND_UNLIMITED_WINS=解放後も
+    cancel_afk_wins: int = 3
     osc_port: int = 0       # 0 = OSC不可（従来のキーボード操作にフォールバック）
     # VRChatが値を送ってくるポート。0なら従来どおり osc_port+1 を使う
     # （--osc= の送信ポートは受信+1とは限らない）
@@ -124,7 +121,7 @@ class WindowState:
     # 続行フリーズを張ったラウンドの round_seq。そのラウンドのアイテムは続行の終わり
     # （after_continue_round）で落とすので、RoundOver では落とさない（DW: 二重にしない）
     continue_freeze_round: int = -1
-    # ToN Utils の判断に従う（EB）: 起点（killers_set・killers_revealed）が来たラウンド・待ち始めたラウンド・
+    # ToN Utils の判定に従う（EB）: 起点（killers_set・killers_revealed）が来たラウンド・待ち始めたラウンド・
     # 看破などで先に分かって明かされるのを待っているラウンド。最後に画面へ出した「読めない理由」・窓の対応
     utils_anchor_seq: int = -1
     utils_anchor_time: float = 0.0      # 起点の行の時刻（epoch 秒。VRChat のログはローカル時刻・秒まで。EB2）
@@ -134,6 +131,9 @@ class WindowState:
     utils_source_logged: str = ""
     # RoundOver で落とすと決めたラウンドの round_seq（-1 = 無し）と、落としたラウンドの round_seq
     dropped_round_seq: int = -1         # アイテムを落としたラウンド（死んだ・生き残ったときに 1 回。EU）
+    # 続行の後なので Begin を押さないと決めたラウンドの round_seq（-1 = 無し）。
+    # RoundOver の頭で決めて、同じラウンドの装備の行でも見る
+    begin_skipped_seq: int = -1
     # 続行フリーズを張った・外した瞬間に呼ぶ（引数 True / False。LogMonitor が入れる）
     continue_hook: object = field(default=None, compare=False, repr=False)
     _skip_time: float = 0.0

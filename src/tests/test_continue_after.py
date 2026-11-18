@@ -388,6 +388,8 @@ class TestTheSettings(unittest.TestCase):
     def setUp(self):
         self.addCleanup(SharedState.set_continue_drop_item, False)
         self.addCleanup(SharedState.set_continue_restore_window, False)
+        self.addCleanup(SharedState.set_continue_restore_at_round_end, False)
+        self.addCleanup(SharedState.set_no_begin_after_continue, False)
 
     def test_on_by_default_and_restored(self):
         for data, expected in (({}, (True, True)),
@@ -401,30 +403,64 @@ class TestTheSettings(unittest.TestCase):
             self.assertEqual((SharedState.get_continue_drop_item(), SharedState.get_continue_restore_window()),
                              expected, data)
 
+    def test_the_restore_time_is_on_by_default_and_restored(self):
+        """窓位置リセットの時点: 無い・None・壊れた値は ON。False だけが OFF"""
+        for data, expected in (({}, True), ({"continue_restore_at_round_end": None}, True),
+                               ({"continue_restore_at_round_end": "x"}, True),
+                               ({"continue_restore_at_round_end": 0}, True),
+                               ({"continue_restore_at_round_end": True}, True),
+                               ({"continue_restore_at_round_end": False}, False)):
+            SharedState.set_continue_restore_at_round_end(not expected)
+            self._load(data)
+            self.assertEqual(SharedState.get_continue_restore_at_round_end(), expected, data)
+
+    def test_no_begin_after_continue_is_off_by_default_and_restored(self):
+        """続行の後は自動Beginしない: 無い・None・壊れた値は OFF。True だけが ON"""
+        for data, expected in (({}, False), ({"no_begin_after_continue": None}, False),
+                               ({"no_begin_after_continue": "x"}, False),
+                               ({"no_begin_after_continue": 1}, False),
+                               ({"no_begin_after_continue": False}, False),
+                               ({"no_begin_after_continue": True}, True)):
+            SharedState.set_no_begin_after_continue(not expected)
+            self._load(data)
+            self.assertEqual(SharedState.get_no_begin_after_continue(), expected, data)
+
     def test_the_defaults_and_the_checks(self):
         src = Path(SharedState.__file__).read_text(encoding="utf-8")
         self.assertIn("_CONTINUE_DROP_ITEM = _Setting(True, bool)", src)
         self.assertIn("_CONTINUE_RESTORE_WINDOW = _Setting(True, bool)", src)
+        self.assertIn("_CONTINUE_RESTORE_AT_ROUND_END = _Setting(True, bool)", src)
+        self.assertIn("_NO_BEGIN_AFTER_CONTINUE = _Setting(False, bool)", src)
         gui = Path(mainGUI.__file__).read_text(encoding="utf-8")
         self.assertIn("self.v_continue_drop_item = tk.BooleanVar(value=True)", gui)
         self.assertIn("self.v_continue_restore_window = tk.BooleanVar(value=True)", gui)
+        self.assertIn("self.v_continue_restore_at_round_end = tk.BooleanVar(value=True)", gui)
+        self.assertIn("self.v_no_begin_after_continue = tk.BooleanVar(value=False)", gui)
         # DV3: 見出しを無くして短い名前（詳しくは README）
         self.assertIn('text="アイテムを落とす"', gui)
         self.assertIn('text="窓位置リセット"', gui)
+        self.assertIn('text="窓位置リセットはラウンド終了後"', gui)
+        self.assertIn('text="続行の後は自動Beginしない"', gui)
 
     def test_the_checks_change_the_setting(self):
         app = type("FakeApp", (), {})()
         app.v_continue_drop_item = MagicMock(get=lambda: False)
         app.v_continue_restore_window = MagicMock(get=lambda: True)
+        app.v_continue_restore_at_round_end = MagicMock(get=lambda: False)
+        app.v_no_begin_after_continue = MagicMock(get=lambda: True)
         app._schedule_settings_save = MagicMock()
         mainGUI.App._on_continue_after_changed(app)
-        self.assertEqual((SharedState.get_continue_drop_item(), SharedState.get_continue_restore_window()),
-                         (False, True))
+        self.assertEqual((SharedState.get_continue_drop_item(), SharedState.get_continue_restore_window(),
+                          SharedState.get_continue_restore_at_round_end(),
+                          SharedState.get_no_begin_after_continue()),
+                         (False, True, False, True))
         app._schedule_settings_save.assert_called_once()
 
     def test_they_are_saved(self):
         SharedState.set_continue_drop_item(False)
         SharedState.set_continue_restore_window(True)
+        SharedState.set_continue_restore_at_round_end(False)
+        SharedState.set_no_begin_after_continue(True)
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app.tool_rows = []
@@ -443,10 +479,14 @@ class TestTheSettings(unittest.TestCase):
             app._window_freeze_setting = lambda: {}
             mainGUI.App._save_launch_settings(app)
         self.assertEqual((saved["continue_drop_item"], saved["continue_restore_window"]), (False, True))
+        self.assertIs(saved["continue_restore_at_round_end"], False)
+        self.assertIs(saved["no_begin_after_continue"], True)
 
     def test_the_readme(self):
         readme = (Path(mainGUI.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("アイテムを落とす・窓位置リセット", readme)
+        self.assertIn("**窓位置リセットはラウンド終了後**（デフォルト ON）", readme)
+        self.assertIn("**続行の後は自動Beginしない**（デフォルト OFF）", readme)
         self.assertIn("死んだとき・生き残ったときに、1 回だけ", readme)  # EU（前は DW の「どのラウンドでも、終わったら」）
         self.assertNotIn("どのラウンドでも、終わったら", readme)
 

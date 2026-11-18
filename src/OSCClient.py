@@ -67,19 +67,22 @@ class OSCClient:
 
     # ── 入力 ──────────────────────────────────
 
-    def press(self, address: str, hold_sec: float, stop=None) -> bool:
+    def press(self, address: str, hold_sec: float, stop=None, wake=None) -> bool:
         """ボタン系入力を押して離す。0→1の変化で反応する入力があるため
         押す前に0を送ってから1にする。押している間は 1 を送り直す（_hold_and_release）。
         stop（呼ぶと True ならやめる）を渡すと、押している途中でもすぐ離す（マクロの停止など）"""
         ok = self.send(address, 0)
         ok = self.send(address, 1) and ok
-        return self._hold_and_release([(address, time.time() + max(0.0, hold_sec))], stop) and ok
+        return self._hold_and_release([(address, time.time() + max(0.0, hold_sec))],
+                                      stop, wake) and ok
 
-    def _hold_and_release(self, ends, stop=None) -> bool:
+    def _hold_and_release(self, ends, stop=None, wake=None) -> bool:
         """ends は [(アドレス, 離す時刻)]。離す時刻の早い順に 0 を送る。待つ間は OSC_HOLD_RESEND_SEC ごとに、
         まだ押しているアドレスへ 1 を送り直す（押している途中で VRChat 側で入力が消えて止まることが
         あった。途中で消えても次の送り直しで戻る）。離す時刻は送り直しで変わらない。
-        stop() が True になったら、まだ押しているものを全部その場で離す"""
+        stop() が True になったら、まだ押しているものを全部その場で離す。
+        wake（threading.Event）を渡すと、押している途中でも合図で即座に起きて stop() を見直す。
+        送り直しの間隔（OSC_HOLD_RESEND_SEC）は変えない"""
         ok = True
         ends = sorted(ends, key=lambda e: e[1])
         for i, (address, end) in enumerate(ends):
@@ -91,7 +94,10 @@ class OSCClient:
                 remain = end - time.time()
                 if remain <= 0:
                     break
-                time.sleep(min(remain, config.OSC_HOLD_RESEND_SEC))
+                if wake is not None:
+                    wake.wait(min(remain, config.OSC_HOLD_RESEND_SEC))
+                else:
+                    time.sleep(min(remain, config.OSC_HOLD_RESEND_SEC))
                 if time.time() < end and not (stop is not None and stop()):
                     for held, _end in ends[i:]:     # まだ離していないもの
                         ok = self.send(held, 1) and ok
@@ -121,7 +127,7 @@ class OSCClient:
                 ok = self.send(address, value) and ok       # 同じ float を送り直す
         return self.send(address, 0.0) and ok
 
-    def press_multi(self, holds, stop=None) -> bool:
+    def press_multi(self, holds, stop=None, wake=None) -> bool:
         """複数の入力を同時に押し、それぞれの秒数で個別に離す。
 
         holds は [(アドレス, 押す秒数), ...]。全部を同時に押し始め、
@@ -142,7 +148,7 @@ class OSCClient:
             ok = self.send(address, 1) and ok
         start = time.time()
         return self._hold_and_release([(address, start + sec) for address, sec in holds],
-                                      stop) and ok
+                                      stop, wake) and ok
 
     def move_forward(self, sec: float) -> bool:
         return self.press("/input/MoveForward", sec)

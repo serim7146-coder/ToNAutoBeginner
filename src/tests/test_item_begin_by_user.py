@@ -5,7 +5,7 @@ import tests.test_equip_freeze_timing as _timing
 
 
 class _Case(_timing._Case):
-    def _manual_executor(self):
+    def _by_user_executor(self):
         """アイテム取得→Begin モードの窓。ロストして装備待ち（waiting_for_equip）"""
         ex, st = self._executor(fetch=False)
         SharedState.set_item_begin_mode(True)
@@ -29,17 +29,17 @@ class _Case(_timing._Case):
 
 
 class TestHandleItemLostInTheItemBeginMode(_Case):
-    def test_after_equipping_it_returns_manual_with_the_one_line(self):
-        ex, st = self._manual_executor()
+    def test_after_equipping_it_returns_by_user_with_the_one_line(self):
+        ex, st = self._by_user_executor()
         with patch.object(ActionExecutor.time, "sleep", side_effect=self._equip(st)):
-            self.assertEqual(ex._handle_item_lost(), "manual")
+            self.assertEqual(ex._handle_item_lost(), "by_user")
         self.assertIn("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）", self.logs)
         self.assertFalse(any("装備確認" in m for m in self.logs), "装備の確認はログに出さない（1 行で足りる）")
         self.assertFalse(any("Beginへ向かいます" in m for m in self.logs), self.logs)
         self.assertTrue(st.equip_freeze_held, "装備待ちフリーズは Begin の受理まで解かない（ここでは解かない）")
 
     def test_a_round_start_before_equipping_returns_false(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
 
         def start_round(_sec):
             st.in_round = True                       # 誰かが Begin を押した
@@ -48,20 +48,20 @@ class TestHandleItemLostInTheItemBeginMode(_Case):
         self.assertFalse(any("装備確認" in m for m in self.logs), self.logs)
 
     def test_stop_while_waiting_returns_false_and_ends_the_freeze(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         with patch.object(ex, "_is_running", return_value=False), \
              patch.object(ActionExecutor.SharedState, "equip_freeze_end") as end:
             self.assertIs(ex._handle_item_lost(), False)
         end.assert_called_once_with(st)
 
     def test_the_auto_fetch_mode_still_returns_true(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         SharedState.set_item_begin_mode(False)
         self.assertIs(ex._handle_item_lost(), True)
         self.assertIn("⚠ アイテムロスト → Beginへ向かいます（フリーズは Begin が通ってから）", self.logs)
 
     def test_no_loss_returns_true(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         st.waiting_for_equip = False
         self.assertIs(ex._handle_item_lost(), True)
 
@@ -79,7 +79,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
 
     def test_a_lost_round_does_nothing_but_the_one_line(self):
         """FZ: 移動も、Run の位置の撮影も、連打も、Begin も、あきらめのやり直しも、BEGIN_WAIT_SEC の待ちもしない"""
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         spies = self._spy(ex)
         ex._pos_ref_plan = MagicMock(return_value=True)
         with patch.object(config, "BEGIN_WAIT_SEC", 9),              patch.object(ActionExecutor.time, "sleep") as sleep:
@@ -92,7 +92,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
         self.assertTrue(st.waiting_for_equip, "装備待ちは解かない（解除は装備＋利用者の Begin の受理かラウンド開始）")
 
     def test_it_waits_for_the_run_respawn_first_and_says_nothing_when_stopped(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         spies = self._spy(ex)
         ex._wait_run_respawn = MagicMock(return_value=False)
         ex.do_after_round()
@@ -102,7 +102,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
 
     def test_a_loss_found_only_at_verified_round_end_keeps_the_fy_path(self):
         """ロストが Verified Round End で初めて分かる回（RoundOver では立たない）: 移動はする・連打は止める・Begin は押さない"""
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         st.waiting_for_equip = False                 # 連打を始める時点ではまだ分からない
         stop = threading.Event()
         ex._start_use_spam = MagicMock(return_value=stop)
@@ -124,7 +124,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
         self.assertEqual(self.logs.count("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）"), 1, self.logs)
 
     def test_a_round_without_loss_is_as_before(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         st.waiting_for_equip = False
         st.item_id = 29
         ex._begin_move = MagicMock()
@@ -134,7 +134,7 @@ class TestDoAfterRoundInTheItemBeginMode(_Case):
         ex._press_begin.assert_called_once()
 
     def test_the_auto_fetch_mode_is_as_before(self):
-        ex, st = self._manual_executor()
+        ex, st = self._by_user_executor()
         SharedState.set_item_begin_mode(False)
 
         def press(*_a, **_k):

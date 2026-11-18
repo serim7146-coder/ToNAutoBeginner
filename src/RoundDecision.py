@@ -11,7 +11,7 @@ class KillerDecision:
     is_continue_round: bool
 
 
-ALTERNATE_SUFFIX = " (Alternate)"
+ALTERNATE_SUFFIX = MatchTNL.ALTERNATE_SUFFIX    # 置き場所は MatchTNL（LogParser も使う）
 
 
 def selectable_round_name(round_type: str) -> str:
@@ -26,20 +26,18 @@ def selectable_round_name(round_type: str) -> str:
     return round_type
 
 
-def unlock_target(cancel_afk_two: bool) -> int:
-    """この窓の DTM/Waldo 続行の目標勝数。「2クラまで」が入っていれば 2、なければ 3
-    （2クラまでは 3クラまでより優先。数える勝利数そのものは窓によらず 3 まで）"""
-    if cancel_afk_two:
-        return config.OPEN_SPECIAL_ROUND_TWO_TARGET_WINS
-    return config.OPEN_SPECIAL_ROUND_TARGET_WINS
+def shown_target(target: int) -> int:
+    """画面に出す「Nクラ」の N。生存数は 3 で打ち止めなので、解放後も続行（999）でも 3 と出す。
+    続行しない窓（0）も、今までどおり 3 と出す"""
+    if not target:
+        return config.OPEN_SPECIAL_ROUND_TARGET_WINS
+    return min(target, config.OPEN_SPECIAL_ROUND_TARGET_WINS)
 
 
-def open_special_active(wins: int, after_unlock: bool = False, target: int | None = None) -> bool:
-    """DTM/Waldo を続行する時期か（目標の勝数の前。窓の設定で目標の後も）。
-    target が None なら config.OPEN_SPECIAL_ROUND_TARGET_WINS（3）"""
-    if target is None:
-        target = config.OPEN_SPECIAL_ROUND_TARGET_WINS
-    return after_unlock or wins < target
+def open_special_active(wins: int, target: int) -> bool:
+    """DTM/Waldo を続行する時期か。target はこの窓の目標勝数
+    （0=続行しない・999=解放後も。どちらもこの 1 行で正しく出る）"""
+    return wins < target
 
 
 def open_special_round_type(round_type: str) -> bool:
@@ -67,16 +65,13 @@ def is_open_special_round_target(
     terror_ids: list[int],
     round_type: str,
     wins: int,
-    cancel_afk: bool,
-    after_unlock: bool = False,
+    target: int,
     holds_plush: bool | None = None,
-    target: int | None = None,
 ) -> bool:
     return (
         bool(open_special_ids(terror_ids, holds_plush))
         and open_special_round_type(round_type)
-        and open_special_active(wins, after_unlock, target)
-        and cancel_afk
+        and open_special_active(wins, target)
     )
 
 
@@ -117,15 +112,12 @@ def decide_killers(
     terror_ids: list[int],
     round_type: str,
     wins: int,
-    cancel_afk: bool,
+    target: int,
     bloodthirsty_variant: bool = False,
-    after_unlock: bool = False,
     holds_plush: bool | None = None,
     self_inserts_table_disabled: bool = False,
-    target: int | None = None,
 ) -> KillerDecision:
-    open_special = is_open_special_round_target(terror_ids, round_type, wins, cancel_afk,
-                                                after_unlock, holds_plush, target)
+    open_special = is_open_special_round_target(terror_ids, round_type, wins, target, holds_plush)
     # リストで表現できない組み合わせ。3クラ解放とは別物なので、
     # KillerDecision.open_special には混ぜない（AFK解除が誤って走る）
     forced = is_self_inserts_bloodthirsty(terror_ids, round_type,

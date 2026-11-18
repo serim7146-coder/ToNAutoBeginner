@@ -111,6 +111,10 @@ class ActionExecutor:
         # OSCが使える窓では移動をOSCで行う。フォーカスを奪わないので
         # 排他ロックが不要になり、他窓と並行して動ける。
         self._osc = OSCClient.OSCClient(cfg.osc_port) if cfg.osc_port else None
+        # 長押しを起こす合図。待っている側は clear しない（下ろすのは条件が戻った側の仕事）
+        self._skip_wake = threading.Event()   # 自爆: 死亡・リスポーン・自爆キャンセル・ツール停止
+        self._stop_wake = threading.Event()   # ジャンプ: ツール停止（_stopped の写し）
+        self._move_wake = threading.Event()   # 移動: ツール停止・private でなくなった（_move_stopped の写し）
         self._chase_lock = threading.Lock()
         self._chase_dir = None            # 回っている向き（"cw" / "ccw"）。止まっていれば None
         self._chase_stop = None           # 送り直しのスレッドを止める合図
@@ -138,6 +142,8 @@ class ActionExecutor:
         self._speed_ready = threading.Event()
         self._receiver = None             # 監視中ずっと生かす速度受信器
         self._continue_rect = None        # 続行ラウンドの始まりの窓の矩形（窓を戻す先）
+        # 覚えた同じ矩形を 2 つのスレッドが取るのを防ぐ。RoundOver からの予約・ラウンドの片づけ・フリーズ解除の 3 か所から取りに来る
+        self._continue_lock = threading.Lock()
         # Run のリスポーン（後ろへ・正面へまで）が終わっているか。動き出すこの窓のほかの操作
         # （Begin 前の移動・アイテム取得・押し直し）は、終わるまで待つ
         self._run_respawn_idle = threading.Event()
@@ -338,13 +344,29 @@ class ActionExecutor:
 
     def _run_jump(self):
         if self._osc is not None:
-            ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC, stop=self._stopped)
+            ok = self._osc.press("/input/Jump", config.JUMP_PRESS_SEC,
+                                 stop=self._stopped, wake=self._stop_wake)
         else:
             # _background_key は 1 文字しか受けないので、スペースは空白 1 文字で渡す（"space" は弾かれる）
             ok = WindowOperator.hold_key_background(self._cfg.hwnd, " ", config.JUMP_PRESS_SEC,
-                                                    stop=self._stopped)
+                                                    stop=self._stopped, wake=self._stop_wake)
         if ok is False:
             self._log("⚠ ジャンプを送れません（最小化中など）")
+
+    def wake_skip_hold(self):
+        """自爆の長押し・死亡待ちをその場で起こす（死亡・リスポーン・自爆キャンセル・ツール停止）"""
+        self._skip_wake.set()
+
+    def refresh_hold_blocks(self):
+        """ジャンプ・移動の「もう押さない条件」の今の状態を合図に映す。
+        条件が変わりうる所（監視の開始・停止・インスタンス移動・ワールド移動）から呼ぶ。
+        立てっぱなしにしない（private に戻ったら下ろす）"""
+        for event, blocked in ((self._stop_wake, self._stopped()),
+                               (self._move_wake, self._move_stopped())):
+            if blocked:
+                event.set()
+            else:
+                event.clear()
 
     def _stopped(self) -> bool:
         """マクロが止められたか。押している最中の移動・長押しはこれでその場で離す"""
@@ -361,7 +383,7 @@ class ActionExecutor:
     def move(self, direction: str, seconds: float):
         """移動する。フォーカスは奪わない。
 
-        OSCが使える窓はOSCで送る。使えない窓（手動起動の2窓目以降など）は
+        OSCが使える窓はOSCで送る。使えない窓（利用者が立ち上げた 2 窓目以降など）は
         背面へのキー送信（自爆と同じ経路）で送る。キーはメッセージでも
         読まれるので、前面化しなくても前進できる（WindowOperator.click() の
         docstring の実測を参照）。
@@ -382,12 +404,14 @@ class ActionExecutor:
                        "left": "/input/MoveLeft",
                        "right": "/input/MoveRight"}.get(direction)
             if address:
-                ok = self._osc.press(address, seconds, stop=self._move_stopped)
+                ok = self._osc.press(address, seconds,
+                                     stop=self._move_stopped, wake=self._move_wake)
                 self._osc.stop_all(repeat=1)
                 return ok is not False
         key = {"forward": "w", "back": "s", "left": "a", "right": "d"}.get(direction)
         if key and not WindowOperator.hold_key_background(
-                self._cfg.hwnd, key, seconds, stop=self._move_stopped):
+                self._cfg.hwnd, key, seconds,
+                stop=self._move_stopped, wake=self._move_wake):
             self._log("⚠ 移動キーを送れませんでした（窓が最小化されている等）")
             return False
         return True
@@ -683,6 +707,7 @@ class ActionExecutor:
         if st.suicide_seq == round_seq:
             return          # このラウンドの自爆はもう走っている。流れは1本
         st.suicide_seq = round_seq
+        self._skip_wake.clear()     # このラウンドの頭で 1 回だけ（やり直しの各回では下ろさない）
         try:
             self._skip_until_dead(round_seq)
         finally:
@@ -703,19 +728,22 @@ class ActionExecutor:
             if attempt > 1:
                 self._log(f"自爆が効いていません → やり直し（{attempt}/{limit}回目）")
             key = SharedState.get_suicide_key()
+            hold = SharedState.get_suicide_hold_sec()
             st._skip_time = time.time()
             if self._holding_maxwell():
                 # 一度立てたら、このラウンドの間は下ろさない（長押しの途中でゲームが手から外すことがあり、
                 # やり直しの長押しの時点ではもう持っていない）
                 st.skip_maxwell_seq = round_seq
-            self._log(f"自爆実行中 ({config.SUICIDE_HOLD_SEC}秒・背面)…")
+            self._log(f"自爆実行中 ({hold:g}秒・背面)…")
             if not WindowOperator.hold_key_background(
-                    self._cfg.hwnd, key, config.SUICIDE_HOLD_SEC,
-                    stop=lambda: self._suicide_cancelled(round_seq) or self._stopped()):
+                    self._cfg.hwnd, key, hold, wake=self._skip_wake):
                 # 送れないもの（最小化・Shift併用キー）はやり直しても送れない
                 st._skip_time = 0.0
                 self._log("⚠ 自爆できませんでした（窓が最小化されている等）")
                 return
+            if st.died_this_round:
+                DebugLog.write(f"[操作] [窓{st.window_idx}] 自爆: 死亡の合図で長押しを中断"
+                               f"（押していた時間 {time.time() - st._skip_time:.2f}秒 / 設定 {hold:g}秒）")
             if self._suicide_cancelled(round_seq):
                 return              # 長押しの途中で離した。やり直さない
             if self._died_after_skip(round_seq):
@@ -760,20 +788,28 @@ class ActionExecutor:
             return None
         round_seq = st.round_seq
         st.suicide_cancelled_round = round_seq
+        self._skip_wake.set()           # 長押し・死亡待ちをその場で起こす
         self._log("自爆キャンセル → このラウンドは自爆しません")
         return "stopped" if st.suicide_seq == round_seq else "marked"
 
     def _died_after_skip(self, round_seq: int) -> bool:
-        """長押しが終わってから、死亡を少し待つ。死ねば True"""
+        """長押しが終わってから、死亡を最大 SUICIDE_CONFIRM_SEC 待つ。死ねば True。
+
+        死亡・自爆キャンセル・ツール停止は合図で起こされるので、刻んで見に行かない。
+        合図を立てる 3 つを全部ここで受けて抜ける（受けないと、立った合図で
+        wait() が即返り続けて空回りする）"""
         st = self._st
         deadline = time.time() + config.SUICIDE_CONFIRM_SEC
         while True:
             if st.died_this_round:
                 return True
-            if (time.time() >= deadline or not self._is_running()
+            if self._suicide_cancelled(round_seq):
+                return False        # 待っている間にキャンセル（今までは 1.5 秒待ち切っていた）
+            left = deadline - time.time()
+            if (left <= 0 or not self._is_running()
                     or st.round_seq != round_seq or not st.in_round):
                 return False
-            time.sleep(0.1)
+            self._skip_wake.wait(left)
 
     def _confirm_begin(self, round_seq: int):
         """1回目を押した後。受理されなければ押し直す。1ラウンドで押すのは
@@ -1738,7 +1774,7 @@ class ActionExecutor:
     def _handle_item_lost(self) -> bool | str:
         """アイテムロスト時のフリーズ処理。続行してよければTrue。
 
-        戻り値: True（続けてよい）／False（止めた・ラウンド開始）／"manual"（アイテム取得→Beginモードで
+        戻り値: True（続けてよい）／False（止めた・ラウンド開始）／"by_user"（アイテム取得→Beginモードで
         装備を確認した。Begin は利用者が押すので、この回のツールの Begin はここで終わり。FY）
 
         ロストの判定は Verified Round End で行われるため、必ず
@@ -1764,9 +1800,9 @@ class ActionExecutor:
                 SharedState.equip_freeze_end(st)
                 return False
             if st.in_round:
-                # 手動Begin等でラウンド開始 → ROUND_START側で解除済み
+                # 利用者の Begin などでラウンド開始 → ROUND_START側で解除済み
                 return False
-            return "manual"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
+            return "by_user"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
         else:
             # ここでは張らない（EV: 23:12 窓1・09:47 窓2 は Begin を押す前に張り、Begin が通らずに取りに
             # 行けず、全窓が止まり続けた）。取りに行く窓は店でボタンを押す間だけ（_fetch_in_front）、
@@ -1889,10 +1925,25 @@ class ActionExecutor:
 
     # ── Begin自動操作 ─────────────────────────
 
-    def _item_begin_manual(self) -> bool:
+    def _item_begin_by_user(self) -> bool:
         """アイテム取得→Begin モードでロストした回か（Begin も移動も利用者がする。FY・FZ）"""
         st = self._st
         return bool(SharedState.get_item_begin_mode() and st.waiting_for_equip and self._auto_begin_active())
+
+    def _wait_use_spam_only(self, round_seq: int, spam):
+        """設定「Begin は連打だけ」: 差し込みもクリックもせず、連打が効くのを待つ（依頼者 2026-11-16）。
+        UseRight が Begin に届くのは、その窓が前面か、カーソルがその窓の中にあるときだけ
+        （_use_right_reaches_begin）。背面でカーソルも外の窓は押されないまま終わる。
+        受理（st.begin_done）でも戻る: 通常の流れも受理で _confirm_begin が戻るので、
+        そのあとの装備待ち・アイテム取得（begin_done を条件にする）へ同じタイミングで進める"""
+        st = self._st
+        if spam is None:
+            self._log("Begin: この窓は OSC が使えないので、連打だけの設定では押せません")
+            return
+        self._log("Begin: 連打だけで押します（前面かカーソルがこの窓の上のときに押せます）")
+        while (self._is_running() and not st.in_round and not st.begin_done
+               and st.round_seq == round_seq):
+            time.sleep(config.BEGIN_USE_PULSE_SEC)
 
     def do_after_round(self):
         """
@@ -1908,7 +1959,7 @@ class ActionExecutor:
             return
         # アイテムを落とすのは死んだ・生き残ったとき（EU。LogMonitor → drop_at_round_end）。ここでは落とさない
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
-        if self._item_begin_manual():
+        if self._item_begin_by_user():
             # FZ: アイテム取得→Begin モードでロストした回は、ツールは何もしない（操作は利用者）。
             # フリーズ・前面化・音声は RoundOver で済んでいる。解除は装備＋利用者の Begin の受理か、ラウンド開始
             self._log("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）")
@@ -1952,14 +2003,14 @@ class ActionExecutor:
                 # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
                 # 差し込むだけにする（カーソルを奪う時間を最小にする）
                 # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
-                spam = None if self._item_begin_manual() else self._start_use_spam(round_seq)
+                spam = None if self._item_begin_by_user() else self._start_use_spam(round_seq)
                 # ロスト判定は Verified Round End で行われるので、必ず
                 # 待ってからフリーズ処理をする。RoundOver時点で判定すると
                 # まだ立っておらずフリーズが張られない。
                 if not self._wait_round_end(round_seq=round_seq):
                     return
                 lost = self._handle_item_lost()
-                if lost == "manual":
+                if lost == "by_user":
                     if spam is not None:
                         spam.set()      # ロストが Verified Round End で初めて分かった回は、連打を先に始めている。止める
                     return              # FY: Begin は利用者が押す。あきらめのやり直しも動かない
@@ -1974,7 +2025,10 @@ class ActionExecutor:
                     return      # 他窓を待つ間にインスタンスを抜けた・窓が消えた。押さずに黙って終わる
                 time.sleep(0.1)
                 if not st.in_round and st.round_seq == round_seq:
-                    clicked = self._press_begin()
+                    if SharedState.get_begin_use_spam_only():
+                        self._wait_use_spam_only(round_seq, spam)
+                    else:
+                        clicked = self._press_begin()
 
             if clicked:
                 self._confirm_begin(round_seq)
@@ -2012,7 +2066,7 @@ class ActionExecutor:
                 if fetch:
                     # 自動取得: いつもの案内のタイミング（Begin が通った後）で音だけ鳴らし、取りに行く。
                     # 「音は前面化と一緒に _show_item_loss からだけ」の例外。前面化すると取りに行く
-                    # 前面化・カーソルの差し込みの邪魔になる。手で装備するならこの音で気づける。
+                    # 前面化・カーソルの差し込みの邪魔になる。利用者が装備するならこの音で気づける。
                     # アイテム取得→Begin モードで RoundOver に鳴らした回は鳴らない（1ラウンド1回）
                     self.announce_item_lost_once()
                 outcome = self._fetch_item(round_seq, *fetch) if fetch else None
@@ -2050,6 +2104,13 @@ class ActionExecutor:
                 return
 
     # ── アイテム自動取得 ──────────────────
+    @staticmethod
+    def _fetch_label(shop: str, item_id) -> str:
+        """画面のログに出す、取りに行くものの名前（依頼者 2026-11-17。「#29」では何か分からない）。
+        item.json に無い番号のときだけ「#29」のように番号で出す"""
+        name = ItemCatalog.item_name(item_id, config.ITEMS)
+        return f"{shop} Shop の {name or f'#{item_id}'}"
+
     def item_fetch_target(self) -> tuple | None:
         """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
         押さない窓・このラウンドにロストしたアイテムが分からない・Others や
@@ -2084,7 +2145,7 @@ class ActionExecutor:
             if st.item_id == want:
                 return "equipped"
         elif st.item_id and not st.waiting_for_equip:
-            return "equipped"               # 手で装備した
+            return "equipped"               # 利用者が装備した
         _eq_ok, con_ok, spd_ok, rnd_ok = self._freezes_ok()
         if not (con_ok and spd_ok and rnd_ok):
             # ほかの窓の続行ラウンド・速度検知・突入のフリーズ。その窓を人が操作し始めるので手を引く。
@@ -2130,7 +2191,7 @@ class ActionExecutor:
             client_height=lambda: WindowOperator.client_height(self._cfg.hwnd),
             speed=self._receiver_speed if receiver is not None else None,
             on_miss=lambda shot, why: FetchMiss.save(shot, st.window_idx, why))
-        name = f"{shop} Shop の #{item_id}"
+        name = self._fetch_label(shop, item_id)
         self._fetched_round = st.round_seq          # 柵を越えて店へ行く（EY: 押し直しは Begin の前へ戻ってから）
         self._log(f"アイテム取得: {name} を取りに行きます")
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
@@ -2913,13 +2974,38 @@ class ActionExecutor:
 
     def after_continue_round(self):
         """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）: 窓を始まりの位置へ戻す
-        （覚えた矩形があるときだけ。どのインスタンスでも）。アイテムはここでは落とさない（EU: 死んだ・
-        生き残ったときに落とす。drop_at_round_end）"""
-        rect, self._continue_rect = self._continue_rect, None
-        if not self._is_running():
+        （覚えた矩形があるときだけ。どのインスタンスでも）。
+
+        「窓位置リセットはラウンド終了後」が ON のときは何もしない（RoundOver から戻すので。依頼者 2026-11-18。
+        OFF のときは今まで通り、ここ＝死亡から 5 秒後に戻す）。
+        アイテムはここでは落とさない（EU: 死んだ・生き残ったときに落とす。drop_at_round_end）"""
+        if SharedState.get_continue_restore_at_round_end():
             return
-        if rect is not None and SharedState.get_continue_restore_window():
-            self._restore_continue_window(rect)
+        self.restore_continue_window_now()
+
+    def _take_continue_rect(self):
+        """覚えた矩形を取り出して忘れる。3 か所から来るので、1 回しか戻さないよう鍵の中で"""
+        with self._continue_lock:
+            rect, self._continue_rect = self._continue_rect, None
+        return rect
+
+    def restore_continue_window_at_round_end(self, round_seq: int):
+        """この窓のラウンド終了（RoundOver）から CONTINUE_RESTORE_DELAY_SEC 後に、続行ラウンドの始まりの
+        位置へ窓を戻す（依頼者 2026-11-18。前は続行フリーズが外れた瞬間＝死亡から 5 秒後で、
+        ラウンドが続いているうちに戻っていた）。別スレッド。
+        待っている間に次のラウンドが始まったら何もしない"""
+        time.sleep(config.CONTINUE_RESTORE_DELAY_SEC)
+        if self._st.round_seq != round_seq:
+            return
+        self.restore_continue_window_now()
+
+    def restore_continue_window_now(self):
+        """覚えた矩形へ窓を戻す（覚えていなければ何もしない）。待たない。
+        RoundOver が来ないまま終わったとき（インスタンス移動・窓が消えた）はここから"""
+        rect = self._take_continue_rect()
+        if rect is None or not self._is_running() or not SharedState.get_continue_restore_window():
+            return
+        self._restore_continue_window(rect)
 
     def drop_at_round_end(self, round_seq: int, why: str):
         """死んだ・生き残った行が来たラウンドで 1 回（EU。LogMonitor._drop_when_round_ends が 1 回にする）:
@@ -3225,10 +3311,11 @@ class ActionExecutor:
 
     def _afk_not_mine(self, round_seq: int) -> bool:
         """AFK 回避の見張りが手を出さない: このラウンドを自爆する（キャンセルしていない）・DTM/Waldo や Glorbo の
-        AFK 解除ループが動いている（二重にしない）"""
+        AFK 解除ループが動いている（二重にしない）・Sabotage で自分がマーダーで、設定で止めている"""
         st = self._st
         suicide = st.suicide_seq == round_seq and st.suicide_cancelled_round != round_seq
-        return suicide or st.glorbo_afk or st.is_open_special_round_round
+        murder = st.sabotage_murder_this_round and SharedState.get_murder_no_afk()
+        return suicide or st.glorbo_afk or st.is_open_special_round_round or murder
 
     def _afk_speed_note(self, speed, peak, now) -> str:
         """AFK 回避で動かす・鳴らすときの速さの記録（FG: 動いているのに鳴った件を追うため）"""
@@ -3319,8 +3406,7 @@ class ActionExecutor:
                 not st.is_open_special_round_round
                 or not RoundDecision.open_special_active(
                     st.open_special_round_wins,
-                    getattr(self._cfg, "cancel_afk_after_unlock", False),
-                    RoundDecision.unlock_target(getattr(self._cfg, "cancel_afk_two", False)))
+                    getattr(self._cfg, "cancel_afk_wins", config.OPEN_SPECIAL_ROUND_TARGET_WINS))
             )
 
         while not _should_stop():

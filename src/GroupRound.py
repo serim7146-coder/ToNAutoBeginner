@@ -65,6 +65,44 @@ def is_fog_alternate(killers_round_type: str) -> bool:
     return killers_round_type == FOG_ALTERNATE_ROUND_TYPE
 
 
+def is_first_time_only_moon(instance_type: str, round_type: str) -> bool:
+    """このラウンドの続行（CONTINUE）が「1 回目だけ」のものか（画面の文言を選ぶためだけに使う。
+    判定そのものは decide が決める）。moon のうち、焼き芋の YAKIIMO_OPT_IN_MOONS（Twilight。
+    指定があれば 2 回目以降も続行する）だけが外れる"""
+    if instance_type not in GROUP_INSTANCES or round_type not in MOONS:
+        return False
+    return not (instance_type == config.INSTANCE_YAKIIMO
+                and round_type in YAKIIMO_OPT_IN_MOONS)
+
+
+SETTING_SKIP = "skip"
+SETTING_CONTINUE = "continue"
+
+
+def setting_applies(instance_type: str, which: str, round_name: str) -> bool:
+    """窓ごとの全自爆（which="skip"）・全続行（which="continue"）の指定が、このインスタンスで効くか。
+    画面がチェックを押せなくするのに使う。
+
+    グループでは、判定そのもの（decide）を「指定あり」「指定なし」で呼び比べて、
+    結果が変わるかどうかで決める。手書きの表を持たないので、decide を変えても
+    画面の表示が勝手に追従する（2026-11-17: 手書きだったときに実際にずれていた）。
+    1 回目（moon_repeat=False）で見る。2 回目以降はどの moon も自爆固定で、
+    どの指定も効かないため。
+
+    private 相当（JUDGE_LIKE_INSTANCES）は decide を通らない（LogMonitor の
+    ラウンド指定が直に効く）ので、全部効く。
+    """
+    if instance_type in config.JUDGE_LIKE_INSTANCES:
+        return True
+    if instance_type not in GROUP_INSTANCES:
+        return False
+    key = "skip_moons" if which == SETTING_SKIP else "continue_moons"
+    without = decide(instance_type, round_name, (), moon_repeat=False)
+    with_it = decide(instance_type, round_name, (), moon_repeat=False,
+                     **{key: {round_name}})
+    return without != with_it
+
+
 def decide(
     instance_type: str,
     round_type: str,

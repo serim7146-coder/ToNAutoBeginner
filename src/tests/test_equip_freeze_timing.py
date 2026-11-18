@@ -168,7 +168,7 @@ class TestTheFetchingWindow(_Case):
 
 
 class TestTheManualWindow(_Case):
-    """取りに行かない窓（人が手で装備する）: Verified Round End では張らず、Begin が通ったときに張る"""
+    """取りに行かない窓（利用者が装備する）: Verified Round End では張らず、Begin が通ったときに張る"""
 
     def _round(self, accept_on):
         ex, st = self._executor(fetch=False, accept_on=accept_on)
@@ -213,7 +213,7 @@ class TestItemBeginModeIsAsBefore(_Case):
         def equip(_sec):
             st.item_id = 29                       # 装備した
         with patch.object(ActionExecutor.time, "sleep", side_effect=equip):
-            self.assertEqual(ex._handle_item_lost(), "manual")  # FY: 装備の後の Begin は利用者が押す
+            self.assertEqual(ex._handle_item_lost(), "by_user")  # FY: 装備の後の Begin は利用者が押す
         self.assertTrue(st.equip_freeze_held, "アイテム取得→Begin モードは今どおり Begin の前に張る")
 
 

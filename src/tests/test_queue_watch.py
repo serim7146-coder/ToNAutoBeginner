@@ -1,11 +1,14 @@
-"""待機列に入れるようになった合図（QueueWatch）。VRChat のログの Get / POST / Delete / Joining から読む。
+"""待機列に入れるようになった合図（QueueWatch）。VRChat のログの Get / POST / Delete / Joining と、
+順番の通知が消えた行（Remove）から読む。
 
-マクロを開始していなくても、通知する が ON のあいだツールが自分でログを読む（Watcher）。窓の番号は使わない。
+マクロを開始していなくても、「待機列に入れるようになったら知らせる」が ON のあいだツールが自分でログを読む（Watcher）。
+窓の番号は使わない。
 
 ID は伏せた形（wrld_X・grp_X・番号は 5 桁）。本物の窓の並びを写したものを使い、本物のログは読まない
 （一時フォルダに偽の output_log_*.txt を作る）。スマホへは送らない（PhoneNotify.send を偽物にする）。
 時計は差し替える"""
 from tests.support import *  # noqa: F401,F403
+from datetime import timezone
 
 import QueueWatch
 import PhoneNotify
@@ -50,6 +53,19 @@ def other(hms, text="[Behaviour] OnPlayerJoined someone"):
     return line(hms, text)
 
 
+READY_BODY = "「入る」を押して移動します。"         # 待機列の順番の通知の本文（日本語クライアント）
+FAKE_NAME = "FakePlayerName"
+FAKE_USER = "usr_fake-0000"
+
+
+def remove(hms, made=None, nid=7305519, kind="localNotifs", body=READY_BODY):
+    """通知が消えた行（Remove）。made は通知が作られた時刻（epoch 秒。既定はその行と同じ時刻）。
+    行には名前とユーザー ID が入っている（ツールがどこにも書かないことを確かめるため）"""
+    stamp = datetime.fromtimestamp(at(hms) if made is None else made, timezone.utc).strftime("%m/%d/%Y %H:%M:%S")
+    return line(hms, f"Remove notification [Notification from username:{FAKE_NAME}, sender user id:{FAKE_USER} "
+                     f"to  of type: {kind}, id: {nid}, created at: {stamp} UTC, message: \"{body}\"]")
+
+
 def at(hms) -> float:
     """ログの時刻（epoch 秒）"""
     return LogParser.log_time(line(hms, "x"))
@@ -85,6 +101,8 @@ class _Env(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         SharedState.set_phone_notify(True)
+        SharedState.set_queue_notify(True)
+        self.addCleanup(SharedState.set_queue_notify, True)
         SharedState.set_phone_topic(TOPIC)
         SharedState.set_hands_free(False)
         SharedState.set_queue_voice(VOICE)
@@ -145,10 +163,16 @@ class TestCompletion(_Env):
         self.assertEqual(self.sent, [], "後ろの 3 秒が閉じるまで送らない")
         self.settle()
         self.assertEqual(self.sent, [(TOPIC, PhoneNotify.APP_TITLE, "待機列に入れるようになりました")])
-        self.assertEqual(self.logs, ["[スマホ通知] 待機列に入れるようになりました"])
+        self.assertEqual(self.logs, ["[待機列] 入れるようになりました"])
         self.pass_time(10)
         self.poll()
-        self.assertEqual(len(self.sent), 1, "使い切った記録で出直さない")
+        self.assertEqual(len(self.sent), 1, "答え合わせ待ちのあいだは出直さない")
+        self.pass_time(55)
+        self.poll()                 # 65 秒たっても Remove が来ない。待ちが解ける（記録は残る）
+        self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 2, "65 秒たっても Remove が来なければ、次の単独の Get で出し直せる")
 
     def test_the_text_has_no_window_number(self):
         self.assertEqual(PhoneNotify.queue_ready_text(), (PhoneNotify.APP_TITLE, "待機列に入れるようになりました"))
@@ -162,7 +186,8 @@ class TestCompletion(_Env):
 
 
 class TestQueueVoice(_Env):
-    """合図で声「待機列」を 1 回鳴らす。「通知する」が ON のときだけ。声と送信は互いに影響しない"""
+    """合図で声「待機列」を 1 回鳴らす。「待機列に入れるようになったら知らせる」が ON のときだけ。
+    声とスマホへの送信は互いに影響しない（送信は「通知する」が ON のときだけ）"""
 
     def fire(self):
         self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
@@ -177,12 +202,12 @@ class TestQueueVoice(_Env):
         self.poll()
         self.assertEqual(len(self.played), 1)
 
-    def test_phone_notify_off_plays_nothing_and_sends_nothing(self):
+    def test_phone_notify_off_plays_the_voice_once_and_sends_nothing(self):
         SharedState.set_phone_notify(False)
         self.fire()
-        self.assertEqual(self.played, [])
+        self.assertEqual(self.played, [(VOICE, "queue")])
         self.assertEqual(self.sent, [])
-        self.assertEqual(self.logs, ["[スマホ通知] 待機列に入れるようになりました"], "ツールのログは書く（今までどおり）")
+        self.assertEqual(self.logs, ["[待機列] 入れるようになりました"], "ツールのログは書く（今までどおり）")
 
     def test_an_invalid_topic_still_plays_and_does_not_send(self):
         SharedState.set_phone_topic("bad topic!")
@@ -287,17 +312,20 @@ class TestCatchUp(_Env):
         self.settle()
         self.assertEqual(self.sent, [])
         self.assertEqual(self.logs, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "黙った合図でも記録は残る")
+        self.assertEqual(QueueWatch._awaiting, {}, "答え合わせ待ちは解く")
 
-    def test_a_consumed_record_does_not_fire_on_a_later_lone_get(self):
-        self.write(LOG_A, post("19:40:00", 39837), get("19:41:00", 39837))
+    def test_a_record_awaiting_the_answer_does_not_fire_on_a_later_lone_get(self):
+        self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
         self.poll()
         self.settle()
+        self.assertEqual(len(self.sent), 1)
         self.pass_time(10)
         self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
         self.poll()
         self.settle()
-        self.assertEqual(self.sent, [])
-        self.assertEqual(self.logs, [])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.logs), 1)
 
     def _closing_at(self, seconds_after_get):
         """Get のログの時刻から seconds_after_get 秒後に、候補が閉じるようにする"""
@@ -314,6 +342,8 @@ class TestCatchUp(_Env):
         self._closing_at(60)
         self.assertEqual(self.sent, [])
         self.assertEqual(self.logs, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "黙った合図でも記録は残る")
+        self.assertEqual(QueueWatch._awaiting, {})
 
     def test_a_post_before_the_start_and_a_get_afterwards_fires_once(self):
         self.write(LOG_A, post("19:47:50", 39837))
@@ -492,7 +522,7 @@ class TestRule(_Env):
 
     def test_a_different_instance_get_within_three_seconds_cancels(self):
         for where in ("before", "after"):
-            for gap, expect in ((1, 0), (3, 0), (4, 1)):
+            for gap, expect in ((1, 0), (2, 0), (3, 1), (4, 1)):
                 with self.subTest(where=where, gap=gap):
                     QueueWatch.reset()
                     self.sent.clear()
@@ -555,12 +585,14 @@ class TestRule(_Env):
         self.assertEqual(self.sent, [])
 
     def test_joining_forgets_it(self):
-        self.feed(joining("10:00:30", 39837), get("10:01:00", 39837))
+        # joining の直後の 1 本目の Get は数えない（捨ての Get）。2 本目が合図の候補になるが、記録は忘れている
+        self.feed(joining("10:00:30", 39837), get("10:00:31", 39837), get("10:01:00", 39837))
         self.settle()
         self.assertEqual(self.sent, [])
 
     def test_joining_another_instance_does_not_forget_it(self):
-        self.feed(joining("10:00:30", 11111), get("10:01:00", 39837))
+        # joining の直後の 1 本目の Get は数えない（捨ての Get）
+        self.feed(joining("10:00:30", 11111), get("10:00:31", 11111), get("10:01:00", 39837))
         self.settle()
         self.assertEqual(len(self.sent), 1)
 
@@ -601,12 +633,14 @@ class TestNotifyReady(unittest.TestCase):
         sound.start()
         self.addCleanup(sound.stop)
         SharedState.set_queue_voice(VOICE)
+        SharedState.set_queue_notify(True)
         for setter, value in ((SharedState.set_phone_notify, False), (SharedState.set_phone_topic, ""),
-                              (SharedState.set_queue_voice, "")):
+                              (SharedState.set_queue_voice, ""), (SharedState.set_queue_notify, True)):
             self.addCleanup(setter, value)
 
-    def test_the_sound_is_off_when_notify_is_off(self):
-        SharedState.set_phone_notify(False)
+    def test_the_sound_is_off_when_queue_notify_is_off(self):
+        SharedState.set_queue_notify(False)
+        SharedState.set_phone_notify(True)
         SharedState.set_phone_topic(TOPIC)
         QueueWatch.notify_ready(self.logs.append)
         self.assertEqual(self.played, [])
@@ -622,7 +656,7 @@ class TestNotifyReady(unittest.TestCase):
         SharedState.set_phone_notify(True)
         SharedState.set_phone_topic(TOPIC)
         QueueWatch.notify_ready(self.logs.append)
-        self.assertEqual(self.logs, ["[スマホ通知] 待機列に入れるようになりました"])
+        self.assertEqual(self.logs, ["[待機列] 入れるようになりました"])
         self.assertEqual(self.sent, [(TOPIC, "ToNAutoBeginner", "待機列に入れるようになりました")])
 
     def test_off_does_not_send(self):
@@ -658,8 +692,8 @@ class TestNotifyReady(unittest.TestCase):
 class TestQueuedNotice(_Env):
     """待機列に入れた行（POST）を読んだとき、ツールのログに 1 行出す。声・スマホへの送信はしない"""
 
-    QUEUED = "[スマホ通知] 待機列に入りました"
-    READY = "[スマホ通知] 待機列に入れるようになりました"
+    QUEUED = "[待機列] 並びました"
+    READY = "[待機列] 入れるようになりました"
 
     def setUp(self):
         super().setUp()
@@ -769,8 +803,8 @@ class TestSyncQueueWatcherWiring(unittest.TestCase):
         logs = []
         app = type("FakeApp", (), {})()
         app._log = logs.append
-        self.addCleanup(SharedState.set_phone_notify, False)
-        SharedState.set_phone_notify(True)
+        self.addCleanup(SharedState.set_queue_notify, True)
+        SharedState.set_queue_notify(True)
         with patch.object(QueueWatch, "Watcher") as watcher_class,              patch.object(QueueWatch, "notify_ready") as ready:
             mainGUI.App._sync_queue_watcher(app)
             args, kwargs = watcher_class.call_args
@@ -778,15 +812,255 @@ class TestSyncQueueWatcherWiring(unittest.TestCase):
             args[1]()
             ready.assert_called_once_with(logs.append)
             kwargs["on_queued"]()
-        self.assertEqual(logs, ["[スマホ通知] 待機列に入りました"])
+        self.assertEqual(logs, ["[待機列] 並びました"])
         watcher_class.return_value.start.assert_called_once()
+
+
+class _AnswerEnv(_Env):
+    """合図を出したあとの答え合わせ。今日の実例: POST 19:47:50・Get 19:50:32（wall は Get の 2 秒後）"""
+
+    GET_AT = "19:50:32"
+
+    def debug_text(self):
+        return config.DEBUG_LOG_PATH.read_text(encoding="utf-8") if config.DEBUG_LOG_PATH.exists() else ""
+
+    def fire(self):
+        """合図が 1 回出るところまで進める。そのあと wall は 19:50:37"""
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+
+    def lone_get(self):
+        """今の時刻の、単独の Get を足して読む"""
+        self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.settle()
+
+    def restart(self):
+        """記録も偽ログも見張りも、新しく作り直す（subTest のあいだ）"""
+        QueueWatch.reset()
+        self.path(LOG_A).unlink(missing_ok=True)
+        self.path(LOG_B).unlink(missing_ok=True)
+        self.sent.clear()
+        self.logs.clear()
+        self.wall.now = at("19:50:34")
+        self.watcher = QueueWatch.Watcher(self.dir, lambda: QueueWatch.notify_ready(self.logs.append),
+                                          clock=self.clock, wall=self.wall)
+
+    def assertStillAwaiting(self):
+        self.assertIn(inst(39837), QueueWatch._queued)
+        self.assertIn(inst(39837), QueueWatch._awaiting)
+
+    def assertForgotten(self):
+        self.assertNotIn(inst(39837), QueueWatch._queued)
+        self.assertNotIn(inst(39837), QueueWatch._awaiting)
+
+
+class TestAnswerCheck(_AnswerEnv):
+    """合図を出したあと、順番の通知が消えた行（Remove）で答え合わせをする。本物なら記録を忘れ、
+    Remove が来なければ誤検出なので待ちだけ解く（記録は残す）"""
+
+    def test_a_remove_after_the_signal_forgets_the_record(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT) + 1))
+        self.pass_time(1)
+        self.poll()
+        self.assertForgotten()
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1, "忘れたあとの単独の Get では出ない")
+        text = "\n".join(self.logs) + "\n" + self.debug_text() + "\n" + repr(self.sent)
+        for word in (FAKE_NAME, FAKE_USER, "7305519", "localNotifs"):
+            self.assertNotIn(word, text, "Remove の行の中身はどこにも書かない")
+
+    def test_no_remove_for_sixty_five_seconds_releases_the_wait_and_the_next_lone_get_fires(self):
+        self.fire()
+        before = self.debug_text()
+        self.pass_time(64)
+        self.poll()
+        self.assertStillAwaiting()
+        self.pass_time(1)
+        self.poll()
+        self.assertEqual(QueueWatch._awaiting, {}, "65 秒で待ちが解ける")
+        self.assertIn(inst(39837), QueueWatch._queued, "記録は残る")
+        self.assertIn("答え合わせできなかった合図 1 件", self.debug_text()[len(before):])
+        self.lone_get()
+        self.assertEqual(len(self.sent), 2)
+
+    def test_queuing_again_drops_the_earlier_wait_so_the_old_remove_keeps_the_new_record(self):
+        """Delete を挟まずに入れ直したとき（実例あり）、前の通知の Remove で新しい記録を忘れない"""
+        self.fire()
+        self.pass_time(10)
+        self.write(LOG_A, post(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.assertIn(inst(39837), QueueWatch._queued, "新しい記録が入る")
+        self.assertEqual(QueueWatch._awaiting, {}, "前の答え合わせ待ちは捨てる")
+        self.write(LOG_A, remove("19:50:51", made=at(self.GET_AT) + 1))      # 前の通知が消えた
+        self.pass_time(1)
+        self.poll()
+        self.assertIn(inst(39837), QueueWatch._queued, "前の通知の Remove では新しい記録を忘れない")
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 2, "入れ直した待機列でも合図が出る")
+
+    def test_a_second_signal_is_not_given_while_awaiting_the_answer(self):
+        self.fire()
+        self.pass_time(10)
+        self.lone_get()
+        self.pass_time(10)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.logs), 1)
+        self.assertEqual(len(self.played), 1)
+
+    def test_local_alltime_and_recent_lines_count_once(self):
+        self.fire()
+        real = QueueWatch.note_ready_gone
+        with patch.object(QueueWatch, "note_ready_gone", side_effect=real) as counted:
+            self.write(LOG_A, *[remove("19:50:36", made=at(self.GET_AT)) for _ in range(3)])
+            self.poll()
+        self.assertEqual(counted.call_count, 1)
+        self.assertForgotten()
+
+    def test_the_same_remove_in_two_logs_counts_once(self):
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.write(LOG_B, get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+        real = QueueWatch.note_ready_gone
+        with patch.object(QueueWatch, "note_ready_gone", side_effect=real) as counted:
+            self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT)))
+            self.write(LOG_B, remove("19:50:36", made=at(self.GET_AT)))
+            self.poll()
+        self.assertEqual(counted.call_count, 1)
+        self.assertForgotten()
+
+    def test_a_group_notification_is_not_counted(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT), kind="group"))
+        self.poll()
+        self.assertStillAwaiting()
+
+    def test_a_local_notification_with_another_message_is_not_counted(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT), body="新しいバージョンがあります。"))
+        self.poll()
+        self.assertStillAwaiting()
+
+    def test_the_created_at_must_be_within_five_seconds_of_the_get(self):
+        for offset, forgotten in ((5, True), (-5, True), (6, False), (-6, False)):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.fire()
+                self.write(LOG_A, remove("19:50:37", made=at(self.GET_AT) + offset))
+                self.poll()
+                if forgotten:
+                    self.assertForgotten()
+                else:
+                    self.assertStillAwaiting()
+
+    def test_a_delete_forgets_the_record_and_the_wait(self):
+        self.fire()
+        self.write(LOG_A, delete("19:50:36", 39837))
+        self.poll()
+        self.assertForgotten()
+
+    def test_joining_the_same_instance_forgets_the_record_and_the_wait(self):
+        self.fire()
+        self.write(LOG_A, joining("19:50:36", 39837))
+        self.poll()
+        self.assertForgotten()
+
+
+class TestReadyGoneInTheSameRead(_AnswerEnv):
+    """ログを先頭から読み直すと、Get とその Remove が同じ読み取りの束に入る。もう消えている通知では知らせない"""
+
+    def read_with_remove(self, made_offset):
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837),
+                   remove("19:50:40", made=at(self.GET_AT) + made_offset))
+        self.poll()
+        self.settle()
+
+    def test_a_remove_within_five_seconds_of_the_get_in_the_same_batch_is_silent(self):
+        for offset in (0, 2, 5, -5):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.read_with_remove(offset)
+                self.assertEqual(self.logs, [])
+                self.assertEqual(self.played, [])
+                self.assertEqual(self.sent, [])
+
+    def test_the_record_is_forgotten_then(self):
+        self.read_with_remove(1)
+        self.assertForgotten()
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(self.sent, [], "あとの単独の Get でも出直さない")
+
+    def test_a_remove_outside_five_seconds_does_not_silence_the_signal(self):
+        for offset in (6, -6):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.read_with_remove(offset)
+                self.assertEqual(len(self.sent), 1)
+                self.assertEqual(len(self.logs), 1)
+
+    def test_in_a_live_log_a_remove_that_comes_in_the_next_read_still_lets_the_signal_out(self):
+        self.fire()
+        self.assertEqual(len(self.sent), 1)
+        self.pass_time(55)
+        self.write(LOG_A, remove("19:51:31", made=at(self.GET_AT)))
+        self.poll()
+        self.assertEqual(len(self.sent), 1)
+        self.assertForgotten()
+
+
+class TestLogShowsItPassed(_AnswerEnv):
+    """Remove の行は無いが、その Get より 65 秒以上後の行を同じログで読んでいる。通知が出ていれば Remove が
+    出ているはずなので誤検出。黙る（記録は残す）"""
+
+    def read_with_later_line(self, seconds_after_get):
+        """wall は Get の 2 秒後のまま（実時間の 60 秒の押さえには当たらない）。そのログの後ろに別のインスタンスの Get を置く"""
+        later = datetime.fromtimestamp(at(self.GET_AT) + seconds_after_get).strftime("%H:%M:%S")
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837), get(later, 55555))
+        self.poll()
+        self.settle()
+
+    def test_a_line_sixty_five_seconds_after_the_get_makes_it_silent(self):
+        self.read_with_later_line(65)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.logs, [])
+        self.assertEqual(self.played, [])
+
+    def test_the_record_stays_and_the_next_lone_get_fires(self):
+        self.read_with_later_line(65)
+        self.assertIn(inst(39837), QueueWatch._queued)
+        self.assertEqual(QueueWatch._awaiting, {})
+        self.pass_time(70)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_line_sixty_four_seconds_after_the_get_does_not_silence_it(self):
+        self.read_with_later_line(64)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_log_that_ends_there_falls_back_to_the_sixty_second_rule(self):
+        self.wall.now = at(self.GET_AT) + 57
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()                       # Get から 60 秒。後ろの行は無い
+        self.assertEqual(self.sent, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "記録は残す")
+        self.assertEqual(QueueWatch._awaiting, {})
 
 
 class TestNoIdsInLogs(_Env):
     def test_no_topic_instance_world_or_group_id_reaches_any_log(self):
         self.write(LOG_A, post("19:45:00", 6515), delete("19:47:50", 6515), post("19:47:50", 39837),
                    get("19:48:36", 11111), get("19:48:37", 6515), joining("19:49:00", 11111),
-                   get("19:50:32", 39837))
+                   get("19:49:01", 11111), get("19:50:32", 39837))
         self.poll()
         self.settle()
         self.assertEqual(len(self.sent), 1)
@@ -807,6 +1081,10 @@ class TestNoIdsInLogs(_Env):
 
 class TestThread(unittest.TestCase):
     def setUp(self):
+        # support は App のテストにスレッドを立てさせないよう start() を空にしている。ここは本物を確かめる
+        real_start = patch.object(QueueWatch.Watcher, "start", real_queue_watcher_start())
+        real_start.start()
+        self.addCleanup(real_start.stop)
         self.dir = Path(tempfile.mkdtemp(prefix="tonab_queue_"))
         self.addCleanup(shutil.rmtree, self.dir, True)
         QueueWatch.reset()
@@ -829,7 +1107,7 @@ class TestThread(unittest.TestCase):
         watcher = QueueWatch.Watcher(self.dir, lambda: None)
         watcher.start()
         self.addCleanup(watcher.stop)
-        self.assertIsNone(QueueWatch.take_ready(inst(39837), at("10:01:00")))
+        self.assertFalse(QueueWatch.hold_ready(inst(39837), at("10:01:00"), 0.0))
 
     def test_the_thread_reads_a_log_and_signals_once(self):
         now = time.time()
@@ -885,14 +1163,16 @@ class _AppForSync:
 class TestAppWiring(unittest.TestCase):
     def setUp(self):
         self.addCleanup(SharedState.set_phone_notify, False)
+        self.addCleanup(SharedState.set_queue_notify, True)
         SharedState.set_phone_notify(False)
+        SharedState.set_queue_notify(False)
 
     def test_sync_starts_and_stops_with_the_setting(self):
         app = _AppForSync()
         with patch.object(QueueWatch, "Watcher") as watcher_class:
             mainGUI.App._sync_queue_watcher(app)
             watcher_class.assert_not_called()               # OFF のあいだは作らない
-            SharedState.set_phone_notify(True)
+            SharedState.set_queue_notify(True)
             mainGUI.App._sync_queue_watcher(app)
             mainGUI.App._sync_queue_watcher(app)            # ON のまま呼んでも 1 つだけ
             watcher_class.assert_called_once()
@@ -900,7 +1180,7 @@ class TestAppWiring(unittest.TestCase):
             watcher = watcher_class.return_value
             watcher.start.assert_called_once_with()
             self.assertIs(app._queue_watcher, watcher)
-            SharedState.set_phone_notify(False)
+            SharedState.set_queue_notify(False)
             mainGUI.App._sync_queue_watcher(app)
             watcher.stop.assert_called_once_with()
             self.assertIsNone(app._queue_watcher)
@@ -909,7 +1189,7 @@ class TestAppWiring(unittest.TestCase):
 
     def test_the_signal_goes_to_notify_ready_with_the_app_log(self):
         app = _AppForSync()
-        SharedState.set_phone_notify(True)
+        SharedState.set_queue_notify(True)
         with patch.object(QueueWatch, "Watcher") as watcher_class, \
                 patch.object(QueueWatch, "notify_ready") as notify:
             mainGUI.App._sync_queue_watcher(app)
@@ -934,7 +1214,7 @@ class TestAppWiring(unittest.TestCase):
 
     def test_the_checkbox_syncs(self):
         import inspect
-        self.assertIn("self._sync_queue_watcher()", inspect.getsource(mainGUI.App._on_phone_notify_changed))
+        self.assertIn("self._sync_queue_watcher()", inspect.getsource(mainGUI.App._on_queue_notify_changed))
 
     def test_closing_stops_the_watcher_before_destroying(self):
         order = []
@@ -958,6 +1238,194 @@ class TestAppWiring(unittest.TestCase):
         bare = MagicMock(spec=["_save_settings_now", "_stop", "destroy", "_unhook_chase_keys", "_unhook_move_keys",
                                "_unhook_suicide_cancel_key", "_unhook_stop_start_keys", "_show_own_windows_again"])
         mainGUI.App._on_close(bare)         # 属性そのものが無くても落ちない
+
+
+class TestFirstGetAfterJoining(_Env):
+    """ワールドに入り直した（Joining）直後の、そのログの 1 本目の Get は合図にしない。VRChat が起動の 11 秒後などに
+    待機列の表示を取り直す Get で、順番が来た合図ではない（依頼者 2026-11-18）"""
+
+    def cands(self):
+        fired = []
+        return QueueWatch.Candidates(fired.append, clock=self.clock), fired
+
+    def test_the_first_get_after_joining_a_world_is_not_a_signal(self):
+        self.write(LOG_A, post("19:47:50", 39837), joining("19:50:30", 11111), get("19:50:31", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.logs, [])
+
+    def test_a_vrchat_start_is_not_a_signal_but_the_record_stays(self):
+        """起動の形（入室と待機列の Get が同じ秒）。外した Get は記録を食べない"""
+        self.write(LOG_A, post("19:47:50", 39837), joining("19:50:28", 11111), get("19:50:28", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(self.sent, [])
+        self.write(LOG_A, get("19:50:33", 39837))
+        self.pass_time(1)
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_the_second_get_after_joining_a_world_is_a_signal(self):
+        self.write(LOG_A, post("19:47:50", 39837), joining("19:50:10", 11111), get("19:50:11", 11111),
+                   get("19:50:15", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_get_with_no_readable_time_does_not_use_up_the_skip(self):
+        QueueWatch.note_post(inst(39837), at("10:00:00"))
+        cands, fired = self.cands()
+        cands.feed(at("10:00:30"), joining("10:00:30", 11111))
+        cands.feed(None, f"[API] Requesting Get instances/{inst(11111)} {{{{}}}} retryCount: 2")
+        cands.feed(at("10:01:00"), get("10:01:00", 39837))
+        self.clock.advance(3)
+        cands.tick()
+        self.assertEqual(fired, [], "時刻の読めない Get では外す分を使い切らない。時刻の読めた 1 本目が外れる")
+
+    def test_a_joining_with_no_readable_time_still_arms_the_skip(self):
+        QueueWatch.note_post(inst(39837), at("10:00:00"))
+        cands, fired = self.cands()
+        cands.feed(None, joining("10:00:30", 11111))
+        cands.feed(at("10:01:00"), get("10:01:00", 39837))
+        self.clock.advance(3)
+        cands.tick()
+        self.assertEqual(fired, [])
+
+    def test_the_skipped_get_does_not_cancel_another_candidate(self):
+        QueueWatch.note_post(inst(39837), at("10:00:00"))
+        QueueWatch.note_post(inst(22222), at("10:00:00"))
+        cands, fired = self.cands()
+        cands.feed(at("10:01:00"), joining("10:01:00", 11111))
+        cands.feed(at("10:01:00"), get("10:01:00", 39837))      # 外れる
+        cands.feed(at("10:01:01"), get("10:01:01", 22222))      # 候補になる。外れた Get は前後の記録に無い
+        self.clock.advance(3)
+        cands.tick()
+        self.assertEqual(fired, [at("10:01:01")])
+
+    def test_each_log_counts_its_own_first_get(self):
+        """ログ A が入り直しても、ログ B の最初の Get は外れない"""
+        self.write(LOG_A, post("19:47:50", 39837), joining("19:50:30", 11111))
+        self.write(LOG_B, get("19:50:31", 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+
+
+class TestQuietBoundary(_Env):
+    """前後の「静か」は 3 秒未満。ちょうど 3 秒差の Get は取り消さない（ログの時刻は秒までなので、ちょうど 3 秒差が
+    出やすい）。閉じるのはちょうど 3 秒後のまま"""
+
+    def setUp(self):
+        super().setUp()
+        QueueWatch.note_post(inst(39837), at("10:00:00"))
+        self.fired = []
+        self.cands = QueueWatch.Candidates(self.fired.append, clock=self.clock)
+
+    def run_with_other_get(self, where, gap):
+        """10:01:10 の候補の前（before）か後ろ（after）に、gap 秒ずれた別のインスタンスの Get を置く"""
+        QueueWatch.reset()                  # 前の回の答え合わせ待ちを持ち越さない
+        QueueWatch.note_post(inst(39837), at("10:00:00"))
+        self.fired.clear()
+        self.cands = QueueWatch.Candidates(self.fired.append, clock=self.clock)
+        other_hms = "10:01:%02d" % (10 - gap if where == "before" else 10 + gap)
+        events = [("10:01:10", get("10:01:10", 39837)), (other_hms, get(other_hms, 55555))]
+        for hms, text in sorted(events):
+            self.cands.feed(at(hms), text)
+        self.clock.advance(3)
+        self.cands.tick()
+
+    def test_a_get_exactly_three_seconds_later_does_not_cancel(self):
+        for where in ("before", "after"):
+            with self.subTest(where=where):
+                self.run_with_other_get(where, 3)
+                self.assertEqual(len(self.fired), 1)
+
+    def test_a_get_two_seconds_later_cancels(self):
+        for where in ("before", "after"):
+            with self.subTest(where=where):
+                self.run_with_other_get(where, 2)
+                self.assertEqual(self.fired, [])
+
+    def test_a_candidate_closes_exactly_three_seconds_later(self):
+        self.cands.feed(at("10:01:10"), get("10:01:10", 39837))
+        self.cands.feed(at("10:01:12"), other("10:01:12"))
+        self.assertEqual(self.fired, [], "2 秒後ではまだ閉じない")
+        self.cands.feed(at("10:01:13"), other("10:01:13"))
+        self.assertEqual(self.fired, [at("10:01:10")])
+
+
+class TestQueueNotifySetting(_Env):
+    """「待機列に入れるようになったら知らせる」（全窓共通・保存・既定 ON）。見張りと声の元栓。
+    スマホへ送るかは「通知する」が元栓"""
+
+    def test_the_default_is_on(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("SharedState_fresh", SharedState.__file__)
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        self.assertIs(fresh.get_queue_notify(), True)
+
+    def test_a_missing_key_stays_on_and_false_turns_it_off(self):
+        self.addCleanup(SharedState.set_phone_topic, "")
+        for saved, expect in (({}, True), ({"queue_notify": False}, False), ({"queue_notify": True}, True),
+                              ({"queue_notify": "no"}, True), ({"queue_notify": None}, True)):
+            with self.subTest(saved=saved):
+                SharedState.set_queue_notify(not expect)
+                app = type("FakeApp", (), {})()
+                app.v_phone_notify, app.v_queue_notify, app.v_phone_topic = MagicMock(), MagicMock(), MagicMock()
+                mainGUI.App._load_phone_notify(app, saved)
+                self.addCleanup(DebugLog._secrets.discard, SharedState.get_phone_topic())
+                self.assertIs(SharedState.get_queue_notify(), expect)
+                app.v_queue_notify.set.assert_called_once_with(expect)
+
+    def test_off_does_not_start_the_watcher(self):
+        SharedState.set_queue_notify(False)
+        SharedState.set_phone_notify(True)              # スマホ通知が ON でも、見張りは決まらない
+        app = _AppForSync()
+        with patch.object(QueueWatch, "Watcher") as watcher_class:
+            mainGUI.App._sync_queue_watcher(app)
+        watcher_class.assert_not_called()
+        self.assertIsNone(app._queue_watcher)
+
+    def test_turning_it_off_stops_a_running_watcher(self):
+        SharedState.set_phone_notify(False)             # スマホ通知が OFF でも、見張りは動く
+        app = _AppForSync()
+        with patch.object(QueueWatch, "Watcher") as watcher_class:
+            mainGUI.App._sync_queue_watcher(app)
+            watcher_class.return_value.start.assert_called_once_with()
+            SharedState.set_queue_notify(False)
+            mainGUI.App._sync_queue_watcher(app)
+            watcher_class.return_value.stop.assert_called_once_with()
+        self.assertIsNone(app._queue_watcher)
+
+    def test_phone_notify_off_still_logs_and_plays_but_does_not_send(self):
+        SharedState.set_phone_notify(False)
+        QueueWatch.notify_ready(self.logs.append)
+        self.assertEqual(self.logs, ["[待機列] 入れるようになりました"])
+        self.assertEqual(self.played, [(VOICE, "queue")])
+        self.assertEqual(self.sent, [])
+
+    def test_queue_notify_off_logs_but_plays_nothing_and_sends_nothing(self):
+        SharedState.set_queue_notify(False)
+        SharedState.set_phone_notify(True)
+        QueueWatch.notify_ready(self.logs.append)
+        self.assertEqual(self.logs, ["[待機列] 入れるようになりました"], "ログの 1 行目は元栓の前")
+        self.assertEqual(self.played, [])
+        self.assertEqual(self.sent, [])
+
+    def test_the_phone_notify_checkbox_no_longer_touches_the_watcher(self):
+        syncs = []
+        app = type("FakeApp", (), {})()
+        app.v_phone_notify = MagicMock()
+        app.v_phone_notify.get.return_value = True
+        app._log = lambda msg: None
+        app._schedule_settings_save = lambda: None
+        app._sync_queue_watcher = lambda: syncs.append(1)
+        self.addCleanup(SharedState.set_phone_notify, False)
+        mainGUI.App._on_phone_notify_changed(app)
+        self.assertEqual(syncs, [])
 
 
 if __name__ == "__main__":

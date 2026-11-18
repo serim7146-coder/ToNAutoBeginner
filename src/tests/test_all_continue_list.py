@@ -118,7 +118,7 @@ class TestKnownLater(_Case):
 class TestOtherKindsOfContinue(_Case):
     def test_dtm_waldo_follows_the_list(self):
         monitor = self._monitor(keep_on={})
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
         _s, play, _rec, _rem = self._killers(monitor, [config.DTM_ID] if hasattr(config, "DTM_ID")
                                              else [config.DTM_ID])
         self.assertTrue(monitor.st.is_continue_round)

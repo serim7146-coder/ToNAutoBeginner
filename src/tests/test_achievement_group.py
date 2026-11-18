@@ -144,7 +144,7 @@ class TestJudging(_AchCase):
 
     def test_dtm_continues_but_does_not_move(self):
         monitor = self._ach({KEY: {1}}, ids=(config.DTM_ID,))
-        monitor.cfg.cancel_afk = True
+        monitor.cfg.cancel_afk_wins = 3
         plan = monitor._plan("Classic", [config.DTM_ID], False)
         self.assertEqual(plan, ("list", True, True))
         self._decide(monitor)

@@ -62,7 +62,7 @@ ROUND_COLORS = {
     "Fog(Alternate)": "#5f5f5f",
     "Alternate": "#ffffff",
     "8 Pages": "#d4d4d4",
-    "Punish": "#ffd43b",
+    "Punished": "#ffd43b",
     "Twilight": "#d9b44a",
     "Ghost": "#7fdcff",
     "Ghost(Alternate)": "#2e8fbf",
@@ -104,7 +104,7 @@ ROUND_ORDER_GROUPS = (
         ("Fog(Alternate)", ("Fog (Alternate)", "Fog(Alternate)", "Fog Alternate")),
         ("Ghost", ("Ghost",)),
         ("Ghost(Alternate)", ("Ghost (Alternate)", "Ghost(Alternate)", "Ghost Alternate")),
-        ("Punish", ("Punished", "Punish")),
+        ("Punished", ("Punished", "Punish")),
         ("Sabotage", ("Sabotage",)),
         ("Bloodbath", ("Bloodbath",)),
         ("Double Trouble", ("Double Trouble",)),
@@ -385,7 +385,7 @@ class StatisticsWindow(tk.Toplevel):
             ttk.Radiobutton(scope, text=text, value=value, variable=self.v_scope,
                             command=self._analyze).pack(side="left", padx=(0, 8))
         ttk.Label(scope, text="人数").pack(side="left", padx=(12, 6))
-        # 選択・矢印・チェックはラウンドの選択と同じ 0.3 秒待ち。手で打った数は Enter か「集計」で反映
+        # 選択・矢印・チェックはラウンドの選択と同じ 0.3 秒待ち。利用者が入力した数は Enter か「集計」で反映
         self.players_op_box = ttk.Combobox(scope, textvariable=self.v_players_op, values=PLAYERS_OPS,
                                            state="readonly", width=6)
         self.players_op_box.pack(side="left")

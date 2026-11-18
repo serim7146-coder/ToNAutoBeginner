@@ -5,7 +5,7 @@
 src/config.py の APP_VERSION を読んで、展開先（--onefile-tempdir-spec）と exe の版を
 その版にする。展開先は「版-ビルドの印」（印はビルドした時刻。ビルドのたびに違う）に
 固定するので、2回目以降の起動は展開を省いて速くなり（Nuitka の cached モード）、
-同じ版でビルドし直しても古い中身を使わない。版は手で書かない。
+同じ版でビルドし直しても古い中身を使わない。版は `build.py` に書かない（`src/config.py` の `APP_VERSION` だけを見る）。
 引数は src/main.py の頭のビルドコマンドと同じ（並びも同じ）で、足すのは展開先と版だけ。
 
 exe ができたら、続けてインストーラー（dist/ToNAutoBeginner-Setup.exe）を作る。

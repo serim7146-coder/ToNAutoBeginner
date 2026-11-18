@@ -21,15 +21,10 @@ class TestToNEntry(unittest.TestCase):
         """
         steps = config.TON_ENTRY_STEPS
         self.assertEqual(len(steps), 4)
-        self.assertEqual(steps[0]["move"], "right")
-        self.assertEqual(steps[1]["move"], "left")
-        self.assertEqual(steps[2]["move"], "right")
-        self.assertIsNone(steps[3]["move"], "最後は移動せず続けて押す")
-        for step in steps[:3]:
-            with self.subTest(label=step["label"]):
-                self.assertGreater(step["sec"], 0, "移動する段は秒数が必要")
+        self.assertEqual([(s["expect"], s["pick"]) for s in steps],
+                         [(None, 0), (3, "flavor"), (2, "music"), (2, 1)])
         self.assertEqual([s["label"] for s in steps],
-                         ["警告同意", "難易度(Casual)", "BGM", "LET ME PLAY"])
+                         ["警告の了解", "難易度", "音楽", "LET ME PLAY"])
 
     def test_move_uses_osc_and_releases(self):
         """移動はOSCで送り、必ず解除する（入力が残ると操作不能になる）"""
@@ -69,7 +64,11 @@ class TestToNEntry(unittest.TestCase):
         """パネル検出直後は描画が整っていないので少し待つ"""
         entry = self._entry()
         slept = []
-        with patch.object(entry, "wait_for_panel", return_value=True),              patch.object(entry, "move", return_value=True),              patch.object(entry, "click", return_value=True),              patch.object(entry._osc, "stop_all"),              patch.object(ToNEntry.time, "sleep", side_effect=slept.append):
+        with patch.object(entry, "wait_for_panel", return_value=True), \
+             patch.object(entry, "_find_button", return_value=(10, 20)), \
+             patch.object(entry, "_click_point", return_value=True), \
+             patch.object(entry._osc, "stop_all"), \
+             patch.object(ToNEntry.time, "sleep", side_effect=slept.append):
             entry.run()
         self.assertIn(config.TON_ENTRY_START_DELAY_SEC, slept)
 
@@ -77,18 +76,17 @@ class TestToNEntry(unittest.TestCase):
         entry = self._entry()
         actions = []
         with patch.object(entry, "wait_for_panel", return_value=True), \
-             patch.object(entry, "move",
-                          side_effect=lambda d, s: actions.append(("move", d, s)) or True), \
-             patch.object(entry, "click",
-                          side_effect=lambda label: actions.append(("click", label)) or True), \
+             patch.object(entry, "_find_button",
+                          side_effect=lambda step: actions.append(("find", step["label"])) or (10, 20)), \
+             patch.object(entry, "_click_point",
+                          side_effect=lambda point, label: actions.append(("click", label)) or True), \
              patch.object(entry._osc, "stop_all"), \
              patch.object(ToNEntry.time, "sleep"):
             self.assertTrue(entry.run())
-        # 設定から期待値を組み立てる（秒数は調整で変わるため直書きしない）
+        # 設定から期待値を組み立てる（手順は調整で変わるため直書きしない）
         expected = []
         for step in config.TON_ENTRY_STEPS:
-            if step["move"]:
-                expected.append(("move", step["move"], step["sec"]))
+            expected.append(("find", step["label"]))
             expected.append(("click", step["label"]))
         self.assertEqual(actions, expected)
 
@@ -106,8 +104,8 @@ class TestToNEntry(unittest.TestCase):
     def test_run_aborts_when_click_fails(self):
         entry = self._entry()
         with patch.object(entry, "wait_for_panel", return_value=True), \
-             patch.object(entry, "move", return_value=True), \
-             patch.object(entry, "click", return_value=False), \
+             patch.object(entry, "_find_button", return_value=(10, 20)), \
+             patch.object(entry, "_click_point", return_value=False), \
              patch.object(entry._osc, "stop_all") as mock_stop, \
              patch.object(ToNEntry.time, "sleep"):
             self.assertFalse(entry.run())
@@ -2076,7 +2074,7 @@ class TestCursorGiveUpReasons(unittest.TestCase):
 
     # ── 1〜2. 読み返しの順番 ─────────────────────
     def test_the_readback_comes_before_the_dwell(self):
-        """待ってから読むと、その間に手でマウスを動かされて誤判定する"""
+        """待ってから読むと、その間に利用者がマウスを動かして誤判定する"""
         order = []
         user32 = FakeUser32()
         real_set, real_get = user32.SetCursorPos, user32.GetCursorPos
@@ -2332,14 +2330,14 @@ class TestDipRetry(unittest.TestCase):
         real = user32.SetCursorPos
         calls = {"n": 0}
 
-        def moved_by_hand(x, y):
+        def moved_by_user(x, y):
             calls["n"] += 1
             real(x, y)
             if calls["n"] == 1:
-                user32.cursor = (7, 9)        # 置いた瞬間に手でマウスを動かされた
+                user32.cursor = (7, 9)        # 置いた瞬間に利用者がマウスを動かした
             return 1
 
-        user32.SetCursorPos = moved_by_hand
+        user32.SetCursorPos = moved_by_user
 
         ok, _u, slept, _waits = self._dip(ex, user32=user32, accept_on=1)
 
@@ -3233,7 +3231,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         ex = self._make()
         spam = threading.Event()
         self.order = []
-        values = dict(_wait_run_respawn=True, _item_begin_manual=False, _pos_ref_plan=None,
+        values = dict(_wait_run_respawn=True, _item_begin_by_user=False, _pos_ref_plan=None,
                       _begin_precheck=True, _begin_move=None, _start_use_spam=spam,
                       _wait_round_end=True, _handle_item_lost=True, _wait_other_windows=True,
                       _press_begin=False, _confirm_begin=None, _gave_up_begin=False,
@@ -3276,8 +3274,8 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         self.assertIsNone(error)
         self.assertFalse(self._fetched())
 
-    def test_a_manual_loss_stops_the_spam(self):
-        spam, error = self._run(_handle_item_lost="manual")
+    def test_a_loss_handled_by_the_user_stops_the_spam(self):
+        spam, error = self._run(_handle_item_lost="by_user")
         self.assertTrue(spam.is_set())
         self.assertFalse(self._fetched())
 
@@ -3294,7 +3292,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", side_effect=lambda **_k: next(answers)), \
              patch.object(ex, "_begin_move"), \
@@ -3328,7 +3326,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", return_value=True), \
              patch.object(ex, "_begin_move"), \
@@ -3353,7 +3351,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", return_value=True), \
              patch.object(ex, "_begin_move"), \

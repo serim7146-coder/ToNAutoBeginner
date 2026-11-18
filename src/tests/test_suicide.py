@@ -48,7 +48,7 @@ class TestSuicideRetry(unittest.TestCase):
         """die_on 回目の長押しで死ぬ。before(n) は n 回目の長押しの直前に呼ぶ"""
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(hwnd)
             if before:
                 before(len(sent))
@@ -133,7 +133,7 @@ class TestSuicideRetry(unittest.TestCase):
         with patch.object(config, "SUICIDE_CONFIRM_SEC", 5.0), \
              patch.object(WindowOperator, "hold_key_background",
                           side_effect=lambda *a, **_: sent.append(1) or True), \
-             patch.object(ActionExecutor.time, "sleep", side_effect=nap):
+             patch.object(ex._skip_wake, "wait", side_effect=nap):
             ex.do_skip()
 
         self.assertEqual(len(sent), 1)
@@ -155,7 +155,7 @@ class TestSuicideRetry(unittest.TestCase):
         ex, st, _logs = self._executor()
         sent = []
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             sent.append(1)
             if len(sent) == 1:
                 ex.do_skip()             # 1本目の最中に2本目が来た
@@ -601,7 +601,7 @@ class TestSuicideBackgroundRouting(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep"):
             ex.do_skip()
 
-        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC, stop=ANY)
+        mock_bg.assert_called_once_with(123, "^", config.SUICIDE_HOLD_SEC, wake=ANY)
         mock_focus.assert_not_called()
         mock_hold.assert_not_called()
         self.assertGreater(st._skip_time, 0, "死亡判定用の時刻は残すこと")
@@ -657,7 +657,7 @@ class TestSuicideIsolation(unittest.TestCase):
         """別スレッドで回す。止まってしまったら False"""
         sent = []
         with patch.object(WindowOperator, "hold_key_background",
-                          side_effect=lambda h, k, sec, stop=None: sent.append(h) or True):
+                          side_effect=lambda h, k, sec, stop=None, wake=None: sent.append(h) or True):
             t = threading.Thread(target=ex.do_skip, daemon=True)
             t.start()
             t.join(timeout)
@@ -753,7 +753,7 @@ class TestSuicideIsolation(unittest.TestCase):
         gate = threading.Barrier(2, timeout=2.0)
         lock = threading.Lock()
 
-        def hold(hwnd, key, sec, stop=None):
+        def hold(hwnd, key, sec, stop=None, wake=None):
             with lock:
                 inside.append(hwnd)
                 peak.append(len(inside))
@@ -815,7 +815,7 @@ class TestActionExecutorSkip(unittest.TestCase):
              patch.object(ActionExecutor.time, "sleep") as mock_sleep:
             executor.do_skip()
 
-        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC, stop=ANY)
+        mock_bg.assert_called_once_with(123, "x", config.SUICIDE_HOLD_SEC, wake=ANY)
         mock_focus.assert_not_called()
         mock_sleep.assert_not_called()
 
@@ -1092,9 +1092,9 @@ class TestSkipRoundsByType(unittest.TestCase):
         SharedState.set_hands_free(False)
 
     def _monitor(self, *, skip_rounds=("Classic",), do_skip=True,
-                 cancel_afk=True, keep_on=None,
+                 afk_wins=3, keep_on=None,
                  instance_type=config.INSTANCE_PRIVATE):
-        cfg = WindowConfig(do_skip=do_skip, cancel_afk=cancel_afk,
+        cfg = WindowConfig(do_skip=do_skip, cancel_afk_wins=afk_wins,
                            voice_continue="continue.mp3",
                            skip_rounds=set(skip_rounds))
         monitor = LogMonitor.LogMonitor(cfg, keep_on or {}, lambda _m: None,
@@ -1283,14 +1283,14 @@ class TestSkipRoundsByType(unittest.TestCase):
                          config.OPEN_SPECIAL_ROUND_TARGET_WINS)
 
     def test_nothing_is_said_when_the_dtm_waldo_continue_is_off(self):
-        monitor = self._monitor(cancel_afk=False)
+        monitor = self._monitor(afk_wins=0)
 
         self.assertEqual(self._special_round(monitor, "Fog"), [])
         self.assertEqual(monitor.st.open_special_round_wins,
                          config.OPEN_SPECIAL_ROUND_TARGET_WINS, "3勝扱いにはなる")
 
     def test_the_skip_applies_when_cancel_afk_is_off(self):
-        monitor = self._monitor(cancel_afk=False)
+        monitor = self._monitor(afk_wins=0)
 
         started = self._killers(monitor, [self.DTM])
 
