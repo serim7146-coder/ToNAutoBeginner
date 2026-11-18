@@ -144,7 +144,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面に出す・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）

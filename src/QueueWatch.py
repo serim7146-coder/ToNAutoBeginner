@@ -1,6 +1,6 @@
 """グループインスタンスの待機列に入れるようになった合図を、VRChat のログから読む。
 
-マクロの開始・窓とログの割り当てとは関係なく、スマホ通知の「通知する」が ON のあいだ、ツールが自分で VRChat の
+マクロの開始・窓とログの割り当てとは関係なく、「待機列に入れるようになったら知らせる」が ON のあいだ、ツールが自分で VRChat の
 ログ（output_log_*.txt）を読む（Watcher）。読むだけで、マクロの操作・入力・OSC は何もしない。待機列はアカウントの
 もので窓のものではない（1 つの窓で並ぶと、全部の窓が同じ待機列に動く）ので、窓の番号は使わない。
 
@@ -10,12 +10,15 @@
   待機列を抜けた   [API] Requesting Delete instances/wrld_X:39837~…/queue …
   入室した         [Behaviour] Joining wrld_X:39837~…
 
-合図の決まり。あるログの Get の行が、次の 3 つを全部満たしたとき:
+合図の決まり。あるログの Get の行が、次の 4 つを全部満たしたとき:
 1. そのインスタンスが、どれかのログで待機列に入れられている（POST。ログどうしで共有する。アカウントは
    共通なので、POST しなかった窓にも同じ Get が出る）
 2. Get のログの時刻が、その POST のログの時刻より QUEUE_READY_AFTER_POST_SEC 秒以上後
-3. その Get のログに、前後 QUEUE_READY_QUIET_SEC 秒以内（両端を含む）に、別のインスタンスの Get が無い
+3. その Get のログに、前後 QUEUE_READY_QUIET_SEC 秒未満（ちょうど 3 秒は数えない。ログの時刻は秒までなので、
+   ちょうど 3 秒差が出やすい）に、別のインスタンスの Get が無い
    （同じインスタンスの Get は数えない。メニューの行は決まりに入れない）
+4. その Get が、そのログで [Behaviour] Joining wrld_… の直後の 1 本目でない（入り直した直後に VRChat が待機列の
+   表示を取り直す Get で、順番が来た合図ではない）
 インスタンスの印は `wrld_…:番号~…` の全部。
 
 待機列に入れたものを忘れるとき: 合図が出た・Delete を読んだ・Joining を読んだ・POST から QUEUE_FORGET_SEC 秒たった。
@@ -134,6 +137,8 @@ class Candidates:
         self._on_queued = on_queued
         self._recent: list = []         # このログで最近読んだ Get (ログの時刻, 印)。前後の判定用
         self._pending: list = []        # 閉じるのを待っている候補
+        # ワールドに入り直した（Joining）直後の 1 本目の Get か。待機列の表示を取り直しているだけなので候補にしない
+        self._armed = False
 
     def feed(self, at, line: str):
         """1 行を読んだ。at はその行のログの時刻（epoch 秒。無ければ None）"""
@@ -154,6 +159,11 @@ class Candidates:
             verb, key, queue = m.groups()
             if verb == "Get" and not queue:
                 if at is not None:
+                    if self._armed:
+                        # 入り直した直後の 1 本目は、VRChat が待機列の表示を戻すために取りに来た分。
+                        # 候補にも前後の記録にも入れない
+                        self._armed = False
+                        return
                     self._on_get(at, key)
             elif verb == "Post" and queue:
                 if at is not None:
@@ -169,16 +179,17 @@ class Candidates:
         m = _RE_JOIN.match(text)
         if m:
             note_join(m.group(1))
+            self._armed = True          # 次の Get 1 本は数えない
 
     def _on_get(self, at: float, key: str):
         quiet = config.QUEUE_READY_QUIET_SEC
-        self._recent = [r for r in self._recent if abs(at - r[0]) <= quiet]
+        self._recent = [r for r in self._recent if abs(at - r[0]) < quiet]
         conflict = any(r_key != key for _r_at, r_key in self._recent)
         for cand in self._pending:
-            if cand.key != key and abs(at - cand.at) <= quiet:
-                cand.cancelled = True       # 後ろ 3 秒以内に別のインスタンスの Get
+            if cand.key != key and abs(at - cand.at) < quiet:
+                cand.cancelled = True       # 後ろ 3 秒未満に別のインスタンスの Get
         self._recent.append((at, key))
-        if not conflict:                    # 前 3 秒以内に別のインスタンスの Get があれば候補にしない
+        if not conflict:                    # 前 3 秒未満に別のインスタンスの Get があれば候補にしない
             self._pending.append(_Candidate(key, at, self._clock()))
 
     # ── 閉じる ───────────────────────
@@ -365,17 +376,18 @@ class Watcher:
 def notify_queued(logger):
     """待機列に入った（Watcher の裏のスレッドから）。ツールのログに 1 行書くだけ（声・スマホへの送信はしない）。
     インスタンスの印はログに出さない"""
-    logger("[スマホ通知] 待機列に入りました")
+    logger("[待機列] 並びました")
 
 
 def notify_ready(logger):
-    """合図が出た（Watcher の裏のスレッドから）。ツールのログに書き、「通知する」が ON なら、待機列の声を 1 回鳴らし
-    （「アナウンス」の待機列のチェックが OFF なら鳴らない）、宛先が正しければスマホへ送る。「通知する」が OFF なら
-    声も送信もしない。声の失敗は送信を止めず、送信の失敗は声に響かない。完全放置モードでも鳴る。
+    """合図が出た（Watcher の裏のスレッドから）。ツールのログに書き、「待機列に入れるようになったら知らせる」が
+    ON なら待機列の声を 1 回鳴らし（「アナウンス」の待機列のチェックが OFF なら鳴らない）、そのうえでスマホ通知の
+    「通知する」が ON で宛先が正しければスマホへ送る（前は声も送信も「通知する」だけで決まっていた）。
+    声の失敗は送信を止めず、送信の失敗は声に響かない。完全放置モードでも鳴る。
     logger は裏のスレッドから呼んでよいもの。宛先・インスタンスの印はログに出さない"""
-    logger("[スマホ通知] 待機列に入れるようになりました")
+    logger("[待機列] 入れるようになりました")
     try:
-        if not SharedState.get_phone_notify():
+        if not SharedState.get_queue_notify():
             return
     except Exception:
         DebugLog.exception("QueueWatch.notify_ready")
@@ -385,6 +397,8 @@ def notify_ready(logger):
     except Exception:
         DebugLog.exception("QueueWatch.notify_ready.sound")
     try:
+        if not SharedState.get_phone_notify():
+            return
         topic = SharedState.get_phone_topic()
         if not PhoneNotify.is_valid_topic(topic):
             return

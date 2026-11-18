@@ -700,3 +700,61 @@ class TestSettleAndTryAgain(unittest.TestCase):
             text = "\n".join(map(str, world.logs + world.written + world.events))
             self.assertNotIn(CODE, text, kwargs)
             self.assertNotIn(str(len(CODE)), text, ("長さも出さない", kwargs))
+
+
+class _Var:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+class TestQueueNotifyIsSaved(unittest.TestCase):
+    """「待機列に入れるようになったら知らせる」の保存キー queue_notify の往復（保存に入る・読み戻せる・キーが無ければ ON）"""
+
+    def setUp(self):
+        self.addCleanup(SharedState.set_queue_notify, True)
+        self.addCleanup(SharedState.set_phone_topic, "")
+        self.addCleanup(SharedState.set_phone_notify, False)
+
+    def saved_settings(self) -> dict:
+        app = _with_cancel_key(type("FakeApp", (), {})())
+        app.tabs = []
+        app.tool_rows = []
+        app._win_count_pref = None
+        for name in ("v_desktop_mode", "v_use_osc", "v_ton_entry", "v_ton_begin", "v_join_world", "v_ton_access",
+                     "v_emergency_key", "v_start_key", "v_obs_enabled", "v_obs_freeze", "v_obs_host", "v_obs_port",
+                     "v_obs_password"):
+            setattr(app, name, _Var(""))
+        app._window_volume_settings = lambda: {}
+        app._fog_early_read_setting = lambda: {}
+        app._launch_options_setting = lambda: {}
+        app._window_freeze_setting = lambda: {}
+        saved = {}
+        with patch.object(mainGUI, "save_settings", saved.update), \
+             patch.object(mainGUI, "load_settings", return_value={}):
+            mainGUI.App._save_launch_settings(app)
+        return saved
+
+    def load(self, data: dict):
+        app = type("FakeApp", (), {})()
+        app.v_phone_notify, app.v_queue_notify, app.v_phone_topic = MagicMock(), MagicMock(), MagicMock()
+        mainGUI.App._load_phone_notify(app, data)
+        self.addCleanup(DebugLog._secrets.discard, SharedState.get_phone_topic())
+
+    def test_queue_notify_round_trips_and_a_missing_key_is_on(self):
+        for value in (True, False):
+            with self.subTest(value=value):
+                SharedState.set_queue_notify(value)
+                saved = self.saved_settings()
+                self.assertIs(saved["queue_notify"], value)
+                SharedState.set_queue_notify(not value)
+                self.load(saved)
+                self.assertIs(SharedState.get_queue_notify(), value)
+        SharedState.set_queue_notify(False)
+        self.load({})
+        self.assertIs(SharedState.get_queue_notify(), True)

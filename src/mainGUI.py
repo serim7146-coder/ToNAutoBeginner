@@ -443,6 +443,8 @@ PHONE_NOTIFY_NOTE = ("続行ラウンド・全続行・待機列に入れるよ�
                      "スマホへ通知します。スマホにntfyのアプリを入れて、\n"
                      "下の宛先を購読してください。\n"
                      "宛先を知っている人は、この通知を読めます（人に見せないでください）。")
+QUEUE_NOTIFY_NOTE = ("スマホ通知がOFFでも、ツールのログと声で知らせます。\n"
+                     "待機列はアカウントのものなので、窓の番号は付きません。")
 WINDOW_VOLUME_NOTE = ("続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。\n"
                       "マクロを停止すると元の音量に戻ります。")
 
@@ -1425,12 +1427,12 @@ class App(tk.Tk):
         self._entry_stop = threading.Event()   # 入室時自動操作の中断フラグ
         self._launched_tab_indices: list[int] | None = None  # 今回起動した窓タブ
         self._stop_reason: str | None = None
-        self._queue_watcher = None            # 待機列の見張り（通知する が ON のあいだだけ。マクロの開始とは別）
+        self._queue_watcher = None            # 待機列の見張り（待機列に入れるようになったら知らせる が ON のあいだだけ。マクロの開始とは別）
         DebugLog.install_hooks(self)          # 例外をトレースバックごと debug.log へ
         self._build_ui()
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
-        self._sync_queue_watcher()            # 読み込んだ「通知する」に合わせて見張りを始める
+        self._sync_queue_watcher()            # 読み込んだ「待機列に入れるようになったら知らせる」に合わせて見張りを始める
         self._auto_detect_windows()
         self._sync_launch_count()
         AutoUpdate.cleanup_old_exe()
@@ -3214,12 +3216,17 @@ class App(tk.Tk):
 
     # ── スマホ通知（ntfy）──────────────────────
     def _build_phone_notify(self, parent):
-        """枠「スマホ通知（ntfy）」。全窓共通。通知する（デフォルト OFF）・宛先（ツールが作る）・コピー・テスト送信・作り直す"""
+        """枠「スマホ通知（ntfy）」。全窓共通。通知する（デフォルト OFF）・待機列に入れるようになったら知らせる
+        （デフォルト ON。スマホ通知とは別の元栓）・宛先（ツールが作る）・コピー・テスト送信・作り直す"""
         box = ttk.LabelFrame(parent, text="スマホ通知（ntfy）")
         box.pack(fill="x", pady=(6, 0))
         self.v_phone_notify = tk.BooleanVar(value=False)
         ttk.Checkbutton(box, text="通知する", variable=self.v_phone_notify,
                         command=self._on_phone_notify_changed).pack(anchor="w")
+        self.v_queue_notify = tk.BooleanVar(value=True)
+        ttk.Checkbutton(box, text="待機列に入れるようになったら知らせる", variable=self.v_queue_notify,
+                        command=self._on_queue_notify_changed).pack(anchor="w")
+        ttk.Label(box, text=QUEUE_NOTIFY_NOTE, wraplength=420).pack(anchor="w")
         ttk.Label(box, text=PHONE_NOTIFY_NOTE, wraplength=420).pack(anchor="w")
         row = ttk.Frame(box)
         row.pack(fill="x")
@@ -3236,15 +3243,21 @@ class App(tk.Tk):
         on = bool(self.v_phone_notify.get())
         SharedState.set_phone_notify(on)
         self._log("[スマホ通知] " + ("通知します" if on else "通知しません"))
+        self._schedule_settings_save()
+
+    def _on_queue_notify_changed(self):
+        on = bool(self.v_queue_notify.get())
+        SharedState.set_queue_notify(on)
+        self._log("[待機列] 入れるようになったら知らせます" if on else "[待機列] 知らせません")
         self._sync_queue_watcher()
         self._schedule_settings_save()
 
     def _sync_queue_watcher(self):
-        """待機列の見張りを「通知する」に合わせる。ON なら VRChat のログを自分で読み始め（マクロの開始とは別）、
+        """待機列の見張りを「待機列に入れるようになったら知らせる」に合わせる。ON なら VRChat のログを自分で読み始め（マクロの開始とは別）、
         OFF なら止める。ここは Tk のスレッド。見張りは裏のスレッドから _log を呼ぶ（_log は裏から呼んでよい。
         Tk の変数には触らない）"""
         watcher = getattr(self, "_queue_watcher", None)
-        if SharedState.get_phone_notify():
+        if SharedState.get_queue_notify():
             if watcher is None:
                 watcher = QueueWatch.Watcher(config.VRCHAT_LOG_DIR, lambda: QueueWatch.notify_ready(self._log),
                                              on_queued=lambda: QueueWatch.notify_queued(self._log))
@@ -3293,6 +3306,7 @@ class App(tk.Tk):
         読み込みでは保存しない（ほかの設定と同じ）。作った宛先は、通知を入れる・コピー・テスト送信の
         ときに保存する（スマホで購読するのはそのあとなので、次の起動で変わらない）"""
         SharedState.set_phone_notify(data.get("phone_notify") is True)
+        SharedState.set_queue_notify(data.get("queue_notify") is not False)     # キーが無ければ ON
         topic = data.get("phone_notify_topic")
         if not PhoneNotify.is_valid_topic(topic):
             topic = PhoneNotify.new_topic()
@@ -3304,6 +3318,7 @@ class App(tk.Tk):
         """画面の表示を SharedState（保存・読み込みの元）に合わせる"""
         try:
             self.v_phone_notify.set(SharedState.get_phone_notify())
+            self.v_queue_notify.set(SharedState.get_queue_notify())
             self.v_phone_topic.set(SharedState.get_phone_topic())
         except (tk.TclError, AttributeError):
             pass
@@ -5391,6 +5406,7 @@ class App(tk.Tk):
             "follow_utils":            SharedState.get_follow_utils(),
             "phone_notify":            SharedState.get_phone_notify(),
             "phone_notify_topic":      SharedState.get_phone_topic(),
+            "queue_notify":            SharedState.get_queue_notify(),
             "chase_cw_key":            self.v_chase_cw_key.get(),
             "chase_ccw_key":           self.v_chase_ccw_key.get(),
             **{field: self._move_key_var(target).get() for target, field, _label in App.MOVE_KEY_FIELDS},

@@ -204,6 +204,10 @@ _PHONE_NOTIFY = _Setting(False, bool)
 get_phone_notify, set_phone_notify = _PHONE_NOTIFY.get, _PHONE_NOTIFY.set
 _PHONE_TOPIC = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_phone_topic, set_phone_topic = _PHONE_TOPIC.get, _PHONE_TOPIC.set
+# 待機列に入れるようになったら知らせるか（全窓共通・保存・既定 ON）。OFF ならログの見張りを止める。
+# スマホへ送るかは _PHONE_NOTIFY が元栓（OFF なら声とツールのログだけ）
+_QUEUE_NOTIFY = _Setting(True, bool)
+get_queue_notify, set_queue_notify = _QUEUE_NOTIFY.get, _QUEUE_NOTIFY.set
 # 待機列の合図で鳴らす声のファイル（窓のものではない。見張りの裏のスレッドは Tk の変数を読めないので、ここに置く）。空なら鳴らさない
 _QUEUE_VOICE = _Setting("", lambda v: v if isinstance(v, str) else "")
 get_queue_voice, set_queue_voice = _QUEUE_VOICE.get, _QUEUE_VOICE.set

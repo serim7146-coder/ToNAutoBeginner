@@ -346,7 +346,8 @@ def setUpModule():
                        rounds=config.ROUND_STORE_PATH,
                        trust=FogEarlyRead.trust,
                        items=config.ITEMS,
-                       host_local=config.HOST_LOCAL_STATE_PATH)
+                       host_local=config.HOST_LOCAL_STATE_PATH,
+                       vrchat_log_dir=config.VRCHAT_LOG_DIR)
     # 本物の item.json（依頼者が作成中）の中身にテストを左右させない。表が要るテストは差し替える
     config.ITEMS = {}
     config.SETTINGS_PATH = root / "settings.json"
@@ -356,6 +357,9 @@ def setUpModule():
     # 本物の ToN ListTool の host_local_state.bin（DPAPI で封じてある）を読まない。無いパスへ向け、
     # 確かめるテストが一時フォルダのものへ差し替える
     config.HOST_LOCAL_STATE_PATH = str(root / "no_host_local_state.bin")
+    # 「待機列に入れるようになったら知らせる」は既定 ON なので、App を作るたびに待機列の見張りが VRChat のログの
+    # フォルダを読みに行く。本物の VRChat のログを読まないよう、無いパスへ向ける
+    config.VRCHAT_LOG_DIR = root / "no_vrchat_log_dir"
     # trust は import 時にパスを受け取っている。config を差し替えても効かないので作り直す
     FogEarlyRead.trust = FogEarlyRead.NameTrust(config.FOG_OBJECT_NAMES_PATH)
     # サーバーへの確認（AccessCheck）を本物のネットワークへ出さない。既定は「使ってよい」の答え。
@@ -379,6 +383,7 @@ def setUpModule():
     SharedState.set_no_begin_after_continue(False)   # 前のテストの ON を残さない（既定も OFF）
     SharedState.set_run_respawn(False)      # Run のリスポーン（前面・Esc・OSC）も同じ
     SharedState.set_wait_bloodthirsty(True)     # 前のテストの OFF を残さない（既定は ON）
+    SharedState.set_queue_notify(True)          # 前のテストの OFF を残さない（既定は ON）
     SharedState.set_suicide_hold_sec(config.SUICIDE_HOLD_SEC)   # 前のテストの秒数を残さない
     # App を作るたびに最大 WS の見張り（MemoryWatch）の本物のスレッドが立つと、モジュールが終わって debug.log のパスが
     # 本物に戻った後も生き残り、本物の debug.log に書きうる。立てた済みの印を入れて start() を何もしなくする。
@@ -444,6 +449,7 @@ def tearDownModule():
     FogEarlyRead.trust = _real_paths["trust"]
     config.ITEMS = _real_paths["items"]
     config.HOST_LOCAL_STATE_PATH = _real_paths["host_local"]
+    config.VRCHAT_LOG_DIR = _real_paths["vrchat_log_dir"]
     AccessCheck.reset_for_tests()
     AccessCheck._ask_server = _real_paths["ask_server"]
     AccessCheck.SecretStore = _real_paths["access_secret_store"]

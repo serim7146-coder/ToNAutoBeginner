@@ -15,6 +15,10 @@ PHONE_LINES = [
     "下の宛先を購読してください。",
     "宛先を知っている人は、この通知を読めます（人に見せないでください）。",
 ]
+QUEUE_LINES = [
+    "スマホ通知がOFFでも、ツールのログと声で知らせます。",
+    "待機列はアカウントのものなので、窓の番号は付きません。",
+]
 VOLUME_LINES = [
     "続行の窓、全続行の窓、フリーズの窓、それ以外で音量を切り替えられます。",
     "マクロを停止すると元の音量に戻ります。",
@@ -41,6 +45,7 @@ def _has_label(widget, text):
 class TestNoteText(unittest.TestCase):
     NOTES = (
         ("PHONE_NOTIFY_NOTE", mainGUI.PHONE_NOTIFY_NOTE, PHONE_LINES),
+        ("QUEUE_NOTIFY_NOTE", mainGUI.QUEUE_NOTIFY_NOTE, QUEUE_LINES),
         ("WINDOW_VOLUME_NOTE", mainGUI.WINDOW_VOLUME_NOTE, VOLUME_LINES),
         ("REPORT_NOTE", mainGUI.ReportDialog.REPORT_NOTE, REPORT_LINES),
     )
@@ -78,6 +83,9 @@ class TestNoteLabels(unittest.TestCase):
     def test_the_phone_notify_label_uses_the_constant(self):
         self.assertTrue(_has_label(self.app, mainGUI.PHONE_NOTIFY_NOTE))
 
+    def test_the_queue_notify_label_uses_the_constant(self):
+        self.assertTrue(_has_label(self.app, mainGUI.QUEUE_NOTIFY_NOTE))
+
     def test_the_window_volume_label_uses_the_constant(self):
         self.assertTrue(_has_label(self.app, mainGUI.WINDOW_VOLUME_NOTE))
 
@@ -90,7 +98,8 @@ class TestNoteLabels(unittest.TestCase):
 
     def test_wraplength_is_kept(self):
         """画面の拡大率が大きい PC の保険として、折り返しの幅は残す"""
-        for note, width in ((mainGUI.PHONE_NOTIFY_NOTE, 420), (mainGUI.WINDOW_VOLUME_NOTE, 420)):
+        for note, width in ((mainGUI.PHONE_NOTIFY_NOTE, 420), (mainGUI.QUEUE_NOTIFY_NOTE, 420),
+                            (mainGUI.WINDOW_VOLUME_NOTE, 420)):
             labels = [lb for lb in _labels(self.app) if lb.cget("text") == note]
             self.assertEqual(len(labels), 1)
             self.assertEqual(int(str(labels[0].cget("wraplength"))), width)

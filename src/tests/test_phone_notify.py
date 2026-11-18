@@ -175,6 +175,7 @@ class _FakeApp:
         self.logs, self.saves = [], 0
         self.clipboard = []
         self.v_phone_notify = type("V", (), {"v": False, "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
+        self.v_queue_notify = type("V", (), {"v": True, "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
         self.v_phone_topic = type("V", (), {"v": "", "get": lambda s: s.v, "set": lambda s, x: setattr(s, "v", x)})()
 
     def _log(self, msg):
@@ -241,7 +242,7 @@ class TestSettings(unittest.TestCase):
         mainGUI.App._on_phone_notify_changed(app)
         self.assertTrue(SharedState.get_phone_notify())
         self.assertEqual(app.saves, 1)
-        self.assertEqual(app.syncs, 1, "見張りも「通知する」に合わせる")
+        self.assertEqual(getattr(app, "syncs", 0), 0, "見張りは「待機列に入れるようになったら知らせる」で決まる（ここでは触らない）")
         app.v_phone_notify.set(False)
         mainGUI.App._on_phone_notify_changed(app)
         self.assertFalse(SharedState.get_phone_notify())
