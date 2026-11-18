@@ -10,7 +10,6 @@ import DebugLog
 import FetchMiss
 import ItemCatalog
 import ItemFetch
-import ItemUse
 import ScreenCapture
 import SharedState
 import TaskStats
@@ -730,10 +729,6 @@ class ActionExecutor:
             key = SharedState.get_suicide_key()
             hold = SharedState.get_suicide_hold_sec()
             st._skip_time = time.time()
-            if self._holding_maxwell():
-                # 一度立てたら、このラウンドの間は下ろさない（長押しの途中でゲームが手から外すことがあり、
-                # やり直しの長押しの時点ではもう持っていない）
-                st.skip_maxwell_seq = round_seq
             self._log(f"自爆実行中 ({hold:g}秒・背面)…")
             if not WindowOperator.hold_key_background(
                     self._cfg.hwnd, key, hold, wake=self._skip_wake):
@@ -750,14 +745,6 @@ class ActionExecutor:
                 return
         if self._should_skip(round_seq):
             self._log(f"⚠ 自爆を{limit}回試しましたが死にませんでした")
-
-    def _held_log_name(self) -> str:
-        """手に持っている物のログの名前（持っていない・LogMonitor が追跡を作る前は ""）"""
-        tracker = self._st.item_use
-        return "" if tracker is None else tracker.held_name()
-
-    def _holding_maxwell(self) -> bool:
-        return ItemUse.norm(self._held_log_name()) == config.MAXWELL_LOG_NAME
 
     def _should_skip(self, round_seq: int) -> bool:
         """いま自爆してよいか。やり直すたびに見直す"""
