@@ -23,11 +23,18 @@
 --   古い版のツールは p_name なしで呼ぶ → default null なので今まで通り動く。
 --
 -- 流し方:
---   1. この関数（1〜3）を SQL Editor で流す。新しいツールはこの時点でこれを使う
+--   1. この関数（1〜3）を SQL Editor で流す。2 引数の版は本番にもう在るので、create or replace が
+--      本体だけ差し替える（権限はそのまま残り、関数が無い瞬間もできない）
 --   2. 4（Users を閉じる）は流し済み。
 --
--- 注意: drop と create は同じ実行で流すこと。古い関数 (text) と新しい関数 (text, text default null) が
---   両方あると、PostgREST が候補を選べず 300 で止まる。
+-- 注意:
+--   - 1 引数の古い関数 (text) が残っていると、2 引数の版と両方あって PostgREST が候補を選べず
+--     300 で止まる。下の drop で消す（無ければ何もしない）。drop と create は同じ実行で流すこと。
+--   - create or replace は引数の名前を変えられない。本番の引数名が p_vrchat_uid / p_name でなければ
+--     42P13 で止まる。そのときだけ drop function if exists public.get_transformed_uid(text, text);
+--     を足して作り直す。関数を drop すると権限も消えるので、3 の grant も必ず同じ実行に含めること。
+--   - 2026-11-19: 本番に在ったのは last_seen_at を更新しない古い 2 引数の版だった。create function の
+--     ままだと 42723（同じ引数の関数が在る）で止まる。
 
 -- 1. 一意（同時に登録されても二重にならない・番号が重ならない）
 create unique index if not exists users_vrchat_uid_key on public."Users" ("VRChat_uid");
@@ -39,10 +46,10 @@ alter table public."Users" add column if not exists name_updated_at timestamptz;
 alter table public."Users" add column if not exists last_seen_at timestamptz;     -- check_access.sql と同じ列
 
 -- 2. 関数。所有者の権限で Users を読む（security definer）ので、呼ぶ側に Users の権限は要らない
---    古い (text) を消してから新しい (text, text default null) を作る（同じ実行で流す）
+--    1 引数の古い版 (text) は消し、2 引数の版 (text, text default null) は本体を差し替える（同じ実行で流す）
 drop function if exists public.get_transformed_uid(text);
 
-create function public.get_transformed_uid(p_vrchat_uid text, p_name text default null)
+create or replace function public.get_transformed_uid(p_vrchat_uid text, p_name text default null)
 returns smallint
 language plpgsql
 security definer
