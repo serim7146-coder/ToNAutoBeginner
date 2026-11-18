@@ -99,7 +99,7 @@ ITEM_FETCH_FRONT_LATEST_SEC = 5.0
 ITEM_FETCH_FOCUS_SEC = 0.25     # 窓を前に出してから撮り始めるまで
 # 使うと無くなるアイテム（店の番号。item.json）: Burger・Haunted Burger・Thorn Glognut。手に持って利用者がクリックしたらアイテムロスト
 CONSUMABLE_ITEM_IDS = frozenset({36, 74, 79})
-# Maxwell を手に持ったときのログの名前（空白なし・小文字で比べる）。手に持ったまま自爆したらアイテムロスト
+# Maxwell を手に持ったときのログの名前（空白なし・小文字で比べる）。手に持ったまま死んだらアイテムロスト
 MAXWELL_LOG_NAME = "maxwell"
 
 # 録画中だけ、当ツールの窓を画面キャプチャから外す。物理モニタには見えたままで、

@@ -49,7 +49,7 @@ HELD_LOST_SABOTAGE = "Sabotage マーダー"
 HELD_LOST_INSTANCE = "インスタンス移動"
 HELD_LOST_REBORN = "猫消費"
 HELD_LOST_USED = "使用"
-HELD_LOST_SUICIDE = "自爆"
+HELD_LOST_DEATH = "死亡"
 
 # サーバーに確認できず、この窓を始めないときの画面のログ（理由ごとに 1 回）
 ACCESS_NOTICES = {
@@ -2283,10 +2283,14 @@ class LogMonitor:
                 SharedState.get_suicide_hold_sec() + config.SUICIDE_CONFIRM_SEC):
             self._log("✅ 自爆成功")
             st._skip_time = 0.0
-            if st.skip_maxwell_seq == st.round_seq:
-                st.skip_maxwell_seq = -1
-                self._mark_item_lost("Maxwell を持って自爆: アイテムロスト")
-                self._lose_held_item(HELD_LOST_SUICIDE)
+        # Maxwell は、手に持ったまま死ぬと無くなる（復活しても消費される）。自爆かどうかは見ない。
+        # 自爆の前や最中に手放せば無くならないので、死亡の行を読んだ時点で手に持っているかで決める
+        # （利用者 2026-11-19。追跡がまだ無い間は何もしない）
+        tracker = st.item_use
+        if (st.in_round and tracker is not None
+                and ItemUse.norm(tracker.held_name()) == config.MAXWELL_LOG_NAME):
+            self._mark_item_lost("Maxwell を持って死亡: アイテムロスト")
+            self._lose_held_item(HELD_LOST_DEATH)
         self._mark_out_of_round("死亡")
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")
