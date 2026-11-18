@@ -11,10 +11,10 @@ _SCREEN_CALLS = {"_log", "_note", "showinfo", "showwarning", "showerror",
 
 
 def _sources():
-    """走査の対象: src/*.py・src/tests/*.py・README.md。この中に探す語そのものが書いてあるので、このファイル自身は除く"""
+    """走査の対象: src/*.py・src/tests/*.py・README.md・リポジトリ直下の build.py。この中に探す語そのものが書いてあるので、このファイル自身は除く"""
     me = Path(__file__).resolve()
     tests = [p for p in sorted((SRC / "tests").glob("*.py")) if p.resolve() != me]
-    return sorted(SRC.glob("*.py")) + tests + [README]
+    return sorted(SRC.glob("*.py")) + tests + [README, SRC.parent / "build.py"]
 
 
 def _screen_strings(path):

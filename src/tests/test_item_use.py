@@ -368,15 +368,15 @@ class TestHandClick(unittest.TestCase):
 
     def test_the_front_registered_window_gets_the_click(self):
         with patch.object(WindowOperator, "foreground_hwnd", return_value=0x50):
-            mainGUI._on_hand_left_down()
-            mainGUI._on_hand_left_down(types.SimpleNamespace(name="mouse:left", event_type="down"))
+            mainGUI._on_user_left_down()
+            mainGUI._on_user_left_down(types.SimpleNamespace(name="mouse:left", event_type="down"))
         self.assertEqual(self.tr.take_use(), CHARM)
         self.assertIsNone(self.tr.take_use())
 
     def test_another_front_window_does_nothing(self):
         for hwnd in (0x51, 0):
             with patch.object(WindowOperator, "foreground_hwnd", return_value=hwnd):
-                mainGUI._on_hand_left_down()
+                mainGUI._on_user_left_down()
         self.assertIsNone(self.tr.take_use())
 
 
@@ -394,8 +394,8 @@ class TestStartupAndCloseOfHandHook(_mb._MouseCase):
         with patch.object(MouseButtons, "start", return_value=True):
             mainGUI.App._start_emergency_stop_polling(app)
         self.assertEqual(len(MouseButtons._left_hooks), 1)
-        self.assertIs(app._hand_click_hook, MouseButtons._left_hooks[0])
-        self.assertIs(app._hand_click_hook.callback, mainGUI._on_hand_left_down)
+        self.assertIs(app._user_click_hook, MouseButtons._left_hooks[0])
+        self.assertIs(app._user_click_hook.callback, mainGUI._on_user_left_down)
         self.assertEqual(MouseButtons._hooks, [], "左ボタンは hook() の購読に混ぜない")
         self.assertEqual(app.logs, [])
 
@@ -422,14 +422,14 @@ class TestStartupAndCloseOfHandHook(_mb._MouseCase):
         app._unhook_move_keys = lambda: None
         app._unhook_stop_start_keys = lambda: None
         app._show_own_windows_again = lambda: None
-        app._hand_click_hook = MouseButtons.hook_left(print)
+        app._user_click_hook = MouseButtons.hook_left(print)
         with patch.object(MouseButtons, "stop",
                           lambda: app.order.append(("mouse", len(MouseButtons._left_hooks)))):
             mainGUI.App._on_close(app)
         self.assertEqual(app.order, [("mouse", 0), "destroy"])
-        self.assertIsNone(app._hand_click_hook)
+        self.assertIsNone(app._user_click_hook)
 
-    def test_closing_without_a_hand_hook_still_works(self):
+    def test_closing_without_a_user_click_hook_still_works(self):
         app = _with_cancel_key(type("FakeApp", (), {})())
         app.tabs = []
         app._log = lambda m: None

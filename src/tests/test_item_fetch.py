@@ -1086,7 +1086,7 @@ class TestItemFetch(unittest.TestCase):
     def test_the_limit_is_10_seconds(self):
         self.assertEqual(config.ITEM_FETCH_LIMIT_SEC, 10.0)
 
-    def test_equipping_by_hand_while_fetching_is_fine(self):
+    def test_equipping_by_the_user_while_fetching_is_fine(self):
         ex, st, _ = self._executor()
 
         def move(fetcher):

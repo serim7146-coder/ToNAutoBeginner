@@ -1025,7 +1025,7 @@ def _remember_own_window(widget):
         pass
 
 
-def _on_hand_left_down(event=None):
+def _on_user_left_down(event=None):
     """利用者が左クリックした（マウスフックのスレッドから）。前面の窓が VRChat なら、持っているアイテムの使用の合図。
     注入されたクリック（ツール自身）は MouseButtons が捨てている"""
     ItemUse.on_click(WindowOperator.foreground_hwnd(), ItemUse.SOURCE_HAND)
@@ -1475,7 +1475,7 @@ class App(tk.Tk):
             self._log("[キー] ⚠ マウスのサイドボタンは使えません（フックを張れませんでした）")
             DebugLog.write("[アイテム] 利用者のクリックは使用に数えません（マウスフックを張れませんでした）")
         # 手に持ったアイテムの使用の判定（ItemUse）の、利用者のクリック。張れていなければ通知が来ないだけ
-        self._hand_click_hook = MouseButtons.hook_left(_on_hand_left_down)
+        self._user_click_hook = MouseButtons.hook_left(_on_user_left_down)
         self._hook_chase_keys()
         self._hook_move_keys()
         self._hook_suicide_cancel_key()
@@ -5534,10 +5534,10 @@ class App(tk.Tk):
         self._unhook_move_keys()
         self._unhook_suicide_cancel_key()
         self._unhook_stop_start_keys()
-        hand_hook = getattr(self, "_hand_click_hook", None)
-        if hand_hook is not None:
-            self._hand_click_hook = None
-            MouseButtons.unhook_left(hand_hook)
+        user_hook = getattr(self, "_user_click_hook", None)
+        if user_hook is not None:
+            self._user_click_hook = None
+            MouseButtons.unhook_left(user_hook)
         MouseButtons.stop()                         # マウスのサイドボタンのフック（GW）。キーのフックを外した後に
         self._show_own_windows_again()
         inbox = getattr(self, "_inbox", None)

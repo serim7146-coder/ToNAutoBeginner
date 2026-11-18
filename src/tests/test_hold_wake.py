@@ -55,7 +55,8 @@ class TestKeyHoldWake(unittest.TestCase):
         wake = threading.Event()
         started = time.monotonic()
         WindowOperator._wait_holding(0.2, wake=wake)
-        self.assertGreaterEqual(time.monotonic() - started, 0.19)
+        # Windows のタイマーの粒度（約 15.6 ms）で Event.wait(0.2) がわずかに早く返ることがあるので、許容は 0.18
+        self.assertGreaterEqual(time.monotonic() - started, 0.18)
 
     def test_the_key_hold_without_a_signal_still_polls(self):
         """stop だけ（合図を渡さない古い呼び出し）は、今まで通り HOLD_STOP_POLL_SEC ごとに stop() を見る"""

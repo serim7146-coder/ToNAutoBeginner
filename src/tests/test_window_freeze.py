@@ -583,7 +583,7 @@ class TestLoadingDoesNotSave(_AppCase):
         self.app._rebuild_tabs(3)
         self.assertFalse(self.saved.called)
 
-    def test_a_hand_change_and_a_ctrl_broadcast_do_schedule_a_save(self):
+    def test_a_change_by_the_user_and_a_ctrl_broadcast_do_schedule_a_save(self):
         self.saved.reset_mock()
         _checkbutton(self.tabs[0], "Fog", 0).invoke()
         self.assertTrue(self.saved.called, "手の変更")

@@ -95,7 +95,7 @@ class TestConsumableClick(_Case):
     def _click(self):
         self.assertTrue(self.tracker.use(ItemUse.SOURCE_HAND))
 
-    def test_each_consumable_is_lost_by_a_hand_click_while_held(self):
+    def test_each_consumable_is_lost_by_a_user_click_while_held(self):
         for item_id, name in ((BURGER, "Burger"), (HAUNTED_BURGER, "Haunted Burger"),
                               (GLOGNUT, "Thorn Glognut")):
             with self.subTest(item_id=item_id):

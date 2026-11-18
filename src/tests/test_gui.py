@@ -413,7 +413,7 @@ class TestOBSSettingsInTheGui(unittest.TestCase):
         self.assertEqual(obs.count("StartRecord"), 1)
         self.assertEqual(obs.count("StopRecord"), 1)
 
-    def test_turning_it_off_leaves_a_hand_started_recording_alone(self):
+    def test_turning_it_off_leaves_a_recording_the_user_started_alone(self):
         obs = FakeOBS(recording=True)
 
         self._recorder_after_turning_off(obs)
@@ -1090,7 +1090,7 @@ class TestWindowCountIsRemembered(unittest.TestCase):
 
         self.assertIsNone(app._win_count_pref)
 
-    def test_a_manual_change_is_remembered_and_saved(self):
+    def test_a_change_by_the_user_is_remembered_and_saved(self):
         app = self._app(pref=None, tabs=4)
         app.v_win_count.set(6)
 
@@ -1769,7 +1769,7 @@ class TestLaunchWindowCount(unittest.TestCase):
 
         self.assertEqual(app.v_launch_count.get(), 7)
 
-    def test_manual_value_is_clamped_to_the_tab_count(self):
+    def test_a_value_typed_by_the_user_is_clamped_to_the_tab_count(self):
         app = type("FakeApp", (), {})()
         app.v_launch_count = self.FakeVar(9)
 

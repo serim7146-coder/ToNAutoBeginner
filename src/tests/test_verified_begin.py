@@ -2330,14 +2330,14 @@ class TestDipRetry(unittest.TestCase):
         real = user32.SetCursorPos
         calls = {"n": 0}
 
-        def moved_by_hand(x, y):
+        def moved_by_user(x, y):
             calls["n"] += 1
             real(x, y)
             if calls["n"] == 1:
                 user32.cursor = (7, 9)        # 置いた瞬間に利用者がマウスを動かした
             return 1
 
-        user32.SetCursorPos = moved_by_hand
+        user32.SetCursorPos = moved_by_user
 
         ok, _u, slept, _waits = self._dip(ex, user32=user32, accept_on=1)
 
@@ -3231,7 +3231,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         ex = self._make()
         spam = threading.Event()
         self.order = []
-        values = dict(_wait_run_respawn=True, _item_begin_manual=False, _pos_ref_plan=None,
+        values = dict(_wait_run_respawn=True, _item_begin_by_user=False, _pos_ref_plan=None,
                       _begin_precheck=True, _begin_move=None, _start_use_spam=spam,
                       _wait_round_end=True, _handle_item_lost=True, _wait_other_windows=True,
                       _press_begin=False, _confirm_begin=None, _gave_up_begin=False,
@@ -3274,8 +3274,8 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         self.assertIsNone(error)
         self.assertFalse(self._fetched())
 
-    def test_a_manual_loss_stops_the_spam(self):
-        spam, error = self._run(_handle_item_lost="manual")
+    def test_a_loss_handled_by_the_user_stops_the_spam(self):
+        spam, error = self._run(_handle_item_lost="by_user")
         self.assertTrue(spam.is_set())
         self.assertFalse(self._fetched())
 
@@ -3292,7 +3292,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", side_effect=lambda **_k: next(answers)), \
              patch.object(ex, "_begin_move"), \
@@ -3326,7 +3326,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", return_value=True), \
              patch.object(ex, "_begin_move"), \
@@ -3351,7 +3351,7 @@ class TestUseSpamIsAlwaysStopped(unittest.TestCase):
         with patch.object(config, "BEGIN_WAIT_SEC", 0), \
              patch.object(ActionExecutor.time, "sleep"), \
              patch.object(ex, "_wait_run_respawn", return_value=True), \
-             patch.object(ex, "_item_begin_manual", return_value=False), \
+             patch.object(ex, "_item_begin_by_user", return_value=False), \
              patch.object(ex, "_pos_ref_plan", return_value=None), \
              patch.object(ex, "_begin_precheck", return_value=True), \
              patch.object(ex, "_begin_move"), \

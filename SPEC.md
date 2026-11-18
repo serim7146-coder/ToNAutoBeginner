@@ -144,7 +144,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面に出す・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・窓位置リセットはラウンド終了後（`continue_restore_at_round_end`。既定 ON。OFF なら続行フリーズが外れた瞬間から数える）・続行の後は自動Beginしない（`no_begin_after_continue`。既定 OFF）・2, 3枠目のBloodthirstyを待つ（`wait_bloodthirsty`。既定 ON）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）
@@ -291,7 +291,7 @@ LogMonitor._process(line)
 
 | ファイル | 中身 |
 |---|---|
-| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `obs_record_freeze`・`window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`run_respawn` |
+| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `obs_record_freeze`・`window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`continue_restore_at_round_end`・`no_begin_after_continue`・`queue_notify`・`wait_bloodthirsty`・`run_respawn` |
 | `%APPDATA%\ToNAutoBeginner\debug.log`（.1〜.3） | デバッグログ。20MB で世代を回す |
 | `%APPDATA%\ToNAutoBeginner\rounds.sqlite`（`.listtool.bak`） | 統計画面の手元の保存（独自の番号。列 `players` あり）。前の版のものは初回に直し、直す前を `rounds.sqlite.listtool.bak` に残す |
 | `%APPDATA%\ToNAutoBeginner\continue_list.json`（`.listtool.bak`） | ツールの中の続行リスト（`{"version": 2, …}`。独自の番号。前の版のものは初回に直し、直す前を `continue_list.json.listtool.bak` に残す） |

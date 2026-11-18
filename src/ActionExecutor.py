@@ -1774,7 +1774,7 @@ class ActionExecutor:
     def _handle_item_lost(self) -> bool | str:
         """アイテムロスト時のフリーズ処理。続行してよければTrue。
 
-        戻り値: True（続けてよい）／False（止めた・ラウンド開始）／"manual"（アイテム取得→Beginモードで
+        戻り値: True（続けてよい）／False（止めた・ラウンド開始）／"by_user"（アイテム取得→Beginモードで
         装備を確認した。Begin は利用者が押すので、この回のツールの Begin はここで終わり。FY）
 
         ロストの判定は Verified Round End で行われるため、必ず
@@ -1802,7 +1802,7 @@ class ActionExecutor:
             if st.in_round:
                 # 利用者の Begin などでラウンド開始 → ROUND_START側で解除済み
                 return False
-            return "manual"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
+            return "by_user"         # 装備の確認はログに出さない（依頼者 2026-10-18: 1 行で足りる）
         else:
             # ここでは張らない（EV: 23:12 窓1・09:47 窓2 は Begin を押す前に張り、Begin が通らずに取りに
             # 行けず、全窓が止まり続けた）。取りに行く窓は店でボタンを押す間だけ（_fetch_in_front）、
@@ -1925,7 +1925,7 @@ class ActionExecutor:
 
     # ── Begin自動操作 ─────────────────────────
 
-    def _item_begin_manual(self) -> bool:
+    def _item_begin_by_user(self) -> bool:
         """アイテム取得→Begin モードでロストした回か（Begin も移動も利用者がする。FY・FZ）"""
         st = self._st
         return bool(SharedState.get_item_begin_mode() and st.waiting_for_equip and self._auto_begin_active())
@@ -1959,7 +1959,7 @@ class ActionExecutor:
             return
         # アイテムを落とすのは死んだ・生き残ったとき（EU。LogMonitor → drop_at_round_end）。ここでは落とさない
         self._trace("[状態] Begin 待ちを開始（RoundOver から）")
-        if self._item_begin_manual():
+        if self._item_begin_by_user():
             # FZ: アイテム取得→Begin モードでロストした回は、ツールは何もしない（操作は利用者）。
             # フリーズ・前面化・音声は RoundOver で済んでいる。解除は装備＋利用者の Begin の受理か、ラウンド開始
             self._log("⚠ アイテムロスト → 全窓フリーズ（装備+Beginをしてください）")
@@ -2003,14 +2003,14 @@ class ActionExecutor:
                 # 連打はその前から回しておき、待ち終わったらカーソルを一瞬
                 # 差し込むだけにする（カーソルを奪う時間を最小にする）
                 # FY: アイテム取得→Beginモードでロストした回は、装備の後の Begin を利用者が押す。連打しない
-                spam = None if self._item_begin_manual() else self._start_use_spam(round_seq)
+                spam = None if self._item_begin_by_user() else self._start_use_spam(round_seq)
                 # ロスト判定は Verified Round End で行われるので、必ず
                 # 待ってからフリーズ処理をする。RoundOver時点で判定すると
                 # まだ立っておらずフリーズが張られない。
                 if not self._wait_round_end(round_seq=round_seq):
                     return
                 lost = self._handle_item_lost()
-                if lost == "manual":
+                if lost == "by_user":
                     if spam is not None:
                         spam.set()      # ロストが Verified Round End で初めて分かった回は、連打を先に始めている。止める
                     return              # FY: Begin は利用者が押す。あきらめのやり直しも動かない
