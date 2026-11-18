@@ -815,6 +815,10 @@ class TestNoIdsInLogs(_Env):
 
 class TestThread(unittest.TestCase):
     def setUp(self):
+        # support は App のテストにスレッドを立てさせないよう start() を空にしている。ここは本物を確かめる
+        real_start = patch.object(QueueWatch.Watcher, "start", real_queue_watcher_start())
+        real_start.start()
+        self.addCleanup(real_start.stop)
         self.dir = Path(tempfile.mkdtemp(prefix="tonab_queue_"))
         self.addCleanup(shutil.rmtree, self.dir, True)
         QueueWatch.reset()

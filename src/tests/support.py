@@ -160,6 +160,7 @@ import RoundStore
 import VerifiedTracker
 import DebugLog
 import MemoryWatch
+import QueueWatch
 import shutil
 import random
 import zipfile
@@ -390,6 +391,17 @@ def setUpModule():
     # 見張りを確かめるテスト（test_memory_watch）は自分で _thread を None にして使う
     _real_paths["memory_watch_thread"] = MemoryWatch._thread
     MemoryWatch._thread = "テスト中は見張りを立てない"
+    # 「待機列に入れるようになったら知らせる」は既定 ON なので、App を作るたびに待機列の見張り（QueueWatch.Watcher）の
+    # 本物のスレッドが立つ。TaskStats に載ってスレッドの数を数えるテストを狂わせ、積み上がって毎秒 poll するので遅くもなる。
+    # start() を何もしない形にする。スレッドを確かめるテスト（test_queue_watch の TestThread）は
+    # real_queue_watcher_start() で本物に戻して使う
+    _real_paths["queue_watcher_start"] = QueueWatch.Watcher.start
+    QueueWatch.Watcher.start = lambda self: None
+
+
+def real_queue_watcher_start():
+    """support が何もしない形に差し替えた QueueWatch.Watcher.start の本物（TestThread が戻して使う）"""
+    return _real_paths["queue_watcher_start"]
 
 
 def end_sound_threads(timeout: float = 3.0) -> bool:
@@ -441,6 +453,7 @@ def tearDownModule():
     ItemUse.reset_for_tests()
     MouseButtons.reset_for_tests()
     MemoryWatch._thread = _real_paths["memory_watch_thread"]
+    QueueWatch.Watcher.start = _real_paths["queue_watcher_start"]
     urllib.request.urlopen = _real_paths["urlopen"]
     config.SETTINGS_PATH = _real_paths["settings"]
     config.FOG_OBJECT_NAMES_PATH = _real_paths["names"]
