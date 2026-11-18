@@ -823,7 +823,11 @@ QUEUE_READY_QUIET_SEC = 3.0                 # その Get のログで、前後�
 QUEUE_FORGET_SEC = 3 * 3600.0               # 待機列に入れてからこの秒数たったら忘れる
 QUEUE_WATCH_INTERVAL_SEC = 1.0              # ログの増えた分を読む間隔（通知する が ON のあいだ、ツールが自分で読む）
 QUEUE_WATCH_SCAN_SEC = 5.0                  # ログの一覧を見直す間隔
-QUEUE_READY_NOTICE_SEC = 60.0               # Get のログの時刻がこれ以上前の合図は黙って使い切る（VRChat の通知は 60 秒で消える）
+QUEUE_READY_NOTICE_SEC = 60.0               # VRChat の通知の寿命（実測 58〜61 秒）。ログで判定できないとき（Remove の行も、Get より
+                                            # QUEUE_READY_CONFIRM_SEC 秒後の行も無い）だけ使う最後の押さえ。Get の時刻がこれ以上前なら黙る
+QUEUE_READY_CONFIRM_SEC = 65.0              # 合図の答え合わせの待ち。通知が消えれば Remove の行が出るので、これだけたって出なければ
+                                            # 誤検出とみなす（実測の最大 61 秒＋余裕）
+QUEUE_READY_MATCH_SEC = 5.0                 # Remove の created at と、合図の Get の時刻のずれの許容（実測 0〜2 秒）
 
 # Fog はテラー不明のまま進むが、Enrage のログに名前が出る。名前が
 # terrors.json に一意に一致したときだけ、判定を前倒しする

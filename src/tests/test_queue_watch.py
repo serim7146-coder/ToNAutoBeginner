@@ -1,4 +1,5 @@
-"""待機列に入れるようになった合図（QueueWatch）。VRChat のログの Get / POST / Delete / Joining から読む。
+"""待機列に入れるようになった合図（QueueWatch）。VRChat のログの Get / POST / Delete / Joining と、
+順番の通知が消えた行（Remove）から読む。
 
 マクロを開始していなくても、「待機列に入れるようになったら知らせる」が ON のあいだツールが自分でログを読む（Watcher）。
 窓の番号は使わない。
@@ -7,6 +8,7 @@ ID は伏せた形（wrld_X・grp_X・番号は 5 桁）。本物の窓の並び
 （一時フォルダに偽の output_log_*.txt を作る）。スマホへは送らない（PhoneNotify.send を偽物にする）。
 時計は差し替える"""
 from tests.support import *  # noqa: F401,F403
+from datetime import timezone
 
 import QueueWatch
 import PhoneNotify
@@ -49,6 +51,19 @@ def joining(hms, number):
 
 def other(hms, text="[Behaviour] OnPlayerJoined someone"):
     return line(hms, text)
+
+
+READY_BODY = "「入る」を押して移動します。"         # 待機列の順番の通知の本文（日本語クライアント）
+FAKE_NAME = "FakePlayerName"
+FAKE_USER = "usr_fake-0000"
+
+
+def remove(hms, made=None, nid=7305519, kind="localNotifs", body=READY_BODY):
+    """通知が消えた行（Remove）。made は通知が作られた時刻（epoch 秒。既定はその行と同じ時刻）。
+    行には名前とユーザー ID が入っている（ツールがどこにも書かないことを確かめるため）"""
+    stamp = datetime.fromtimestamp(at(hms) if made is None else made, timezone.utc).strftime("%m/%d/%Y %H:%M:%S")
+    return line(hms, f"Remove notification [Notification from username:{FAKE_NAME}, sender user id:{FAKE_USER} "
+                     f"to  of type: {kind}, id: {nid}, created at: {stamp} UTC, message: \"{body}\"]")
 
 
 def at(hms) -> float:
@@ -151,7 +166,13 @@ class TestCompletion(_Env):
         self.assertEqual(self.logs, ["[待機列] 入れるようになりました"])
         self.pass_time(10)
         self.poll()
-        self.assertEqual(len(self.sent), 1, "使い切った記録で出直さない")
+        self.assertEqual(len(self.sent), 1, "答え合わせ待ちのあいだは出直さない")
+        self.pass_time(55)
+        self.poll()                 # 65 秒たっても Remove が来ない。待ちが解ける（記録は残る）
+        self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 2, "65 秒たっても Remove が来なければ、次の単独の Get で出し直せる")
 
     def test_the_text_has_no_window_number(self):
         self.assertEqual(PhoneNotify.queue_ready_text(), (PhoneNotify.APP_TITLE, "待機列に入れるようになりました"))
@@ -291,17 +312,20 @@ class TestCatchUp(_Env):
         self.settle()
         self.assertEqual(self.sent, [])
         self.assertEqual(self.logs, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "黙った合図でも記録は残る")
+        self.assertEqual(QueueWatch._awaiting, {}, "答え合わせ待ちは解く")
 
-    def test_a_consumed_record_does_not_fire_on_a_later_lone_get(self):
-        self.write(LOG_A, post("19:40:00", 39837), get("19:41:00", 39837))
+    def test_a_record_awaiting_the_answer_does_not_fire_on_a_later_lone_get(self):
+        self.write(LOG_A, post("19:47:50", 39837), get("19:50:32", 39837))
         self.poll()
         self.settle()
+        self.assertEqual(len(self.sent), 1)
         self.pass_time(10)
         self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
         self.poll()
         self.settle()
-        self.assertEqual(self.sent, [])
-        self.assertEqual(self.logs, [])
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.logs), 1)
 
     def _closing_at(self, seconds_after_get):
         """Get のログの時刻から seconds_after_get 秒後に、候補が閉じるようにする"""
@@ -318,6 +342,8 @@ class TestCatchUp(_Env):
         self._closing_at(60)
         self.assertEqual(self.sent, [])
         self.assertEqual(self.logs, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "黙った合図でも記録は残る")
+        self.assertEqual(QueueWatch._awaiting, {})
 
     def test_a_post_before_the_start_and_a_get_afterwards_fires_once(self):
         self.write(LOG_A, post("19:47:50", 39837))
@@ -790,6 +816,230 @@ class TestSyncQueueWatcherWiring(unittest.TestCase):
         watcher_class.return_value.start.assert_called_once()
 
 
+class _AnswerEnv(_Env):
+    """合図を出したあとの答え合わせ。今日の実例: POST 19:47:50・Get 19:50:32（wall は Get の 2 秒後）"""
+
+    GET_AT = "19:50:32"
+
+    def debug_text(self):
+        return config.DEBUG_LOG_PATH.read_text(encoding="utf-8") if config.DEBUG_LOG_PATH.exists() else ""
+
+    def fire(self):
+        """合図が 1 回出るところまで進める。そのあと wall は 19:50:37"""
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+
+    def lone_get(self):
+        """今の時刻の、単独の Get を足して読む"""
+        self.write(LOG_A, get(datetime.fromtimestamp(self.wall.now).strftime("%H:%M:%S"), 39837))
+        self.poll()
+        self.settle()
+
+    def restart(self):
+        """記録も偽ログも見張りも、新しく作り直す（subTest のあいだ）"""
+        QueueWatch.reset()
+        self.path(LOG_A).unlink(missing_ok=True)
+        self.path(LOG_B).unlink(missing_ok=True)
+        self.sent.clear()
+        self.logs.clear()
+        self.wall.now = at("19:50:34")
+        self.watcher = QueueWatch.Watcher(self.dir, lambda: QueueWatch.notify_ready(self.logs.append),
+                                          clock=self.clock, wall=self.wall)
+
+    def assertStillAwaiting(self):
+        self.assertIn(inst(39837), QueueWatch._queued)
+        self.assertIn(inst(39837), QueueWatch._awaiting)
+
+    def assertForgotten(self):
+        self.assertNotIn(inst(39837), QueueWatch._queued)
+        self.assertNotIn(inst(39837), QueueWatch._awaiting)
+
+
+class TestAnswerCheck(_AnswerEnv):
+    """合図を出したあと、順番の通知が消えた行（Remove）で答え合わせをする。本物なら記録を忘れ、
+    Remove が来なければ誤検出なので待ちだけ解く（記録は残す）"""
+
+    def test_a_remove_after_the_signal_forgets_the_record(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT) + 1))
+        self.pass_time(1)
+        self.poll()
+        self.assertForgotten()
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1, "忘れたあとの単独の Get では出ない")
+        text = "\n".join(self.logs) + "\n" + self.debug_text() + "\n" + repr(self.sent)
+        for word in (FAKE_NAME, FAKE_USER, "7305519", "localNotifs"):
+            self.assertNotIn(word, text, "Remove の行の中身はどこにも書かない")
+
+    def test_no_remove_for_sixty_five_seconds_releases_the_wait_and_the_next_lone_get_fires(self):
+        self.fire()
+        before = self.debug_text()
+        self.pass_time(64)
+        self.poll()
+        self.assertStillAwaiting()
+        self.pass_time(1)
+        self.poll()
+        self.assertEqual(QueueWatch._awaiting, {}, "65 秒で待ちが解ける")
+        self.assertIn(inst(39837), QueueWatch._queued, "記録は残る")
+        self.assertIn("答え合わせできなかった合図 1 件", self.debug_text()[len(before):])
+        self.lone_get()
+        self.assertEqual(len(self.sent), 2)
+
+    def test_a_second_signal_is_not_given_while_awaiting_the_answer(self):
+        self.fire()
+        self.pass_time(10)
+        self.lone_get()
+        self.pass_time(10)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(len(self.logs), 1)
+        self.assertEqual(len(self.played), 1)
+
+    def test_local_alltime_and_recent_lines_count_once(self):
+        self.fire()
+        real = QueueWatch.note_ready_gone
+        with patch.object(QueueWatch, "note_ready_gone", side_effect=real) as counted:
+            self.write(LOG_A, *[remove("19:50:36", made=at(self.GET_AT)) for _ in range(3)])
+            self.poll()
+        self.assertEqual(counted.call_count, 1)
+        self.assertForgotten()
+
+    def test_the_same_remove_in_two_logs_counts_once(self):
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.write(LOG_B, get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()
+        self.assertEqual(len(self.sent), 1)
+        real = QueueWatch.note_ready_gone
+        with patch.object(QueueWatch, "note_ready_gone", side_effect=real) as counted:
+            self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT)))
+            self.write(LOG_B, remove("19:50:36", made=at(self.GET_AT)))
+            self.poll()
+        self.assertEqual(counted.call_count, 1)
+        self.assertForgotten()
+
+    def test_a_group_notification_is_not_counted(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT), kind="group"))
+        self.poll()
+        self.assertStillAwaiting()
+
+    def test_a_local_notification_with_another_message_is_not_counted(self):
+        self.fire()
+        self.write(LOG_A, remove("19:50:36", made=at(self.GET_AT), body="新しいバージョンがあります。"))
+        self.poll()
+        self.assertStillAwaiting()
+
+    def test_the_created_at_must_be_within_five_seconds_of_the_get(self):
+        for offset, forgotten in ((5, True), (-5, True), (6, False), (-6, False)):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.fire()
+                self.write(LOG_A, remove("19:50:37", made=at(self.GET_AT) + offset))
+                self.poll()
+                if forgotten:
+                    self.assertForgotten()
+                else:
+                    self.assertStillAwaiting()
+
+    def test_a_delete_forgets_the_record_and_the_wait(self):
+        self.fire()
+        self.write(LOG_A, delete("19:50:36", 39837))
+        self.poll()
+        self.assertForgotten()
+
+    def test_joining_the_same_instance_forgets_the_record_and_the_wait(self):
+        self.fire()
+        self.write(LOG_A, joining("19:50:36", 39837))
+        self.poll()
+        self.assertForgotten()
+
+
+class TestReadyGoneInTheSameRead(_AnswerEnv):
+    """ログを先頭から読み直すと、Get とその Remove が同じ読み取りの束に入る。もう消えている通知では知らせない"""
+
+    def read_with_remove(self, made_offset):
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837),
+                   remove("19:50:40", made=at(self.GET_AT) + made_offset))
+        self.poll()
+        self.settle()
+
+    def test_a_remove_within_five_seconds_of_the_get_in_the_same_batch_is_silent(self):
+        for offset in (0, 2, 5, -5):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.read_with_remove(offset)
+                self.assertEqual(self.logs, [])
+                self.assertEqual(self.played, [])
+                self.assertEqual(self.sent, [])
+
+    def test_the_record_is_forgotten_then(self):
+        self.read_with_remove(1)
+        self.assertForgotten()
+        self.pass_time(20)
+        self.lone_get()
+        self.assertEqual(self.sent, [], "あとの単独の Get でも出直さない")
+
+    def test_a_remove_outside_five_seconds_does_not_silence_the_signal(self):
+        for offset in (6, -6):
+            with self.subTest(offset=offset):
+                self.restart()
+                self.read_with_remove(offset)
+                self.assertEqual(len(self.sent), 1)
+                self.assertEqual(len(self.logs), 1)
+
+    def test_in_a_live_log_a_remove_that_comes_in_the_next_read_still_lets_the_signal_out(self):
+        self.fire()
+        self.assertEqual(len(self.sent), 1)
+        self.pass_time(55)
+        self.write(LOG_A, remove("19:51:31", made=at(self.GET_AT)))
+        self.poll()
+        self.assertEqual(len(self.sent), 1)
+        self.assertForgotten()
+
+
+class TestLogShowsItPassed(_AnswerEnv):
+    """Remove の行は無いが、その Get より 65 秒以上後の行を同じログで読んでいる。通知が出ていれば Remove が
+    出ているはずなので誤検出。黙る（記録は残す）"""
+
+    def read_with_later_line(self, seconds_after_get):
+        """wall は Get の 2 秒後のまま（実時間の 60 秒の押さえには当たらない）。そのログの後ろに別のインスタンスの Get を置く"""
+        later = datetime.fromtimestamp(at(self.GET_AT) + seconds_after_get).strftime("%H:%M:%S")
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837), get(later, 55555))
+        self.poll()
+        self.settle()
+
+    def test_a_line_sixty_five_seconds_after_the_get_makes_it_silent(self):
+        self.read_with_later_line(65)
+        self.assertEqual(self.sent, [])
+        self.assertEqual(self.logs, [])
+        self.assertEqual(self.played, [])
+
+    def test_the_record_stays_and_the_next_lone_get_fires(self):
+        self.read_with_later_line(65)
+        self.assertIn(inst(39837), QueueWatch._queued)
+        self.assertEqual(QueueWatch._awaiting, {})
+        self.pass_time(70)
+        self.lone_get()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_line_sixty_four_seconds_after_the_get_does_not_silence_it(self):
+        self.read_with_later_line(64)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_a_log_that_ends_there_falls_back_to_the_sixty_second_rule(self):
+        self.wall.now = at(self.GET_AT) + 57
+        self.write(LOG_A, post("19:47:50", 39837), get(self.GET_AT, 39837))
+        self.poll()
+        self.settle()                       # Get から 60 秒。後ろの行は無い
+        self.assertEqual(self.sent, [])
+        self.assertIn(inst(39837), QueueWatch._queued, "記録は残す")
+        self.assertEqual(QueueWatch._awaiting, {})
+
+
 class TestNoIdsInLogs(_Env):
     def test_no_topic_instance_world_or_group_id_reaches_any_log(self):
         self.write(LOG_A, post("19:45:00", 6515), delete("19:47:50", 6515), post("19:47:50", 39837),
@@ -841,7 +1091,7 @@ class TestThread(unittest.TestCase):
         watcher = QueueWatch.Watcher(self.dir, lambda: None)
         watcher.start()
         self.addCleanup(watcher.stop)
-        self.assertIsNone(QueueWatch.take_ready(inst(39837), at("10:01:00")))
+        self.assertFalse(QueueWatch.hold_ready(inst(39837), at("10:01:00"), 0.0))
 
     def test_the_thread_reads_a_log_and_signals_once(self):
         now = time.time()
@@ -1059,6 +1309,7 @@ class TestQuietBoundary(_Env):
 
     def run_with_other_get(self, where, gap):
         """10:01:10 の候補の前（before）か後ろ（after）に、gap 秒ずれた別のインスタンスの Get を置く"""
+        QueueWatch.reset()                  # 前の回の答え合わせ待ちを持ち越さない
         QueueWatch.note_post(inst(39837), at("10:00:00"))
         self.fired.clear()
         self.cands = QueueWatch.Candidates(self.fired.append, clock=self.clock)
