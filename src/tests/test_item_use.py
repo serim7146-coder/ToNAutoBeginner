@@ -454,11 +454,19 @@ class TestOverlayHasNoItemPart(_ui_tidy._AppCase):
         overlay.close()
         self.assertTrue(overlay._closed)
 
-    def test_toggle_overlay_makes_it_from_the_app_only(self):
-        app = types.SimpleNamespace(_overlay=None)
+    def test_toggle_overlay_passes_only_the_app_and_the_overlay_settings(self):
+        """アイテムの部分の引数が戻っていないこと。位置・透明度・開閉の知らせ先は 2026-11-19 から渡す"""
+        app = types.SimpleNamespace(
+            _overlay=None, _overlay_rect=None, _overlay_alpha=0.75, _overlay_open=False,
+            _on_overlay_geometry=lambda rect: None, _on_overlay_alpha=lambda alpha: None,
+            _on_overlay_closed=lambda: None, _schedule_settings_save=lambda: None)
+        app._open_overlay = lambda: mainGUI.App._open_overlay(app)
         with patch.object(mainGUI, "LogOverlay") as overlay:
             mainGUI.App._toggle_overlay(app)
-        overlay.assert_called_once_with(app)
+        overlay.assert_called_once()
+        args, kwargs = overlay.call_args
+        self.assertEqual(args, (app,))
+        self.assertEqual(set(kwargs), {"rect", "alpha", "on_geometry", "on_alpha", "on_close"})
         self.assertIs(app._overlay, overlay.return_value)
 
 
