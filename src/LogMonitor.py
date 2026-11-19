@@ -200,9 +200,11 @@ class LogMonitor:
         （all_continue_round。ラウンド指定・グループ判定・Run 全続行の 4 経路すべて）。
         DTM/Waldo 続行は対象外（ほかの窓を止めない続行で、よく起きるため）。
         完全放置モードの窓では止めない（人が見ていない前提なので、そこで進まなくなる）。
+        ツールが Begin を押さない窓（自動Begin OFF・private 相当でない窓。焼き芋・干し芋・
+        public など）では印を立てない（依頼者 2026-11-19。押さないのに案内のログだけ出ていた）。
         RoundOver の頭で 1 回だけ見る（全続行の印はそのすぐ下で消えるため）"""
         st = self.st
-        if not self.cfg.auto_begin or self._hands_free():
+        if not self._auto_begin_active() or self._hands_free():
             return False
         if not SharedState.get_no_begin_after_continue():
             return False
