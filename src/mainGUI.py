@@ -1351,6 +1351,14 @@ class App(tk.Tk):
     def host_tabs(self, value: dict):
         self._shared_lists().tabs = value
 
+    @property
+    def host_self(self):
+        return self._shared_lists().host_self
+
+    @host_self.setter
+    def host_self(self, value):
+        self._shared_lists().host_self = value
+
     def __init__(self):
         super().__init__()
         # 別のスレッドからの画面の更新はここへ（FC。Tk はこのスレッドでだけ呼ぶ）。何かがログを書く前に作る
@@ -1380,7 +1388,7 @@ class App(tk.Tk):
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
         # 続行リスト一式。全窓の LogMonitor が同じものを持つ。中身は差し替えで更新する
-        # （keepOn_set・host_wishes・host_participants・host_tabs はこの属性の窓口）。
+        # （keepOn_set・host_wishes・host_participants・host_tabs・host_self はこの属性の窓口）。
         # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
         self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
@@ -3676,9 +3684,11 @@ class App(tk.Tk):
         version = (self.host_tabs or {}).get("version", 0) + 1
         self.host_tabs = {"version": version, "tabs": dict(tabs_data or {})}
 
-    def _apply_host_wishes(self, new_wishes: dict, participants=()):
-        """参加者別の希望と参加者の名前を差し替える"""
+    def _apply_host_wishes(self, new_wishes: dict, participants=(), host_self=None):
+        """参加者別の希望・参加者の名前・主催者自身の名前を差し替える。
+        主催者自身の名前は、焼き芋・干し芋・private 相当の窓が主催者のリストを足すのに使う（代入だけ）"""
         self.host_wishes = dict(new_wishes)
+        self.host_self = host_self
         if getattr(self, "host_participants", None) is not None:
             self.host_participants = set(participants)
 
@@ -3885,7 +3895,7 @@ class App(tk.Tk):
         SharedState.set_list_source("host")
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
-        self._apply_host_wishes(wishes, meta.get("participant_names", ()))
+        self._apply_host_wishes(wishes, meta.get("participant_names", ()), meta.get("host_self"))
         self._apply_host_tabs(meta.get("tabs_data") or {})
         if switched:
             self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")

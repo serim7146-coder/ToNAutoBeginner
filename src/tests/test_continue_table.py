@@ -724,7 +724,9 @@ class _MonitorCase(_TableCase):
     def _judgement_line(self, monitor):
         lines = [m for m in monitor.logs if "判定:" in m]
         self.assertEqual(len(lines), 1, monitor.logs)
-        return lines[0]
+        # 名前で組む窓は主催リストのとき行の最後に根拠が付く。ここで見るのは続行表の札なので、
+        # 共有リストで判定したときの根拠（誰がいるか分からない窓）は外して比べる
+        return lines[0].removesuffix("（共有リスト）")
 
 
 class TestWindowList(_MonitorCase):
@@ -757,9 +759,13 @@ class TestWindowList(_MonitorCase):
         ContinueTable.set_current(_store(None, {ALT: [own(150)]}))
         self.assertEqual(self._result_of(monitor), "continue")
 
-    def test_it_also_applies_to_the_host_list_of_a_tab(self):
+    def test_it_also_applies_to_the_host_list_of_the_players_present(self):
+        """private の窓は、タブではなく在室者の名前で主催リストの希望を引く（依頼者 2026-11-19）"""
         monitor = self._monitor({})
-        monitor._window_tab = lambda: {"keepOn": {KEY: {7}}}
+        monitor.host_wishes = {"a": {KEY: {7}}}
+        monitor.st.players_known = True
+        monitor.st.players = {"usr_a"}
+        monitor.st.player_names = {"usr_a": "a"}
         self.assertEqual(self._result_of(monitor), "continue")
         ContinueTable.set_current(_store({KEY: [7]}))
         self.assertEqual(self._result_of(monitor), "skip")
