@@ -995,6 +995,76 @@ class TestContinueRoundFocus(unittest.TestCase):
 
         self.assertEqual(seen, [0], "数える前に見ていること")
 
+    # ── 10. 死んだ後に続行と分かったら前面に出さない（依頼者 2026-11-19） ──
+    DIED_LOG = "死亡の後に続行と分かったので、この窓を前面に出しません"
+
+    def test_a_continue_after_dying_does_not_focus_but_keeps_the_rest(self):
+        """霧でテラーの判明が死亡より後になった例。前面化だけ止め、アナウンスとほかの窓のフリーズは今どおり"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.died_this_round = True
+        monitor.st.terror_ids = [42]
+        logs = []
+        monitor.logger = logs.append
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound") as play, \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._decide_with_keep_on_set("Classic")
+
+        focus.assert_not_called()
+        self.assertTrue(monitor.st.is_continue_round)
+        self.assertGreaterEqual(SharedState.get_continue_round_count(), 1)
+        play.assert_called_once_with("continue.mp3", kind="continue")
+        self.assertEqual(sum(self.DIED_LOG in m for m in logs), 1, logs)
+
+    def test_a_group_wanted_after_dying_does_not_focus(self):
+        monitor = self._monitor(instance_type=config.INSTANCE_YAKIIMO)
+        monitor.st.terror_ids = [42]
+        monitor.st.died_this_round = True
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(monitor, "_group_decision",
+                          return_value=GroupRound.WANTED), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            self.assertTrue(monitor._apply_group_decision("Classic"))
+
+        self.assertTrue(monitor.st.is_continue_round)
+        focus.assert_not_called()
+
+    def test_a_glorbo_continue_after_dying_does_not_focus(self):
+        monitor = self._monitor()
+        monitor.st.died_this_round = True
+
+        with patch.object(WindowOperator, "focus_window",
+                          return_value=True) as focus, \
+             patch.object(PlaySound, "play_sound"), \
+             patch.object(Recorder, "on_continue_start"), \
+             patch.object(monitor._action, "do_open_special_round_loop"), \
+             patch.object(LogMonitor.threading, "Thread",
+                          side_effect=self._run_now):
+            monitor._start_glorbo_continue("Classic")
+
+        self.assertTrue(monitor.st.is_continue_round)
+        focus.assert_not_called()
+
+    def test_a_continue_after_a_cat_revival_still_focuses(self):
+        """猫で生き返った後（died_this_round が False に戻った後）は今どおり前面に出す"""
+        monitor = self._monitor({self.CLASSIC_KEY: {42}})
+        monitor.st.died_this_round = True
+        monitor.st.died_this_round = False      # 猫の復活（_on_reborn）で戻る
+
+        focus = self._judge(monitor)
+
+        self.assertTrue(monitor.st.is_continue_round)
+        focus.assert_called_once_with(777)
+
 
 
 
