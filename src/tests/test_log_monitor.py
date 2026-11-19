@@ -349,10 +349,13 @@ class TestHeldItem(unittest.TestCase):
         self.assertEqual(self._held_logs(monitor)[-1],
                          "所持アイテム: なし（Emerald Coil を リスポーン でロスト）")
 
-    def test_respawn_outside_a_round_keeps_it(self):
+    def test_respawn_outside_a_round_loses_it_too(self):
+        """ロビーのリスポーンでもアイテムは外れる（依頼者 2026-11-19。それまでは所持を変えなかった）"""
         monitor = self._monitor("Classic", in_round=False)
         self._feed(monitor, "Equipping 29.", "Player respawned, opted out!")
-        self.assertEqual(monitor.st.held_item_id, 29)
+        self.assertEqual(monitor.st.held_item_id, 0)
+        self.assertEqual(self._held_logs(monitor)[-1],
+                         "所持アイテム: なし（Emerald Coil を リスポーン でロスト）")
 
     def test_run_death_loses_it_other_deaths_do_not(self):
         monitor = self._monitor("Run", in_round=True)
@@ -580,7 +583,7 @@ class TestHeldItemRestored(unittest.TestCase):
             ([self._start("Classic"), "Equipping 29.", "You died."], 29),
             ([self._start("Classic"), "Equipping 29.", "Player respawned, opted out!"], 0),
             ([self._start("Classic"), "RoundOver", "Equipping 29.",
-              "Player respawned, opted out!"], 29),
+              "Player respawned, opted out!"], 0),        # ロビーのリスポーンでも外れる（依頼者 2026-11-19）
             (["Equipping 29.", "Sus player = 1 serim01", self._start("Sabotage")], 0),
             (["Equipping 29.", self._start("Sabotage"), "Sus player = 1 serim01"], 0),
             (["Equipping 29.", self._start("Sabotage"), "Sus player = 1 other"], 29),

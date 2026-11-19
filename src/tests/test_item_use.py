@@ -516,12 +516,19 @@ class TestLogMonitorItemUse(unittest.TestCase):
         self.monitor._process(JOIN)
         self.assertFalse(self._held())
 
-    def test_death_and_respawn_alone_keep_it(self):
+    def test_death_alone_keeps_it_and_a_respawn_with_an_item_drops_it(self):
+        """死亡だけでは手の記録を外さない。ラウンドの外のリスポーンも、アイテムが外れるとき（持っていたとき）は
+        ラウンド中と同じに外す（依頼者 2026-11-19。それまでは何もしなかった）。持っていなければ何もしない"""
         self.monitor._process(PICK)
         self.monitor._process(DIED)
         self.assertTrue(self._held())
         self.monitor._process(RESPAWN)
-        self.assertTrue(self._held())
+        self.assertFalse(self._held())
+
+        self.monitor.st.item_id = self.monitor.st.held_item_id = 0
+        self.monitor._process(PICK)
+        self.monitor._process(RESPAWN)
+        self.assertTrue(self._held(), "アイテムを持っていないリスポーンは何も変えない")
 
     def test_pickup_and_drop_are_not_written_as_events(self):
         with patch.object(DebugLog, "write") as written:
