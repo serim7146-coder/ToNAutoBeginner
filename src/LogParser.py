@@ -34,6 +34,9 @@ EVENT_PLAYER_LEFT = "player_left"
 EVENT_PAGE_COLLECTED = "page_collected"
 EVENT_PICKUP = "pickup"          # アイテムを手に持った（Pickup object。ItemUse が使う）
 EVENT_DROP = "drop"              # アイテムを手から離した（Drop object）
+# 参加していないラウンドと、リスポーンの後に参加へ戻る合図（依頼者 2026-11-19）
+EVENT_NOT_OPTED_IN = "not_opted_in"   # 「Not opted in. Not joining this round.」（次のラウンドに参加しない）
+EVENT_OPTED_IN = "opted_in"           # 本文がちょうど「opted in」（リスポーンの約 3 秒後。参加に戻る）
 
 
 RE_ROUND_START = re.compile(r"This round is taking place at (.+) and the round type is (.+)")
@@ -136,6 +139,12 @@ PLAYER_LEFT_MARK = "OnPlayerLeft "
 RE_SUS_PLAYER = re.compile(r"^Sus player(?:\s+(\d+))?\s*=\s*(\d+)\s+(.+)$")
 RE_RESPAWN_GENERIC = re.compile(r"^Player respawned, opted out!$")
 RESPAWN_MARK = "Player respawned"
+# 参加していないラウンドの合図。開始の行「This round is taking place at …」と同じ秒の直前に出る（依頼者 2026-11-19）
+RE_NOT_OPTED_IN = re.compile(r"^Not opted in[.] Not joining this round[.]$")
+NOT_OPTED_IN_MARK = "Not opted in"
+# 本文がちょうど「opted in」の行だけ（Not opted in. … と取り違えない）
+RE_OPTED_IN = re.compile(r"^opted in$")
+OPTED_IN_MARK = "opted in"
 YOU_DIED_MARK = "You died"
 REBORN_MARK = "LOL JK, REBORN"
 SUS_PLAYER_MARK = "Sus player"
@@ -381,6 +390,12 @@ def parse(line: str) -> LogEvent | None:
 
     if RE_RESPAWN_GENERIC.match(line):
         return LogEvent(EVENT_RESPAWN)
+
+    if RE_NOT_OPTED_IN.match(line):
+        return LogEvent(EVENT_NOT_OPTED_IN)
+
+    if RE_OPTED_IN.match(line):
+        return LogEvent(EVENT_OPTED_IN)
 
     if RE_JOY.match(line):
         return LogEvent(EVENT_JOY)

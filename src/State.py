@@ -184,6 +184,14 @@ class WindowState:
     item_lost_this_round: bool = False
     randomizer_item_changed: bool = False
     died_this_round: bool = False
+    # 参加していないラウンド（「Not opted in. Not joining this round.」の次のラウンド。依頼者 2026-11-19）。
+    # pending は「Not opted in」を読んでから次のラウンド開始までの印。not_joined_seq はそのラウンドの round_seq
+    # （round_seq が進めば外れる）。respawn_item_pending はラウンドの外でリスポーンしてアイテムが外れ、opted in
+    # の行で案内するまでの印。respawn_notice_seq は opted in で案内したラウンドの番号（RoundOver と二重にしない）
+    not_opted_in_pending: bool = False
+    not_joined_seq: int = -1
+    respawn_item_pending: bool = False
+    respawn_notice_seq: int = -1
     reborn_seq: int = 0                 # 猫で復活した通し番号（死亡で予約した解除が、起きたときに見比べる）
     lived_this_round: bool = False
     item_equipped_after_death: bool = False
