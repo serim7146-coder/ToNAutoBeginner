@@ -84,6 +84,9 @@ class LogMonitor:
             host_participants, host_tabs)
         self._tab_key = None        # 対応づけを計算したときの (版, 在室者)
         self._tab_index = _UNSET    # 対応づいたタブ（_UNSET はまだ計算していない）
+        # 判定の行に付ける「何を根拠にしたか」。(ラウンドの連番, ラウンド名, テラー番号, 文字)。
+        # _list_plan が判定を作った時点のものを持つ（待っている間に主催リストが差し替わっても行が判定と合う）
+        self._last_basis: tuple | None = None
         self.logger = logger
         self.window_idx = window_idx
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
@@ -162,6 +165,14 @@ class LogMonitor:
     @host_tabs.setter
     def host_tabs(self, value: dict):
         self.lists.tabs = value
+
+    @property
+    def host_self(self):
+        return self.lists.host_self
+
+    @host_self.setter
+    def host_self(self, value):
+        self.lists.host_self = value
 
     def _on_continue_freeze(self, started: bool):
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
@@ -1064,8 +1075,16 @@ class LogMonitor:
             names.add(st.local_player_name)
         return names
 
+    def _judges_by_names(self) -> bool:
+        """この窓は、在室者の名前で続行リストを組む種類か（焼き芋・干し芋・private 相当）。
+        ToN ListTool のタブは番号に中身が固定されず、別のインスタンスのタブへ対応づけてしまうことがあった
+        （2/19 人の重なりのタブで判定して、続行すべきテラーで自爆した）。この種類の窓はタブを使わず、
+        在室者の名前で全員ぶんの希望（待機を含む）から引く（依頼者 2026-11-19）"""
+        return self.st.instance_type in (*GroupRound.GROUP_INSTANCES, *config.JUDGE_LIKE_INSTANCES)
+
     def _window_tab(self) -> dict | None:
         """この窓に対応するタブのデータ。対応づけできなければ None。
+        焼き芋・干し芋・private 相当の窓（_judges_by_names）は、これを呼ばない（名前で引く）。
 
         ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
         タブごとに続行リストの中身が違う。対応はどこにも記録されていないので、
@@ -1103,12 +1122,30 @@ class LogMonitor:
             return None
         return tabs.get(self._tab_index)
 
-    def _effective_wishes(self) -> dict | None:
+    def _wishes_by_names(self, host_wishes: dict, include_host: bool) -> tuple:
+        """名前で組む窓の、参加者別の希望。(希望, 不在のまま足した主催者の名前 or None)。
+
+        在室者（自分を含む）を表示名で全員ぶんの希望（待機を含む）から引く。主催者自身のリストは、
+        主催者がその場にいなくても、自分以外の人がいるときは足す（ソロの窓は足さない）。
+        いる主催者は在室者として入っているので二重にならない。呼び出しごとに今の dict から作る
+        （主催リストは 3 秒ごとに差し替わる）"""
+        wishes = {name: host_wishes[name] for name in self._present_names() if name in host_wishes}
+        added = None
+        host = self.host_self
+        if include_host and host and host in host_wishes and self._other_players() and host not in wishes:
+            wishes.setdefault(host, host_wishes[host])
+            added = host
+        return wishes, added
+
+    def _effective_wishes(self, include_host: bool = True) -> dict | None:
         """この窓の判定に使う、参加者別の希望。絞り込めなければ None。
 
         周回の参加者の希望は全窓で共有しているので、そのまま使うと焼き芋の窓の
         参加者の希望でソロの窓まで判定してしまう。この窓のインスタンスにいる人
         （自分のアカウントを含む）の希望だけにする。
+
+        焼き芋・干し芋・private 相当の窓は、タブを使わず在室者の名前で引く（_judges_by_names）。
+        include_host=False なら、不在の主催者のリストを足さない（_wishes_missing 用）。
 
         None（＝従来どおり共有の続行リスト）になるのは、tnl のとき・参加者別の
         希望が無いとき・誰がいるか分からないとき（起動時に復元できなかった）。
@@ -1118,6 +1155,8 @@ class LogMonitor:
             return None
         if not self.st.players_known:
             return None
+        if self._judges_by_names():
+            return self._wishes_by_names(host_wishes, include_host)[0]
         present = self._present_names()
         tab = self._window_tab()
         # 対応づいた窓は、そのタブの人の希望だけを見る（別のタブは別の窓の周回）
@@ -1142,7 +1181,8 @@ class LogMonitor:
 
     def _keep_on_base(self) -> dict:
         """この窓の続行リスト（続行表を重ねる前）"""
-        tab = self._window_tab()
+        # 名前で組む窓（_judges_by_names）はタブを見ない
+        tab = None if self._judges_by_names() else self._window_tab()
         if tab is not None:
             # そのタブの参加者の希望だけ（主催者自身のぶんは読み込み側で足してある）
             return tab["keepOn"]
@@ -1649,6 +1689,7 @@ class LogMonitor:
 
     def _group_rule_decision(self, killers_round_type: str, ids=None) -> str:
         st = self.st
+        group_wishes = self._group_wishes()         # 1 回だけ読む（途中で主催リストが差し替わっても揃う）
         return GroupRound.decide(
             st.instance_type,
             st.round_type,
@@ -1663,8 +1704,8 @@ class LogMonitor:
             continue_moons={name for name in self.cfg.continue_rounds
                             if name in GroupRound.MOONS},
             sus_players=st.sus_players,
-            host_wishes=self._group_wishes(),
-            follow_host=bool(self._group_wishes()),
+            host_wishes=group_wishes,
+            follow_host=bool(group_wishes),
             bloodthirsty_listed=self._bloodthirsty_listed(),
         )
 
@@ -1759,17 +1800,22 @@ class LogMonitor:
         リストが空（全部 OFF）の人がいれば「続行したいものが無い」と分かって
         いるので止めない（全部自爆する）。誰もリストを持っていないときは、
         続行が無いのか分からないので止める。
+        判定には、いない主催者のリストも足す（_effective_wishes）が、ここでは数えない。
+        在室者の誰もリストを持っていない窓を、主催者のリストだけで動かさない（止める安全は従来どおり）。
         """
         if self.st.instance_type not in (*config.JUDGE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip:
             return False
-        wishes = self._effective_wishes()
+        wishes = self._effective_wishes(include_host=False)
         return wishes is not None and not wishes
 
     def _group_wishes(self) -> dict:
         """Sabotage の参加者別判定に使う希望。
+
+        在室者の希望と、自分以外の人がいるときは主催者のリスト（いなくても）。タブは使わない
+        （_effective_wishes）。
 
         誰がいるか分からないときは、参加者（＋自分）の希望だけにする（従来どおり）。
         host_wishes には待機（その場にいない人）も入っているので、そのまま使うと
@@ -3028,10 +3074,53 @@ class LogMonitor:
         return (st.instance_type in config.JUDGE_LIKE_INSTANCES
                 and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds)
 
+    def _basis_label(self, ids) -> str:
+        """判定の行に付ける、続行リストの根拠（名前で組む窓・主催リストのときだけ。ほかは空文字）。
+
+        `（在室19人・リストあり17人・続行希望: A、B）`。続行を希望した人（そのラウンドの枠に、判定したテラーを
+        入れている人）の名前だけを出す。希望した人がいなければ人数だけ。在室者のうち希望していない人の名前は
+        出さない（依頼者 2026-11-19）。いない主催者のリストを足したときは `・主催者を足す`、主催者が希望者なら
+        名前の後に `（主催者）`。誰がいるか分からず共有リストで判定したときは `（共有リスト）`"""
+        st = self.st
+        if not self._judges_by_names() or SharedState.get_list_source() != "host":
+            return ""
+        host_wishes = self.host_wishes
+        if not host_wishes or not st.players_known:
+            return "（共有リスト）"
+        present = self._present_names()
+        wishes, added = self._wishes_by_names(host_wishes, True)
+        if st.round_type == "Sabotage" and st.instance_type in config.JUDGE_LIKE_INSTANCES:
+            # _list_plan と同じ: Murder の枠にもあるテラーは続行しない
+            key = GroupRound.SABOTAGE_STAR_KEY
+            murder = set().union(*(wish.get(GroupRound.SABOTAGE_MURDER_KEY, ()) for wish in wishes.values()))
+            judged = set(ids) - murder
+        else:
+            key = ContinueList.round_keys(st.round_type)[0]
+            judged = set(ids)
+        host = self.host_self
+        wishers = sorted(name for name, wish in wishes.items() if judged & set(wish.get(key, ())))
+        parts = [f"在室{len(present)}人", f"リストあり{sum(1 for name in present if name in host_wishes)}人"]
+        if wishers:
+            parts.append("続行希望: " + "、".join(name + ("（主催者）" if name == host else "")
+                                                   for name in wishers))
+        if added:
+            parts.append("主催者を足す")
+        return "（" + "・".join(parts) + "）"
+
+    def _basis_for_log(self, ids) -> str:
+        """判定の行用。_list_plan が同じラウンド・同じテラーで作った根拠があればそれ、無ければ今の主催リストから"""
+        st = self.st
+        last = self._last_basis
+        if last is not None and last[:3] == (st.round_seq, st.round_type, tuple(ids)):
+            return last[3]
+        return self._basis_label(ids)
+
     def _list_plan(self, ids, bloodthirsty) -> tuple:
         """続行リストでの判定"""
         st = self.st
         keep_on = self._keep_on()
+        # 判定の行に出す根拠は、リストを組んだ今のうちに控える
+        self._last_basis = (st.round_seq, st.round_type, tuple(ids), self._basis_label(ids))
         round_type = st.round_type
         if round_type == "Sabotage" and st.instance_type in config.JUDGE_LIKE_INSTANCES:
             # private 系の Sabotage は 1 つのラウンド。リストには「Sabotage」の枠が無く、Sabotage star と
@@ -3306,7 +3395,7 @@ class LogMonitor:
         if st.is_continue_round and self._is_all_continue_round():
             tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
         self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}"
-                  + self._overlay_label(all_ids))
+                  + self._overlay_label(all_ids) + self._basis_for_log(all_ids))
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
