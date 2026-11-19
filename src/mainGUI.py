@@ -243,6 +243,22 @@ OVERLAY_DEFAULT_POS = (10, 10)
 OVERLAY_DEFAULT_ALPHA = 0.75
 OVERLAY_ALPHA_MIN = 0.2
 OVERLAY_ALPHA_MAX = 1.0
+OVERLAY_STACK_CHECK_MS = 5000       # オーバーレイの重なり順を確かめる間隔（debug.log に残す。依頼者 2026-11-19）
+
+
+def overlay_stack_line(topmost, above, names, minutes) -> str:
+    """オーバーレイの重なり順の記録 1 行。topmost は最前面の指定（None は取れなかった）、above は
+    WindowOperator.windows_above の結果、names は pid → プロセス名（無い pid は "?"）、minutes は開いてからの分"""
+    mark = "?" if topmost is None else ("あり" if topmost else "なし")
+    if above:
+        parts = []
+        for w in above:
+            state = "最前面の指定" + ("あり" if w["topmost"] else "なし") + ("・前面" if w["foreground"] else "")
+            parts.append(f"{names.get(w['pid']) or '?'} {w['class']}（{state}）{tuple(w['rect'])}")
+        over = "上に重なる窓: " + "、".join(parts)
+    else:
+        over = "上に重なる窓なし"
+    return f"[オーバーレイ] 重なり: 最前面の指定={mark}・{over}（開いてから {minutes} 分）"
 
 
 def _as_overlay_rect(value):
@@ -1148,6 +1164,30 @@ class LogOverlay(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._closed = False
+        # 重なり順の記録（依頼者 2026-11-19）。長く使うとオーバーレイが VRChat の後ろに回る原因を見分ける
+        self._hwnd = WindowOperator.own_window_hwnd(self)
+        self._opened_at = time.monotonic()
+        self._last_stack = None
+        self._stack_job = self.after(OVERLAY_STACK_CHECK_MS, self._check_stack)
+
+    def _check_stack(self):
+        """重なり順を確かめ、前回から変わったときだけ debug.log に 1 行残す。最前面のかけ直しはしない。
+        矩形は比べない（窓を動かすたびに行が増えるため）"""
+        if self._closed:
+            return
+        try:
+            topmost = WindowOperator.is_topmost(self._hwnd)
+            above = WindowOperator.windows_above(self._hwnd)
+            key = (topmost, tuple((a["pid"], a["class"], a["topmost"], a["foreground"]) for a in above))
+            if key != self._last_stack:
+                names = {a["pid"]: ProcessCheck.process_name(a["pid"]) or "?" for a in above}
+                minutes = int((time.monotonic() - self._opened_at) // 60)
+                DebugLog.write(overlay_stack_line(topmost, above, names, minutes))
+                self._last_stack = key
+        except Exception:
+            DebugLog.exception("mainGUI.LogOverlay._check_stack")
+        if not self._closed:
+            self._stack_job = self.after(OVERLAY_STACK_CHECK_MS, self._check_stack)
 
     def append(self, msg: str):
         self.append_many([msg])
@@ -1169,6 +1209,10 @@ class LogOverlay(tk.Toplevel):
         if self._closed:
             return
         self._closed = True
+        try:
+            self.after_cancel(self._stack_job)
+        except Exception:
+            pass
         self.destroy()
         if self._on_close is not None:
             self._on_close()
