@@ -196,6 +196,20 @@ class TestBeginOrNot(_Case):
                 self.assertEqual(monitor.st.begin_skipped_seq, -1)
                 self.assertEqual(self._count(monitor, SKIP_LOG), 0)
 
+    def test_windows_where_the_tool_does_not_begin_are_unchanged(self):
+        """ツールが Begin を押さない窓（焼き芋・干し芋・public）は、設定が ON でも印を立てず、
+        ログも出さない（依頼者 2026-11-19）。動きは設定 OFF のときと同じ（do_after_round を予約する）"""
+        for itype in (config.INSTANCE_YAKIIMO, config.INSTANCE_HOSHIIMO, config.INSTANCE_PUBLIC):
+            for how in ("freeze", "all"):
+                with self.subTest(itype=itype, how=how):
+                    SharedState.continue_round_reset()
+                    self.daemons = []
+                    monitor = self._monitor(itype=itype, how=how)
+                    self._line(monitor, ROUND_OVER)
+                    self.assertEqual(monitor.st.begin_skipped_seq, -1)
+                    self.assertEqual(self._count(monitor, SKIP_LOG), 0, monitor.logs)
+                    self.assertIn("do_after_round", self._names())
+
     def test_the_decision_is_made_before_the_all_continue_flag_is_cleared(self):
         monitor = self._monitor(how="all")
         self._line(monitor, ROUND_OVER)

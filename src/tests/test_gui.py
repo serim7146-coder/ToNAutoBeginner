@@ -3274,6 +3274,7 @@ class TestSettingsArePersisted(unittest.TestCase):
             "chase_cw_key", "chase_ccw_key",                     # DV2 で足した
             "move_forward_key", "move_left_key", "move_right_key", "jump_key",     # GV で足した
             "window_layout",                                     # DX で足した
+            "log_overlay",                                       # オーバーレイの位置・大きさ・透明度・開いていたか
             "ton_entry_plush",                                   # DZ で足した
             "ton_entry_flavor", "ton_entry_music",               # 入室の選択画面の難易度・音楽
             "voice_enabled",                                     # FG で足した（声ごとのオン・オフ）

@@ -144,7 +144,7 @@ LogMonitor が1窓に1つ持つ。主なもの:
 ### 4.3 `SharedState`（全窓で共通）
 - `_GLOBAL_ACTION_LOCK`: 前面を切り替える操作（前面に出す・クリック・カーソルの差し込み・リスポーンのメニュー）は必ずこれを取る。1度に1窓だけ。
 - 全窓フリーズ4種（§5）。
-- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・窓位置リセットはラウンド終了後（`continue_restore_at_round_end`。既定 ON。OFF なら続行フリーズが外れた瞬間から数える）・続行の後は自動Beginしない（`no_begin_after_continue`。既定 OFF）・2, 3枠目のBloodthirstyを待つ（`wait_bloodthirsty`。既定 ON）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・開始した回・ツールの窓を隠しているか。
+- 全窓共通の設定（`_Setting`）: インスタンスタイプ・自爆キー・放置モード・速度検知（ON/OFF のボタン）・続行リストの供給元（`"host"`/`"tnl"`）・アイテム自動取得とその感度・アイテム取得→Begin モード・アイテムを落とす（`continue_drop_item`）・続行ラウンドの後に窓を戻す（`continue_restore_window`）・フリーズと窓位置はラウンド終了まで（`continue_restore_at_round_end`。既定 ON。続行フリーズの解除と窓位置リセットを RoundOver から数える。OFF なら死亡から数え、窓位置は続行フリーズが外れた瞬間から数える）・続行の後は自動Beginしない（`no_begin_after_continue`。既定 OFF）・2, 3枠目のBloodthirstyを待つ（`wait_bloodthirsty`。既定 ON）・チェイスを使う（`chase_enabled`）・Utils の判定に従う（`follow_utils`）・待機列に入れるようになったら知らせる（`queue_notify`。既定 ON。OFF なら待機列の見張りを止める）・Run リスポーン（`run_respawn`）・ログのオーバーレイの位置・大きさ・透明度・開いていたか（`log_overlay` = `{"rect": [x, y, w, h] か null, "alpha": 0.2〜1.0, "open": 真偽}`。位置・大きさはドラッグとつまみを離したとき、透明度はつまみを動かしたとき、開いていたかは開閉したときに保存。保存した位置の中心がどのモニターの上にもなければ位置だけ左上 `+10+10` に戻す。無い・壊れた値は左上・520x320・0.75・閉じている。開いたままツールを閉じると、次の起動で開く）・開始した回・ツールの窓を隠しているか。
 - 掴んでいる VRChat の窓・当ツール自身の窓。
 
 ### 4.4 続行リスト（`MatchTNL.SharedLists`）
@@ -155,12 +155,12 @@ LogMonitor が1窓に1つ持つ。主なもの:
 
 | 種類 | 開始 | 解く |
 |---|---|---|
-| 続行 | 続行ラウンド（アナウンスが鳴るもの）が決まったとき。DTM/Waldo の続行は開始しない | 死亡・RoundOver から猶予の後（`_release_continue_freeze_after_delay`）／次のラウンド開始 |
+| 続行 | 続行ラウンド（アナウンスが鳴るもの）が決まったとき。DTM/Waldo の続行は開始しない | `continue_restore_at_round_end` が ON（既定）の窓は RoundOver から猶予の後、OFF の窓は死亡から猶予の後（どちらも `_release_continue_freeze_after_delay`。DTM/Waldo は常に死亡から）／次のラウンド開始 |
 | 装備待ち | アイテムロストの窓。自動で取りに行かない窓は Begin が通ったとき（通らなければ開始しない）、取りに行く窓は店で一時的に前面にしてボタンを押す間だけ、アイテム取得→Begin モードは Begin の前（ロストした回はツールは移動もしないし押さない。装備も Begin も利用者がして、その Begin の受理で解く。FY・FZ）。開始した順に並び、先頭の窓だけが前面に出る＋音声 | 装備＋Begin の受理から猶予の後（Begin を押さない窓は装備から猶予の後）・取りに行く窓は店の操作の後（取れた・取れない・時間切れとも）／ラウンド開始 |
 | 速度検知 | 速度で 8 Pages / Punished と分かったとき（その窓の設定で選ぶ） | 8 Pages はアイテムを取ったら猶予の後／ラウンド開始で必ず |
 | 突入 | その窓で選んだ種類のラウンドに入ったとき（Sabotage は Sus player の行で murder／star に分ける。行は開始の行より前に来る） | 死亡から猶予の後／ラウンド開始で必ず |
 
-- 続行フリーズの死亡による解除は、待っている間に猫（Maxwell）で復活した（「LOL JK, REBORN!」の行）ら、死亡を取り消してしない（復活の後に本当に死んだら、その死亡から数え直す。RoundOver からの解除の予約は今のまま）。突入フリーズの死亡による解除も同じ。
+- 続行フリーズの死亡による解除は、待っている間に猫（Maxwell）で復活した（「LOL JK, REBORN!」の行）ら、死亡を取り消してしない（復活の後に本当に死んだら、その死亡から数え直す）。`continue_restore_at_round_end` が ON の窓は死亡からは予約しないので、取り消す対象が無く、フリーズは RoundOver から猶予の後まで保たれる。突入フリーズの死亡による解除も同じ。
 - どれも `_Freeze`: フリーズ中の窓の数で管理し、0 になったら解除。窓ごとの保持（`*_held`）で多重登録・多重解除を防ぐ（足していない窓が引くと、別の窓の本物のフリーズを解いてしまう）。
 - 前面を要する操作（Begin のクリックなど）の前に `ActionExecutor._wait_other_windows()` で待つ。自分が開始した分は待たない。移動（OSC・背面のキー）は前面を奪わないので待たない。自爆も背面送信なので待たない。
 - フリーズのために前面にした窓は、その窓のフリーズが全部解けたら元の窓に戻す（`FrontLoan`）。
@@ -223,6 +223,7 @@ LogMonitor._process(line)
 
 1. 続行リストの供給元: ToN ListTool が動いていて、参加者・待機の誰かが続行リストを持っていれば主催リスト（`host_state.sqlite3`）、それ以外は .tnl。取れない状態（ListTool が見えない・ファイルが無い・読み込みの失敗）が `HOST_LIST_LOSS_GRACE_SEC` 続いたら、ツールの続行リストへ切り替える（画面に `[続行リスト] ツールの続行リストへ切替（理由）`。読み込みの失敗が続いたときの理由は `主催リストを N 秒読めません: …`）。猶予の間は前の主催リストのまま使い、画面には出さない（debug.log に `[主催リスト] 一時的に取れません（猶予中）` / `読み込み失敗（猶予中）`、読めたら `読み込みが戻りました（N 秒）` の 1 行ずつ）。主催リストを使っていないときの読み込みの失敗は、画面にも debug.log にも出さない。切り替えた後は、ほかの人がいる窓（自動自爆 ON）は主催リストが無いので自爆を止める（`LogMonitor._host_list_missing`）。
    主催リストの複窓対応のタブは、その窓にいる人の名前の重なりで窓に対応づける。ToN ListTool の保存ファイルのタブの参加者には主催者自身（このPCのアカウント）が入らないので、読み込み側で全タブの参加者に足す（窓の「一致 N/M人」の数え方のため。`meta["participants"]` の人数には数えない。`tab_for_window` は主催者を重なりに数えず、選ぶタブは変わらない）。参加者別の希望は、その窓にいる人の分だけを使う。
+   焼き芋・干し芋・private 相当（`config.JUDGE_LIKE_INSTANCES`）の窓は、このタブの対応づけを使わない（`LogMonitor._judges_by_names`。ListTool はタブの番号に中身を固定せず、別のインスタンスのタブへ対応づけて自爆の誤爆が起きたため。依頼者 2026-11-19）。その窓にいる人を表示名で、全タブ・待機を含む全員ぶんの希望（`host_wishes`）から引き、その和集合を続行リストにする（`_effective_wishes`）。自分以外の人がいるときは、ToN ListTool の user_save で last_active の主催者（`meta["host_self"]`。`SharedLists.host_self`）のリストを、主催者がその場にいなくても足す（ソロの窓は足さない。いる主催者は二重にしない。`host_self` が無い・希望に無いときは足さない）。誰がいるか分からない窓は、従来どおり共有の続行リスト。「この窓にいる誰もリストを持っていない」ときの停止（`_wishes_missing`）は、足した主催者のリストを数えずに見る。判定の行の後ろに根拠を付ける（主催リストのときだけ。`_list_plan` が判定を作った時点で控える）: `（在室19人・リストあり17人・続行希望: A、B）`。続行を希望した人（そのラウンドの枠に判定したテラーを入れている人）の名前だけを出し、いなければ人数だけ。いない主催者のリストを足したときは `・主催者を足す`、主催者が希望者なら名前の後に `（主催者）`。誰がいるか分からず共有リストで判定したときは `（共有リスト）`。.tnl のとき・ほかの種類の窓には付けない。
    主催リストは `HOST_SAVE_IGNORED_KEYS`（Fog (Alternate)・Ghost (Alternate) の枠）を読み飛ばす（ログの Fog (Alternate) は通常の Fog の枠で照合するため、畳むと判定が変わる）。tnl の読み込みでも同じ 2 つの枠を読み飛ばす（件数が主催リストと一致する。FV）。2026-11-14 に畳む形を試して戻した: 主催リストの実データでは、この 2 つのキーの中身は 713 行すべて「ListTool の番号 0〜133（Classic 全部）が ON」という固定の塊で、人の希望ではなかった（ListTool が機械的に書いている）。畳むと通常の Fog/霧 の続行対象に Classic が 81 件、Ghost/ゴースト に 5 件、誤って増えて、自爆するはずのラウンドが続行になる。オルタネイトのテラーの希望は Fog/霧 のタブ（ListTool の番号 134〜169）に入っていて、畳まなくても読めている。
    監視開始の遡り（`_detect_instance_from_log`）は、今のインスタンスで出た moon の印だけを `RoundSequence.mark_moons_seen` で立て（並びの推定には混ぜない）、次に同じ moon が来たら 2 回目として扱う。所持アイテムが分かったら `item_id`・`item_id_at_round_start` も `held_item_id` に合わせる（入室の行が見つからなければ何も変えない）。
    ログが縮んだ（前の位置より小さくなった）ときは、先頭から読み直さず末尾へ飛び、状態（インスタンス・人数・所持アイテム・moon）だけ遡って取り戻す（`LogMonitor._run`。過去のラウンドを「今起きたこと」として処理し直さない）。
@@ -291,7 +292,7 @@ LogMonitor._process(line)
 
 | ファイル | 中身 |
 |---|---|
-| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `obs_record_freeze`・`window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`continue_restore_at_round_end`・`no_begin_after_continue`・`queue_notify`・`wait_bloodthirsty`・`run_respawn` |
+| `%APPDATA%\ToNAutoBeginner\settings.json` | 設定（OBS のパスワードは DPAPI で暗号化）。新しめの名前: `obs_record_freeze`・`window_layout`・`follow_utils`・`ton_entry`・`ton_entry_plush`・`ton_begin`・`chase_enabled`・`chase_cw_key`・`chase_ccw_key`・`start_key`・`suicide_cancel_key`・`continue_drop_item`・`continue_restore_window`・`continue_restore_at_round_end`・`no_begin_after_continue`・`queue_notify`・`wait_bloodthirsty`・`run_respawn`・`log_overlay` |
 | `%APPDATA%\ToNAutoBeginner\debug.log`（.1〜.3） | デバッグログ。20MB で世代を回す |
 | `%APPDATA%\ToNAutoBeginner\rounds.sqlite`（`.listtool.bak`） | 統計画面の手元の保存（独自の番号。列 `players` あり）。前の版のものは初回に直し、直す前を `rounds.sqlite.listtool.bak` に残す |
 | `%APPDATA%\ToNAutoBeginner\continue_list.json`（`.listtool.bak`） | ツールの中の続行リスト（`{"version": 2, …}`。独自の番号。前の版のものは初回に直し、直す前を `continue_list.json.listtool.bak` に残す） |

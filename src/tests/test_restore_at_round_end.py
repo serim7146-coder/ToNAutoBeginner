@@ -1,6 +1,6 @@
 """窓位置リセットの時点を設定で選ぶ（依頼者 2026-11-18）: ON（既定）はラウンド終了（RoundOver）から
 config.CONTINUE_RESTORE_DELAY_SEC 後、OFF は今まで通り続行フリーズが外れた瞬間（死亡から）。
-ほかの窓のフリーズ解除の時点はどちらでも変わらない。
+ほかの窓のフリーズ解除の時点も同じ設定で決まる（ON は RoundOver から、OFF は死亡から。依頼者 2026-11-19）。
 本物の窓・OSC・時計は使わない（窓を戻す処理・待ち・予約はすべて偽物）"""
 from tests.support import *  # noqa: F401,F403
 
@@ -211,26 +211,132 @@ class TestOff(_Case):
         self.assertEqual(self.restored, [START], "二重に戻さない")
 
 
-class TestCommon(_Case):
-    def test_the_other_windows_freeze_release_is_unchanged(self):
-        """ほかの窓のフリーズ解除は、ON / OFF とも死亡から CONTINUE_FREEZE_RELEASE_DELAY_SEC（霧は 2 秒）"""
-        for at_round_end in (True, False):
-            for fog, expected in ((False, config.CONTINUE_FREEZE_RELEASE_DELAY_SEC),
-                                  (True, config.FOG_FREEZE_RELEASE_DELAY_SEC)):
-                with self.subTest(at_round_end=at_round_end, fog=fog):
-                    SharedState.continue_round_reset()
-                    SharedState.set_continue_restore_at_round_end(at_round_end)
-                    monitor = self._monitor()
-                    monitor.st.fog = fog
-                    monitor._process(DIED)
-                    self.assertIn("_release_continue_freeze_after_delay", self._names())
-                    sleeps = []
-                    with patch.object(LogMonitor.time, "sleep", side_effect=sleeps.append):
-                        self._run("_release_continue_freeze_after_delay")
-                    self.assertEqual(sleeps, [expected])
-                    self.assertFalse(monitor.st.continue_freeze_held, "ほかの窓のフリーズは外れる")
-        self.assertEqual(config.CONTINUE_FREEZE_RELEASE_DELAY_SEC, 5.0)
+class TestFreezeRelease(_Case):
+    """ほかの窓のフリーズの解除の時点も、この設定で決まる（依頼者 2026-11-19）。
+    ON は RoundOver から、OFF は今までどおり死亡から。DTM/Waldo はどちらでも死亡から"""
 
+    def _release_sleeps(self):
+        sleeps = []
+        with patch.object(LogMonitor.time, "sleep", side_effect=sleeps.append):
+            self._run("_release_continue_freeze_after_delay")
+        return sleeps
+
+    def _logs(self, monitor):
+        logs = []
+        monitor._log = logs.append
+        return logs
+
+    def test_on_death_does_not_schedule_the_freeze_release(self):
+        monitor = self._monitor()
+        monitor._process(DIED)
+        self.assertNotIn("_release_continue_freeze_after_delay", self._names())
+        self.assertTrue(monitor.st.continue_freeze_held, "死亡ではほかの窓を止めたまま")
+
+    def test_on_respawn_does_not_schedule_the_freeze_release(self):
+        monitor = self._monitor()
+        monitor._mark_out_of_round("リスポーン")
+        self.assertNotIn("_release_continue_freeze_after_delay", self._names())
+        self.assertTrue(monitor.st.continue_freeze_held)
+
+    def test_on_round_over_releases_after_the_delay(self):
+        for fog, expected in ((False, config.CONTINUE_FREEZE_RELEASE_DELAY_SEC),
+                              (True, config.FOG_FREEZE_RELEASE_DELAY_SEC)):
+            with self.subTest(fog=fog):
+                SharedState.continue_round_reset()
+                monitor = self._monitor()
+                monitor.st.fog = fog
+                monitor._process(DIED)
+                monitor._process(ROUND_OVER)
+                self.assertEqual(self._names().count("_release_continue_freeze_after_delay"), 1)
+                self.assertTrue(monitor.st.continue_freeze_held, "RoundOver の時点ではまだ解けない")
+                self.assertEqual(self._release_sleeps(), [expected])
+                self.assertFalse(monitor.st.continue_freeze_held, "RoundOver から数えて解ける")
+                self.assertFalse(monitor.st.is_continue_round)
+        self.assertEqual(config.CONTINUE_FREEZE_RELEASE_DELAY_SEC, 5.0)
+        self.assertEqual(config.FOG_FREEZE_RELEASE_DELAY_SEC, 2.0)
+
+    def test_off_death_releases_after_the_delay(self):
+        SharedState.set_continue_restore_at_round_end(False)
+        for fog, expected in ((False, config.CONTINUE_FREEZE_RELEASE_DELAY_SEC),
+                              (True, config.FOG_FREEZE_RELEASE_DELAY_SEC)):
+            with self.subTest(fog=fog):
+                SharedState.continue_round_reset()
+                monitor = self._monitor()
+                monitor.st.fog = fog
+                monitor._process(DIED)
+                self.assertIn("_release_continue_freeze_after_delay", self._names())
+                self.assertEqual(self._release_sleeps(), [expected])
+                self.assertFalse(monitor.st.continue_freeze_held, "死亡から数えて解ける")
+                monitor._process(ROUND_OVER)
+                self.assertNotIn("_release_continue_freeze_after_delay", self._names(),
+                                 "解けた後の RoundOver は何も予約しない")
+
+    def test_survivor_releases_from_round_over_either_way(self):
+        for at_round_end in (True, False):
+            with self.subTest(at_round_end=at_round_end):
+                SharedState.continue_round_reset()
+                SharedState.set_continue_restore_at_round_end(at_round_end)
+                monitor = self._monitor()
+                monitor._process(ROUND_OVER)
+                self.assertEqual(self._release_sleeps(), [config.CONTINUE_FREEZE_RELEASE_DELAY_SEC])
+                self.assertFalse(monitor.st.continue_freeze_held)
+
+    def test_without_a_freeze_death_schedules_either_way(self):
+        """DTM/Waldo の続行（is_continue_round は真だがフリーズを張らない）は設定に関係なく死亡から"""
+        for at_round_end in (True, False):
+            with self.subTest(at_round_end=at_round_end):
+                SharedState.continue_round_reset()
+                SharedState.set_continue_restore_at_round_end(at_round_end)
+                monitor = self._monitor()
+                SharedState.continue_round_end(monitor.st)          # フリーズだけ外す
+                monitor.st.is_continue_round = True
+                self.assertFalse(monitor.st.continue_freeze_held)
+                self.daemons.clear()
+                monitor._process(DIED)
+                self.assertIn("_release_continue_freeze_after_delay", self._names())
+                self._release_sleeps()
+                self.assertFalse(monitor.st.is_continue_round)
+
+    def test_the_log_says_from_round_over(self):
+        monitor = self._monitor()
+        logs = self._logs(monitor)
+        monitor._process(DIED)
+        monitor._process(ROUND_OVER)
+        self._release_sleeps()
+        released = [m for m in logs if "ほかの窓のフリーズ解除" in m]
+        self.assertEqual(len(released), 1)
+        self.assertIn("ラウンド終了から", released[0])
+        self.assertNotIn("死亡から", released[0])
+
+    def test_the_log_says_from_death_when_off(self):
+        SharedState.set_continue_restore_at_round_end(False)
+        monitor = self._monitor()
+        logs = self._logs(monitor)
+        monitor._process(DIED)
+        self._release_sleeps()
+        released = [m for m in logs if "ほかの窓のフリーズ解除" in m]
+        self.assertEqual(len(released), 1)
+        self.assertIn("死亡から", released[0])
+
+    def test_abandoning_the_round_releases_at_once(self):
+        monitor = self._monitor()
+        monitor._process(DIED)
+        monitor._abandon_round("インスタンス移動")
+        self.assertFalse(monitor.st.continue_freeze_held, "その場で解除")
+        self.assertNotIn("_release_continue_freeze_after_delay", self._names())
+
+    def test_round_freeze_release_after_death_is_unchanged(self):
+        for at_round_end in (True, False):
+            with self.subTest(at_round_end=at_round_end):
+                SharedState.set_continue_restore_at_round_end(at_round_end)
+                monitor = self._monitor()
+                monitor.st.round_freeze_held = True
+                self.daemons.clear()
+                monitor._process(DIED)
+                self.assertIn("_release_round_freeze_after_delay", self._names())
+
+
+class TestCommon(_Case):
     def test_restore_window_off_wins(self):
         for at_round_end in (True, False):
             SharedState.set_continue_restore_at_round_end(at_round_end)

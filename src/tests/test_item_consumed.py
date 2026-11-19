@@ -1,7 +1,7 @@
-"""消費系アイテムを手に持って利用者がクリックしたら、Maxwell を手に持ったまま自爆したら、アイテムロストにする。
+"""消費系アイテムを手に持って利用者がクリックしたら、Maxwell を手に持ったまま死んだら、アイテムロストにする。
 
-LogMonitor（_check_item_used・_on_you_died）と ActionExecutor（自爆の長押しの始まり）を通す。長押しそのものは
-WindowOperator.hold_key_background の偽物で、本物のキー入力・OSC・マウス・窓は使わない。
+LogMonitor（_check_item_used・_on_you_died）を通す。自爆の長押しは WindowOperator.hold_key_background の
+偽物で、本物のキー入力・OSC・マウス・窓は使わない。
 """
 from tests.support import *  # noqa: F401,F403
 import ItemUse
@@ -13,7 +13,7 @@ REBORN = T + "LOL JK, REBORN!"
 BURGER, HAUNTED_BURGER, GLOGNUT = 36, 74, 79
 EMERALD_COIL = 29           # 消費系でない（item.json）
 MAXWELL_ID = 41
-MAXWELL_LOST = "Maxwell を持って自爆: アイテムロスト"
+MAXWELL_LOST = "Maxwell を持って死亡: アイテムロスト"
 
 
 class _Case(unittest.TestCase):
@@ -216,43 +216,82 @@ class TestConsumableClick(_Case):
                          ["Burger", "Haunted Burger", "Thorn Glognut"])
         self.assertEqual(config.MAXWELL_LOG_NAME, "maxwell")
         self.assertEqual(ItemCatalog.item_name(MAXWELL_ID, config.ITEMS), "Maxwell")
-        self.assertEqual((LogMonitor.HELD_LOST_USED, LogMonitor.HELD_LOST_SUICIDE), ("使用", "自爆"))
+        self.assertEqual((LogMonitor.HELD_LOST_USED, LogMonitor.HELD_LOST_DEATH), ("使用", "死亡"))
 
 
-# ── B Maxwell を手に持ったまま自爆したらアイテムロスト ──
-class TestMaxwellSuicide(_Case):
-    def _die(self, n):
+# ── B Maxwell を手に持ったまま死んだらアイテムロスト（死亡の行を読んだ時点で持っている物で決める） ──
+class TestMaxwellDeath(_Case):
+    def _die(self, n=None):
         self.monitor._process(DIED)
 
-    def test_the_names_that_count_as_maxwell(self):
-        for name in ("maxwell", "Maxwell", "max well", " MAXWELL "):
-            with self.subTest(name=name):
-                self.setUp_again()
-                self.tracker.pickup(name)
-                seen = []
-                self.assertEqual(self._suicide(during=lambda n: (seen.append(self.st.skip_maxwell_seq),
-                                                                 self._die(n))), 1)
-                self.assertEqual(seen, [self.ROUND_SEQ], "長押しの始まりの時点で印が立つ")
-                self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
-                self.assertEqual((self.st.item_id, self.st.held_item_id, self.st.last_lost_item_id),
-                                 (0, 0, MAXWELL_ID))
-                self.assertEqual(self.tracker.held_name(), "")
-                self.assertEqual(self.st.skip_maxwell_seq, -1, "使ったら戻す")
-                self.assertTrue(any("✅ 自爆成功" in m for m in self.monitor.logs))
-                self.assertTrue(any("Maxwell を 自爆 でロスト" in m for m in self.monitor.logs), self.monitor.logs)
-
-    def setUp_again(self):
+    def _fresh(self):
         """subTest ごとに窓を作り直す"""
         self.monitor = self._monitor()
         self.st = self.monitor.st
         self.tracker = self.st.item_use
         self._equip(MAXWELL_ID)
 
-    def test_only_equipped_not_held_is_not_lost(self):
+    def test_the_names_that_count_as_maxwell(self):
+        for name in ("maxwell", "Maxwell", "max well", " MAXWELL "):
+            with self.subTest(name=name):
+                self._fresh()
+                self.tracker.pickup(name)
+                self._die()
+                self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
+                self.assertEqual((self.st.item_id, self.st.held_item_id, self.st.last_lost_item_id),
+                                 (0, 0, MAXWELL_ID))
+                self.assertEqual(self.tracker.held_name(), "")
+                self.assertTrue(self.st.item_lost_this_round)
+                self.assertTrue(any("Maxwell を 死亡 でロスト" in m for m in self.monitor.logs), self.monitor.logs)
+
+    def test_a_death_with_maxwell_in_hand_is_lost_without_a_tool_suicide(self):
+        """利用者が自分で自爆した死亡・テラーに殺された死亡でも、手に Maxwell なら拾う（ツールの自爆は押していない）"""
         self._equip(MAXWELL_ID)
-        self._suicide(during=lambda n: (self.assertEqual(self.st.skip_maxwell_seq, -1), self._die(n)))
+        self.tracker.pickup("Maxwell")
+        self.assertEqual(self.st._skip_time, 0.0)
+        self._die()
+        self.assertEqual(self._lost_lines(), [MAXWELL_LOST], self.monitor.logs)
+        self.assertFalse(any("自爆成功" in m for m in self.monitor.logs))
+        self.assertEqual((self.st.item_id, self.st.held_item_id, self.st.last_lost_item_id), (0, 0, MAXWELL_ID))
+
+    def test_a_tool_suicide_with_maxwell_in_hand_is_lost_once(self):
+        self._equip(MAXWELL_ID)
+        self.tracker.pickup("Maxwell")
+        self.assertEqual(self._suicide(during=self._die), 1)
+        self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
+        self.assertTrue(any("✅ 自爆成功" in m for m in self.monitor.logs))
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
+
+    def test_leaving_the_hand_before_the_death_line_is_not_lost(self):
+        """自爆の最中に手放した（実ログの 11/18 の 3 件）。無くならない"""
+        self._equip(MAXWELL_ID)
+        self.tracker.pickup("Maxwell")
+
+        def during(n):
+            self.tracker.drop("Maxwell")             # 長押しの最中に手から外れた
+            self._die()
+
+        self.assertEqual(self._suicide(during=during), 1)
         self.assertEqual(self._lost_lines(), [])
         self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
+        self.assertFalse(self.st.item_lost_this_round)
+        self.assertTrue(any("✅ 自爆成功" in m for m in self.monitor.logs))
+
+    def test_dropping_in_the_same_second_before_the_death_line_is_not_lost(self):
+        """死亡と同じ秒で、死亡の行より前に離した（実ログの 11/15）。無くならない"""
+        self._equip(MAXWELL_ID)
+        self.tracker.pickup("Maxwell")
+        self.tracker.drop("Maxwell")
+        self._die()
+        self.assertEqual(self._lost_lines(), [])
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
+
+    def test_only_equipped_not_held_is_not_lost(self):
+        self._equip(MAXWELL_ID)
+        self._suicide(during=self._die)
+        self.assertEqual(self._lost_lines(), [])
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
+        self.assertFalse(self.st.item_lost_this_round)
         self.assertTrue(any("✅ 自爆成功" in m for m in self.monitor.logs))
 
     def test_holding_something_else_is_not_lost(self):
@@ -261,22 +300,7 @@ class TestMaxwellSuicide(_Case):
         self._suicide(during=self._die)
         self.assertEqual(self._lost_lines(), [])
         self.assertEqual(self.tracker.held_name(), "BloodKatCharm")
-
-    def test_a_death_that_is_not_a_suicide_is_not_lost(self):
-        self._equip(MAXWELL_ID)
-        self.tracker.pickup("Maxwell")
-        self.monitor._process(DIED)
-        self.assertEqual(self._lost_lines(), [])
-        self.assertEqual(self.st.skip_maxwell_seq, -1)
         self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
-        self.assertFalse(any("自爆成功" in m for m in self.monitor.logs))
-
-    def test_a_death_that_is_not_a_suicide_then_reborn_behaves_as_before(self):
-        self._equip(MAXWELL_ID)
-        self.tracker.pickup("Maxwell")
-        self.monitor._process(DIED)
-        self.monitor._process(REBORN)
-        self.assertEqual(self._lost_lines(), [f"{LogMonitor.HELD_LOST_REBORN}: アイテムロスト"])
 
     def test_a_suicide_that_does_not_kill_is_not_lost(self):
         self._equip(MAXWELL_ID)
@@ -284,64 +308,6 @@ class TestMaxwellSuicide(_Case):
         self.assertEqual(self._suicide(), 3, "死ななければ上限までやり直す")
         self.assertEqual(self._lost_lines(), [])
         self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
-
-    def test_a_cancelled_suicide_is_not_lost(self):
-        self._equip(MAXWELL_ID)
-        self.tracker.pickup("Maxwell")
-
-        def cancel(n):
-            self.monitor._action.cancel_suicide()
-
-        self.assertEqual(self._suicide(during=cancel), 1)
-        self.assertEqual(self._lost_lines(), [])
-
-    def test_a_death_in_the_next_round_is_not_lost_by_the_old_mark(self):
-        self._equip(MAXWELL_ID)
-        self.tracker.pickup("Maxwell")
-        self._suicide()                                  # 死なずに終わる。印は前のラウンドのまま
-        self.assertEqual(self.st.skip_maxwell_seq, self.ROUND_SEQ)
-        self.st.round_seq = self.ROUND_SEQ + 1
-        self.st.died_this_round = False
-        # 長押しの終わり際と取られる時刻の死亡でも、ラウンドが違えばロストにしない
-        self.st._skip_time = time.time()
-        self.monitor._process(DIED)
-        self.assertTrue(any("✅ 自爆成功" in m for m in self.monitor.logs))
-        self.assertEqual(self._lost_lines(), [])
-        self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
-
-    def test_picking_it_up_only_at_the_retry_is_lost(self):
-        self._equip(MAXWELL_ID)
-        seen = []
-
-        def during(n):
-            seen.append(self.st.skip_maxwell_seq)
-            if n == 1:
-                self.tracker.pickup("Maxwell")           # 1 回目の長押しの始まりのあとに拾った
-            else:
-                self._die(n)
-
-        self.assertEqual(self._suicide(during=during), 2)
-        self.assertEqual(seen, [-1, self.ROUND_SEQ], "2 回目の始まりで見直す")
-        self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
-        self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
-
-    def test_leaving_the_hand_before_the_retry_is_still_lost(self):
-        """長押しの途中でゲームが手から外すことがある。1 回目の始まりで持っていたら、やり直しで死んでもロスト"""
-        self._equip(MAXWELL_ID)
-        self.tracker.pickup("Maxwell")
-        seen = []
-
-        def during(n):
-            seen.append(self.st.skip_maxwell_seq)
-            if n == 1:
-                self.tracker.drop("Maxwell")             # 1 回目の長押しの間に手から外れた
-            else:
-                self._die(n)
-
-        self.assertEqual(self._suicide(during=during), 2)
-        self.assertEqual(seen, [self.ROUND_SEQ, self.ROUND_SEQ], "一度立てた印は、このラウンドの間は下ろさない")
-        self.assertEqual(self._screen().count(MAXWELL_LOST), 1, self.monitor.logs)
-        self.assertEqual((self.st.item_id, self.st.held_item_id), (0, 0))
 
     def test_a_reborn_in_the_same_second_writes_the_lost_line_once(self):
         self._equip(MAXWELL_ID)
@@ -351,6 +317,30 @@ class TestMaxwellSuicide(_Case):
         self.assertEqual((self.st.item_id, self.st.held_item_id, self.st.last_lost_item_id), (0, 0, MAXWELL_ID))
         self.assertFalse(self.st.died_this_round, "復活の扱いは今までどおり（死亡の取り消し）")
 
+    def test_killed_by_a_terror_then_reborn_writes_the_lost_line_once(self):
+        self._equip(MAXWELL_ID)
+        self.tracker.pickup("Maxwell")
+        self.monitor._process(DIED)
+        self.monitor._process(REBORN)
+        self.assertEqual(self._lost_lines(), [MAXWELL_LOST], self.monitor.logs)
+        self.assertTrue(any("猫消費 → 死亡を取り消し" in m for m in self.debug), self.debug)
+
+    def test_a_reborn_without_a_hand_hold_is_still_a_loss_as_before(self):
+        self._equip(MAXWELL_ID)
+        self.monitor._process(DIED)
+        self.monitor._process(REBORN)
+        self.assertEqual(self._lost_lines(), [f"{LogMonitor.HELD_LOST_REBORN}: アイテムロスト"])
+
+    def test_a_death_outside_a_round_does_nothing(self):
+        self.st.in_round = False
+        self._equip(MAXWELL_ID)
+        self.tracker.pickup("Maxwell")
+        self._die()
+        self.assertEqual(self._lost_lines(), [])
+        self.assertFalse(self.st.item_lost_this_round)
+        self.assertEqual((self.st.item_id, self.st.held_item_id), (MAXWELL_ID, MAXWELL_ID))
+        self.assertEqual(self.tracker.held_name(), "Maxwell")
+
     def test_the_death_line_then_the_lost_line_order_and_no_double_on_run(self):
         self.st.round_type = "Run"
         self._equip(MAXWELL_ID)
@@ -358,15 +348,19 @@ class TestMaxwellSuicide(_Case):
         self._suicide(during=self._die)
         self.assertEqual(self._lost_lines(), [MAXWELL_LOST], "Run の死亡のロストが 2 行目に出ない")
 
-    def test_without_a_tracker_the_start_of_the_hold_is_safe(self):
-        st = WindowState(in_round=True, round_seq=self.ROUND_SEQ)
-        self.assertIsNone(st.item_use)
-        executor = ActionExecutor.ActionExecutor(WindowConfig(hwnd=9, do_skip=True), st, lambda: True,
-                                                 lambda _m: None)
-        self.assertEqual(executor._held_log_name(), "")
-        with patch.object(WindowOperator, "hold_key_background", side_effect=lambda *a, **k: True):
-            executor.do_skip()
-        self.assertEqual(st.skip_maxwell_seq, -1)
+    def test_a_run_death_without_maxwell_still_loses_the_item(self):
+        self.st.round_type = "Run"
+        self._equip(EMERALD_COIL)
+        self._die()
+        self.assertEqual(self._lost_lines(), ["Run死亡: アイテムロスト"])
 
-    def test_the_state_default(self):
-        self.assertEqual(WindowState().skip_maxwell_seq, -1)
+    def test_without_a_tracker_a_death_is_safe(self):
+        self.st.item_use = None
+        with patch.object(self.monitor, "_lose_held_item") as lose:
+            self._die()                                  # 例外にならない
+        lose.assert_not_called()
+        self.assertEqual(self._lost_lines(), [])
+        self.assertTrue(self.st.died_this_round, "死亡の後始末は今までどおり")
+
+    def test_the_state_has_no_tracker_until_the_monitor_makes_one(self):
+        self.assertIsNone(WindowState().item_use)

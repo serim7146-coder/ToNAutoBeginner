@@ -419,7 +419,8 @@ class TestFreezeFrame(_AppCase):
     def test_no_freeze_checks_left_outside(self):
         outside = [w.cget("text") for w in _all_widgets(self.app) if isinstance(w, ttk.Checkbutton)
                    and "フリーズ" in w.cget("text")
-                   and w.cget("text") != "突入フリーズのラウンドを録画する"]     # OBS自動録画（設定の窓）のスイッチ
+                   and w.cget("text") not in ("突入フリーズのラウンドを録画する",      # OBS自動録画（設定の窓）のスイッチ
+                                              "フリーズと窓位置はラウンド終了まで")]   # 続行の設定（その他の枠）
         self.assertEqual(outside, [])
 
     def test_the_checks_work_as_before(self):
@@ -490,7 +491,7 @@ class TestDv2MainScreen(_AppCase):
                         key=lambda w: (int(w.grid_info()["row"]), int(w.grid_info()["column"])))
         items = [(type(w).__name__, w.cget("text")) for w in checks]
         self.assertEqual(items, [("Checkbutton", "アイテムを落とす"), ("Checkbutton", "窓位置リセット"),
-                                 ("Checkbutton", "窓位置リセットはラウンド終了後"),
+                                 ("Checkbutton", "フリーズと窓位置はラウンド終了まで"),
                                  ("Checkbutton", "続行の後は自動Beginしない"),
                                  ("Checkbutton", "Runリスポーン"), ("Checkbutton", "霧即時判定"),
                                  ("Checkbutton", "Utilsの判定に従う"),         # EB
@@ -1034,7 +1035,7 @@ class TestOtherChecksWrap(_AppCase):
 
     def test_the_order_of_the_checks_is_kept(self):
         self.assertEqual([c.cget("text") for c in self.checks],
-                         ["アイテムを落とす", "窓位置リセット", "窓位置リセットはラウンド終了後",
+                         ["アイテムを落とす", "窓位置リセット", "フリーズと窓位置はラウンド終了まで",
                           "続行の後は自動Beginしない", "Runリスポーン", "霧即時判定",
                           "Utilsの判定に従う", "2, 3枠目のBloodthirstyを待つ", "Murderで AFK 回避しない",
                           "Beginは連打だけ（カーソルを動かさない）"])

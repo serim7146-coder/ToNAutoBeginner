@@ -237,6 +237,76 @@ def window_layout_setting(layout) -> dict:
     return {k: [r[0], r[1], r[2] - r[0], r[3] - r[1]] for k, r in (layout or {}).items()}
 
 
+# ログのオーバーレイの既定（保存が無い・壊れているとき）。依頼者 2026-11-19
+OVERLAY_DEFAULT_SIZE = (520, 320)
+OVERLAY_DEFAULT_POS = (10, 10)
+OVERLAY_DEFAULT_ALPHA = 0.75
+OVERLAY_ALPHA_MIN = 0.2
+OVERLAY_ALPHA_MAX = 1.0
+OVERLAY_STACK_CHECK_MS = 5000       # オーバーレイの重なり順を確かめる間隔（debug.log に残す。依頼者 2026-11-19）
+
+
+def overlay_stack_line(topmost, above, names, minutes) -> str:
+    """オーバーレイの重なり順の記録 1 行。topmost は最前面の指定（None は取れなかった）、above は
+    WindowOperator.windows_above の結果、names は pid → プロセス名（無い pid は "?"）、minutes は開いてからの分"""
+    mark = "?" if topmost is None else ("あり" if topmost else "なし")
+    if above:
+        parts = []
+        for w in above:
+            state = "最前面の指定" + ("あり" if w["topmost"] else "なし") + ("・前面" if w["foreground"] else "")
+            parts.append(f"{names.get(w['pid']) or '?'} {w['class']}（{state}）{tuple(w['rect'])}")
+        over = "上に重なる窓: " + "、".join(parts)
+    else:
+        over = "上に重なる窓なし"
+    return f"[オーバーレイ] 重なり: 最前面の指定={mark}・{over}（開いてから {minutes} 分）"
+
+
+def _as_overlay_rect(value):
+    """保存したオーバーレイの位置と大きさ [x, y, w, h] を (x, y, w, h) に。壊れた値・w か h が 0 以下なら None"""
+    if not (isinstance(value, list) and len(value) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in value)):
+        return None
+    x, y, w, h = value
+    if w > 0 and h > 0:
+        return (x, y, w, h)
+    return None
+
+
+def _as_overlay_alpha(value) -> float:
+    """保存したオーバーレイの透明度。数値で 0.2〜1.0 ならそのまま、無い・壊れた値・範囲の外は 0.75"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return OVERLAY_DEFAULT_ALPHA
+    if OVERLAY_ALPHA_MIN <= value <= OVERLAY_ALPHA_MAX:
+        return float(value)
+    return OVERLAY_DEFAULT_ALPHA
+
+
+def _as_overlay_setting(value) -> tuple:
+    """保存した "log_overlay" を (位置と大きさ, 透明度, 開いていたか) に。dict でなければすべて既定"""
+    if not isinstance(value, dict):
+        return (None, OVERLAY_DEFAULT_ALPHA, False)
+    return (_as_overlay_rect(value.get("rect")), _as_overlay_alpha(value.get("alpha")),
+            value.get("open") is True)
+
+
+def overlay_setting(rect, alpha, opened) -> dict:
+    """オーバーレイの位置と大きさ・透明度・開いていたかを保存の形 {"rect": [x, y, w, h] か null, …} に"""
+    return {"rect": list(rect) if rect else None, "alpha": alpha, "open": bool(opened)}
+
+
+def overlay_geometry(rect) -> str:
+    """オーバーレイを開くときの geometry 文字列。位置が無ければ既定（左上・520x320）。
+    保存した位置の中心がどのモニターの上にもなければ（モニターを外したなど）、位置だけ左上に戻す"""
+    dw, dh = OVERLAY_DEFAULT_SIZE
+    dx, dy = OVERLAY_DEFAULT_POS
+    if rect is None:
+        return f"{dw}x{dh}+{dx}+{dy}"
+    x, y, w, h = rect
+    if WindowOperator.rect_on_screen((x, y, x + w, y + h)):
+        return f"{w}x{h}+{x}+{y}"
+    return f"{w}x{h}+{dx}+{dy}"
+
+
 def _as_flag(value) -> bool:
     """旧形式（窓ごとの配列）なら、いずれかがONならON"""
     if isinstance(value, (list, tuple)):
@@ -1035,14 +1105,18 @@ class LogOverlay(tk.Toplevel):
     """半透明の最前面ログオーバーレイウィンドウ"""
     MAX_LINES = config.GUI_OVERLAY_LOG_MAX_LINES
 
-    def __init__(self, parent):
+    def __init__(self, parent, rect=None, alpha=OVERLAY_DEFAULT_ALPHA,
+                 on_geometry=None, on_alpha=None, on_close=None):
         super().__init__(parent)
+        self._on_geometry = on_geometry      # 位置・大きさを変え終えたら on_geometry((x, y, w, h))
+        self._on_alpha = on_alpha            # 透明度のつまみを動かしたら on_alpha(透明度)
+        self._on_close = on_close            # 閉じたら on_close()（1 回だけ）
         self.title("Log Overlay")
         self.overrideredirect(True)      # タイトルバーなし
         self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.75)
+        self.attributes("-alpha", alpha)
         self.configure(bg="#000000")
-        self.geometry("520x320+10+10")
+        self.geometry(overlay_geometry(rect))
         self._lines: list[str] = []
         self._drag_x = 0
         self._drag_y = 0
@@ -1059,15 +1133,16 @@ class LogOverlay(tk.Toplevel):
         # 透明度スライダー
         tk.Label(hf, text="α:", bg="#1e1e2e", fg="#cdd6f4",
                  font=(UIFont.UI, 8)).pack(side="right")
-        self._alpha = tk.DoubleVar(value=0.75)
+        self._alpha = tk.DoubleVar(value=alpha)
         tk.Scale(hf, from_=0.2, to=1.0, resolution=0.05,
                  variable=self._alpha, orient="horizontal", length=80,
                  bg="#1e1e2e", fg="#cdd6f4", troughcolor="#313244",
                  highlightthickness=0, bd=0,
-                 command=lambda v: self.attributes("-alpha", float(v))
+                 command=self._set_alpha
                  ).pack(side="right")
         hf.bind("<ButtonPress-1>",   self._drag_start)
         hf.bind("<B1-Motion>",       self._drag_move)
+        hf.bind("<ButtonRelease-1>", lambda _e: self._report_geometry())
 
         # ログテキスト
         self.text = tk.Text(
@@ -1084,10 +1159,35 @@ class LogOverlay(tk.Toplevel):
         grip.place(relx=1.0, rely=1.0, anchor="se")
         grip.bind("<ButtonPress-1>",  self._resize_start)
         grip.bind("<B1-Motion>",      self._resize_move)
+        grip.bind("<ButtonRelease-1>", lambda _e: self._report_geometry())
         self._rw = self._rh = 0
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._closed = False
+        # 重なり順の記録（依頼者 2026-11-19）。長く使うとオーバーレイが VRChat の後ろに回る原因を見分ける
+        self._hwnd = WindowOperator.own_window_hwnd(self)
+        self._opened_at = time.monotonic()
+        self._last_stack = None
+        self._stack_job = self.after(OVERLAY_STACK_CHECK_MS, self._check_stack)
+
+    def _check_stack(self):
+        """重なり順を確かめ、前回から変わったときだけ debug.log に 1 行残す。最前面のかけ直しはしない。
+        矩形は比べない（窓を動かすたびに行が増えるため）"""
+        if self._closed:
+            return
+        try:
+            topmost = WindowOperator.is_topmost(self._hwnd)
+            above = WindowOperator.windows_above(self._hwnd)
+            key = (topmost, tuple((a["pid"], a["class"], a["topmost"], a["foreground"]) for a in above))
+            if key != self._last_stack:
+                names = {a["pid"]: ProcessCheck.process_name(a["pid"]) or "?" for a in above}
+                minutes = int((time.monotonic() - self._opened_at) // 60)
+                DebugLog.write(overlay_stack_line(topmost, above, names, minutes))
+                self._last_stack = key
+        except Exception:
+            DebugLog.exception("mainGUI.LogOverlay._check_stack")
+        if not self._closed:
+            self._stack_job = self.after(OVERLAY_STACK_CHECK_MS, self._check_stack)
 
     def append(self, msg: str):
         self.append_many([msg])
@@ -1106,8 +1206,27 @@ class LogOverlay(tk.Toplevel):
         self.text.config(state="disabled")
 
     def close(self):
+        if self._closed:
+            return
         self._closed = True
+        try:
+            self.after_cancel(self._stack_job)
+        except Exception:
+            pass
         self.destroy()
+        if self._on_close is not None:
+            self._on_close()
+
+    def _set_alpha(self, v):
+        """透明度のつまみを動かしたとき。窓の透明度を変え、呼び出し元へ知らせる"""
+        self.attributes("-alpha", float(v))
+        if self._on_alpha is not None:
+            self._on_alpha(float(v))
+
+    def _report_geometry(self):
+        """ドラッグかつまみで位置・大きさを変え終えたとき、今の (x, y, w, h) を呼び出し元へ知らせる"""
+        if self._on_geometry is not None:
+            self._on_geometry((self.winfo_x(), self.winfo_y(), self.winfo_width(), self.winfo_height()))
 
     def _drag_start(self, e):
         self._drag_x = e.x_root - self.winfo_x()
@@ -1351,6 +1470,14 @@ class App(tk.Tk):
     def host_tabs(self, value: dict):
         self._shared_lists().tabs = value
 
+    @property
+    def host_self(self):
+        return self._shared_lists().host_self
+
+    @host_self.setter
+    def host_self(self, value):
+        self._shared_lists().host_self = value
+
     def __init__(self):
         super().__init__()
         # 別のスレッドからの画面の更新はここへ（FC。Tk はこのスレッドでだけ呼ぶ）。何かがログを書く前に作る
@@ -1380,7 +1507,7 @@ class App(tk.Tk):
         # 開かずに起動したとき3が出てしまう。無ければ None
         self._win_count_pref: int | None = None
         # 続行リスト一式。全窓の LogMonitor が同じものを持つ。中身は差し替えで更新する
-        # （keepOn_set・host_wishes・host_participants・host_tabs はこの属性の窓口）。
+        # （keepOn_set・host_wishes・host_participants・host_tabs・host_self はこの属性の窓口）。
         # 参加者（＋自分）の名前は host_wishes に待機も入るので区別する
         self.lists = MatchTNL.SharedLists(participants=set())
         self._host_save_stamp: tuple | None = None   # (st_mtime, st_size)
@@ -1398,6 +1525,9 @@ class App(tk.Tk):
         self._running = False
         self._start_stop_busy = False      # 開始・停止のボタンを押した直後（押せない）
         self._overlay: LogOverlay | None = None
+        self._overlay_rect = None                   # オーバーレイの位置と大きさ (x, y, w, h)。None は既定
+        self._overlay_alpha = OVERLAY_DEFAULT_ALPHA
+        self._overlay_open = False                  # 開いていたか（ツールを閉じたときに開いていれば、次の起動で開く）
         self._log_line_count = 0
         self._log_pending: list[tuple[str, str]] = []     # (テキストに足す行, オーバーレイの行)
         self._log_pending_lock = threading.Lock()
@@ -1433,6 +1563,7 @@ class App(tk.Tk):
         self._build_ui()
         self._log(f"[画面] {UIFont.describe(self)}")
         self._load_saved_settings()
+        self._open_overlay_if_it_was_open()   # 保存した「開いていた」なら、保存した位置・大きさ・透明度で開く
         self._sync_queue_watcher()            # 読み込んだ「待機列に入れるようになったら知らせる」に合わせて見張りを始める
         self._auto_detect_windows()
         self._sync_launch_count()
@@ -2725,7 +2856,7 @@ class App(tk.Tk):
             variable=self.v_continue_restore_window,
             command=self._on_continue_after_changed))
         self._other_checks.append(ttk.Checkbutton(
-            fcr, text="窓位置リセットはラウンド終了後",
+            fcr, text="フリーズと窓位置はラウンド終了まで",
             variable=self.v_continue_restore_at_round_end,
             command=self._on_continue_after_changed))
         # 続行ラウンドの後は自動 Begin を押さない（全窓共通・保存・既定 OFF）。詳しくは README
@@ -3676,9 +3807,11 @@ class App(tk.Tk):
         version = (self.host_tabs or {}).get("version", 0) + 1
         self.host_tabs = {"version": version, "tabs": dict(tabs_data or {})}
 
-    def _apply_host_wishes(self, new_wishes: dict, participants=()):
-        """参加者別の希望と参加者の名前を差し替える"""
+    def _apply_host_wishes(self, new_wishes: dict, participants=(), host_self=None):
+        """参加者別の希望・参加者の名前・主催者自身の名前を差し替える。
+        主催者自身の名前は、焼き芋・干し芋・private 相当の窓が主催者のリストを足すのに使う（代入だけ）"""
         self.host_wishes = dict(new_wishes)
+        self.host_self = host_self
         if getattr(self, "host_participants", None) is not None:
             self.host_participants = set(participants)
 
@@ -3885,7 +4018,7 @@ class App(tk.Tk):
         SharedState.set_list_source("host")
         changed = keep_on != self.keepOn_set
         self._apply_keep_on(keep_on)
-        self._apply_host_wishes(wishes, meta.get("participant_names", ()))
+        self._apply_host_wishes(wishes, meta.get("participant_names", ()), meta.get("host_self"))
         self._apply_host_tabs(meta.get("tabs_data") or {})
         if switched:
             self._log(f"[続行リスト] 主催リストへ切替（参加者{meta['participants']}人）")
@@ -4066,6 +4199,7 @@ class App(tk.Tk):
         App._refresh_follow_utils_check(self)
         App._load_phone_notify(self, data)
         self._window_layout = _as_window_layout(data.get("window_layout"))   # 壊れた値は捨てる（DX）
+        self._overlay_rect, self._overlay_alpha, self._overlay_open = _as_overlay_setting(data.get("log_overlay"))
         App._refresh_forget_layout_button(self)
         self._apply_saved_window_settings()
         self.v_tnl.set(data.get("tnl_path", ""))
@@ -5403,6 +5537,9 @@ class App(tk.Tk):
             "suicide_hold_sec":        SharedState.get_suicide_hold_sec(),
             "begin_use_spam_only":     SharedState.get_begin_use_spam_only(),
             "window_layout":           window_layout_setting(getattr(self, "_window_layout", None)),
+            "log_overlay":             overlay_setting(getattr(self, "_overlay_rect", None),
+                                                       getattr(self, "_overlay_alpha", OVERLAY_DEFAULT_ALPHA),
+                                                       getattr(self, "_overlay_open", False)),
             "chase_enabled":           SharedState.get_chase_enabled(),
             "follow_utils":            SharedState.get_follow_utils(),
             "phone_notify":            SharedState.get_phone_notify(),
@@ -5476,12 +5613,42 @@ class App(tk.Tk):
     def _open_statistics(self):
         StatisticsWindow(self)
 
+    def _open_overlay(self):
+        """保存した位置・大きさ・透明度でオーバーレイを開き、「開いていた」を保存する"""
+        self._overlay = LogOverlay(self, rect=self._overlay_rect, alpha=self._overlay_alpha,
+                                   on_geometry=self._on_overlay_geometry,
+                                   on_alpha=self._on_overlay_alpha,
+                                   on_close=self._on_overlay_closed)
+        if not self._overlay_open:
+            self._overlay_open = True
+            self._schedule_settings_save()
+
+    def _open_overlay_if_it_was_open(self):
+        """起動のとき、前回オーバーレイを開いたままツールを閉じていたなら開く"""
+        if self._overlay_open:
+            self._open_overlay()
+
     def _toggle_overlay(self):
         if self._overlay and not self._overlay._closed:
             self._overlay.close()
             self._overlay = None
         else:
-            self._overlay = LogOverlay(self)
+            self._open_overlay()
+
+    def _on_overlay_geometry(self, rect):
+        if rect != self._overlay_rect:
+            self._overlay_rect = rect
+            self._schedule_settings_save()
+
+    def _on_overlay_alpha(self, alpha):
+        if alpha != self._overlay_alpha:
+            self._overlay_alpha = alpha
+            self._schedule_settings_save()
+
+    def _on_overlay_closed(self):
+        if self._overlay_open:
+            self._overlay_open = False
+            self._schedule_settings_save()
 
     def _clear_log(self):
         self.log_text.config(state="normal")

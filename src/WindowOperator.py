@@ -546,6 +546,69 @@ def foreground_hwnd() -> int:
         return 0
 
 
+DWMWA_CLOAKED = 14
+WINDOWS_ABOVE_MAX_STEPS = 500          # 重なり順をたどる数の上限（ループの保険）
+
+
+def is_topmost(hwnd: int) -> bool | None:
+    """その窓に最前面の指定（WS_EX_TOPMOST）があるか。取れなければ None。
+    ログのオーバーレイが後ろに回る原因を調べるための記録用（依頼者 2026-11-19）"""
+    try:
+        return bool(win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) & win32con.WS_EX_TOPMOST)
+    except Exception:
+        DebugLog.exception("WindowOperator.is_topmost")
+        return None
+
+
+def _is_cloaked(hwnd: int) -> bool:
+    """DWM に隠されている窓か（別の仮想デスクトップの窓など。見えているように見えて表示されない）。
+    取れなければ False（隠されていない扱い）"""
+    try:
+        cloaked = wintypes.DWORD(0)
+        result = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            wintypes.HWND(hwnd), DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked))
+        return result == 0 and cloaked.value != 0
+    except Exception:
+        DebugLog.exception("WindowOperator._is_cloaked")
+        return False
+
+
+def windows_above(hwnd: int) -> list:
+    """hwnd の窓より重なり順で上にあって、その窓の矩形に重なる、見えている窓（上にある順）。
+
+    各要素は {"hwnd", "pid", "class", "topmost", "rect": (左, 上, 幅, 高さ), "foreground"}。
+    非表示・最小化・DWM で隠された窓と、矩形が重ならない窓は含めない。失敗したら []。
+    プロセス名は引かない（呼び出し側が記録を書くときだけ引く。毎回プロセスの一覧を撮るため重い）。
+    ログのオーバーレイが後ろに回る原因を調べるための記録用（依頼者 2026-11-19）
+    """
+    try:
+        own = win32gui.GetWindowRect(hwnd)
+        foreground = foreground_hwnd()
+        found = []
+        current = hwnd
+        for _ in range(WINDOWS_ABOVE_MAX_STEPS):
+            current = win32gui.GetWindow(current, win32con.GW_HWNDPREV)
+            if not current:
+                break
+            if not win32gui.IsWindowVisible(current) or win32gui.IsIconic(current) or _is_cloaked(current):
+                continue
+            left, top, right, bottom = win32gui.GetWindowRect(current)
+            if min(own[2], right) - max(own[0], left) <= 0 or min(own[3], bottom) - max(own[1], top) <= 0:
+                continue
+            found.append({
+                "hwnd": current,
+                "pid": win32process.GetWindowThreadProcessId(current)[1],
+                "class": win32gui.GetClassName(current),
+                "topmost": bool(win32gui.GetWindowLong(current, win32con.GWL_EXSTYLE) & win32con.WS_EX_TOPMOST),
+                "rect": (left, top, right - left, bottom - top),
+                "foreground": current == foreground,
+            })
+        return found
+    except Exception:
+        DebugLog.exception("WindowOperator.windows_above")
+        return []
+
+
 class FrontLoan:
     """ツールが VRChat の窓を前面にしたときに控える、返すための札"""
 

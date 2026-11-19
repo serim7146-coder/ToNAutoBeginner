@@ -119,8 +119,33 @@ class TestRespawnMarksOutOfRound(_Case):
         self.assertIn("リスポーン: アイテムロスト", self._lines(monitor))
         self.assertTrue(any("リスポーン → 死亡と同じ扱い" in m and "[窓1]" in m for m in self.debug), self.debug)
 
-    def test_a_respawn_in_the_lobby_does_nothing_new(self):
+    def test_a_respawn_in_the_lobby_is_not_a_death(self):
+        """ロビーのリスポーンは死亡扱いにしない（続行・突入フリーズ・AFK ループの印・予約は触らない）。
+        アイテムが外れるので、ロストにして opted in の行の案内を待つ（依頼者 2026-11-19。それまでは何もしなかった）"""
         monitor = self._monitor(in_round=False)
+        monitor.st.item_id = monitor.st.held_item_id = 29
+        monitor.st.is_continue_round = True
+        monitor.st.glorbo_afk = True
+        SharedState.round_freeze_start(monitor.st)
+        self.debug.clear()
+
+        monitor._process(RESPAWN)
+
+        st = monitor.st
+        self.assertEqual(st.respawn_seen_seq, 1, "数えるのは今までどおり")
+        self.assertFalse(st.died_this_round)
+        self.assertTrue(st.glorbo_afk)
+        self.assertEqual(monitor.booked, [])
+        self.assertFalse(any("死亡と同じ扱い" in m for m in self.debug), self.debug)
+        self.assertTrue(st.item_lost_this_round)
+        self.assertEqual((st.item_id, st.held_item_id), (0, 0))
+        self.assertTrue(st.respawn_item_pending)
+        self.assertEqual(self._lines(monitor), ["リスポーン: アイテムロスト",
+                                                "所持アイテム: なし（Emerald Coil を リスポーン でロスト）"])
+
+    def test_a_respawn_in_the_lobby_without_an_item_does_nothing_new(self):
+        monitor = self._monitor(in_round=False)
+        monitor.st.item_id = monitor.st.held_item_id = 0
         monitor.st.is_continue_round = True
         monitor.st.glorbo_afk = True
         SharedState.round_freeze_start(monitor.st)
@@ -133,6 +158,7 @@ class TestRespawnMarksOutOfRound(_Case):
         self.assertFalse(st.died_this_round)
         self.assertTrue(st.glorbo_afk)
         self.assertFalse(st.item_lost_this_round)
+        self.assertFalse(st.respawn_item_pending)
         self.assertEqual(monitor.booked, [])
         self.assertEqual(monitor.logs, [])
         self.assertFalse(any("死亡と同じ扱い" in m for m in self.debug), self.debug)
@@ -323,6 +349,84 @@ class TestTheAfkLoopsStopAtTheRespawn(_Case):
         moves, naps = self._loop(None, glorbo=True, at=0)
         self.assertEqual(naps, 1000)
         self.assertGreater(moves, 0)
+
+
+class TestNoAfkLoopAfterDeath(_Case):
+    """死亡・リスポーンの後に判定が走って DTM/Waldo・Glorbo の続行になっても、AFK 解除ループは回さない
+    （依頼者 2026-11-19）。続行フリーズ・アナウンス・録画・通知は今までどおり"""
+    LOG = LogMonitor.NO_AFK_LOOP_AFTER_DEATH
+
+    def _judged(self, died, glorbo, revived=False):
+        monitor = self._monitor()
+        st = monitor.st
+        st.open_special_round_wins = 0
+        st.terror_ids = [config.DTM_ID]
+        if died:
+            monitor._process(DIED if died == "death" else RESPAWN)
+        if revived:
+            monitor._process(T + "LOL JK, REBORN!")
+        monitor.logs.clear()
+        monitor.booked.clear()
+        with patch.object(WindowOperator, "focus_window", return_value=True),                 patch.object(Recorder, "on_continue_start") as record:
+            if glorbo:
+                monitor._start_glorbo_continue("Classic")
+            else:
+                monitor._decide_with_keep_on_set("Classic", ("list", True, True))
+        return monitor, record
+
+    def test_after_a_death_or_a_respawn_the_loop_is_not_booked(self):
+        for died in ("death", "respawn"):
+            for glorbo in (False, True):
+                with self.subTest(died=died, glorbo=glorbo):
+                    SharedState.continue_round_reset()
+                    monitor, _record = self._judged(died, glorbo)
+                    st = monitor.st
+                    self.assertNotIn("do_open_special_round_loop", self._names(monitor))
+                    self.assertFalse(st.glorbo_afk)
+                    self.assertFalse(st.is_open_special_round_round)
+                    self.assertEqual(self._lines(monitor).count(self.LOG), 1, monitor.logs)
+                    self.assertFalse(any("AFK解除ループ開始" in m or "クラ解放ラウンド開始" in m
+                                         for m in monitor.logs), monitor.logs)
+
+    def test_the_continue_marks_and_the_freeze_stay_as_before(self):
+        SharedState.continue_round_reset()
+        monitor, record = self._judged("death", glorbo=True)
+        st = monitor.st
+        self.assertTrue(st.is_continue_round)
+        self.assertEqual(SharedState.get_continue_round_count(), 1)
+        record.assert_called_once()
+        self.assertIn("🎙 続行アナウンス再生", self._lines(monitor))
+
+    def test_after_a_cat_revival_the_loop_is_booked(self):
+        for glorbo in (False, True):
+            with self.subTest(glorbo=glorbo):
+                SharedState.continue_round_reset()
+                monitor, _record = self._judged("death", glorbo, revived=True)
+                self.assertFalse(monitor.st.died_this_round)
+                self.assertIn("do_open_special_round_loop", self._names(monitor))
+                self.assertNotIn(self.LOG, self._lines(monitor))
+
+    def test_without_a_death_the_loop_is_booked(self):
+        for glorbo in (False, True):
+            with self.subTest(glorbo=glorbo):
+                SharedState.continue_round_reset()
+                monitor, _record = self._judged(None, glorbo)
+                self.assertIn("do_open_special_round_loop", self._names(monitor))
+
+    def test_the_loop_function_itself_stops_at_died_this_round(self):
+        for glorbo in (True, False):
+            with self.subTest(glorbo=glorbo):
+                monitor = self._monitor()
+                st = monitor.st
+                ex = monitor._action
+                st.open_special_round_wins = 0
+                st.is_open_special_round_round = not glorbo
+                st.glorbo_afk = glorbo
+                st.died_this_round = True          # 印だけ立てる（死亡の後始末は通さない）
+                with patch.object(ActionExecutor.time, "sleep") as sleep, patch.object(ex, "move") as move:
+                    ex.do_open_special_round_loop(glorbo=glorbo)
+                sleep.assert_not_called()
+                move.assert_not_called()
 
 
 class TestTheSuicideStopsAtTheRespawn(_Case):

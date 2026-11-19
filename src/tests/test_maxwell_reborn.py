@@ -129,8 +129,8 @@ class TestContinueFreezeAfterReborn(_Case):
         with patch.object(monitor._action, "_attend_to_item_loss"):
             monitor._process(ROUND_OVER)
         self.assertEqual(self._names(monitor), ["_release_continue_freeze_after_delay"] * 2)
-        self.assertEqual(monitor.booked[1][1], (monitor.st.round_seq,),
-                         "RoundOver からの予約は復活の番号を持たない")
+        self.assertEqual(monitor.booked[1][1], (monitor.st.round_seq, None, "ラウンド終了"),
+                         "RoundOver からの予約は復活の番号を持たず、ログには「ラウンド終了」と出す")
 
         self._run(monitor, 0)
         self.assertEqual(SharedState.get_continue_round_count(), 1, "死亡からの予約は効かない")
@@ -154,6 +154,25 @@ class TestContinueFreezeAfterReborn(_Case):
 
         self.assertEqual(SharedState.get_continue_round_count(), 0)
         self.assertFalse(monitor.st.is_continue_round)
+
+    def test_on_a_reborn_keeps_the_freeze_until_round_over(self):
+        """設定 ON（既定）は死亡で予約しないので、猫で復活しても取り消す対象が無く、RoundOver まで保たれる
+        （依頼者 2026-11-19）"""
+        SharedState.set_continue_restore_at_round_end(True)
+        self.addCleanup(SharedState.set_continue_restore_at_round_end, False)   # 既存のテストは OFF 前提
+        monitor = self._continuing()
+        monitor._process(DIED)
+        monitor._process(REBORN)
+        self.assertEqual(self._names(monitor), [], "死亡では予約しない")
+        self.assertTrue(monitor.st.continue_freeze_held)
+        self.assertTrue(monitor.st.is_continue_round)
+
+        with patch.object(monitor._action, "_attend_to_item_loss"):
+            monitor._process(ROUND_OVER)
+        self.assertEqual(self._names(monitor).count("_release_continue_freeze_after_delay"), 1)
+        self.assertEqual(SharedState.get_continue_round_count(), 1, "RoundOver の時点ではまだ解けない")
+        self._run(monitor, self._names(monitor).index("_release_continue_freeze_after_delay"))
+        self.assertEqual(SharedState.get_continue_round_count(), 0, "RoundOver から数えて解ける")
 
     def test_a_release_without_a_number_ignores_the_reborn_count(self):
         monitor = self._continuing()

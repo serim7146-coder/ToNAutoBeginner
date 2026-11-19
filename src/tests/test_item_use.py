@@ -454,11 +454,19 @@ class TestOverlayHasNoItemPart(_ui_tidy._AppCase):
         overlay.close()
         self.assertTrue(overlay._closed)
 
-    def test_toggle_overlay_makes_it_from_the_app_only(self):
-        app = types.SimpleNamespace(_overlay=None)
+    def test_toggle_overlay_passes_only_the_app_and_the_overlay_settings(self):
+        """アイテムの部分の引数が戻っていないこと。位置・透明度・開閉の知らせ先は 2026-11-19 から渡す"""
+        app = types.SimpleNamespace(
+            _overlay=None, _overlay_rect=None, _overlay_alpha=0.75, _overlay_open=False,
+            _on_overlay_geometry=lambda rect: None, _on_overlay_alpha=lambda alpha: None,
+            _on_overlay_closed=lambda: None, _schedule_settings_save=lambda: None)
+        app._open_overlay = lambda: mainGUI.App._open_overlay(app)
         with patch.object(mainGUI, "LogOverlay") as overlay:
             mainGUI.App._toggle_overlay(app)
-        overlay.assert_called_once_with(app)
+        overlay.assert_called_once()
+        args, kwargs = overlay.call_args
+        self.assertEqual(args, (app,))
+        self.assertEqual(set(kwargs), {"rect", "alpha", "on_geometry", "on_alpha", "on_close"})
         self.assertIs(app._overlay, overlay.return_value)
 
 
@@ -508,12 +516,19 @@ class TestLogMonitorItemUse(unittest.TestCase):
         self.monitor._process(JOIN)
         self.assertFalse(self._held())
 
-    def test_death_and_respawn_alone_keep_it(self):
+    def test_death_alone_keeps_it_and_a_respawn_with_an_item_drops_it(self):
+        """死亡だけでは手の記録を外さない。ラウンドの外のリスポーンも、アイテムが外れるとき（持っていたとき）は
+        ラウンド中と同じに外す（依頼者 2026-11-19。それまでは何もしなかった）。持っていなければ何もしない"""
         self.monitor._process(PICK)
         self.monitor._process(DIED)
         self.assertTrue(self._held())
         self.monitor._process(RESPAWN)
-        self.assertTrue(self._held())
+        self.assertFalse(self._held())
+
+        self.monitor.st.item_id = self.monitor.st.held_item_id = 0
+        self.monitor._process(PICK)
+        self.monitor._process(RESPAWN)
+        self.assertTrue(self._held(), "アイテムを持っていないリスポーンは何も変えない")
 
     def test_pickup_and_drop_are_not_written_as_events(self):
         with patch.object(DebugLog, "write") as written:

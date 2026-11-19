@@ -25,7 +25,7 @@ class SharedLists:
     見てしまう。代入なら、読む側はいつも古いか新しいかのどちらか一方の完全なものを見る
     """
 
-    def __init__(self, keep_on=None, wishes=None, participants=None, tabs=None):
+    def __init__(self, keep_on=None, wishes=None, participants=None, tabs=None, host_self=None):
         self.keep_on: dict = keep_on if keep_on is not None else {}
         # 参加者別の続行希望 {vrc_name: {round_key: set(ids)}}
         self.wishes: dict = wishes if wishes is not None else {}
@@ -33,6 +33,9 @@ class SharedLists:
         self.participants: set | None = participants
         # ToN ListTool の複窓対応のタブ {"version": n, "tabs": {タブ: {...}}}
         self.tabs: dict = tabs if tabs is not None else {"version": 0, "tabs": {}}
+        # 主催者自身の名前（ListTool の user_save で last_active の人）。分からなければ None。
+        # 焼き芋・干し芋・private 相当の窓は、主催者がその場にいなくても他の人がいればこの人のリストを足す
+        self.host_self: str | None = host_self
 
 
 # ═══════════════════════════════════════════════

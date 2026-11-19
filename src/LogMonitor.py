@@ -49,7 +49,15 @@ HELD_LOST_SABOTAGE = "Sabotage マーダー"
 HELD_LOST_INSTANCE = "インスタンス移動"
 HELD_LOST_REBORN = "猫消費"
 HELD_LOST_USED = "使用"
-HELD_LOST_SUICIDE = "自爆"
+HELD_LOST_DEATH = "死亡"
+
+# 参加していないラウンド（「Not opted in. Not joining this round.」の次のラウンド。依頼者 2026-11-19）と、
+# リスポーンでアイテムが外れたときの案内の文言
+NOT_JOINED_LINE = "このラウンドには参加していません（リスポーンの後）→ 死亡と同じ扱い"
+NOT_JOINED_NOTE = "（参加していないラウンド）"
+NOT_JOINED_SKIP_NOTE = "（参加していないラウンド → 自爆しません）"
+NO_AFK_LOOP_AFTER_DEATH = "死亡・リスポーンの後なので、AFK 解除ループは回しません"
+RESPAWN_ITEM_NOTICE = "リスポーンでアイテムが外れました → 全窓フリーズ（装備で解除）"
 
 # サーバーに確認できず、この窓を始めないときの画面のログ（理由ごとに 1 回）
 ACCESS_NOTICES = {
@@ -84,6 +92,9 @@ class LogMonitor:
             host_participants, host_tabs)
         self._tab_key = None        # 対応づけを計算したときの (版, 在室者)
         self._tab_index = _UNSET    # 対応づいたタブ（_UNSET はまだ計算していない）
+        # 判定の行に付ける「何を根拠にしたか」。(ラウンドの連番, ラウンド名, テラー番号, 文字)。
+        # _list_plan が判定を作った時点のものを持つ（待っている間に主催リストが差し替わっても行が判定と合う）
+        self._last_basis: tuple | None = None
         self.logger = logger
         self.window_idx = window_idx
         # インスタンスが変わってラウンド指定を解除したことをGUIへ伝える。
@@ -163,10 +174,18 @@ class LogMonitor:
     def host_tabs(self, value: dict):
         self.lists.tabs = value
 
+    @property
+    def host_self(self):
+        return self.lists.host_self
+
+    @host_self.setter
+    def host_self(self, value):
+        self.lists.host_self = value
+
     def _on_continue_freeze(self, started: bool):
         """この窓の続行フリーズを張った（続行ラウンドの始まり）・外した（終わり）。
         始まりは窓の位置を覚えるだけ（すぐ終わる）。終わりは窓を戻す（待つので別スレッド）。
-        「窓位置リセットはラウンド終了後」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
+        「フリーズと窓位置はラウンド終了まで」が ON の窓では、終わりでは戻さず RoundOver から戻す（依頼者 2026-11-18）"""
         if started:
             self.st.continue_freeze_round = self.st.round_seq
             self._action.remember_continue_window()
@@ -189,9 +208,11 @@ class LogMonitor:
         （all_continue_round。ラウンド指定・グループ判定・Run 全続行の 4 経路すべて）。
         DTM/Waldo 続行は対象外（ほかの窓を止めない続行で、よく起きるため）。
         完全放置モードの窓では止めない（人が見ていない前提なので、そこで進まなくなる）。
+        ツールが Begin を押さない窓（自動Begin OFF・private 相当でない窓。焼き芋・干し芋・
+        public など）では印を立てない（依頼者 2026-11-19。押さないのに案内のログだけ出ていた）。
         RoundOver の頭で 1 回だけ見る（全続行の印はそのすぐ下で消えるため）"""
         st = self.st
-        if not self.cfg.auto_begin or self._hands_free():
+        if not self._auto_begin_active() or self._hands_free():
             return False
         if not SharedState.get_no_begin_after_continue():
             return False
@@ -396,12 +417,19 @@ class LogMonitor:
 
         呼び出し側は自分がフリーズを張る**前**に呼ぶこと。後だと自分の分を
         数えてしまい、常に前面化しなくなる。
+
+        死んだ後（ラウンド中のリスポーンを含む）に続行と分かったときは前面に出さない。
+        霧などで判明が死亡より後になると、ほかの窓で操作している入力を奪っていた
+        （依頼者 2026-11-19）。
         """
         if self._hands_free():
             # 人が見ていないので意味が無く、ほかの窓のカーソル方式 Begin の
             # 邪魔になる。アナウンスと録画と同じ扱い
             return
         if label == "続行ラウンド":
+            if self.st.died_this_round:
+                self._log("死亡の後に続行と分かったので、この窓を前面に出しません")
+                return
             # 続行ラウンドは何よりも優先して前面化する（依頼者）。止めるのは、ほかの窓が続行ラウンドを
             # やっているときだけ（装備待ち・速度検知・突入のフリーズでは止めない。ほかの窓のアイテム取得は
             # 続行のフリーズを見て手を引く）。数える前に呼ぶので自分の分は入っていない
@@ -428,9 +456,12 @@ class LogMonitor:
                 self._log(f"⚠ 前面に出せませんでした（{label}は継続）")
 
     def _release_continue_freeze_after_delay(self, round_seq: int, reborn_seq=None, label: str = "死亡"):
-        """死亡から一定時間後に続行ラウンドのフリーズを解除する。
+        """死亡またはラウンド終了から一定時間後に、続行ラウンドのフリーズを解除する。
 
-        label は何から数えたか（"死亡" か "リスポーン"。ログの文言だけに使う）。
+        label は何から数えたか（"死亡"・"リスポーン"・"ラウンド終了"。ログの文言だけに使う）。
+        設定「フリーズと窓位置はラウンド終了まで」が ON の窓（続行フリーズを張っている窓）は、
+        死亡からは予約せず、RoundOver から数える（依頼者 2026-11-19）。OFF の窓と、
+        フリーズを張らない続行（DTM/Waldo）は、今までどおり死亡から数える。
 
         猶予を置くのは、解除前に利用者が操作する余地を残すため。
         テラーが分からないまま終わった霧ラウンドは猶予を短くする
@@ -512,12 +543,16 @@ class LogMonitor:
             return "Sabotage murder" if st.sabotage_murder_this_round else "Sabotage star"
         return st.round_type
 
+    def _not_joined(self) -> bool:
+        """今のラウンドは参加していないラウンド（直前に「Not opted in」を読んだ）か。round_seq が進めば外れる"""
+        return self.st.not_joined_seq == self.st.round_seq
+
     def _enter_round_freeze(self, name: str):
         """選んだラウンドに入ったら全窓を止める（張っていなければ）。テラー判明は待たない。自窓の自爆は止めない。
         放置モード中は Fog に揃えて張らない"""
         st = self.st
         if (name not in self.cfg.freeze_rounds or self._hands_free()
-                or st.round_freeze_held):
+                or st.round_freeze_held or self._not_joined()):     # 参加していないラウンドは止めない（依頼者 2026-11-19）
             return
         self._focus_for_freeze("ラウンド突入フリーズ")   # 数える前に見る
         SharedState.round_freeze_start(st)
@@ -700,12 +735,14 @@ class LogMonitor:
                          LogParser.VERIFIED_MARK, LogParser.ROUND_OVER_MARK,
                          LogParser.ITEM_EQUIP_MARK, LogParser.PAGE_COLLECTED_MARK,
                          LogParser.RESPAWN_MARK, LogParser.YOU_DIED_MARK,
-                         LogParser.REBORN_MARK, LogParser.SUS_PLAYER_MARK)
+                         LogParser.REBORN_MARK, LogParser.SUS_PLAYER_MARK,
+                         LogParser.NOT_OPTED_IN_MARK)       # 参加していないラウンドの印（OPTED_IN_MARK は要らない）
     # 所持アイテムを取り戻すために、入室後の分を古い順に流す行
     _HELD_ITEM_REPLAY_KINDS = (LogParser.EVENT_ITEM_EQUIP, LogParser.EVENT_ROUND_START,
                                LogParser.EVENT_ROUND_OVER, LogParser.EVENT_PAGE_COLLECTED,
                                LogParser.EVENT_RESPAWN, LogParser.EVENT_YOU_DIED,
-                               LogParser.EVENT_REBORN, LogParser.EVENT_SUS_PLAYER)
+                               LogParser.EVENT_REBORN, LogParser.EVENT_SUS_PLAYER,
+                               LogParser.EVENT_NOT_OPTED_IN)
     # 定期の Verified の位相を取り戻すために集める行
     _VERIFIED_LEARN_KINDS = (LogParser.EVENT_VERIFIED, LogParser.EVENT_ROUND_START,
                              LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END)
@@ -736,6 +773,13 @@ class LogMonitor:
             # その行より新しい入退室の数（人数を開始の時点に戻すため。DB に送る人数と時刻だけに使う）
             round_checked = False
             running_round = None
+            # 参加していないラウンド（依頼者 2026-11-19）。pending_not_opted: ラウンド開始・RoundOver より新しい
+            # 「Not opted in」がある（次の開始が参加していないラウンド）。running_not_joined: 進行中のラウンドの
+            # 開始の行のすぐ前（境界の行より新しい側）に「Not opted in」がある
+            pending_not_opted = False
+            pending_done = False
+            running_not_joined = False
+            running_done = True
             # 定期の Verified の位相用（新しい順に溜まる。入室をまたいでよい）
             verified_events = []
             newest = None
@@ -768,12 +812,27 @@ class LogMonitor:
                     item_events.append(event)
                 if not found_instance and event.kind == LogParser.EVENT_ROUND_START:
                     round_types.append(event.round_type)    # 1ラウンド1回
+                if not found_instance:
+                    if not pending_done:
+                        if event.kind == LogParser.EVENT_NOT_OPTED_IN:
+                            pending_not_opted = pending_done = True
+                        elif event.kind in (LogParser.EVENT_ROUND_START, LogParser.EVENT_ROUND_OVER):
+                            pending_done = True
+                    if not running_done:
+                        # 進行中のラウンドの開始の行より古い側（今の行が、その開始の行の 1 つ前の行から遡る）
+                        if event.kind == LogParser.EVENT_NOT_OPTED_IN:
+                            running_not_joined = running_done = True
+                        elif event.kind in (LogParser.EVENT_ROUND_OVER, LogParser.EVENT_VERIFIED_END,
+                                            LogParser.EVENT_VERIFIED, LogParser.EVENT_ROUND_START,
+                                            LogParser.EVENT_JOINING):
+                            running_done = True
                 if not found_instance and not round_checked and event.kind in (
                         LogParser.EVENT_ROUND_START, LogParser.EVENT_ROUND_OVER):
                     # 新しい順の最初の 1 つ。開始なら進行中、終わりならラウンドの間
                     round_checked = True
                     if event.kind == LogParser.EVENT_ROUND_START:
                         running_round = (at, len(player_events), event.map_id)
+                        running_done = False
 
                 if event.kind == LogParser.EVENT_USER_AUTH and not auth_scanned:
                     # 遡りで最初に見えたログインの行だけを使う（それが最新。先頭から読んだものと違えば入り直している）。
@@ -813,6 +872,7 @@ class LogMonitor:
                 self._log(f"所持アイテム（入室後のログから）: {self._held_item_text()}")
                 self._notify_held_item_changed()
                 self._restore_running_round(running_round, list(reversed(player_events)))
+                self._restore_not_joined(running_not_joined, pending_not_opted)
         except Exception as e:
             DebugLog.exception("LogMonitor._detect_instance_from_log")
             self._log(f"検出エラー: {e}")
@@ -959,6 +1019,18 @@ class LogMonitor:
         st.round_players = max(1, len(players | ({st.local_user_id} if st.local_user_id else set())))
         st.map_id = map_id
 
+    def _restore_not_joined(self, running_not_joined: bool, pending_not_opted: bool):
+        """監視開始の遡り: 参加していないラウンドの印を戻す（依頼者 2026-11-19）。pending_not_opted は「Not opted in」を
+        読んだあと、まだ開始の行が来ていない（次の開始が参加していないラウンド）。running_not_joined は進行中の
+        ラウンドが参加していないラウンド（死亡と同じ扱い）。in_round は今までどおり戻さない"""
+        st = self.st
+        if pending_not_opted:
+            st.not_opted_in_pending = True
+        if running_not_joined:
+            st.not_joined_seq = st.round_seq
+            st.died_this_round = True
+            self._log(NOT_JOINED_LINE + "（監視開始の時点で進んでいたラウンド）")
+
     def _restore_three_wins(self, lived: int, round_types: list):
         """監視開始の遡り: 今のインスタンスに入ってからの生存と特殊ラウンドで、
         3クラの勝利数を決める（再起動しても取り戻す。入り直すと0に戻るので
@@ -1061,8 +1133,16 @@ class LogMonitor:
             names.add(st.local_player_name)
         return names
 
+    def _judges_by_names(self) -> bool:
+        """この窓は、在室者の名前で続行リストを組む種類か（焼き芋・干し芋・private 相当）。
+        ToN ListTool のタブは番号に中身が固定されず、別のインスタンスのタブへ対応づけてしまうことがあった
+        （2/19 人の重なりのタブで判定して、続行すべきテラーで自爆した）。この種類の窓はタブを使わず、
+        在室者の名前で全員ぶんの希望（待機を含む）から引く（依頼者 2026-11-19）"""
+        return self.st.instance_type in (*GroupRound.GROUP_INSTANCES, *config.JUDGE_LIKE_INSTANCES)
+
     def _window_tab(self) -> dict | None:
         """この窓に対応するタブのデータ。対応づけできなければ None。
+        焼き芋・干し芋・private 相当の窓（_judges_by_names）は、これを呼ばない（名前で引く）。
 
         ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
         タブごとに続行リストの中身が違う。対応はどこにも記録されていないので、
@@ -1100,12 +1180,30 @@ class LogMonitor:
             return None
         return tabs.get(self._tab_index)
 
-    def _effective_wishes(self) -> dict | None:
+    def _wishes_by_names(self, host_wishes: dict, include_host: bool) -> tuple:
+        """名前で組む窓の、参加者別の希望。(希望, 不在のまま足した主催者の名前 or None)。
+
+        在室者（自分を含む）を表示名で全員ぶんの希望（待機を含む）から引く。主催者自身のリストは、
+        主催者がその場にいなくても、自分以外の人がいるときは足す（ソロの窓は足さない）。
+        いる主催者は在室者として入っているので二重にならない。呼び出しごとに今の dict から作る
+        （主催リストは 3 秒ごとに差し替わる）"""
+        wishes = {name: host_wishes[name] for name in self._present_names() if name in host_wishes}
+        added = None
+        host = self.host_self
+        if include_host and host and host in host_wishes and self._other_players() and host not in wishes:
+            wishes.setdefault(host, host_wishes[host])
+            added = host
+        return wishes, added
+
+    def _effective_wishes(self, include_host: bool = True) -> dict | None:
         """この窓の判定に使う、参加者別の希望。絞り込めなければ None。
 
         周回の参加者の希望は全窓で共有しているので、そのまま使うと焼き芋の窓の
         参加者の希望でソロの窓まで判定してしまう。この窓のインスタンスにいる人
         （自分のアカウントを含む）の希望だけにする。
+
+        焼き芋・干し芋・private 相当の窓は、タブを使わず在室者の名前で引く（_judges_by_names）。
+        include_host=False なら、不在の主催者のリストを足さない（_wishes_missing 用）。
 
         None（＝従来どおり共有の続行リスト）になるのは、tnl のとき・参加者別の
         希望が無いとき・誰がいるか分からないとき（起動時に復元できなかった）。
@@ -1115,6 +1213,8 @@ class LogMonitor:
             return None
         if not self.st.players_known:
             return None
+        if self._judges_by_names():
+            return self._wishes_by_names(host_wishes, include_host)[0]
         present = self._present_names()
         tab = self._window_tab()
         # 対応づいた窓は、そのタブの人の希望だけを見る（別のタブは別の窓の周回）
@@ -1139,7 +1239,8 @@ class LogMonitor:
 
     def _keep_on_base(self) -> dict:
         """この窓の続行リスト（続行表を重ねる前）"""
-        tab = self._window_tab()
+        # 名前で組む窓（_judges_by_names）はタブを見ない
+        tab = None if self._judges_by_names() else self._window_tab()
         if tab is not None:
             # そのタブの参加者の希望だけ（主催者自身のぶんは読み込み側で足してある）
             return tab["keepOn"]
@@ -1341,33 +1442,39 @@ class LogMonitor:
         round_type = ""
         in_round = False
         pending_murder = False
+        not_opted = False       # 「Not opted in」を読んだあと、次の開始の行まで（依頼者 2026-11-19）
+        joined = True           # 進行中のラウンドに参加しているか。参加していないラウンドは失わない
         for event in events:
             kind = event.kind
             if kind == LogParser.EVENT_ITEM_EQUIP:
                 held = event.item_id
+            elif kind == LogParser.EVENT_NOT_OPTED_IN:
+                not_opted = True
             elif kind == LogParser.EVENT_ROUND_START:
                 in_round = True
                 round_type = event.round_type
-                murder = round_type == "Sabotage" and pending_murder
+                joined = not not_opted
+                not_opted = False
+                murder = round_type == "Sabotage" and pending_murder and joined
                 pending_murder = False
-                if self._held_item_round_start_loss(round_type, murder):
+                if joined and self._held_item_round_start_loss(round_type, murder):
                     held = 0
             elif kind == LogParser.EVENT_ROUND_OVER:
                 in_round = False
             elif kind == LogParser.EVENT_SUS_PLAYER:
                 if self._same_player_name(event.player_name, self.st.local_player_name):
                     if in_round and round_type == "Sabotage":
-                        held = 0
+                        if joined:
+                            held = 0
                     else:
                         pending_murder = True
             elif kind == LogParser.EVENT_YOU_DIED:
-                if round_type == "Run":
+                if round_type == "Run" and joined:
                     held = 0
             elif kind == LogParser.EVENT_RESPAWN:
-                if in_round:
-                    held = 0
+                held = 0        # ラウンドの中でも外でも、リスポーンでアイテムは外れる
             elif kind == LogParser.EVENT_REBORN:
-                if in_round:
+                if in_round and joined:
                     held = 0
             elif kind == LogParser.EVENT_PAGE_COLLECTED:
                 if self._page_loses_held_item(round_type, held):
@@ -1646,6 +1753,7 @@ class LogMonitor:
 
     def _group_rule_decision(self, killers_round_type: str, ids=None) -> str:
         st = self.st
+        group_wishes = self._group_wishes()         # 1 回だけ読む（途中で主催リストが差し替わっても揃う）
         return GroupRound.decide(
             st.instance_type,
             st.round_type,
@@ -1660,8 +1768,8 @@ class LogMonitor:
             continue_moons={name for name in self.cfg.continue_rounds
                             if name in GroupRound.MOONS},
             sus_players=st.sus_players,
-            host_wishes=self._group_wishes(),
-            follow_host=bool(self._group_wishes()),
+            host_wishes=group_wishes,
+            follow_host=bool(group_wishes),
             bloodthirsty_listed=self._bloodthirsty_listed(),
         )
 
@@ -1756,17 +1864,22 @@ class LogMonitor:
         リストが空（全部 OFF）の人がいれば「続行したいものが無い」と分かって
         いるので止めない（全部自爆する）。誰もリストを持っていないときは、
         続行が無いのか分からないので止める。
+        判定には、いない主催者のリストも足す（_effective_wishes）が、ここでは数えない。
+        在室者の誰もリストを持っていない窓を、主催者のリストだけで動かさない（止める安全は従来どおり）。
         """
         if self.st.instance_type not in (*config.JUDGE_LIKE_INSTANCES,
                                          *GroupRound.GROUP_INSTANCES):
             return False
         if not self.cfg.do_skip:
             return False
-        wishes = self._effective_wishes()
+        wishes = self._effective_wishes(include_host=False)
         return wishes is not None and not wishes
 
     def _group_wishes(self) -> dict:
         """Sabotage の参加者別判定に使う希望。
+
+        在室者の希望と、自分以外の人がいるときは主催者のリスト（いなくても）。タブは使わない
+        （_effective_wishes）。
 
         誰がいるか分からないときは、参加者（＋自分）の希望だけにする（従来どおり）。
         host_wishes には待機（その場にいない人）も入っているので、そのまま使うと
@@ -1903,6 +2016,8 @@ class LogMonitor:
     # ── ログ行処理 ────────────────────────────
     # イベントの種類 → 受けるメソッドの名前。名前で引くので、テストが差し替えたものも効く
     _HANDLERS = {
+        LogParser.EVENT_NOT_OPTED_IN: "_on_not_opted_in",
+        LogParser.EVENT_OPTED_IN: "_on_opted_in",
         LogParser.EVENT_REPLACEMENT: "_on_replacement_signal",
         LogParser.EVENT_ENRAGE: "_on_enrage_event",
         LogParser.EVENT_STUNNED: "_on_stunned_event",
@@ -2040,8 +2155,9 @@ class LogMonitor:
             st.sus_players.append(event.player_name)
         if self._same_player_name(event.player_name, st.local_player_name):
             if st.in_round and st.round_type == "Sabotage":
-                self._mark_sabotage_murder()
-                self._enter_round_freeze("Sabotage murder")     # 開始の後に分かった（手元のログには無い。EZ）
+                if not self._not_joined():      # 参加していないラウンドでは失わず、止めない（依頼者 2026-11-19）
+                    self._mark_sabotage_murder()
+                    self._enter_round_freeze("Sabotage murder")     # 開始の後に分かった（手元のログには無い。EZ）
             else:
                 st.pending_sabotage_murder = True
             self._log(f"Sus player一致: {event.player_name}")
@@ -2093,20 +2209,23 @@ class LogMonitor:
         st.begin_accepted_at = time.time()      # 壁時計（log_now は読み取りの遅れが乗る。FR）
         self._debug_verified("受理（予定の外）" if off_schedule else "受理")
         self._log("✅ Connecting")
+        # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
+        if st.waiting_for_equip and st.item_id:
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
         # 速度検知そのものは Verified Round End 側で始めている（Verified は
         # 自分が Begin を押したときしか出ないので、他人がインマスだと来ない）。
         # 横移動だけはここ。自分の Begin が通った後なので、ボタンから離れても
-        # Begin を押し損ねない。インマスでなければ来ないので判定も要らない
+        # Begin を押し損ねない。インマスでなければ来ないので判定も要らない。
+        # 装備待ちの印は上で先に落とす。アイテム取得→Begin モードでは利用者が装備して
+        # Begin を押すので、後に落とすと横移動が「アイテムロスト後」と見なされて見送られる
+        # （依頼者 2026-11-19）。未装備のときは印が立ったままなので、今までどおり動かない
         if (st.instance_type in config.PRIVATE_LIKE_INSTANCES
                 and SharedState.get_speed_detect()
                 and not self._hands_free()
                 and not st.speed_strafe_done):
             st.speed_strafe_done = True
             self._start_daemon(self._action.do_speed_strafe)
-        # アイテムロスト中のBegin確認：装備済みなら遅延フリーズ解除
-        if st.waiting_for_equip and st.item_id:
-            st.waiting_for_equip = False
-            self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
 
     def _on_round_start(self, event):
         """ラウンド開始"""
@@ -2127,7 +2246,13 @@ class LogMonitor:
         st.round_type                  = event.round_type
         # FW: 全続行で Run を選んだ窓は、Run でリスポーンしない（ラウンド開始の時点のチェックで決める）
         run_continue = st.round_type == "Run" and self._is_all_continue_round()
-        if st.round_type == "Run" and SharedState.get_run_respawn() and not run_continue:
+        # 参加していないラウンド（直前に「Not opted in」を読んだ）。印はこの開始で使って下ろす（依頼者 2026-11-19）
+        not_joined = st.not_opted_in_pending
+        st.not_opted_in_pending = False
+        if not_joined:
+            st.not_joined_seq = st.round_seq
+        if (st.round_type == "Run" and SharedState.get_run_respawn() and not run_continue
+                and not not_joined):
             # リスポーン → 後ろへ → 正面を向く。private・OSC の窓かは中で見る
             self._start_daemon(self._action.do_run_respawn, st.round_seq)
         # moonが2回目以降かは on_round() でフラグが立つ前に見ておく
@@ -2174,11 +2299,11 @@ class LogMonitor:
         st.item_lost_announced         = False
         st.item_lost_this_round        = False
         st.randomizer_item_changed     = False
-        st.died_this_round             = False
+        st.died_this_round             = not_joined
         st.lived_this_round            = False
         st.item_equipped_after_death   = False
         st.sabotage_murder_this_round  = (
-            st.round_type == "Sabotage" and st.pending_sabotage_murder
+            st.round_type == "Sabotage" and st.pending_sabotage_murder and not not_joined
         )
         st.pending_sabotage_murder     = False
         for flag in TerrorReplacement.flags():
@@ -2197,14 +2322,23 @@ class LogMonitor:
             SharedState.equip_freeze_end(st)
             self._log("一時的にアイテムロストフリーズを解除")
 
-        if st.sabotage_murder_this_round:
-            self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
-        elif self._round_start_loses_item():
-            self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
-        held_reason = self._held_item_round_start_loss(st.round_type,
-                                                       st.sabotage_murder_this_round)
-        if held_reason:
-            self._lose_held_item(held_reason)
+        # 参加していないラウンドはアイテムを失わない（所持の追跡も変えない）
+        if not not_joined:
+            if st.sabotage_murder_this_round:
+                self._mark_item_lost("Sabotageマーダー開始: アイテムロスト")
+            elif self._round_start_loses_item():
+                self._mark_item_lost(f"{st.round_type}: ラウンド開始時にアイテムロスト")
+            held_reason = self._held_item_round_start_loss(st.round_type,
+                                                           st.sabotage_murder_this_round)
+            if held_reason:
+                self._lose_held_item(held_reason)
+
+        if not_joined:
+            # 自爆・AFK 回避・突入フリーズ・Run の全続行・ラウンド開始のアイテムロストをしない
+            self._log(f"開始: {st.round_type}")
+            self._log(NOT_JOINED_LINE)
+            self._debug("[状態] Not opted in の次のラウンド → 自爆・AFK 回避・突入フリーズ・ラウンド開始のアイテムロストをしない")
+            return
 
         # 指定ラウンドに突入したら全窓を止める
         self._enter_round_freeze(self._round_freeze_name())
@@ -2283,10 +2417,14 @@ class LogMonitor:
                 SharedState.get_suicide_hold_sec() + config.SUICIDE_CONFIRM_SEC):
             self._log("✅ 自爆成功")
             st._skip_time = 0.0
-            if st.skip_maxwell_seq == st.round_seq:
-                st.skip_maxwell_seq = -1
-                self._mark_item_lost("Maxwell を持って自爆: アイテムロスト")
-                self._lose_held_item(HELD_LOST_SUICIDE)
+        # Maxwell は、手に持ったまま死ぬと無くなる（復活しても消費される）。自爆かどうかは見ない。
+        # 自爆の前や最中に手放せば無くならないので、死亡の行を読んだ時点で手に持っているかで決める
+        # （依頼者 2026-11-19。追跡がまだ無い間は何もしない）
+        tracker = st.item_use
+        if (st.in_round and tracker is not None
+                and ItemUse.norm(tracker.held_name()) == config.MAXWELL_LOG_NAME):
+            self._mark_item_lost("Maxwell を持って死亡: アイテムロスト")
+            self._lose_held_item(HELD_LOST_DEATH)
         self._mark_out_of_round("死亡")
         if st.round_type == "Run":
             self._mark_item_lost("Run死亡: アイテムロスト")
@@ -2307,7 +2445,11 @@ class LogMonitor:
         # 猶予中に利用者が視点を合わせられるようにするため。
         # 死亡の予約の引数は今までどおり（番号・復活番号）。ラベルは死亡でないときだけ足す
         said = () if label == "死亡" else (label,)
-        if st.is_continue_round:
+        # 続行フリーズを張っている窓は、設定 ON なら RoundOver まで保つ（依頼者 2026-11-19）。
+        # ほかの窓を止めない続行（DTM/Waldo）は、今までどおり死亡から数えて落とす
+        hold_to_round_end = (st.continue_freeze_held
+                             and SharedState.get_continue_restore_at_round_end())
+        if st.is_continue_round and not hold_to_round_end:
             self._start_daemon(self._release_continue_freeze_after_delay,
                                st.round_seq, st.reborn_seq, *said)
         if st.round_freeze_held:
@@ -2339,6 +2481,9 @@ class LogMonitor:
         # 自分の窓のスレッドを先に止める。番号を見ている遅れた予約・AFK 回避・連打・押し直し・取得などがこれで止まる
         st.in_round = False
         st.round_seq += 1
+        # 参加していないラウンドの印・リスポーンのアイテムの案内待ちも外す（依頼者 2026-11-19）
+        st.not_opted_in_pending = False
+        st.respawn_item_pending = False
         # 統計: 送っていない分は送らない（遅れて送る予約・RoundOver・Verified Round End も、これで送らない）
         st.statistics_sent = True
         st.terror_ids = []
@@ -2419,7 +2564,7 @@ class LogMonitor:
         死亡の行（You died.）と同じ秒に来る。ラウンドの外なら何もしない。
         """
         st = self.st
-        if not st.in_round:
+        if not st.in_round or self._not_joined():       # 参加していないラウンドは復活しない（依頼者 2026-11-19）
             return
         st.reborn_seq += 1      # 死亡で予約した解除（続行・ラウンド突入）がこれを見て、しないと決める
         st.died_this_round = False
@@ -2434,11 +2579,46 @@ class LogMonitor:
         自爆成功の判定・Run のロストの二重書き・ラウンド終わりのアイテムを落とす処理は、死亡だけがする"""
         st = self.st
         st.respawn_seen_seq += 1        # Run のリスポーン（ActionExecutor.do_run_respawn）が待つ
-        if st.in_round:
+        had_item = bool(st.item_id or st.held_item_id)
+        if st.in_round and not self._not_joined():
             self._mark_item_lost("リスポーン: アイテムロスト")
             self._lose_held_item(HELD_LOST_RESPAWN)
             self._debug("リスポーン → 死亡と同じ扱い")
             self._mark_out_of_round("リスポーン")
+        elif had_item:
+            # ロビー・参加していないラウンドのリスポーン（依頼者 2026-11-19）。ツールが押した分（店の後・Begin のやり直し）も同じ。
+            # アイテムが外れるので、ロストにして、次の「opted in」の行で案内する（ラウンドの外で来たときだけ。
+            # ラウンドが始まってから来たら RoundOver の今の経路で案内する）
+            self._mark_item_lost("リスポーン: アイテムロスト")
+            self._lose_held_item(HELD_LOST_RESPAWN)
+            if not self._hands_free():
+                st.respawn_item_pending = True
+                self._debug("[状態] リスポーンでアイテムが外れました → opted in の行で案内します")
+
+    def _on_not_opted_in(self, event):
+        """「Not opted in. Not joining this round.」: 次のラウンドに参加しない（開始の行の直前に出る）。
+        開始の行（_on_round_start）で使って下ろす（依頼者 2026-11-19）"""
+        self.st.not_opted_in_pending = True
+        self._debug("[状態] Not opted in → 次のラウンドには参加しません")
+
+    def _on_opted_in(self, event):
+        """「opted in」（リスポーンの約 3 秒後。参加に戻る）。リスポーンでアイテムが外れていて、ラウンドの外で
+        来たら、今のアイテムロストの案内（前面化・音声・全窓フリーズ。解除は装備）をここで出す。
+        ラウンドが始まってから来たら何もしない（RoundOver の今の経路で案内する）。参加していないラウンドは
+        取り消さない（依頼者 2026-11-19）"""
+        st = self.st
+        if not st.respawn_item_pending or st.in_round:
+            return
+        st.respawn_item_pending = False
+        if st.item_id or self._hands_free() or self._action.item_fetch_target():
+            return      # 先に装備した・放置モード・自動取得の窓（Begin の後に取りに行く）は案内しない
+        if st.waiting_for_equip and st.equip_freeze_held:
+            return      # もう案内している（RoundOver・Verified Round End の経路が先に来た）
+        st.respawn_notice_seq = st.round_seq
+        st.item_lost_announced = False      # 同じラウンドの番号で前に鳴っていても鳴らす
+        st.waiting_for_equip = True
+        self._log(RESPAWN_ITEM_NOTICE)
+        self._action._attend_to_item_loss()
 
     def _on_page_collected(self, event):
         """8 Pages のページ取得"""
@@ -2449,6 +2629,10 @@ class LogMonitor:
     def _on_round_over(self, event):
         """RoundOver"""
         st = self.st
+        if st.not_opted_in_pending:
+            # 開始の行が来ないまま終わった（依頼者 2026-11-19）
+            st.not_opted_in_pending = False
+            self._debug("[状態] Not opted in の後にラウンド開始が来ませんでした → 印を下ろします")
         # 続行の後に Begin を押さないかは、印を消す前に決める（全続行の印はこの 4 行下で消える）
         if self._skip_begin_after_continue():
             st.begin_skipped_seq = st.round_seq
@@ -2473,15 +2657,15 @@ class LogMonitor:
         # Begin待ちの起点。実処理は Verified Round End 側で走るが、
         # 待ち時間はこの時刻から数える（RoundOver→Round End は実測約13秒）。
         st.round_over_time = time.time()
-        # 続行フリーズの解除を予約する。死亡側だけだと、生き残ったときに
-        # 予約が入らず Verified Round End の保険まで残り、他窓が
-        # RoundOver から13〜14秒も余計に止まっていた。RoundOver は
-        # 死亡・生存のどちらでも来るので、ここなら取りこぼさない。
-        # 死亡は RoundOver より先に来るので、死亡から数える動きは保たれる
-        # （解除は冪等なので二重予約は無害）
+        # 続行フリーズの解除を予約する。
+        # - RoundOver は死亡・生存のどちらでも来るので、ここで予約すれば取りこぼさない
+        #   （生き残ったときに予約が無いと、Verified Round End の保険まで他窓が止まる）
+        # - 設定「フリーズと窓位置はラウンド終了まで」が ON の窓では、死亡側は予約しないので、ここが本番になる
+        #   （依頼者 2026-11-19）
+        # - OFF の窓では死亡側が先に解除しているので、ここでは continue_freeze_held が偽になっていて何もしない
         if st.continue_freeze_held:
             self._start_daemon(self._release_continue_freeze_after_delay,
-                               st.round_seq)
+                               st.round_seq, None, "ラウンド終了")
         if self._waiting_for_terror_replacement():
             self._send_round_statistics_once()
         if RoundDecision.selectable_round_name(st.round_type) == "Fog":
@@ -2498,12 +2682,19 @@ class LogMonitor:
                 st.waiting_for_equip = True
             elif not st.item_id:
                 st.waiting_for_equip = True
+        # リスポーンでアイテムが外れたことを opted in の行で案内済みなら、ここでは案内しない（二重にしない。
+        # 装備待ちは続ける。依頼者 2026-11-19）
+        notice_given = st.respawn_notice_seq == st.round_seq
         if (st.waiting_for_equip and announce_on_round_over and not self._hands_free()
                 and not self._item_begin_mode_active()):
             # ツールが Begin を押さない窓（グループ・public・自動Begin OFF・続行の後）でも装備待ちで
             # 全窓を止める（前面化・音声1回）。解除は装備（猶予の後）かラウンド開始の早い方
-            self._action._attend_to_item_loss()
-            self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
+            st.respawn_item_pending = False
+            if notice_given:
+                self._log("RoundOver（リスポーンで外れたアイテムは案内済み・装備待ち）")
+            else:
+                self._action._attend_to_item_loss()
+                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
         if (self._item_begin_mode_active()
                 and self._round_item_warning() and not self._hands_free()):
             # アイテム取得→Begin モード。RoundOver の時点でもう分かっている
@@ -2511,9 +2702,13 @@ class LogMonitor:
             if self._round_lost_item():
                 st.item_id = 0
             st.waiting_for_equip = True
-            # このモードでは自動取得を動かさない（item_fetch_target が None）
-            self._action._attend_to_item_loss()
-            self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
+            st.respawn_item_pending = False
+            if notice_given:
+                self._log("RoundOver（リスポーンで外れたアイテムは案内済み・装備待ち）")
+            else:
+                # このモードでは自動取得を動かさない（item_fetch_target が None）
+                self._action._attend_to_item_loss()
+                self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ開始】")
         # アイテムを落とすのは死んだ・生き残ったとき（EU。_drop_when_round_ends）。RoundOver では落とさない
         # Begin移動はここを起点に待つ。クリックとアイテムロスト通知は
         # Verified Round End を待ってから行う（RoundOver時点だと
@@ -2541,8 +2736,16 @@ class LogMonitor:
             self._log("続行ラウンド終了 → ほかの窓のフリーズ解除（保険）")
         round_lost_item = self._round_lost_item()
         round_item_warning = self._round_item_warning()
+        # リスポーンでアイテムが外れたことを opted in の行で案内済みなら、ここでは案内しない（二重にしない。
+        # 装備待ちは続ける。依頼者 2026-11-19）
+        notice_given = st.respawn_notice_seq == st.round_seq
         if not self._hands_free():
-            if round_item_warning:
+            if notice_given and (round_item_warning or not st.item_id):
+                if round_lost_item:
+                    st.item_id = 0
+                st.waiting_for_equip = True
+                self._log("ラウンド終了（リスポーンで外れたアイテムは案内済み・装備待ち）")
+            elif round_item_warning:
                 if round_lost_item:
                     st.item_id = 0
                 if not self.cfg.auto_begin and not st.waiting_for_equip:
@@ -2574,6 +2777,11 @@ class LogMonitor:
                     st.waiting_for_equip = True
                 # auto_begin時の通知は ActionExecutor がBeginクリック直前に行う
             self._log("ラウンド終了")
+        if st.waiting_for_equip:
+            # ここまでの経路で案内する（案内は Begin が通った後など）ので、opted in の行では案内しない。
+            # 案内を RoundOver に回した窓（自動Begin OFF で装備待ちが立っていない）は、まだ案内していないので
+            # 立てたままにして、ロビーで opted in が来たら案内する（依頼者 2026-11-19）
+            st.respawn_item_pending = False
         if self.cfg.announce_intermission and not self._hands_free():
             PlaySound.play_sound(self.cfg.voice_intermission, kind="intermission")
         st.round_end_seen = True   # Beginのクリック待ちを解除する合図
@@ -2596,6 +2804,9 @@ class LogMonitor:
                 # 8 Pages はテラーが出るまで自爆できない（debug.log: 開始時の3回は
                 # 1度も死なず、テラーが出た後はほぼ成功）。出た後の判定で自爆する
                 self._log(f"開始: {st.round_type} 【放置モード→テラーが出てから自爆】")
+            elif self._not_joined():
+                # 参加していないラウンドは自爆しない（依頼者 2026-11-19）
+                self._log(f"開始: {st.round_type} 【放置モード→即自爆】{NOT_JOINED_SKIP_NOTE}")
             else:
                 self._log(f"開始: {st.round_type} 【放置モード→即自爆】")
                 self._start_daemon(self._action.do_skip)
@@ -2617,6 +2828,12 @@ class LogMonitor:
         elif self._is_all_continue_round():
             text = f"ラウンド指定で続行: {st.round_type}"
         else:
+            return
+        if self._not_joined():
+            # 参加していないラウンド: 行だけ出し、後の判定で重ねて出さない。印・通知・続行の後始末はしない
+            # （依頼者 2026-11-19）
+            self._log(text + NOT_JOINED_NOTE)
+            st.all_continue_early_seq = st.round_seq
             return
         self._clear_stale_continue_round()
         self._log(text)
@@ -2721,6 +2938,8 @@ class LogMonitor:
         if event.item_id:
             st.last_lost_item_id = 0            # 装備した（利用者が別のアイテムを装備しても）→ もう取りに行かない
         st.item_id = event.item_id
+        if event.item_id:
+            st.respawn_item_pending = False     # 先に装備したら、opted in の行で案内しない（依頼者 2026-11-19）
         self._hold_item(event.item_id)
         if st.speed_freeze_kind == "8pages":
             # 8 Pages はスキャナーを取れたら再開してよい。ただし即座に
@@ -2745,6 +2964,11 @@ class LogMonitor:
         elif st.waiting_for_equip and st.begin_done:
             st.waiting_for_equip = False
             self._start_daemon(self._release_equip_wait_after_delay, st.round_seq)
+        elif st.respawn_notice_seq == st.round_seq and st.equip_freeze_held:
+            # リスポーンでアイテムが外れて、opted in の行で案内した窓: Begin が通ったかは見ずに、猶予の後に外す
+            # （依頼者 2026-11-19）
+            st.waiting_for_equip = False
+            self._start_daemon(self._release_equip_freeze_after_equip)
 
     def _on_lived(self, event):
         """生存"""
@@ -2792,6 +3016,8 @@ class LogMonitor:
         生き残った行が来ないラウンド（Run のリスポーンなど）は落とさない。条件（設定・OSC・private）は
         ActionExecutor.drop_at_round_end が見る。落としたことはロストと数えない（ログの出来事にならない）"""
         st = self.st
+        if self._not_joined():      # 参加していないラウンドは死んでも生き残ってもいない（依頼者 2026-11-19）
+            return
         if st.dropped_round_seq == st.round_seq or not SharedState.get_continue_drop_item():
             return
         st.dropped_round_seq = st.round_seq
@@ -2921,7 +3147,9 @@ class LogMonitor:
         # 置き換えで結論が変わるときだけ待つ（自爆指定の有無に関係なく）。
         # 放置モードは待たずに即自爆する。ただし Glorbo の合図を待つ間は自爆しない
         # （続行リストに Glorbo の続行があれば、放置モードでも続行するため）
-        if ((not self._hands_free() or self._glorbo_pending())
+        # 参加していないラウンドは待たない（待つと、死亡と同じ扱いで黙って抜けて、判定の行が出ない。依頼者 2026-11-19）
+        if (not self._not_joined()
+                and (not self._hands_free() or self._glorbo_pending())
                 and self._replacement_changes_decision(round_type)):
             wait = self._variant_wait_sec(round_type)
             self._log(f"Variant判定待ち({wait}秒): {st.round_type}")
@@ -3014,10 +3242,53 @@ class LogMonitor:
         return (st.instance_type in config.JUDGE_LIKE_INSTANCES
                 and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds)
 
+    def _basis_label(self, ids) -> str:
+        """判定の行に付ける、続行リストの根拠（名前で組む窓・主催リストのときだけ。ほかは空文字）。
+
+        `（在室19人・リストあり17人・続行希望: A、B）`。続行を希望した人（そのラウンドの枠に、判定したテラーを
+        入れている人）の名前だけを出す。希望した人がいなければ人数だけ。在室者のうち希望していない人の名前は
+        出さない（依頼者 2026-11-19）。いない主催者のリストを足したときは `・主催者を足す`、主催者が希望者なら
+        名前の後に `（主催者）`。誰がいるか分からず共有リストで判定したときは `（共有リスト）`"""
+        st = self.st
+        if not self._judges_by_names() or SharedState.get_list_source() != "host":
+            return ""
+        host_wishes = self.host_wishes
+        if not host_wishes or not st.players_known:
+            return "（共有リスト）"
+        present = self._present_names()
+        wishes, added = self._wishes_by_names(host_wishes, True)
+        if st.round_type == "Sabotage" and st.instance_type in config.JUDGE_LIKE_INSTANCES:
+            # _list_plan と同じ: Murder の枠にもあるテラーは続行しない
+            key = GroupRound.SABOTAGE_STAR_KEY
+            murder = set().union(*(wish.get(GroupRound.SABOTAGE_MURDER_KEY, ()) for wish in wishes.values()))
+            judged = set(ids) - murder
+        else:
+            key = ContinueList.round_keys(st.round_type)[0]
+            judged = set(ids)
+        host = self.host_self
+        wishers = sorted(name for name, wish in wishes.items() if judged & set(wish.get(key, ())))
+        parts = [f"在室{len(present)}人", f"リストあり{sum(1 for name in present if name in host_wishes)}人"]
+        if wishers:
+            parts.append("続行希望: " + "、".join(name + ("（主催者）" if name == host else "")
+                                                   for name in wishers))
+        if added:
+            parts.append("主催者を足す")
+        return "（" + "・".join(parts) + "）"
+
+    def _basis_for_log(self, ids) -> str:
+        """判定の行用。_list_plan が同じラウンド・同じテラーで作った根拠があればそれ、無ければ今の主催リストから"""
+        st = self.st
+        last = self._last_basis
+        if last is not None and last[:3] == (st.round_seq, st.round_type, tuple(ids)):
+            return last[3]
+        return self._basis_label(ids)
+
     def _list_plan(self, ids, bloodthirsty) -> tuple:
         """続行リストでの判定"""
         st = self.st
         keep_on = self._keep_on()
+        # 判定の行に出す根拠は、リストを組んだ今のうちに控える
+        self._last_basis = (st.round_seq, st.round_type, tuple(ids), self._basis_label(ids))
         round_type = st.round_type
         if round_type == "Sabotage" and st.instance_type in config.JUDGE_LIKE_INSTANCES:
             # private 系の Sabotage は 1 つのラウンド。リストには「Sabotage」の枠が無く、Sabotage star と
@@ -3122,9 +3393,53 @@ class LogMonitor:
         st = self.st
         plan = self._plan(round_type, st.terror_ids,
                           st.bloodthirsty_creature_variant)
+        if self._not_joined():
+            # 参加していないラウンド: 判定の行だけ出す。自爆・続行の印・フリーズ・音・録画・通知・ループ・Utils 待ちは
+            # しない（_run_plan を呼ぶのは _decide と _wait_utils だけで、_wait_utils は _follow_utils からしか立たない。
+            # 依頼者 2026-11-19）
+            self._log_not_joined_decision(round_type, plan)
+            return
         if plan[0] != "restricted" and self._follow_utils(round_type, plan):
             return
         self._run_plan(round_type, plan)
+
+    def _log_not_joined_decision(self, round_type: str, plan: tuple):
+        """参加していないラウンドの判定の行（各経路の今の 1 行目に注記を付けるだけ。印・フリーズ・音・録画・通知・
+        自爆・ループは触らない。依頼者 2026-11-19）。霧のテラー不明の時点で出した行は二度出さない"""
+        st = self.st
+        kind = plan[0]
+        early_done = st.all_continue_early_seq == st.round_seq
+        if kind == "restricted":
+            self._log(f"インスタンス制限: 操作スキップ ({st.instance_type}){NOT_JOINED_NOTE}")
+        elif kind == "hands_free":
+            self._log(f"{plan[1]}{NOT_JOINED_SKIP_NOTE}")
+        elif kind == "continue_rounds":
+            if not early_done:
+                self._log(f"ラウンド指定で続行: {st.round_type}{NOT_JOINED_NOTE}")
+        elif kind == "round_skip":
+            self._log(f"ラウンド指定自爆: {st.round_type}{NOT_JOINED_SKIP_NOTE}")
+        elif kind == "glorbo":
+            self._log(f"判定: Glorbo / {round_type} 【プレイ(Glorbo)】{NOT_JOINED_NOTE}")
+        elif kind == "hands_free_keep":
+            self._log(f"判定: {plan[1]} / {round_type} 【プレイ(放置: 問答無用)】{NOT_JOINED_NOTE}")
+        elif kind == "group":
+            decision = plan[1]
+            if decision == GroupRound.SKIP:
+                self._log(f"グループ自動自爆: {st.round_type}{NOT_JOINED_SKIP_NOTE}")
+            elif decision in (GroupRound.WANTED, GroupRound.CONTINUE_LISTED):
+                self._log(f"グループ判定: {st.round_type} "
+                          + (f"【{self._all_continue_label()} → 続行リストで続行】"
+                             if decision == GroupRound.CONTINUE_LISTED or self._is_all_continue_round()
+                             else "【プレイ】") + NOT_JOINED_NOTE)
+            elif decision == GroupRound.CONTINUE and not early_done:
+                self._log(f"グループ判定: {st.round_type} 【{self._all_continue_label()}】{NOT_JOINED_NOTE}")
+        elif kind == "list":
+            _kind, is_continue, open_special_target = plan
+            all_ids = st.terror_ids
+            self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} "
+                      f"{self._list_tag(is_continue, open_special_target)}"
+                      + (NOT_JOINED_NOTE if is_continue else NOT_JOINED_SKIP_NOTE)
+                      + self._basis_for_log(all_ids))
 
     def _run_plan(self, round_type: str, plan: tuple):
         """決まった手順（plan）を実行する"""
@@ -3261,9 +3576,13 @@ class LogMonitor:
                 Recorder.on_continue_start(self.window_idx)
             self._log("⏸ 続行ラウンド中 → ほかの窓のフリーズ開始")
         if not st.glorbo_afk and st.instance_type != config.INSTANCE_ACHIEVEMENT:   # 実績・アイテム集会は移動しない（GT）
-            st.glorbo_afk = True
-            self._log("AFK解除ループ開始（Glorbo）")
-            self._start_daemon(self._action.do_open_special_round_loop, True)
+            if st.died_this_round:
+                # 死亡・リスポーンの後は動かない（依頼者 2026-11-19）。猫で生き返った後は died_this_round が戻るので回す
+                self._log(NO_AFK_LOOP_AFTER_DEATH)
+            else:
+                st.glorbo_afk = True
+                self._log("AFK解除ループ開始（Glorbo）")
+                self._start_daemon(self._action.do_open_special_round_loop, True)
 
     # ── 通常判定（続行リスト照合） ──────────────
     def _decide_with_keep_on_set(self, round_type: str, plan: tuple | None = None):
@@ -3287,12 +3606,9 @@ class LogMonitor:
             SharedState.continue_round_end(st)
             self._drop_volume_hold()
 
-        tag  = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
-               "【プレイ】" if st.is_continue_round else "【スキップ】")
-        if st.is_continue_round and self._is_all_continue_round():
-            tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
+        tag = self._list_tag(st.is_continue_round, is_open_special_round_target)
         self._log(f"判定: {format_terror_ids(all_ids)} / {round_type} {tag}"
-                  + self._overlay_label(all_ids))
+                  + self._overlay_label(all_ids) + self._basis_for_log(all_ids))
 
         if st.is_continue_round:
             if not is_open_special_round_target and not was_continue_round:
@@ -3310,7 +3626,10 @@ class LogMonitor:
             if (is_open_special_round_target and is_private
                     and RoundDecision.open_special_active(st.open_special_round_wins,
                                                           self._afk_target())):
-                if not st.is_open_special_round_round:      # 判定が同じラウンドで 2 回通ってもループは 1 本
+                if st.died_this_round:
+                    # 死亡・リスポーンの後は動かない（依頼者 2026-11-19）。猫で生き返った後は died_this_round が戻るので回す
+                    self._log(NO_AFK_LOOP_AFTER_DEATH)
+                elif not st.is_open_special_round_round:      # 判定が同じラウンドで 2 回通ってもループは 1 本
                     st.is_open_special_round_round = True
                     self._log(f"{self._unlock_target()}クラ解放ラウンド開始（勝利数: {st.open_special_round_wins}/{self._unlock_target()}）")
                     self._start_daemon(self._action.do_open_special_round_loop)
@@ -3322,6 +3641,14 @@ class LogMonitor:
             # 続行にならなければ自爆する。グループもここに含める
             if self.cfg.do_skip and (is_judge or is_group):
                 self._start_daemon(self._action.do_skip)
+
+    def _list_tag(self, is_continue: bool, is_open_special_round_target: bool) -> str:
+        """続行リストの判定の行に付ける【…】（参加していないラウンドの行と共有する）"""
+        tag = "【プレイ(DTM/Waldo)】" if is_open_special_round_target else (
+              "【プレイ】" if is_continue else "【スキップ】")
+        if is_continue and self._is_all_continue_round():
+            tag = "【全続行 → 続行リストで続行】" + ("(DTM/Waldo)" if is_open_special_round_target else "")
+        return tag
 
     def _overlay_label(self, ids) -> str:
         """判定の行の後ろに付ける文字。続行表を重ねて続行の判定が変わり、その結果になったときだけ

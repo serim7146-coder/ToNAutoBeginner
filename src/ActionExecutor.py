@@ -10,7 +10,6 @@ import DebugLog
 import FetchMiss
 import ItemCatalog
 import ItemFetch
-import ItemUse
 import ScreenCapture
 import SharedState
 import TaskStats
@@ -588,15 +587,21 @@ class ActionExecutor:
     def _watch_item_loss(self, round_seq: int):
         """ほかの窓のフリーズが解けるのを待って、前面化＋音声を出す"""
         st = self._st
-        while self._is_running():
-            if st.item_id or not st.waiting_for_equip:
-                return                              # 装備できた
-            if st.in_round or st.round_seq != round_seq:
-                return                              # ラウンドが始まった
-            if self._nothing_frozen_but_mine():
-                self._show_item_loss()
-                return
-            time.sleep(ITEM_LOSS_WATCH_SEC)
+        try:
+            while self._is_running():
+                if st.item_id or not st.waiting_for_equip:
+                    return                              # 装備できた
+                if st.in_round or st.round_seq != round_seq:
+                    return                              # ラウンドが始まった
+                if self._nothing_frozen_but_mine():
+                    self._show_item_loss()
+                    return
+                time.sleep(ITEM_LOSS_WATCH_SEC)
+        finally:
+            # 終わったら印を戻す。同じラウンドの番号で 2 回目の案内（ラウンドで死んでロスト → RoundOver で案内 →
+            # 装備 → ロビーでリスポーン → opted in で案内）をしても、見張りが立つようにする（依頼者 2026-11-19）
+            if self._item_loss_watch_seq == round_seq:
+                self._item_loss_watch_seq = -1
 
     def _show_item_loss(self):
         """この窓を前面化し、同時に音声を鳴らす。借りた前面は装備待ちが解けたら返す"""
@@ -730,10 +735,6 @@ class ActionExecutor:
             key = SharedState.get_suicide_key()
             hold = SharedState.get_suicide_hold_sec()
             st._skip_time = time.time()
-            if self._holding_maxwell():
-                # 一度立てたら、このラウンドの間は下ろさない（長押しの途中でゲームが手から外すことがあり、
-                # やり直しの長押しの時点ではもう持っていない）
-                st.skip_maxwell_seq = round_seq
             self._log(f"自爆実行中 ({hold:g}秒・背面)…")
             if not WindowOperator.hold_key_background(
                     self._cfg.hwnd, key, hold, wake=self._skip_wake):
@@ -750,14 +751,6 @@ class ActionExecutor:
                 return
         if self._should_skip(round_seq):
             self._log(f"⚠ 自爆を{limit}回試しましたが死にませんでした")
-
-    def _held_log_name(self) -> str:
-        """手に持っている物のログの名前（持っていない・LogMonitor が追跡を作る前は ""）"""
-        tracker = self._st.item_use
-        return "" if tracker is None else tracker.held_name()
-
-    def _holding_maxwell(self) -> bool:
-        return ItemUse.norm(self._held_log_name()) == config.MAXWELL_LOG_NAME
 
     def _should_skip(self, round_seq: int) -> bool:
         """いま自爆してよいか。やり直すたびに見直す"""
@@ -2071,7 +2064,10 @@ class ActionExecutor:
                     self.announce_item_lost_once()
                 outcome = self._fetch_item(round_seq, *fetch) if fetch else None
                 if outcome is None:
-                    self._attend_to_item_loss()     # 取りに行けない: 今のアイテムロストの案内（前面化・音声）
+                    # 取りに行けない: 今のアイテムロストの案内（前面化・音声）。リスポーンでアイテムが外れたことを
+                    # opted in の行で案内済みなら、二重にしない（装備を待つ。依頼者 2026-11-19）
+                    if st.respawn_notice_seq != st.round_seq:
+                        self._attend_to_item_loss()
                 elif outcome == "stopped":
                     return
                 # 取りに行って失敗・時間切れ・ラウンド開始: 何もしない（音・前面化・フリーズなし）。
@@ -2976,7 +2972,7 @@ class ActionExecutor:
         """続行ラウンドの終わり（この窓の続行フリーズが外れた瞬間。別スレッド）: 窓を始まりの位置へ戻す
         （覚えた矩形があるときだけ。どのインスタンスでも）。
 
-        「窓位置リセットはラウンド終了後」が ON のときは何もしない（RoundOver から戻すので。依頼者 2026-11-18。
+        「フリーズと窓位置はラウンド終了まで」が ON のときは何もしない（RoundOver から戻すので。依頼者 2026-11-18。
         OFF のときは今まで通り、ここ＝死亡から 5 秒後に戻す）。
         アイテムはここでは落とさない（EU: 死んだ・生き残ったときに落とす。drop_at_round_end）"""
         if SharedState.get_continue_restore_at_round_end():
@@ -3387,7 +3383,8 @@ class ActionExecutor:
         ラウンド中60秒ごとに移動キーをわずかに押す（ジャンプ代替）。
         - フォーカス切り替えは SharedState._GLOBAL_ACTION_LOCK 内でのみ行う
           → 自爆・Begin操作中にフォーカスを奪わない
-        - 停止条件: _running=False / in_round=False /
+        - 停止条件: _running=False / in_round=False / died_this_round（死亡・リスポーン・参加していない
+                    ラウンド。依頼者 2026-11-19） /
                     is_open_special_round_round=False / open_special_round_wins達成
         - glorbo=True（Glorbo の続行）は 3 勝・is_open_special_round_round を見ない。
           止まるのはラウンド終了・停止・st.glorbo_afk が外れたとき
@@ -3398,7 +3395,7 @@ class ActionExecutor:
         CHECK_INTERVAL = 1.0
 
         def _should_stop() -> bool:
-            if not self._is_running() or not st.in_round:
+            if not self._is_running() or not st.in_round or st.died_this_round:
                 return True
             if glorbo:
                 return not st.glorbo_afk
