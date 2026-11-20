@@ -1,8 +1,9 @@
-"""焼き芋・干し芋・private 相当の窓は、ToN ListTool のタブへ対応づけず、在室者の名前で続行リストを組む。
+"""全種類の窓（焼き芋・干し芋・private 相当・public・その他のグループ・Emerald City）は、ToN ListTool のタブへ対応づけず、
+在室者の名前で続行リストを組む（焼き芋・干し芋・private 相当は依頼者 2026-11-19、全種類は 2026-11-20）。
 
 - 判定に使うリスト = 在室者の希望（全タブ・待機を含む全員ぶんから表示名で引く）＋ 自分以外がいるときの主催者のリスト
-- 窓とタブの対応づけ（MatchTNL.tab_for_window）を、この種類の窓は呼ばない（別のインスタンスのタブへ誤って対応づけた誤爆の再現）
-- 判定の行の後ろの根拠（`（在室N人・リストあり M人・続行希望: …）`）
+- 窓とタブの対応づけ（MatchTNL.tab_for_window）を、判定は呼ばない（別のインスタンスのタブへ誤って対応づけた誤爆の再現）
+- 判定の行の後ろの根拠（`（在室N人・リストあり M人・続行希望: …）`。主催リストのときだけ・全種類の窓）
 本物の入力・音・録画・窓・ネットワークは使わない。ファイルは一時フォルダだけ
 """
 from tests.support import *  # noqa: F401,F403
@@ -25,10 +26,16 @@ THIRD = own(150)
 HOST = "ぬし"
 ME = "usr_0e01408a"
 INSTANCES = (config.INSTANCE_YAKIIMO, config.INSTANCE_HOSHIIMO, config.INSTANCE_PRIVATE)
+# 以前はタブで引いていた種類（依頼者 2026-11-20 から名前で引く）
+TAB_ERA_INSTANCES = (config.INSTANCE_PUBLIC, config.INSTANCE_OTHER_GROUP, config.INSTANCE_EMERALD_CITY)
+ALL_INSTANCES = INSTANCES + TAB_ERA_INSTANCES
 # 種類 → (ラウンド, Killers 行のラウンド名, 続行リストのキー)
 ROUNDS = {config.INSTANCE_YAKIIMO: ("Fog", "Fog (Alternate)", FOG),
           config.INSTANCE_HOSHIIMO: ("Alternate", "Alternate", ALT),
-          config.INSTANCE_PRIVATE: ("Alternate", "Alternate", ALT)}
+          config.INSTANCE_PRIVATE: ("Alternate", "Alternate", ALT),
+          config.INSTANCE_PUBLIC: ("Alternate", "Alternate", ALT),
+          config.INSTANCE_OTHER_GROUP: ("Alternate", "Alternate", ALT),
+          config.INSTANCE_EMERALD_CITY: ("Alternate", "Alternate", ALT)}
 
 
 class _Base(unittest.TestCase):
@@ -167,11 +174,11 @@ class TestListFromPresentNames(_Base):
 
 
 class TestNeverUsesTabs(_Base):
-    """2: この種類の窓は tab_for_window・tab_match_detail を呼ばない"""
+    """2: どの種類の窓も tab_for_window・tab_match_detail を呼ばない（依頼者 2026-11-20）"""
 
     def test_no_tab_matching_in_a_judging_window(self):
         _k, meta, wishes = self._load([[(0, "alpha", {FOG: {155}})], [(0, "beta", {FOG: {154}})]])
-        for itype in INSTANCES:
+        for itype in ALL_INSTANCES:
             monitor = self._monitor(itype, wishes, present=("alpha", "beta"), tabs=self._tabs_of(meta))
             with self.subTest(itype=itype), \
                     patch.object(MatchTNL, "tab_for_window", side_effect=AssertionError("tab_for_window")), \
@@ -184,14 +191,18 @@ class TestNeverUsesTabs(_Base):
                 self.assertEqual([m for m in monitor.logs if "[主催リスト] タブ" in m or "特定できません" in m], [],
                                  monitor.logs)
 
-    def test_a_window_that_does_not_judge_by_names_still_uses_the_tab(self):
-        """名前で組まない窓（public など）は、今までどおりタブへ対応づける"""
-        _k, meta, wishes = self._load([[(0, "alpha", {FOG: {155}})], [(0, "beta", {FOG: {154}})]])
-        monitor = self._monitor(config.INSTANCE_PUBLIC, wishes, present=("alpha",), tabs=self._tabs_of(meta))
-        monitor.st.round_type = "Fog"
-
-        self.assertFalse(monitor._judges_by_names())
-        self.assertEqual(monitor._keep_on_base(), meta["tabs_data"][0]["keepOn"])
+    def test_public_style_windows_use_present_names_not_the_tab(self):
+        """public・その他のグループ・Emerald City も在室者の名前で引く。
+        タブ 0 の keepOn は OTHER だけだが、在室者 alpha の希望（OTHER）と、待機の gamma の希望（T）で組む"""
+        _k, meta, wishes = self._load([[(0, "alpha", {FOG: {155}}), (1, "gamma", {FOG: {154}})],
+                                       [(0, "beta", {FOG: {150}})]])
+        for itype in TAB_ERA_INSTANCES:
+            monitor = self._monitor(itype, wishes, present=("alpha", "gamma"), tabs=self._tabs_of(meta))
+            monitor.st.round_type = "Fog"
+            with self.subTest(itype=itype):
+                self.assertEqual(meta["tabs_data"][0]["keepOn"], {FOG: {OTHER}})
+                self.assertEqual(monitor._keep_on_base(), {FOG: {T, OTHER}})
+                self.assertIs(monitor._tab_index, LogMonitor._UNSET)
 
 
 class TestMisboundTab(_Base):
@@ -432,15 +443,23 @@ class TestBasisSuffix(_Base):
 
         self.assertTrue(line.endswith("【プレイ】（在室2人・リストあり1人・続行希望: alpha）"), line)
 
-    def test_tnl_mode_and_other_windows_get_nothing(self):
+    def test_tnl_mode_gets_nothing(self):
         SharedState.set_list_source("tnl")
         monitor = self._group({"alpha": {FOG: {T}}}, keep={FOG: {T}})
         line = self._decide(monitor, T)
         self.assertTrue(line.endswith("【プレイ】"), line)
 
-        SharedState.set_list_source("host")
-        public = self._monitor(config.INSTANCE_PUBLIC, {"alpha": {FOG: {T}}}, keep={FOG: {T}})
-        self.assertEqual(public._basis_label([T]), "")
+        for itype in TAB_ERA_INSTANCES:
+            window = self._monitor(itype, {"alpha": {FOG: {T}}}, keep={FOG: {T}})
+            with self.subTest(itype=itype):
+                self.assertEqual(window._basis_label([T]), "")
+
+    def test_every_window_type_gets_the_basis_when_the_host_list_is_the_source(self):
+        """依頼者 2026-11-20: public・その他のグループ・Emerald City にも根拠を付ける"""
+        for itype in TAB_ERA_INSTANCES:
+            window = self._monitor(itype, {"alpha": {ALT: {T}}}, present=("alpha",), keep={ALT: {T}})
+            with self.subTest(itype=itype):
+                self.assertEqual(window._basis_label([T]), "（在室2人・リストあり1人・続行希望: alpha）")
 
     def test_the_line_matches_the_decision_even_if_the_list_is_swapped_after_planning(self):
         """判定を作ったあと（Utils 待ちなど）に主催リストが差し替わっても、行は判定の時点の根拠"""

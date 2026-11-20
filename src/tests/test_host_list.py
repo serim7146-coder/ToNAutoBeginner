@@ -1844,10 +1844,12 @@ class TestHostStateCopy(unittest.TestCase):
 
 
 class TestWindowTabMatching(unittest.TestCase):
-    """ToN ListTool の複窓対応: 窓ごとに、対応するタブの続行リストだけを使う。
+    """ToN ListTool の複窓対応のタブの対応づけ（`_window_tab`・`MatchTNL.tab_for_window`）。
 
     窓とタブの対応はどこにも記録されていないので、その窓にいる人の名前と、
-    タブの参加者の名前の重なりで決める。
+    タブの参加者の名前の重なりで決める。ただし判定（`_keep_on`・`_effective_wishes`）は、
+    依頼者 2026-11-20 から全種類の窓でタブを使わず、在室者の名前で引く
+    （対応づけの関数はコードに残してあり、ここで直接確かめる）。
     """
 
     CLASSIC = "Classic/クラシック"
@@ -1867,10 +1869,21 @@ class TestWindowTabMatching(unittest.TestCase):
             }
         return {"version": 1, "tabs": data}
 
-    def _monitor(self, host_tabs, present=(), me="ぬし", known=True):
+    @staticmethod
+    def _wishes_of(tabs):
+        """タブの内訳から、名前ごとの希望（host_wishes の形）を作る。同じ名前は畳む"""
+        wishes = {}
+        for data in tabs["tabs"].values():
+            for name, wish in data["wishes"].items():
+                mine = wishes.setdefault(name, {})
+                for key, ids in wish.items():
+                    mine.setdefault(key, set()).update(ids)
+        return wishes
+
+    def _monitor(self, host_tabs, present=(), me="ぬし", known=True, wishes=None):
         monitor = LogMonitor.LogMonitor(
             WindowConfig(), {"共有": {999}}, lambda _m: None, window_idx=1,
-            host_wishes={name: {} for name in present},
+            host_wishes=wishes if wishes is not None else {name: {} for name in present},
             host_tabs=host_tabs)
         monitor.st.local_player_name = me
         monitor.st.players_known = known
@@ -1883,12 +1896,12 @@ class TestWindowTabMatching(unittest.TestCase):
         return monitor
 
     # ── 対応づけ ────────────────────────────
-    def test_each_window_uses_its_own_tab(self):
+    def test_each_window_uses_the_wishes_of_its_present_names(self):
         tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []),
                           (["う", "え"], {self.CLASSIC: {2}}, []))
 
-        first = self._monitor(tabs, present=["あ", "い"])
-        second = self._monitor(tabs, present=["う", "え"])
+        first = self._monitor(tabs, present=["あ", "い"], wishes=self._wishes_of(tabs))
+        second = self._monitor(tabs, present=["う", "え"], wishes=self._wishes_of(tabs))
 
         self.assertEqual(first._keep_on(), {self.CLASSIC: {1}})
         self.assertEqual(second._keep_on(), {self.CLASSIC: {2}})
@@ -1896,20 +1909,28 @@ class TestWindowTabMatching(unittest.TestCase):
                          "別のタブの希望は混ぜない")
 
     def test_the_tab_with_the_most_names_wins(self):
+        """タブの対応づけ（_window_tab）は重なりが最大のタブを選ぶ。判定（_keep_on）はそれを使わず名前で引く"""
         tabs = self._tabs((["あ"], {self.CLASSIC: {1}}, []),
                           (["あ", "い", "う"], {self.CLASSIC: {2}}, []))
 
-        monitor = self._monitor(tabs, present=["あ", "い", "う"])
+        monitor = self._monitor(tabs, present=["あ", "い", "う"],
+                                wishes={"あ": {self.CLASSIC: {1}}, "い": {self.CLASSIC: {3}},
+                                        "う": {self.CLASSIC: {3}}})
 
-        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {2}})
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {1, 3}}, "タブ2 の {2} ではなく、在室者の希望")
+        self.assertIs(monitor._tab_index, LogMonitor._UNSET, "判定はタブの対応づけを計算しない")
+        self.assertEqual(monitor._window_tab(), tabs["tabs"][1])
         self.assertTrue(any("タブ2 に対応" in m for m in monitor.logs), monitor.logs)
 
-    def test_no_overlap_falls_back_to_the_shared_list(self):
+    def test_no_overlap_still_judges_by_present_names(self):
         tabs = self._tabs((["あ"], {self.CLASSIC: {1}}, []))
 
-        monitor = self._monitor(tabs, present=["か", "き"])
+        monitor = self._monitor(tabs, present=["か", "き"],
+                                wishes={"か": {self.CLASSIC: {4}}, "あ": {self.CLASSIC: {1}}})
 
-        self.assertEqual(monitor._keep_on(), {}, "共有リスト＋名前の絞り込みのまま")
+        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {4}}, "在室者の希望だけ。タブの有無に関係しない")
+        self.assertFalse(any("特定できません" in m for m in monitor.logs), monitor.logs)
+        self.assertIsNone(monitor._window_tab())
         self.assertTrue(any("特定できません" in m for m in monitor.logs), monitor.logs)
 
     def test_a_tie_is_not_matched(self):
@@ -1943,25 +1964,26 @@ class TestWindowTabMatching(unittest.TestCase):
 
         self.assertIsNone(MatchTNL.tab_for_window(tabs["tabs"], {"あ", "い"}))
 
-    def test_the_wishes_come_from_the_tab(self):
+    def test_the_wishes_come_from_the_present_names(self):
+        """待機（たいき）も名前で引ける。いない人（う）の希望は入らない"""
         tabs = self._tabs((["あ"], {self.FOG: {7}}, ["たいき"]),
                           (["う"], {self.FOG: {8}}, []))
 
-        monitor = self._monitor(tabs, present=["あ"])
+        monitor = self._monitor(tabs, present=["あ", "たいき"], wishes=self._wishes_of(tabs))
 
-        self.assertEqual(monitor._effective_wishes(), {"あ": {self.FOG: {7}}})
+        self.assertEqual(monitor._effective_wishes(), {"あ": {self.FOG: {7}}, "たいき": {self.FOG: {7}}})
 
     # ── 計算のやり直し ───────────────────────
     def test_it_recomputes_when_the_players_change(self):
         tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []),
                           (["う", "え"], {self.CLASSIC: {2}}, []))
         monitor = self._monitor(tabs, present=["あ", "い"])
-        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {1}})
+        self.assertEqual(monitor._window_tab()["keepOn"], {self.CLASSIC: {1}})
 
         monitor.st.players = {0, 1}
         monitor.st.player_names = {0: "う", 1: "え"}
 
-        self.assertEqual(monitor._keep_on(), {self.CLASSIC: {2}}, "在室者が変われば選び直す")
+        self.assertEqual(monitor._window_tab()["keepOn"], {self.CLASSIC: {2}}, "在室者が変われば選び直す")
 
     def test_it_does_not_recompute_while_nothing_changes(self):
         tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []))
@@ -1970,21 +1992,21 @@ class TestWindowTabMatching(unittest.TestCase):
         with patch.object(MatchTNL, "tab_for_window",
                           side_effect=MatchTNL.tab_for_window) as match:
             for _ in range(5):
-                monitor._keep_on()
+                monitor._window_tab()
 
         self.assertEqual(match.call_count, 1, "在室者も主催リストも変わっていない")
 
     def test_a_new_host_list_recomputes(self):
         tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, []))
         monitor = self._monitor(tabs, present=["あ", "い"])
-        monitor._keep_on()
+        monitor._window_tab()
 
         tabs["tabs"][0]["keepOn"] = {self.CLASSIC: {5}}
         tabs["version"] += 1
 
         with patch.object(MatchTNL, "tab_for_window",
                           side_effect=MatchTNL.tab_for_window) as match:
-            self.assertEqual(monitor._keep_on(), {self.CLASSIC: {5}})
+            self.assertEqual(monitor._window_tab()["keepOn"], {self.CLASSIC: {5}})
 
         match.assert_called_once()
 
@@ -1992,7 +2014,7 @@ class TestWindowTabMatching(unittest.TestCase):
     def test_a_single_tab_still_works(self):
         tabs = self._tabs((["あ", "い"], {self.CLASSIC: {1}}, ["たいき"]))
 
-        monitor = self._monitor(tabs, present=["あ", "い"])
+        monitor = self._monitor(tabs, present=["あ", "い"], wishes=self._wishes_of(tabs))
 
         self.assertEqual(monitor._keep_on(), {self.CLASSIC: {1}})
 
