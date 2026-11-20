@@ -1133,16 +1133,11 @@ class LogMonitor:
             names.add(st.local_player_name)
         return names
 
-    def _judges_by_names(self) -> bool:
-        """この窓は、在室者の名前で続行リストを組む種類か（焼き芋・干し芋・private 相当）。
-        ToN ListTool のタブは番号に中身が固定されず、別のインスタンスのタブへ対応づけてしまうことがあった
-        （2/19 人の重なりのタブで判定して、続行すべきテラーで自爆した）。この種類の窓はタブを使わず、
-        在室者の名前で全員ぶんの希望（待機を含む）から引く（依頼者 2026-11-19）"""
-        return self.st.instance_type in (*GroupRound.GROUP_INSTANCES, *config.JUDGE_LIKE_INSTANCES)
-
     def _window_tab(self) -> dict | None:
         """この窓に対応するタブのデータ。対応づけできなければ None。
-        焼き芋・干し芋・private 相当の窓（_judges_by_names）は、これを呼ばない（名前で引く）。
+        判定（_effective_wishes・_keep_on_base）は、どの種類の窓もこれを呼ばず、在室者の名前で引く
+        （依頼者 2026-11-20。ToN ListTool のタブは番号に中身が固定されず、別のインスタンスのタブへ
+        対応づけて誤爆したため。焼き芋・干し芋・private 相当は 2026-11-19 から）。
 
         ToN ListTool の複窓対応では、窓ごとに別のタブへ参加者が振り分けられ、
         タブごとに続行リストの中身が違う。対応はどこにも記録されていないので、
@@ -1181,7 +1176,8 @@ class LogMonitor:
         return tabs.get(self._tab_index)
 
     def _wishes_by_names(self, host_wishes: dict, include_host: bool) -> tuple:
-        """名前で組む窓の、参加者別の希望。(希望, 不在のまま足した主催者の名前 or None)。
+        """在室者の名前で組む、参加者別の希望。(希望, 不在のまま足した主催者の名前 or None)。
+        ToN ListTool の主催リストのときの、全種類の窓の判定に使う。
 
         在室者（自分を含む）を表示名で全員ぶんの希望（待機を含む）から引く。主催者自身のリストは、
         主催者がその場にいなくても、自分以外の人がいるときは足す（ソロの窓は足さない）。
@@ -1202,7 +1198,7 @@ class LogMonitor:
         参加者の希望でソロの窓まで判定してしまう。この窓のインスタンスにいる人
         （自分のアカウントを含む）の希望だけにする。
 
-        焼き芋・干し芋・private 相当の窓は、タブを使わず在室者の名前で引く（_judges_by_names）。
+        どの種類の窓も、タブを使わず在室者の名前で引く（依頼者 2026-11-20）。
         include_host=False なら、不在の主催者のリストを足さない（_wishes_missing 用）。
 
         None（＝従来どおり共有の続行リスト）になるのは、tnl のとき・参加者別の
@@ -1213,15 +1209,8 @@ class LogMonitor:
             return None
         if not self.st.players_known:
             return None
-        if self._judges_by_names():
-            return self._wishes_by_names(host_wishes, include_host)[0]
-        present = self._present_names()
-        tab = self._window_tab()
-        # 対応づいた窓は、そのタブの人の希望だけを見る（別のタブは別の窓の周回）
-        source = tab["wishes"] if tab is not None else host_wishes
         # 中身が空でもリストを持っている人は残す（全部 OFF＝全部自爆）
-        return {name: wish for name, wish in source.items()
-                if name in present}
+        return self._wishes_by_names(host_wishes, include_host)[0]
 
     def _continue_table(self):
         """この窓が重ねる続行表（GL）。窓ごとに選んだ 2 つのプリセット（「なし」の種類は空）に、
@@ -1239,11 +1228,7 @@ class LogMonitor:
 
     def _keep_on_base(self) -> dict:
         """この窓の続行リスト（続行表を重ねる前）"""
-        # 名前で組む窓（_judges_by_names）はタブを見ない
-        tab = None if self._judges_by_names() else self._window_tab()
-        if tab is not None:
-            # そのタブの参加者の希望だけ（主催者自身のぶんは読み込み側で足してある）
-            return tab["keepOn"]
+        # どの種類の窓もタブを見ない（在室者の名前で引く。依頼者 2026-11-20）
         wishes = self._effective_wishes()
         if wishes is None:
             return self.keepOn_set
@@ -3250,14 +3235,14 @@ class LogMonitor:
                 and RoundDecision.selectable_round_name(st.round_type) in self.cfg.continue_rounds)
 
     def _basis_label(self, ids) -> str:
-        """判定の行に付ける、続行リストの根拠（名前で組む窓・主催リストのときだけ。ほかは空文字）。
+        """判定の行に付ける、続行リストの根拠（主催リストのときだけ。.tnl のときは空文字。全種類の窓に付ける）。
 
         `（在室19人・リストあり17人・続行希望: A、B）`。続行を希望した人（そのラウンドの枠に、判定したテラーを
         入れている人）の名前だけを出す。希望した人がいなければ人数だけ。在室者のうち希望していない人の名前は
         出さない（依頼者 2026-11-19）。いない主催者のリストを足したときは `・主催者を足す`、主催者が希望者なら
         名前の後に `（主催者）`。誰がいるか分からず共有リストで判定したときは `（共有リスト）`"""
         st = self.st
-        if not self._judges_by_names() or SharedState.get_list_source() != "host":
+        if SharedState.get_list_source() != "host":
             return ""
         host_wishes = self.host_wishes
         if not host_wishes or not st.players_known:

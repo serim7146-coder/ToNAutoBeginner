@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -572,6 +573,9 @@ def load_host_local_state(path: str,
     tabs_data: dict = {}
     listed = 0
     dropped = 0
+    # 名前ごとの行の候補 {名前: [(待機か, 作成日時の並び替え用の値, ファイルでの順番, 人の希望), ...]}
+    candidates: dict = {}
+    file_order = 0                      # 候補の行のファイルでの順番（同点のとき先に出た行を選ぶ）
     for tab_index, tab in enumerate(tab_list):
         if not isinstance(tab, dict):
             continue
@@ -613,16 +617,71 @@ def load_host_local_state(path: str,
                     continue            # 読めた行が 1 つも無い人は「リストを持つ人」に数えない
                 # 行が 1 つでもあれば「リストを持っている人」（全部 OFF でも {} で残す。sqlite 版と同じ）
                 listed += 1
+                # keepOn_set・タブの内訳へは全行を足す（従来どおり）。人ごとの希望 wishes は、
+                # ここでは触らず、あとで 1 人 1 行だけ選んで作る（依頼者 2026-11-20）
+                _fold_person_wishes(person, section, name, None, tab_data, keepOn_set)
                 if has_name:
-                    wishes.setdefault(name, {})
-                mine = wishes.get(name) if has_name else None
-                _fold_person_wishes(person, section, name, mine, tab_data, keepOn_set)
+                    candidates.setdefault(name, []).append(
+                        (section != PARTICIPANT_SECTION, _created_at_key(member.get("created_at")),
+                         file_order, person))
+                    file_order += 1
     if dropped:
         TerrorIds._report_once("host_local_bits", dropped,
                                f"[主催リスト] 読めない wish_bits を {dropped} 件読み飛ばしました")
+    _choose_one_row_per_name(candidates, wishes)
 
     return _finish_host_state(keepOn_set, wishes, tabs_data, participants, participant_names,
                               listed, len(tab_list), user_save_path, user_save_raw)
+
+
+def _created_at_key(text) -> float:
+    """行の created_at（"2026-11-18 17:59:04" など）→ 新しさを比べる数値。
+    無い・読めないものは最も古い扱い（-inf）。タイムゾーンがあれば UTC に直して比べる"""
+    if not isinstance(text, str) or not text.strip():
+        return float("-inf")
+    try:
+        moment = datetime.fromisoformat(text.strip())
+        if moment.tzinfo is not None:
+            moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+        return (moment - datetime(1970, 1, 1)).total_seconds()
+    except (ValueError, OverflowError):
+        return float("-inf")
+
+
+def _choose_one_row_per_name(candidates: dict, wishes: dict):
+    """名前ごとに行を 1 つ選び、wishes[名前] を作る（依頼者 2026-11-20）。
+
+    ListTool は登録した人を各タブの待機に残し続け、行はその人のリストの登録時点の写し。
+    同じ名前の行が複数あって中身が違うことがあり、全部を和集合にすると、ListTool が判定に使う行に
+    無い続行まで拾ってしまう。参加者の行があればそれ（複数なら created_at がいちばん新しい行）、
+    無ければ待機の行のうち created_at がいちばん新しい行。created_at が無い・読めない行は最も古い扱い。
+    同点はファイルで先に出てくる行（タブ順・参加者が先・並び順）。全部 OFF の行を選んだ人は {}
+    （リストはあるが続行希望なし）"""
+    cache: dict = {}
+
+    def own_of(person: dict) -> dict:
+        # 同じ中身の行が多いので、中身ごとに 1 回だけ直す
+        sig = tuple(sorted((k, tuple(sorted(v))) for k, v in person.items()))
+        if sig not in cache:
+            cache[sig] = own_list_from_listtool(person, "主催リスト", once=True)
+        return cache[sig]
+
+    differing = 0
+    for name, rows in candidates.items():
+        # (待機か, -新しさ, ファイルでの順番) が最小の行。参加者の行が先、同じ区分では新しいほう、同点は先に出た行
+        chosen = min(rows, key=lambda row: (row[0], -row[1], row[2]))
+        if len(rows) > 1:
+            first = own_of(rows[0][3])
+            if any(own_of(row[3]) != first for row in rows[1:]):
+                differing += 1
+        mine = wishes.setdefault(name, {})
+        for round_key, ids in own_of(chosen[3]).items():
+            mine.setdefault(round_key, set()).update(ids)
+    if differing:
+        TerrorIds._report_once(
+            "host_local_diff", differing,
+            f"[主催リスト] 同じ名前で中身の違うリストが {differing} 人 → "
+            "参加者の行（無ければいちばん新しい待機の行）を使います")
 
 
 def _tab_overlaps(tabs_data: dict, present_names) -> list:
