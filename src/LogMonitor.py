@@ -2624,6 +2624,13 @@ class LogMonitor:
         """8 Pages のページ取得"""
         st = self.st
         if self._page_loses_held_item(st.round_type, st.held_item_id):
+            # 開始時にロスト扱いにした後でロビーで装備し直したアイテムも、ここでなくなる。
+            # ロストの案内の記録（item_id）も合わせてロスト扱いにする（依頼者 2026-11-20。
+            # 表示だけ「なし」になり、ラウンド終了の案内が出なかった）。
+            # 装備し直していない（item_id が 0）ときは開始時のロストのままなので、何も足さない。
+            # _mark_item_lost は所持の記録から last_lost_item_id を決めるので、先に呼ぶ
+            if st.item_id:
+                self._mark_item_lost(f"{st.round_type}: ページ取得でアイテムロスト")
             self._lose_held_item(HELD_LOST_PAGE)
 
     def _on_round_over(self, event):
