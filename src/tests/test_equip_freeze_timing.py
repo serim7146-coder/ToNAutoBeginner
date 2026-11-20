@@ -275,7 +275,7 @@ class TestTheWords(unittest.TestCase):
         monitor.st.instance_type = config.INSTANCE_PRIVATE
         monitor.logs = []
         monitor._log = monitor.logs.append
-        monitor._action.item_fetch_target = lambda: ("Survival", 29) if fetch else None
+        monitor._action.item_fetch_target = lambda route="begin": ("Survival", 29) if fetch and route == "begin" else None
         monitor._round_lost_item = lambda: True
         monitor._round_item_warning = lambda: True
         monitor._start_daemon = lambda *a: None

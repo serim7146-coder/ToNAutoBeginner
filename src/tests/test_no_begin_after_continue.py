@@ -359,7 +359,9 @@ class TestTheSettingAndTheText(unittest.TestCase):
     def test_the_readme(self):
         readme = (Path(LogMonitor.__file__).parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn("**続行の後は自動Beginしない**（デフォルト OFF）", readme)
-        self.assertIn("アイテムの自動取得は動きません", readme)
+        # 2026-11-20: 押さない回もアイテムを取りに行く（README の文を直した）
+        self.assertNotIn("アイテムの自動取得は動きません", readme)
+        self.assertIn("音だけ鳴らして店へ取りに行きます", readme)
 
 
 if __name__ == "__main__":

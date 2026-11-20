@@ -2107,16 +2107,28 @@ class ActionExecutor:
         name = ItemCatalog.item_name(item_id, config.ITEMS)
         return f"{shop} Shop の {name or f'#{item_id}'}"
 
-    def item_fetch_target(self) -> tuple | None:
-        """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・ツールが Begin を
-        押さない窓・このラウンドにロストしたアイテムが分からない・Others や
-        表に無いアイテム → None（今どおり）。完全放置モードでも取りに行くが、
-        Guidance Plush だけ（依頼者）"""
+    def _tool_skips_begin(self) -> bool:
+        """このラウンドは、ツールが Begin を押さない窓か（自動 Begin が OFF・続行の後は自動 Begin しない）。
+        private でない窓かどうかは見ない（呼ぶ側が can_operate で見る）"""
+        st = self._st
+        return not self._auto_begin_active() or st.begin_skipped_seq == st.round_seq
+
+    def item_fetch_target(self, route: str = "begin") -> tuple | None:
+        """自動取得するなら (店, アイテムの番号)。設定 OFF・OSC でない・このラウンドにロストしたアイテムが
+        分からない・Others や表に無いアイテム → None（今どおり）。完全放置モードでも取りに行くが、
+        Guidance Plush だけ（依頼者）。
+        route: "begin"（今まで。ツールが Begin を押す窓で、Begin が通った後に取りに行く）・
+        "spawn"（ツールが Begin を押さない回。2026-11-20。ラウンドの後・ロビーのリスポーンの後に、リスポーン位置から
+        取りに行く。速さの受信（接地）が要る・放置モードは行かない・ツールが Begin を押さない回だけ）"""
         st = self._st
         if SharedState.get_item_begin_mode():
             return None     # アイテム取得→Begin モードでは自動取得を動かさない（依頼者）
-        if (not SharedState.get_item_fetch() or self._osc is None
-                or not self._auto_begin_active() or not self.can_operate()):
+        if not SharedState.get_item_fetch() or self._osc is None or not self.can_operate():
+            return None
+        if route == "spawn":
+            if self._receiver is None or self._hands_free() or not self._tool_skips_begin():
+                return None
+        elif not self._auto_begin_active():
             return None
         item_id = st.last_lost_item_id      # 最後にロストしたもの（装備かインスタンス変更で消える）
         if self._hands_free() and item_id != RoundDecision.guidance_plush_id():
@@ -2152,10 +2164,12 @@ class ActionExecutor:
         return None
 
     def _fetch_item(self, round_seq: int, shop: str, item_id: int, plush: bool = False,
-                    extra_stop=None) -> str:
+                    extra_stop=None, route: str = "begin") -> str:
         """Begin が通った後に店へ取りに行く。"ok"・"failed"・"timeout"・"round"・"stopped"・"equipped"。
         移動は OSC（ロック外）。照準とクリックは前面化が要るので排他の中で行い、終わったら前面を返す。
-        plush: Guidance Plush の取り方（DZ。Event → スクロール → Have Plush → Equip）"""
+        plush: Guidance Plush の取り方（DZ。Event → スクロール → Have Plush → Equip）。
+        route: "spawn" はツールが Begin を押さない回（リスポーン位置から左前へ歩いて段差を降りる。
+        ItemFetch.Fetcher.move_to_shop_from_spawn）。"begin" は Begin の位置から（move_to_shop）"""
         st = self._st
         head = f"[操作] [窓{st.window_idx}]"
         deadline = time.time() + config.ITEM_FETCH_LIMIT_SEC
@@ -2193,7 +2207,8 @@ class ActionExecutor:
         DebugLog.write(f"{head} アイテム取得: 開始（{name}）")
         outcome = "failed"
         try:
-            if fetcher.move_to_shop():
+            moved = fetcher.move_to_shop_from_spawn() if route == "spawn" else fetcher.move_to_shop()
+            if moved:
                 outcome = self._fetch_in_front(fetcher, shop, item_id, plush)
         except ItemFetch.Stopped as e:
             outcome = e.args[0]
@@ -2219,6 +2234,64 @@ class ActionExecutor:
                    "front_lost": "この窓が前面でなくなりました"}.get(outcome, outcome)
             self._log(f"⚠ アイテム取得: {why} → やめます")
         return "ok" if outcome == "equipped" else outcome
+
+    def fetch_after_round_without_begin(self, round_seq: int):
+        """ツールが Begin を押さない回（自動 Begin OFF・続行の後は自動 Begin しない）の RoundOver の後に、ロストした
+        アイテムを取りに行く（2026-11-20。LogMonitor._on_round_over が裏のスレッドで始める）。Begin を押す窓なら移動を始める
+        RoundOver + BEGIN_WAIT_SEC まで待ち、そこからリスポーン位置を出発点に取りに行く。待つ間に止めた・ラウンドが
+        変わった・始まった・private でなくなった → 黙って終わる。取りに行けない（条件が変わった）ときは今の案内。
+        取りに行って失敗・時間切れ・ほかの窓のフリーズ・ラウンド開始 → 何もしない（次のラウンドでまた）"""
+        st = self._st
+        if not self._wait_run_respawn():
+            return
+        start_at = st.round_over_time + config.BEGIN_WAIT_SEC
+        while True:
+            if (not self._is_running() or st.round_seq != round_seq or st.in_round
+                    or not self.can_operate()):
+                return
+            remain = start_at - time.time()
+            if remain <= 0:
+                break
+            time.sleep(min(0.1, remain))
+        if st.item_id and not st.waiting_for_equip:
+            return                          # 待つ間に装備した
+        fetch = self.item_fetch_target("spawn")
+        if fetch is None:
+            if st.respawn_notice_seq != st.round_seq:
+                self._attend_to_item_loss()
+            return
+        self.announce_item_lost_once()      # 取りに行くときは音だけ（今の自動取得と同じ）
+        self._fetch_item(round_seq, *fetch, route="spawn")
+
+    def fetch_after_lobby_respawn(self, round_seq: int, on_cannot=None):
+        """ロビーでリスポーンしてアイテムが外れたとき（opted in の行。LogMonitor._on_opted_in が裏のスレッドで始める）に、
+        ロストしたアイテムを取りに行く（2026-11-20）。リスポーンは済んでいる（押さない）ので、Run のリスポーンの後と
+        同じ後ろへ → 左へ → 向きの直しをして同じ位置・向きにしてから、リスポーン位置から取りに行く。
+        正面を向けない・条件が変わった → 歩かずに今の案内（on_cannot。無ければ _attend_to_item_loss）。
+        停止・ラウンドが変わった・始まった・private でなくなった → 黙って終わる"""
+        st = self._st
+        cannot = on_cannot or self._attend_to_item_loss
+        self._run_respawn_idle.clear()
+        self._noted_round_over_after_respawn = False
+        self._respawn_lobby = True              # 続けてよいかは _lobby_still（ラウンドの外・Begin が通っていない）
+        try:
+            faced = self._after_respawn_and_face(round_seq, "リスポーンでアイテムが外れた後")
+        finally:
+            self._respawn_lobby = False
+            self._run_respawn_idle.set()
+        if (not self._is_running() or st.in_round or st.round_seq != round_seq
+                or not self.can_operate()):
+            return
+        if not faced:
+            self._log("アイテム取得: 正面を向けなかったので歩きません")
+            cannot()
+            return
+        fetch = self.item_fetch_target("spawn")
+        if fetch is None:
+            cannot()
+            return
+        self.announce_item_lost_once()
+        self._fetch_item(round_seq, *fetch, route="spawn")
 
     def request_plush_retry(self, why: str):
         """入室時に Guidance Plush を取れなかった（ER）。次の普通のラウンドの後から、最大 PLUSH_RETRY_MAX 回
@@ -2405,7 +2478,6 @@ class ActionExecutor:
     def _respawn_and_face(self, round_seq: int, label: str) -> bool:
         """リスポーン → 後ろへ → 左へ → 向きの直し（do_run_respawn の中身。店に行った後の押し直しでも使う。EY）。
         最後（正面を向く）まで続けられたら True"""
-        head = f"[操作] [窓{self._st.window_idx}] Run:"
         self._run_respawn_idle.clear()
         self._noted_round_over_after_respawn = False
         self._respawn_menu_open = False         # Esc のメニューを開いているか（_respawn_press が持つ）
@@ -2414,55 +2486,62 @@ class ActionExecutor:
             if why:
                 self._log(f"{label}: リスポーンできませんでした（{why}）")
                 return False
-            # 「Player respawned」から RUN_BACK_DELAY_SEC 待ってから後ろへ（EP: 直後の速さが残っていて、
-            # 動き出しから数えるのが 0 秒と取り違えていた）。待つ間に止めた・ラウンドが変わったらやめる
-            deadline = time.time() + config.RUN_BACK_DELAY_SEC
-            while time.time() < deadline:
-                if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
-                    return False
-                time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
-            late = self._st.round_type in config.LATE_ROUND         # Punished 後は足が遅いので長く下がる
-            back_sec = config.RUN_RESPAWN_BACK_SEC_LATER if late else config.RUN_RESPAWN_BACK_SEC
-            for address, sec in (("/input/MoveBackward", back_sec),
-                                 ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
-                if not self._run_after_respawn(round_seq):
-                    DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
-                    return False
-                DebugLog.write(f"{head} {address} {sec:.2f}秒")
-                # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
-                sampler = None
-                if address == "/input/MoveBackward" and self._receiver is not None:
-                    sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
-                    sampler.start()
-                try:
-                    if sampler is not None:
-                        # 動き出しから数える（EH: 12:09 窓3 は動き出し 0.75 秒で下がり足りなかった）
-                        _ok, extension, how, repressed = self._press_counted_from_start(
-                            [(address, sec)], lambda: not self._run_after_respawn(round_seq),
-                            config.BEGIN_USUAL_START_SEC, config.RUN_EXTEND_MAX_SEC,
-                            lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
-                        sampler.suffix = counted_note(extension, how, repressed)
-                    else:
-                        self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
-                finally:
-                    if sampler is not None:
-                        sampler.release()
-                self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
-            fixed = self._face_the_stairs(round_seq)
-            moved = self._fix_depth(round_seq)
-            if moved:
-                self._log(f"Run: 位置を直しました（{moved}）")
-                fixed += self._face_the_stairs(round_seq)     # 前後に動かしたら向きをもう 1 周
-            if not self._run_after_respawn(round_seq):
-                return False
-            self._log(f"{label}: リスポーンして正面を向きました"
-                      + (f"（向きを {fixed} 回直しました）" if fixed else ""))
-            if not self._respawn_lobby:
-                self._take_pos_run()            # Run の後の撮影（EQ）。店に行った後には撮らない
-            return True
+            return self._after_respawn_and_face(round_seq, label)
         finally:
             self._run_respawn_idle.set()
+
+    def _after_respawn_and_face(self, round_seq: int, label: str) -> bool:
+        """リスポーンした後の、後ろへ → 左へ → 向きの直し（_respawn_and_face の後半。ロビーでリスポーンした後の
+        取得（fetch_after_lobby_respawn）も使う）。リスポーンの押し・_run_respawn_idle の出し入れはしない（呼ぶ側）。
+        最後（正面を向く）まで続けられたら True"""
+        head = f"[操作] [窓{self._st.window_idx}] Run:"
+        # 「Player respawned」から RUN_BACK_DELAY_SEC 待ってから後ろへ（EP: 直後の速さが残っていて、
+        # 動き出しから数えるのが 0 秒と取り違えていた）。待つ間に止めた・ラウンドが変わったらやめる
+        deadline = time.time() + config.RUN_BACK_DELAY_SEC
+        while time.time() < deadline:
+            if not self._run_after_respawn(round_seq):
+                DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
+                return False
+            time.sleep(min(config.RUN_RESPAWN_POLL_SEC, max(0.0, deadline - time.time())))
+        late = self._st.round_type in config.LATE_ROUND         # Punished 後は足が遅いので長く下がる
+        back_sec = config.RUN_RESPAWN_BACK_SEC_LATER if late else config.RUN_RESPAWN_BACK_SEC
+        for address, sec in (("/input/MoveBackward", back_sec),
+                             ("/input/LookLeft", config.RUN_RESPAWN_TURN_SEC)):
+            if not self._run_after_respawn(round_seq):
+                DebugLog.write(f"{head} 停止された、またはラウンドが変わりました → 移動をやめます")
+                return False
+            DebugLog.write(f"{head} {address} {sec:.2f}秒")
+            # 下がる動きは実際に動いた量を debug.log へ（EE。受信が無ければ書かない）
+            sampler = None
+            if address == "/input/MoveBackward" and self._receiver is not None:
+                sampler = MotionSampler(self._receiver, lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
+                sampler.start()
+            try:
+                if sampler is not None:
+                    # 動き出しから数える（EH: 12:09 窓3 は動き出し 0.75 秒で下がり足りなかった）
+                    _ok, extension, how, repressed = self._press_counted_from_start(
+                        [(address, sec)], lambda: not self._run_after_respawn(round_seq),
+                        config.BEGIN_USUAL_START_SEC, config.RUN_EXTEND_MAX_SEC,
+                        lambda m: DebugLog.write(f"{head} 後ろへ: {m}"))
+                    sampler.suffix = counted_note(extension, how, repressed)
+                else:
+                    self._osc.press(address, sec, stop=lambda: not self._run_after_respawn(round_seq))
+            finally:
+                if sampler is not None:
+                    sampler.release()
+            self._osc.stop_all(repeat=1)            # 途中でやめても押したままにしない
+        fixed = self._face_the_stairs(round_seq)
+        moved = self._fix_depth(round_seq)
+        if moved:
+            self._log(f"Run: 位置を直しました（{moved}）")
+            fixed += self._face_the_stairs(round_seq)     # 前後に動かしたら向きをもう 1 周
+        if not self._run_after_respawn(round_seq):
+            return False
+        self._log(f"{label}: リスポーンして正面を向きました"
+                  + (f"（向きを {fixed} 回直しました）" if fixed else ""))
+        if not self._respawn_lobby:
+            self._take_pos_run()            # Run の後の撮影（EQ）。店に行った後には撮らない
+        return True
 
     def _face_the_stairs(self, round_seq: int) -> int:
         """撮影で階段の上の構造の絵（RunFace）を探し、真ん中からずれていれば短く回して直す（背面・OSC。
