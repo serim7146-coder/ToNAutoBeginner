@@ -245,8 +245,11 @@ class TestAfterTheRun(unittest.TestCase):
         self.assertTrue(any("Run の位置: Run の後 撮りました" in m for m in w.written), w.written)
 
     def test_it_is_taken_at_the_end_of_the_respawn(self):
-        # 中身は _respawn_and_face（EY: 店に行った後の押し直しでも使う。そのときは撮らない）
-        src = inspect.getsource(ActionExecutor.ActionExecutor._respawn_and_face)
+        # 中身は _respawn_and_face → _after_respawn_and_face（EY: 店に行った後の押し直しでも使う。そのときは撮らない。
+        # 2026-11-20: リスポーンの後の部分を分けた。ロビーでリスポーンした後の取得も使う）
+        src = inspect.getsource(ActionExecutor.ActionExecutor._after_respawn_and_face)
+        self.assertIn("self._after_respawn_and_face(round_seq, label)",
+                      inspect.getsource(ActionExecutor.ActionExecutor._respawn_and_face))
         self.assertLess(src.index('self._log(f"{label}: リスポーンして正面を向きました"'), src.index("self._take_pos_run()"))
         self.assertLess(src.index("fixed = self._face_the_stairs(round_seq)"), src.index("self._take_pos_run()"))
 

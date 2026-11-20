@@ -2605,13 +2605,17 @@ class LogMonitor:
         """「opted in」（リスポーンの約 3 秒後。参加に戻る）。リスポーンでアイテムが外れていて、ラウンドの外で
         来たら、今のアイテムロストの案内（前面化・音声・全窓フリーズ。解除は装備）をここで出す。
         ラウンドが始まってから来たら何もしない（RoundOver の今の経路で案内する）。参加していないラウンドは
-        取り消さない（依頼者 2026-11-19）"""
+        取り消さない（依頼者 2026-11-19）。ツールが Begin を押さない回で自動取得できる窓は、案内せず
+        取りに行く（2026-11-20。fetch_after_lobby_respawn）"""
         st = self.st
         if not st.respawn_item_pending or st.in_round:
             return
         st.respawn_item_pending = False
-        if st.item_id or self._hands_free() or self._action.item_fetch_target():
-            return      # 先に装備した・放置モード・自動取得の窓（Begin の後に取りに行く）は案内しない
+        if st.item_id or self._hands_free():
+            return      # 先に装備した・放置モードは案内しない
+        begin_target = self._action.item_fetch_target()
+        if begin_target and not self._begin_skipped():
+            return      # 自動取得の窓（Begin の後に取りに行く）は案内しない
         if st.waiting_for_equip and st.equip_freeze_held:
             return      # もう案内している（RoundOver・Verified Round End の経路が先に来た）
         if self._action.item_fetch_target("spawn"):
@@ -2623,6 +2627,8 @@ class LogMonitor:
             self._start_daemon(self._action.fetch_after_lobby_respawn, st.round_seq,
                                self._give_respawn_item_notice)
             return
+        if begin_target:
+            return      # Begin を押さない回に当たったが、spawn の道が使えない窓は今までどおり案内しない
         self._give_respawn_item_notice()
 
     def _give_respawn_item_notice(self):

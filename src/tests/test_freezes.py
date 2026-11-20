@@ -1307,7 +1307,8 @@ class TestAttendToItemLoss(unittest.TestCase):
         after = src[src.index("    def do_after_round("):]
         after = after[:after.index("\n    def ", 10)]
 
-        self.assertEqual(len(callers), 2, "_show_item_loss と、自動取得で取りに行く前の2か所だけ")
+        # 自動取得で取りに行く前は 3 か所（Begin の後・Begin を押さない回の RoundOver の後・ロビーのリスポーンの後。2026-11-20）
+        self.assertEqual(len(callers), 4, "_show_item_loss と、自動取得で取りに行く前の3か所だけ")
         self.assertIn("self.announce_item_lost_once()", show)
         self.assertIn("if fetch:", after[:after.index("self.announce_item_lost_once()")][-1200:],
                       "自動取得で取りに行くときだけ")
