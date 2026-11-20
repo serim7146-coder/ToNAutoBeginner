@@ -2614,6 +2614,20 @@ class LogMonitor:
             return      # 先に装備した・放置モード・自動取得の窓（Begin の後に取りに行く）は案内しない
         if st.waiting_for_equip and st.equip_freeze_held:
             return      # もう案内している（RoundOver・Verified Round End の経路が先に来た）
+        if self._action.item_fetch_target("spawn"):
+            # ツールが Begin を押さない回（2026-11-20）: 案内せず、後ろへ下がって正面を向いてから店へ取りに行く。
+            # 向けない・条件が変わったときだけ、下の今の案内を出す（_give_respawn_item_notice）
+            st.item_lost_announced = False      # 取りに行くときの音を鳴らす（同じラウンドの番号で前に鳴っていても）
+            st.waiting_for_equip = True
+            self._log("リスポーンでアイテムが外れました → 取りに行きます")
+            self._start_daemon(self._action.fetch_after_lobby_respawn, st.round_seq,
+                               self._give_respawn_item_notice)
+            return
+        self._give_respawn_item_notice()
+
+    def _give_respawn_item_notice(self):
+        """リスポーンでアイテムが外れたことの案内（前面化・音声・全窓フリーズ。解除は装備）"""
+        st = self.st
         st.respawn_notice_seq = st.round_seq
         st.item_lost_announced = False      # 同じラウンドの番号で前に鳴っていても鳴らす
         st.waiting_for_equip = True
@@ -2692,6 +2706,11 @@ class LogMonitor:
             st.respawn_item_pending = False
             if notice_given:
                 self._log("RoundOver（リスポーンで外れたアイテムは案内済み・装備待ち）")
+            elif self._action.item_fetch_target("spawn"):
+                # ツールが Begin を押さない回の自動取得（2026-11-20）: 案内せず、Begin 前の移動を始める頃に
+                # リスポーン位置から店へ取りに行く
+                self._log("RoundOver 【⚠ アイテムロスト → 取りに行きます】")
+                self._start_daemon(self._action.fetch_after_round_without_begin, st.round_seq)
             else:
                 self._action._attend_to_item_loss()
                 self._log("RoundOver 【⚠ アイテムロスト → 全窓フリーズ（装備かラウンド開始で解除）】")
@@ -2758,15 +2777,21 @@ class LogMonitor:
                     self._log("ラウンド終了 【⚠ アイテムロスト → 全窓フリーズ中】")
                 else:
                     st.waiting_for_equip = True
-                    self._log("ラウンド終了 【⚠ アイテムロスト → Begin が通ったら"
-                              + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
+                    if self._action.item_fetch_target("spawn"):
+                        self._log("ラウンド終了 【⚠ アイテムロスト → 店へ取りに行きます（Begin は押しません）】")
+                    else:
+                        self._log("ラウンド終了 【⚠ アイテムロスト → Begin が通ったら"
+                                  + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
             elif not st.item_id:
                 if not self.cfg.auto_begin and not st.waiting_for_equip:
                     self._log("ラウンド終了 【⚠ アイテム未回収 → RoundOver時に通知予定】")
                 else:
                     st.waiting_for_equip = True
-                    self._log("ラウンド終了 【⚠ アイテム未回収 → Begin が通ったら"
-                              + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
+                    if self._action.item_fetch_target("spawn"):
+                        self._log("ラウンド終了 【⚠ アイテム未回収 → 店へ取りに行きます（Begin は押しません）】")
+                    else:
+                        self._log("ラウンド終了 【⚠ アイテム未回収 → Begin が通ったら"
+                                  + ("取りに行く】" if self._action.item_fetch_target() else "フリーズ】"))
             else:
                 self._log("ラウンド終了")
         else:

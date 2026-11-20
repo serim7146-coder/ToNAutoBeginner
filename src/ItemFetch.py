@@ -100,6 +100,13 @@ LAND_POLL_SEC = 0.01
 BACK_SEC = 0.25             # 後ろだけ
 BACK_LEFT_SEC = 0.40        # 後ろ＋左（斜め）
 TURN_SEC = 0.50             # 左へ90度
+# Begin を押さない回の移動（2026-11-20 の実機の測り。move_to_shop_from_spawn）。ラウンドが終わってリスポーン位置に
+# いる状態から、左 → 左前へ歩いて段差で降りる。降りるのは左を押してから 1.9〜2.9 秒後、空中は 0.28〜0.47 秒。
+# 歩いている途中の接地の浮きは 0.05〜0.13 秒（降りた着地と区別する）
+SPAWN_LEFT_FIRST_SEC = 0.40     # 左だけで歩く時間。その後、前も押して左前へ
+SPAWN_MIN_AIR_SEC = 0.20        # 空中がこれ以上続いて接地に戻ったら着地。これ未満は歩いている途中の浮き
+SPAWN_LEAVE_LIMIT_SEC = 5.0     # 最初に押してから、空中に出る（降りる）までの上限
+SPAWN_LAND_LIMIT_SEC = 1.5      # 空中に出てから、着地までの上限
 
 # Equip
 EQUIP_TRIES = 3
@@ -824,6 +831,59 @@ class Fetcher:
             self._wait(BACK_LEFT_SEC)
             self.osc.send("/input/MoveBackward", 0)
             self.osc.send("/input/MoveLeft", 0)
+            self.osc.send("/input/LookLeft", 1)
+            self._wait(TURN_SEC)
+            self.osc.send("/input/LookLeft", 0)
+            self.log(f"アイテム取得: 店の前に着いた {self.clock() - started:.2f}秒")
+            return True
+        finally:
+            self.osc.stop_all(repeat=1)         # 途中でやめても押したままにしない
+
+    def move_to_shop_from_spawn(self) -> bool:
+        """Begin を押さない回の移動（2026-11-20 の実機の測り）: リスポーン位置から左を押し、
+        SPAWN_LEFT_FIRST_SEC 後に前も押して左前へ歩く。段差で降りて着地したら（空中 SPAWN_MIN_AIR_SEC 以上で
+        接地に戻った）すぐ止め、左へ 90 度向く。歩いている途中の浮き（これ未満）は着地に数えない。
+        降りない（SPAWN_LEAVE_LIMIT_SEC）・着地しない（SPAWN_LAND_LIMIT_SEC）・接地を受け取れない → False。
+        止まったら Stopped。どちらでも入力は離す"""
+        started = self.clock()
+        try:
+            self._check()
+            self.osc.send("/input/MoveLeft", 1)
+            self.log(f"アイテム取得: 出現位置から左へ歩きます（{SPAWN_LEFT_FIRST_SEC:.2f}秒後に左前）")
+            forward = False
+            received = False        # 接地の値（True / False）を 1 回でも受け取ったか
+            seen_ground = False     # 接地（True）を見たか。空中はこの後の False から数える
+            air_start = None        # 今の空中が始まった時刻
+            while True:
+                now = self.clock()
+                if not forward and now - started >= SPAWN_LEFT_FIRST_SEC - 1e-9:
+                    self.osc.send("/input/MoveForward", 1)
+                    forward = True
+                if air_start is None and now - started >= SPAWN_LEAVE_LIMIT_SEC:
+                    self.log(f"アイテム取得: 降りません（{SPAWN_LEAVE_LIMIT_SEC:.1f}秒・"
+                             + ("接地の値は受け取っています" if received else "接地の値を受け取れていません") + "）")
+                    return False
+                if air_start is not None and now - air_start >= SPAWN_LAND_LIMIT_SEC:
+                    self.log(f"アイテム取得: 着地しません（空中から {SPAWN_LAND_LIMIT_SEC:.1f}秒）")
+                    return False
+                self._check()
+                g = self.grounded()
+                if g is not None:
+                    received = True
+                if g is True:
+                    if air_start is not None:
+                        air = now - air_start
+                        if air >= SPAWN_MIN_AIR_SEC:
+                            self.osc.send("/input/MoveForward", 0)
+                            self.osc.send("/input/MoveLeft", 0)
+                            self.log(f"アイテム取得: 降りて着地 {now - started:.2f}秒（空中 {air:.2f}秒）")
+                            break
+                        self.log(f"アイテム取得: 接地の浮き {air:.2f}秒（{SPAWN_MIN_AIR_SEC:.2f}秒未満）→ 着地に数えず歩き続けます")
+                        air_start = None
+                    seen_ground = True
+                elif g is False and seen_ground and air_start is None:
+                    air_start = now
+                self.sleep(LAND_POLL_SEC)
             self.osc.send("/input/LookLeft", 1)
             self._wait(TURN_SEC)
             self.osc.send("/input/LookLeft", 0)
